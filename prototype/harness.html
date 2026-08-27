@@ -90,9 +90,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <button id="bBoard" disabled>Board Target</button>
     <div class="sect">Help</div>
     <div class="hint">
-      <b>Click</b> own ship: select · <b>click</b> enemy: target · <b>click</b> space: move order<br>
-      <kbd>Q</kbd>/<kbd>E</kbd> target elevation ±5 · <kbd>wheel</kbd> zoom · <kbd>drag</kbd> pan (RMB)<br>
-      Enemy paths shown as <span style="color:var(--orange)">estimates</span> (momentum) — their real orders are hidden until resolution, lockstep-style.
+      <b>Drag in space</b> to place the destination — the Bézier updates live.<br>
+      <b>Drag the heading pip</b> (ring at the destination), or <b>shift-drag</b>, to rotate.<br>
+      <b>Click</b> own ship: select · <b>click</b> enemy: target<br>
+      <kbd>Q</kbd>/<kbd>E</kbd> elevation ±5 · <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target<br>
+      <kbd>wheel</kbd> zoom · RMB <kbd>drag</kbd> pan · <b>timeline slider</b> scrubs the
+      <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
+      Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) — real orders stay hidden until resolution, lockstep-style.
     </div>
   </div>
 
@@ -157,6 +161,13 @@ function newMatch(s) {
   // the rogue frigate joins the player side (it's the fun boarding toy)
   const rogue = state.ships.find(s2 => s2.id === "P3");
   rogue.faction = "terran";
+  // Fleets enter with way on: seed each ship's carried momentum along its
+  // heading so the Bezier curvature (and the whole momentum game) is visible
+  // from turn 0 rather than after the first straight-line turn.
+  for (const sh of state.ships) {
+    const fwd = Q.forward(sh.quat);
+    sh.lastVel = V.scale(fwd, DATA.SHIP_CLASSES[sh.classKey].thrusterRange * 0.6);
+  }
   phase = "planning"; orders = {}; sel = null; selWeapon = null; playback = null;
   replayFile = { seed, turns: [] };
   log("New match · seed “" + seed + "”", "good");
@@ -177,6 +188,18 @@ function ordFor(ship) {
 // ------------------------------------------------------------------- view --
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 let cam = { x: 0, z: 0, scale: 4.5 };
+let planScrub = 0;              // planning-phase timeline position, 0..600 ticks
+let facingHandleHit = null;     // screen-space hit region of the rotation pip
+const FACING_HANDLE_R = 9;      // world units from the destination
+
+// The facing the ship will hold at end of turn: explicit order if set,
+// else auto-face travel (MOVE_AND_TURN) / keep current heading (TURN_SLIDE).
+function plannedFacing(ship, o, dest) {
+  if (o.move.face) return V.v3(o.move.face[0], o.move.face[1], o.move.face[2]);
+  if (o.move.mode === "TURN_SLIDE") return Q.forward(ship.quat);
+  const off = V.sub(dest, ship.pos);
+  return V.len(off) > 1e-6 ? V.norm(off) : Q.forward(ship.quat);
+}
 function fit() {
   const r = cv.getBoundingClientRect();
   cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio;
@@ -216,34 +239,64 @@ function draw() {
   const inPlayback = phase === "playback" && playback;
   const frame = inPlayback ? shipsAtPlaybackTick(playback.tick | 0) : null;
 
-  // planned / estimated paths (planning phase only)
+  // planned / estimated paths + the time-scrubbed ghost estimator
+  // (the original's predictive scrubber: drag the timeline to see where every
+  // ship will be at second t — the same Bezier the sim will fly)
   if (!inPlayback) {
+    const tScrub = planScrub / T; // 0..1 through the upcoming turn
     for (const ship of state.ships) {
       if (ship.destroyed) continue;
       const col = FACTION_COLOR(ship.faction);
+      let pts, dashed;
       if (ship.isPlayer) {
         const o = orders[ship.id];
         const tgt = (o && o.move.target) ? o.move.target : [ship.pos.x + ship.lastVel.x, ship.pos.y + ship.lastVel.y, ship.pos.z + ship.lastVel.z];
-        const path = sim.previewPath(ship, tgt, o ? o.move.mode : "MOVE_AND_TURN", 16);
-        strokePath(path.points, col, ship === sel ? 2 : 1, false);
-        // destination cone marker
+        const path = sim.previewPath(ship, tgt, o ? o.move.mode : "MOVE_AND_TURN", 48);
+        pts = path.points; dashed = false;
+        strokePath(pts, col, ship === sel ? 2 : 1, false);
+        // destination marker
         const e = w2s(path.target);
         ctx.fillStyle = col; ctx.beginPath(); ctx.arc(e.x, e.y, 3.5 * devicePixelRatio, 0, 7); ctx.fill();
         if (Math.abs(path.target.y - ship.pos.y) > 0.5) elevLabel(e, path.target.y);
+        // over-range overflow: dashed stub from the clamped destination to the
+        // raw cursor position (the original widget's "you asked for more than
+        // the drives can give" affordance)
+        if (o && o.move.target) {
+          const raw = { x: o.move.target[0], y: o.move.target[1], z: o.move.target[2] };
+          if (V.dist(raw, path.target) > 0.5) {
+            strokePath([path.target, raw], col, 1, true);
+            const rr = w2s(raw);
+            ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = devicePixelRatio;
+            ctx.beginPath(); ctx.arc(rr.x, rr.y, 3 * devicePixelRatio, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+          }
+        }
       } else {
         // enemy estimate: momentum extrapolation, dashed (ADR-6 preview rule)
-        const est = sim.previewPath(ship, [ship.pos.x + ship.lastVel.x, ship.pos.y + ship.lastVel.y, ship.pos.z + ship.lastVel.z], "MOVE_AND_TURN", 12);
-        strokePath(est.points, col, 1, true);
+        const est = sim.previewPath(ship, [ship.pos.x + ship.lastVel.x, ship.pos.y + ship.lastVel.y, ship.pos.z + ship.lastVel.z], "MOVE_AND_TURN", 48);
+        pts = est.points; dashed = true;
+        strokePath(pts, col, 1, true);
+      }
+      // ghost estimator at the scrubbed second
+      if (planScrub > 0 && pts) {
+        const i = Math.min(pts.length - 2, Math.floor(tScrub * (pts.length - 1)));
+        const gp = V.lerp(pts[i], pts[i + 1], tScrub * (pts.length - 1) - i);
+        const tan = V.sub(pts[Math.min(pts.length - 1, i + 1)], pts[i]);
+        drawGhost(gp, tan, col, dashed);
       }
     }
-    // selected ship range ring
+    // selected ship: range rings + the rotation handle at the destination
     if (sel && !sel.destroyed) {
       const cls = DATA.SHIP_CLASSES[sel.classKey];
       const o = ordFor(sel);
       const range = o.move.mode === "FULL_SPEED" ? cls.thrusterRange * 2 : o.move.mode === "FULL_STOP" ? cls.thrusterRange / 2 : cls.thrusterRange;
       ring(sel.pos, range, "#35C7FF33", 1);
       ring(sel.pos, cls.boardingRange, "#4CD97B22", 1);
-    }
+      const tgt = o.move.target
+        ? [o.move.target[0], o.move.target[1], o.move.target[2]]
+        : [sel.pos.x + sel.lastVel.x, sel.pos.y + sel.lastVel.y, sel.pos.z + sel.lastVel.z];
+      const dest = sim.previewPath(sel, tgt, o.move.mode, 4).target;
+      facingHandleHit = drawFacingHandle(dest, plannedFacing(sel, o, dest), FACTION_COLOR(sel.faction));
+    } else facingHandleHit = null;
   }
 
   // beams / effects during playback
@@ -280,8 +333,41 @@ function draw() {
     const quat = inPlayback ? { x: s.q[0], y: s.q[1], z: s.q[2], w: s.q[3] } : s.quat;
     drawShip(ship, pos, quat);
   }
-  // scrub second display
-  ui.hSec.textContent = inPlayback ? (playback.tick / 60).toFixed(1) : "0.0";
+  // scrub second display (playback playhead, or the planning-phase preview time)
+  ui.hSec.textContent = inPlayback ? (playback.tick / 60).toFixed(1) : (planScrub / 60).toFixed(1);
+}
+
+// Ghost estimator: a hollow hull outline at the scrubbed instant, oriented
+// along the path tangent (or the planned facing if the ship has one).
+function drawGhost(pos, tangent, color, dashed) {
+  const s = w2s(pos);
+  const a = Math.atan2(tangent.x, tangent.z);
+  const r = 7 * devicePixelRatio;
+  ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(a);
+  ctx.strokeStyle = color; ctx.globalAlpha = dashed ? 0.45 : 0.75;
+  ctx.lineWidth = 1.2 * devicePixelRatio;
+  ctx.setLineDash(dashed ? [3 * devicePixelRatio, 3 * devicePixelRatio] : []);
+  ctx.beginPath();
+  ctx.moveTo(0, -r); ctx.lineTo(r * 0.7, r * 0.8); ctx.lineTo(0, r * 0.4); ctx.lineTo(-r * 0.7, r * 0.8);
+  ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.restore();
+}
+
+// Facing handle: a ring at the destination with a draggable heading pip.
+function drawFacingHandle(dest, faceDir, color) {
+  const c = w2s(dest);
+  const rad = FACING_HANDLE_R * cam.scale * devicePixelRatio;
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.35; ctx.lineWidth = devicePixelRatio;
+  ctx.setLineDash([2 * devicePixelRatio, 4 * devicePixelRatio]);
+  ctx.beginPath(); ctx.arc(c.x, c.y, rad, 0, 7); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  const a = Math.atan2(faceDir.x, faceDir.z);
+  const px = c.x + Math.sin(a) * rad, py = c.y + Math.cos(a) * rad;
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.globalAlpha = 0.7;
+  ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(px, py); ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(px, py, 5 * devicePixelRatio, 0, 7); ctx.fill();
+  return { x: px, y: py, r: 8 * devicePixelRatio };
 }
 
 function strokePath(pts, color, width, dashed) {
@@ -336,49 +422,89 @@ function drawShip(ship, pos, quat) {
 }
 
 // ------------------------------------------------------------------ input --
-let dragging = false, dragStart = null;
+// Input model mirrors the original NavMove widget: press in empty space and
+// DRAG — the destination follows the cursor live on the ship's plane (no need
+// to grab a marker), with the path preview updating every frame; release to
+// commit. Ships still select/target on press. RMB pans, wheel zooms.
+let panning = false, panStart = null, dragMove = false;
 cv.addEventListener("contextmenu", e => e.preventDefault());
-cv.addEventListener("mousedown", e => {
-  if (e.button === 2) { dragging = true; dragStart = { x: e.offsetX, y: e.offsetY, cx: cam.x, cz: cam.z }; }
-});
-addEventListener("mouseup", () => dragging = false);
-cv.addEventListener("mousemove", e => {
-  if (dragging) {
-    cam.x = dragStart.cx - (e.offsetX - dragStart.x) / cam.scale;
-    cam.z = dragStart.cz - (e.offsetY - dragStart.y) / cam.scale;
-    draw();
-  }
-});
-cv.addEventListener("wheel", e => {
-  e.preventDefault();
-  cam.scale = Math.max(1.2, Math.min(16, cam.scale * (e.deltaY < 0 ? 1.15 : 0.87)));
-  draw();
-}, { passive: false });
 
-cv.addEventListener("click", e => {
-  if (phase !== "planning") return;
-  const w = s2w(e.offsetX, e.offsetY);
-  // pick ship?
+function pickShipAt(w) {
   let picked = null;
   for (const ship of state.ships) {
     if (ship.destroyed) continue;
     const d = Math.hypot(ship.pos.x - w.x, ship.pos.z - w.z);
     if (d < Math.max(4, DATA.SHIP_CLASSES[ship.classKey].radius + 2)) picked = ship;
   }
+  return picked;
+}
+function setMoveTarget(w) {
+  const o = ordFor(sel);
+  const y = o.move.target ? o.move.target[1] : sel.pos.y;
+  o.move.target = [w.x, y, w.z];
+  if (o.move.mode === "FULL_SPEED" || o.move.mode === "FULL_STOP") o.move.mode = "MOVE_AND_TURN";
+}
+
+let dragRotate = false;
+function setFacingFromCursor(w) {
+  const o = ordFor(sel);
+  const tgt = o.move.target
+    ? [o.move.target[0], o.move.target[1], o.move.target[2]]
+    : [sel.pos.x + sel.lastVel.x, sel.pos.y + sel.lastVel.y, sel.pos.z + sel.lastVel.z];
+  const dest = sim.previewPath(sel, tgt, o.move.mode, 4).target;
+  const dir = V.sub(V.v3(w.x, dest.y, w.z), dest);
+  if (V.len(dir) > 0.3) { const n = V.norm(dir); o.move.face = [n.x, n.y, n.z]; }
+}
+
+cv.addEventListener("mousedown", e => {
+  if (e.button === 2) { panning = true; panStart = { x: e.offsetX, y: e.offsetY, cx: cam.x, cz: cam.z }; return; }
+  if (e.button !== 0 || phase !== "planning") return;
+  // rotation pip takes priority — grab it to swing the planned heading
+  if (sel && facingHandleHit) {
+    const dx = e.offsetX * devicePixelRatio - facingHandleHit.x;
+    const dy = e.offsetY * devicePixelRatio - facingHandleHit.y;
+    if (Math.hypot(dx, dy) <= facingHandleHit.r * 1.8) {
+      dragRotate = true; setFacingFromCursor(s2w(e.offsetX, e.offsetY)); draw(); return;
+    }
+  }
+  const w = s2w(e.offsetX, e.offsetY);
+  const picked = pickShipAt(w);
   if (picked && picked.isPlayer) { sel = picked; selWeapon = null; refresh(); return; }
   if (picked && !picked.isPlayer) {
     if (sel) { const o = ordFor(sel); o._targetShip = picked.id; o._targetSub = null; syncWeaponTargets(o); log(sel.id + " targets " + picked.id, "warn"); refresh(); }
     return;
   }
-  // empty space: move order for selected (keep current Y unless modified)
-  if (sel) {
-    const o = ordFor(sel);
-    const y = o.move.target ? o.move.target[1] : sel.pos.y;
-    o.move.target = [w.x, y, w.z];
-    if (o.move.mode === "FULL_SPEED" || o.move.mode === "FULL_STOP") o.move.mode = "MOVE_AND_TURN";
-    refresh();
+  // shift-drag anywhere also rotates (no need to hit the pip)
+  if (sel && e.shiftKey) { dragRotate = true; setFacingFromCursor(w); draw(); return; }
+  if (sel) { dragMove = true; setMoveTarget(w); draw(); }
+});
+cv.addEventListener("mousemove", e => {
+  if (panning) {
+    cam.x = panStart.cx - (e.offsetX - panStart.x) / cam.scale;
+    cam.z = panStart.cz - (e.offsetY - panStart.y) / cam.scale;
+    draw();
+  } else if (dragRotate && sel && phase === "planning") {
+    setFacingFromCursor(s2w(e.offsetX, e.offsetY));
+    draw();
+  } else if (dragMove && sel && phase === "planning") {
+    setMoveTarget(s2w(e.offsetX, e.offsetY));
+    draw();                      // live path preview while dragging
+  } else if (phase === "planning" && sel && facingHandleHit) {
+    // hover affordance on the rotation pip
+    const dx = e.offsetX * devicePixelRatio - facingHandleHit.x;
+    const dy = e.offsetY * devicePixelRatio - facingHandleHit.y;
+    cv.style.cursor = Math.hypot(dx, dy) <= facingHandleHit.r * 1.8 ? "grab" : "crosshair";
   }
 });
+addEventListener("mouseup", () => {
+  panning = false;
+  if (dragMove || dragRotate) { dragMove = false; dragRotate = false; refresh(); }
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.scale = Math.max(1.2, Math.min(16, cam.scale * (e.deltaY < 0 ? 1.15 : 0.87)));
+  draw();
+}, { passive: false });
 
 addEventListener("keydown", e => {
   if (phase !== "planning" || !sel) {
@@ -388,8 +514,32 @@ addEventListener("keydown", e => {
   const o = ordFor(sel);
   if (e.key === "q" || e.key === "Q") { bump(o, -5); }
   else if (e.key === "e" || e.key === "E") { bump(o, 5); }
+  else if (e.key === "a" || e.key === "A") { rotateFacing(o, -15); }
+  else if (e.key === "d" || e.key === "D") { rotateFacing(o, 15); }
+  else if (e.key === "f" || e.key === "F") { faceTarget(o); }
   else if (e.key === "Enter") endTurn();
 });
+// A/D swing the planned heading in 15° steps; F snaps to the target's
+// PREDICTED end-of-turn position (the original's snap-rotation button).
+function rotateFacing(o, deg) {
+  const dest = sim.previewPath(sel, o.move.target || [sel.pos.x + sel.lastVel.x, sel.pos.y, sel.pos.z + sel.lastVel.z], o.move.mode, 4).target;
+  const cur = plannedFacing(sel, o, dest);
+  const a = Math.atan2(cur.x, cur.z) + deg * Math.PI / 180;
+  o.move.face = [Math.sin(a), cur.y, Math.cos(a)];
+  refresh();
+}
+function faceTarget(o) {
+  if (!o._targetShip) { log("No target to face", "bad"); return; }
+  const tgt = state.ships.find(s2 => s2.id === o._targetShip);
+  if (!tgt) return;
+  const myDest = sim.previewPath(sel, o.move.target || [sel.pos.x + sel.lastVel.x, sel.pos.y, sel.pos.z + sel.lastVel.z], o.move.mode, 4).target;
+  // predict where the target ends up (momentum) — aim at the future, not the now
+  const tDest = sim.previewPath(tgt, [tgt.pos.x + tgt.lastVel.x, tgt.pos.y + tgt.lastVel.y, tgt.pos.z + tgt.lastVel.z], "MOVE_AND_TURN", 4).target;
+  const dir = V.norm(V.sub(tDest, myDest));
+  o.move.face = [dir.x, dir.y, dir.z];
+  log(sel.id + " snaps heading to " + tgt.id + "'s predicted position", "warn");
+  refresh();
+}
 function bump(o, dy) {
   if (!o.move.target) o.move.target = [sel.pos.x + sel.lastVel.x, sel.pos.y, sel.pos.z + sel.lastVel.z];
   o.move.target[1] += dy;
@@ -544,7 +694,7 @@ function endTurn() {
   replayFile.turns.push({ turn: state.turn - 1, orders: clean, hash: r.hash, snapshot: r.snapshot });
   ui.hHash.textContent = r.hash.slice(0, 8);
   playback = { tracks: r.tracks, events: r.events, tick: 0, speed: 1, playing: true, logged: new Set() };
-  ui.scrub.value = 0;
+  ui.scrub.value = 0; planScrub = 0;
   orders = {};
   refresh();
   requestAnimationFrame(stepPlayback);
@@ -607,13 +757,21 @@ ui.bSpeed.onclick = () => {
   ui.bSpeed.textContent = playback.speed + "×";
 };
 ui.scrub.oninput = () => {
+  if (phase === "planning") {
+    // predictive scrubber: ghosts slide along every ship's Bezier
+    planScrub = +ui.scrub.value;
+    ui.hSec.textContent = (planScrub / 60).toFixed(1);
+    draw();
+    return;
+  }
   if (!playback) return;
   playback.tick = +ui.scrub.value;
   playback.playing = false;
-  // allow resume by pressing speed button? simple: clicking End Turn is disabled; play resumes on release
   draw();
 };
-ui.scrub.onchange = () => { if (playback && playback.tick < T) { playback.playing = true; requestAnimationFrame(stepPlayback); } };
+ui.scrub.onchange = () => {
+  if (phase === "playback" && playback && playback.tick < T) { playback.playing = true; requestAnimationFrame(stepPlayback); }
+};
 ui.bReplay.onclick = () => {
   document.getElementById("replayText").value = JSON.stringify(replayFile);
   document.getElementById("replayModal").style.display = "block";
