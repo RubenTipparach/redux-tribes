@@ -2,7 +2,7 @@
 
 **Reconstructed from the Unity archive (`archive-model/`, Unity 2022.3 / URP 14) — August 2026.**
 
-This document reverse-engineers the complete design of Fallen Tribes from the archived code (194 C# scripts), 32 scenes, 92 prefabs, 79 authored data assets, 30 3D models, and 35 shaders. It records **what the game is**, **exactly how each system works** (with the numbers, so the new engine can reproduce the feel), and **what was intended but never finished** — the stubs are design signals, not noise. Its companion, [`ARCHITECTURE.md`](./ARCHITECTURE.md), decides how to rebuild it in Rust.
+This document reverse-engineers the complete design of Fallen Tribes from the archived code: 194 C# scripts, 31 scenes, 87 prefabs, 79 authored data assets, 30 3D models, and 23 custom shaders/shader graphs plus 18 noise subgraphs (counts exclude vendored Shapes / TextMesh Pro / URP-sample assets). It records **what the game is**, **exactly how each system works** (with the numbers, so the new engine can reproduce the feel), and **what was intended but never finished** — the stubs are design signals, not noise. Its companion, [`ARCHITECTURE.md`](./ARCHITECTURE.md), decides how to rebuild it in Rust.
 
 ---
 
@@ -118,7 +118,7 @@ Weapons are data-driven (`WeaponData` ScriptableObjects) mounted on damageable t
 | Missile | 25 | 250 | 1 | Homing, volley of 2–3 (`batchLaunch`), 20 s lifetime — **missiles in flight persist across turn boundaries** |
 | Cannon / Plasma / Pulse / Torpedo | 5 | 200 | 1 | One shared implementation (dumb-fire, 100 u/s, 2 s lifetime); the four types differ only in visuals today |
 
-Per-mount `damageMultiplier` (5.5 on beam/plasma mounts) scales output. Ammo fields exist and serialize but are **never decremented** — unlimited ammo shipped; ammo tracking is an unfinished intent.
+Per-mount `damageMultiplier` scales output — and it is authored **5.5 on every mount except the missile launcher (×1)**, so effective per-shot damage is **27.5** for beams and all projectile types, versus 25 per missile. Two beam-data variants matter for balance: `BeamWeaponData_station` (damage **1** — the Starbase Assault turrets) and `LowPower-BeamWeaponData` (1, orphaned); the two Missile assets are identical duplicates differing only in FX color. Ammo fields exist and serialize but are **never decremented** — unlimited ammo shipped; ammo tracking is an unfinished intent.
 
 - Each weapon holds at most one order per turn, queued to an integer second via the time slider (or hotkeys Z = all weapons, X = disengage all).
 - **Firing-arc gates:** per-mount horizontal and vertical arc limits (`ArcTest.TargetArcTest3D` — dot-product-vs-bisector cone tests, asymmetric min/max angles; e.g. missile launchers are unrestricted, hull beams −110°..110°). Re-checked *at the moment of firing* — if the target maneuvered out of arc/range mid-turn, the shot silently skips. The same arc test doubles as the AI's stealth vision cone.
@@ -129,7 +129,7 @@ Per-mount `damageMultiplier` (5.5 on beam/plasma mounts) scales output. Ammo fie
 There is **no abstract to-hit roll and no shield→armor→hull pipeline**. Hit resolution is fully physical: whatever collider a shot reaches decides where damage lands.
 
 - Subsystem colliders wrap ship parts (`SubsystemColliderProxy`); each subsystem absorbs `blockDamagePercent` of a hit and bleeds the rest to the hull:
-  - **Armor plates:** absorb 80–100%; on death the plate GameObject *disappears*, physically exposing the hull behind it. Cannot be healed.
+  - **Armor plates:** absorb 75–90% as authored (Karisen 75, Terran/Benefactor/freighter 80, Rogue 90; the code default of 100 is unused); on death the plate GameObject *disappears*, physically exposing the hull behind it. Cannot be healed.
   - **Weapons:** absorb 75% (50% on missile launchers); dead mounts just can't fire.
   - **Thrusters:** absorb 10–60%; when dead, further hits pass 100% to hull, engine FX/audio stop, and the ship **drifts** (§3.3); healable (used by the capture emergency-repair).
   - **Bare hull:** full damage; internal (collision) damage also spawns explosions. Terran frigate hull = 300 HP.
@@ -148,17 +148,17 @@ Missiles reuse the ship movement math: launch to a rally point (`origin + forwar
 
 The knife-fight layer, taught by Tutorial 3:
 
-- Prereq: target within `BoardingRange` (20 on shipped ships; a noted-but-unimplemented intent: engines must be offline).
-- Boarding sends `min(marines, boardingActionCapacity=8)` marines. A defender can host **multiple factions' boarding parties simultaneously**; same-faction parties stack.
+- Prereq: target within `BoardingRange` — **per-ship, a deliberate faction differentiator**: Terran/Karisen/Benefactor 20 range · 15 marines · capacity 8; the **Rogue frigate is a boarding specialist at 40 range · 40 marines · capacity 12**; civilians 10 range. (A noted-but-unimplemented intent: engines must be offline.)
+- Boarding sends `min(marines, boardingActionCapacity)` marines. A defender can host **multiple factions' boarding parties simultaneously**; same-faction parties stack.
 - **Once per simulated second**, opposed dice: each marine rolls d6, success on 5+. If attacker successes exceed the defender's *efficiency*, defenders lose 1 marine; any defender success kills `efficiency` attackers.
 - `efficiency` comes from the **MarineEfficiencyTable keyed on the defender's hull health** — a damaged ship defends worse: >50% hull → kill ratio 2… ≤35% → 0. *Soften the target before boarding* is the core tactic.
 - **Capture:** when defenders hit 0 and attackers remain, the ship flips faction — AI disabled, UI card moves to the player's roster, and dead thrusters get an emergency 50 HP heal so the prize can move. Captures count as kills for mission goals; captured ships join the campaign fleet.
 - UI: a tug-of-war bar (defender vs. attacker sliders) on each ship card. "Cancel boarding" and enemy re-boarding/reinforcement are authored TODOs.
-- Crew (50/200) is saved and displayed but plays no combat role yet — only marines (15/50) fight. Another unfinished layer.
+- Crew (50/200) is saved and displayed but plays no combat role yet — only marines fight. Another unfinished layer.
 
 ### 4.5 Ship roster (shipped content)
 
-Playable/encounterable: Terran frigate `ship_1` (300 HP, 3 beam mounts, 6 thruster nozzles, 2 armor plates, 10 fake-light decal projectors), Karisen frigate `ship_2` (250 HP), Benefactor and Rogue frigates (250/180 HP, plasma/pulse/torpedo mounts) from the `sketchy_sketch` WIP sheet, an AI variant at 500 HP, plus civilians: generic freighter (10 HP escort-fodder), neutral shipyard, satellite, and the **Starbase** (station AI + turret ring). Scenery hulks: `ship_3`, `large_batleship`, derelict clusters.
+Playable/encounterable: Terran frigate `ship_1` (300 HP, 3 beam mounts, 6 thruster nozzles, 2 armor plates, 10 fake-light decal projectors), Karisen frigate `ship_2` (250 HP), Benefactor and Rogue frigates (250/180 HP, plasma/pulse/torpedo mounts) from the `sketchy_sketch` WIP sheet, an AI variant at 500 HP, plus civilians: generic freighter (600 HP in the prefab — the Freighter Escort mission overrides its instances down to 10 HP to make them fragile objectives, a good example of the scene-override mechanism in §6.3), neutral shipyard, satellite, and the **Starbase** (station AI + turret ring). Scenery hulks: `ship_3`, `large_batleship`, derelict clusters.
 
 ---
 
@@ -166,11 +166,11 @@ Playable/encounterable: Terran frigate `ship_1` (300 HP, 3 beam mounts, 6 thrust
 
 **Files:** `Scripts/Simulator/AIController/BaseAIController.cs`, `StationAIController.cs`, `VisionCone.cs`.
 
-- The AI is **not** a state machine — it's a single decision procedure run once per turn (at end-of-execution), issuing the same orders a player would: pick target (first live enemy in registration order — kill priority is emergent from spawn order), chase with an `AIBoost` range cheat if the target is far, queue each weapon with probability `fireProbability` (default 0.5, "doubles as aggression level") into one random second (1–8), pick a destination on a random sphere around the target (25–100% of thrust range), then **fan-cast sphere sweeps** (radius 10, 9 horizontal × 4 vertical angles) for collision avoidance — first clear ray wins.
+- The AI is **not** a state machine — it's a single decision procedure run once per turn (at end-of-execution), issuing the same orders a player would: pick target (first live enemy in registration order — kill priority is emergent from spawn order), chase with an `AIBoost` range cheat if the target is far, queue weapons into one random second (1–8) — **each weapon independently with probability `fireProbability`** (default 0.5, "doubles as aggression level"), **except below 0.2 where the AI deterministically queues only its first weapon every turn** (the shipped low-aggression ships at `fireProbability = 0.1` always fire their primary and nothing else) — pick a destination on a random sphere around the target (25–100% of thrust range), then **fan-cast sphere sweeps** (radius 10, 9 horizontal × 4 vertical angles) for collision avoidance — first clear ray wins.
 - Facing: snap to the target's predicted position; at close range, a fully random tumble (a quirk players see as erratic knife-fight behavior).
 - **Retaliation:** taking damage reveals and targets the shooter (`IfFiredUponAlert`); no alert propagation between ships — each ship discovers the war alone.
 - **Stations:** same combat brain minus movement; they rotate 45°/turn to walk their firing arcs across the target.
-- **Stealth:** patrol-route AI (waypoint parents authored in-editor; CW/CCW gizmos) + **VisionCone**: range 100, ±30° horizontal/vertical rectangular frustum (the firing-arc math reused), occlusion raycast that requires positively hitting the target — asteroids/terrain are cover. Detection is a **one-way latch** per ship: once seen (or shot), that ship hunts forever. No suspicion meter, no re-hiding, no shared alarms; detection is only evaluated once per turn (mid-turn detection was planned, never built). Stealth missions = patrol fields + escape waypoints.
+- **Stealth:** patrol-route AI (waypoint parents authored in-editor; CW/CCW gizmos) + **VisionCone**: a rectangular frustum (the firing-arc math reused) with per-prefab authored angles — the code default is ±30°/±30°, but **the shipped stealth patrols (Karisen frigate prefab) use ±120° horizontal / ±80° vertical at range 100** — a 240°-wide detection arc; port the authored values, not the default, or stealth becomes trivial. Plus an occlusion raycast that requires positively hitting the target — asteroids/terrain are cover. Detection is a **one-way latch** per ship: once seen (or shot), that ship hunts forever. No suspicion meter, no re-hiding, no shared alarms; detection is only evaluated once per turn (mid-turn detection was planned, never built). Stealth missions = patrol fields + escape waypoints.
 - Friendly AI (escort freighters) uses the same brain with `isFriendly` + an objective waypoint.
 
 ---
@@ -184,7 +184,7 @@ Playable/encounterable: Terran frigate `ship_1` (300 HP, 3 beam mounts, 6 thrust
 Missions compose from **components on scene objects** under a `GameMission` prefab:
 
 - `MissionGoalProcessor` holds a serialized `missionList` (AND semantics; an unused any-one flag) and auto-discovers failure conditions from active children (OR semantics).
-- Goal components: `DestroyAllEnemies` (capture counts), `AllFrieghtersJumped` (≥1 freighter escapes), `DestroyTarget`, `DestroySubsystem` (cripple, don't kill), `CatpuredAllShips` (boarding capture), `Waypoint` (50-unit trigger sphere with in-world Shapes hologram). Failures: `LooseAllAships`, `DestroyedShipFails` (protect-VIP).
+- Goal components: `DestroyAllEnemies` (capture counts), `AllFrieghtersJumped` (≥1 freighter escapes), `DestroyTarget`, `DestroySubsystem` (cripple, don't kill), `CatpuredAllShips` (boarding capture), `Waypoint` (trigger sphere with in-world Shapes hologram; radius is scene-authored via transform scale — radius = scale/2 — with shipped values from ~2.5 units in the stealth mission up to 50 in Freighter Escort). Failures: `LooseAllAships`, `DestroyedShipFails` (protect-VIP).
 - **Sequencing is UnityEvent wiring + GameObject active flags**: e.g. *destroy the shipyards → the Retreat waypoint activates*; *capture the ship → a 5-ship ambush spawns* (`EnemyShipSpawner`) *and the escape objective appears*. Goals on inactive objects can't complete — staged objectives via activation. This "component + event-binding + initial-active flag" language is exactly what the new scenario editor must express.
 - Rewards: `FullMissionAward` per goal (default 250; starbase kill 1500) + 125 per enemy destroyed.
 
@@ -213,7 +213,7 @@ A battle scene = **skybox material** (per-mission recolor of the procedural spac
 ### 7.2 Supporting systems (state of truth)
 
 - **Reputation/diplomacy:** a −100..100 per-faction score (seeded: Terran 100, Karisen −46, Rogue −14, Benefactors 12) with UI widgets and V1 hostility bands (blockades required ≥2 garrison + hostile rep) — but **no code ever changes a score at runtime**, and V2 reduced hostility to a binary faction check. The "diplomacy matrix" is an explicit TODO.
-- **Loot/upgrades:** a named design space (`ShipUpgradeType`: Additional_Health, Armor, Shield, Weapon_Component, Weapon_Modifier, Marine_Capacity, Boarding_Cannon, Thruster_Engines, Hull_Regen, Missiles_Quantity, Ship_Fuel — with design comments like "Shield: absorbs n hits, regens over n turns", "only destroyed ships drop loot / captured ships you can wholesale or strip for parts") — **six of seven loot files are zero-byte placeholders**. Credits are the only implemented reward.
+- **Loot/upgrades:** a named design space (`ShipUpgradeType`: Additional_Health, Armor, Shield, Weapon_Component, Weapon_Modifier, Marine_Capacity, Boarding_Cannon, Thruster_Engines, Hull_Regen, Missiles_Quantity, Ship_Fuel — with design comments like "Shield: absorbs n hits, regens over n turns", "only destroyed ships drop loot / captured ships you can wholesale or strip for parts") — **seven of the eight loot files are zero-byte placeholders; only `ShipUpgrade.cs` (the enum) has content**. Credits are the only implemented reward.
 - **Planet taxonomy:** PlanetType (asteroid → super-Jupiter), SurfaceType (rocky/icy/lava/water/earth-like/gas/volcanic), AtmosphereType — carried everywhere, gameplay-inert so far.
 - **Save system:** JSON (`campaign_1.json`, single slot) — full schema in §11. Saves only on mission victory and travel; **no mid-battle save**. Enemy fleets persist only as type + health%; crew/marines/ammo/names are saved but never restored; subsystem restore matches by array index (fragile). Two parallel save writers coexist (V1 menu path and V2 system) and must be unified.
 - **Editor tooling the author relied on** (`Scripts/CampaignV2/Editor/`): inspector buttons to assign GUIDs to systems/planets/ships, seed default battlegroups everywhere, and emit a fresh save — a *scene-as-database* authoring model. The abandoned `MapJson` export shows the author already wanted the world as data files; the new engine should finish that thought.
@@ -254,15 +254,15 @@ Wiring today is singleton-pull + direct references + per-frame polling with UI w
 
 ## 10. Rendering and VFX
 
-**Files:** `Settings/URP-HighFidelity*.asset`, `Shaders/**`, `Settings/SampleSceneProfile.asset`. Full technical detail per shader in the analysis; this is the feature contract.
+**Files:** `Settings/URP-HighFidelity*.asset`, `Shaders/**`, `Settings/SampleSceneProfile.asset`. This section is the feature contract; the full per-shader technical decoding (node graphs, parameters, material tables, renderer features, particle systems) is committed as [`reference/SHADER_CATALOG.md`](./reference/SHADER_CATALOG.md).
 
 ### 10.1 Pipeline configuration (as shipped)
 
-Forward URP, HDR (R11G11B10), MSAA off, depth texture on; **shadows: 4096 px, 3 cascades (0–300/300–600/600–2000), soft PCF, distance 2000 against a 9000 camera far plane** — shadows visibly cut off in-scene, which is precisely why "cascading shadows over unlimited distance" is a headline requirement for the new engine. One realtime directional sun (5000 K); everything else luminous is HDR emissive + bloom or fake **proxy-light decals** (emissive falloff decal projectors standing in for point/spot lights on hulls). Post: Neutral tonemap, bloom threshold 2.0 / intensity 0.5, contrast +25, saturation +55, custom S-curve, motion blur 0.1; per-scene analytic height fog on the city maps; SSAO (blue-noise, 0.5/0.25); LOD dither cross-fade.
+Forward URP, HDR (R11G11B10), MSAA off, depth texture on; **shadows: 4096 px, 3 cascades (0–300/300–600/600–2000), soft PCF, distance 2000 against a 9000 camera far plane** — shadows visibly cut off in-scene, which is precisely why "cascading shadows over unlimited distance" is a headline requirement for the new engine. One realtime directional sun (5000 K); everything else luminous is HDR emissive + bloom or fake **proxy-light decals** (emissive falloff decal projectors standing in for point/spot lights on hulls). Post: Neutral tonemap, bloom threshold 2.0 / intensity 0.5, contrast +25, saturation +55, custom S-curve, motion blur 0.1; per-scene analytic height/distance fog on the city maps via a **third-party "full-screen fog" renderer feature that is active in the shipped renderer but whose script source is missing from the archive** (behavior reconstructed from serialized settings — density/color/height values survive in the `city_planet*` volume profiles); SSAO (blue-noise, 0.5/0.25); LOD dither cross-fade.
 
 ### 10.2 Shader catalog to reproduce (identity-defining ones bolded)
 
-1. **Procedural planets** (`planet_gen.shadergraph`): 3D simplex fBm at two scales (continents + detail) driving vertex displacement and normal-from-height; land colored via 5 selectable gradient ramps (green/desert/ice/moon/yellow) with variation jitter; sea-level smoothstep water (deep/shallow colors); polar caps; time-rotated 3D-noise clouds; fresnel atmosphere rim. Seven authored planet materials (parameter table preserved in the analysis). **Asteroid variant** adds Voronoi craters and receives shadows.
+1. **Procedural planets** (`planet_gen.shadergraph`): 3D simplex fBm at two scales (continents + detail) driving vertex displacement and normal-from-height; land colored via 5 selectable gradient ramps (green/desert/ice/moon/yellow) with variation jitter; sea-level smoothstep water (deep/shallow colors); polar caps; time-rotated 3D-noise clouds; fresnel atmosphere rim. Seven authored planet materials (full parameter table in [`reference/SHADER_CATALOG.md`](./reference/SHADER_CATALOG.md) §3.1). **Asteroid variant** adds Voronoi craters and receives shadows.
 2. **Engine plumes** (`EngineFlames.shadergraph`): transparent mesh whose length axis stretches by throttle plus per-frame random flicker (min/max band), HDR two-color gradient fading to burn-out toward the tail — driven at runtime by thrust power (0→0.5 normal, →1.0 boost, ramping over the first second, down after second 9). 8 color variants incl. white-hot missile plumes with HDR values up to ~260 (deliberately bloom-blown).
 3. **Procedural space skybox**: dual-layer fBm nebula (two colors, remap controls) + Voronoi starfield (density 1000) with time-rotated shimmer; recolored per mission (10 skybox materials).
 4. **Hologram** (fresnel + HDR tint + slight inflation): all ghost previews — planned ship/missile positions, nav markers.
@@ -280,7 +280,7 @@ The single biggest third-party dependency: the entire tactical overlay layer (ev
 
 ### 11.1 The de-facto database (79 assets in `Resources/`)
 
-ScriptableObjects define: weapon configs (9), ship cards (14: identity, portrait, colors, crew caps, spawner prefab ref, string id), factions (9, 5 fully authored), the marine efficiency table, faction reputation seeds, planet template DB (12), warning messages (7), subsystem icons (7, color-coded), button color sets, and 23 line-style assets. **The string-GUID `id` fields on ship cards and weapons are load-bearing save keys** — and audited as badly corrupted: three ship cards share one id (which is actually the GUID of `ShipCardData.cs` itself), two more share another, six assets have no id and regenerate every load, one weapon id is duplicated. The migration must repair ids first (details + full stat tables in the data-layer analysis; conversion plan in ARCHITECTURE ADR-11).
+ScriptableObjects define: weapon configs (9), ship cards (13 = 8 main + 5 Mission-3 spawn clones: identity, portrait, colors, crew caps, spawner prefab ref, string id), factions (9, 5 fully authored), the marine efficiency table, faction reputation seeds, planet template DB (12), warning messages (7), subsystem icons (7, color-coded), button color sets, and 23 line-style assets. **The string-GUID `id` fields on ship cards and weapons are load-bearing save keys** — and audited as badly corrupted: three ship cards share one id (which is actually the GUID of `ShipCardData.cs` itself), two more share another, six assets have no id and regenerate every load, one weapon id is duplicated. The migration must repair ids first — the complete schemas, authored stat tables, and the id-corruption catalog are committed as [`reference/DATA_AUDIT.md`](./reference/DATA_AUDIT.md); conversion plan in ARCHITECTURE ADR-11.
 
 ### 11.2 Asset inventory (what must migrate)
 
@@ -291,7 +291,7 @@ ScriptableObjects define: weapon configs (9), ship cards (14: identity, portrait
 - **Video:** 17 tutorial mp4s survive; the prologue movie is lost.
 - **Also lost:** `ProjectSettings/` — tags (`Spaceship`, `Armor`, `Missile`), layer table (Nav=7, layer 8 used by weapons/smoke, Outline_1=9, Outline_Hover=10 — reconstructed from bitmasks), physics settings, build order.
 - **Fonts:** OFL sci-fi set (Electrolize, Exo/Exo 2, Michroma, Orbitron, Rajdhani).
-- **Third-party to replace:** Shapes (vector renderer), TextMesh Pro (SDF text), Udar SceneField + DevLocker SceneReference (scene refs — DevLocker's source isn't even in the archive), Simple Particle Scaler (editor-only, skip).
+- **Third-party to replace:** Shapes (vector renderer), TextMesh Pro (SDF text), Udar SceneField + DevLocker SceneReference (scene refs — DevLocker's source isn't even in the archive), the full-screen/volumetric fog renderer features (referenced by GUID, source not archived — only their serialized settings survive), Simple Particle Scaler (editor-only, skip).
 
 ---
 

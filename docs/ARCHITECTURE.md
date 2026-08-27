@@ -56,16 +56,20 @@ Two facts from the code audit shape everything below:
 
 ```
 crates/
-  sim_core     # no_std-friendly, NO Bevy deps. Orders, SimState, fixed-tick step(),
-               # kinematics, weapons/damage, boarding dice, mission goal evaluation,
-               # per-turn seeded RNG. Emits SimEvent streams.
-  sim_replay   # replay/save file format (postcard), versioning, hashing.
-  game         # Bevy app: presentation, input, planning UX, HUD, FX, cutscenes.
-               # Mirrors sim entities via ShipId ↔ Entity map. May be as
-               # nondeterministic as it likes.
-  server       # axum + sim_core + sim_replay: authoritative turn resolution,
-               # match persistence, replay hosting. No renderer.
-  editor       # (feature-gated in `game`) in-game scenario editor (ADR-8).
+  sim_core      # no_std-friendly, NO Bevy deps. Orders, SimState, fixed-tick step(),
+                # kinematics, weapons/damage, boarding dice, mission goal evaluation,
+                # per-turn seeded RNG. Emits SimEvent streams.
+  sim_campaign  # campaign rules (map state, travel, economy, encounter generation),
+                # engine-free like sim_core and under the same determinism +
+                # snapshot/versioning discipline (ADR-4/ADR-5), so the server can
+                # resolve campaign turns and campaign saves share the format.
+  sim_replay    # replay/save file format (postcard), versioning, hashing.
+  game          # Bevy app: presentation, input, planning UX, HUD, FX, cutscenes.
+                # Mirrors sim entities via ShipId ↔ Entity map. May be as
+                # nondeterministic as it likes. The scenario editor (ADR-8) is a
+                # feature-gated mode of this binary, not a separate crate.
+  server        # axum + sim_core + sim_campaign + sim_replay: authoritative turn
+                # resolution, match persistence, replay hosting. No renderer.
 ```
 
 **Why this is the most important decision in the document:**
@@ -84,7 +88,7 @@ crates/
 
 **Decision:** One integer-tick clock owns the turn; wall time never touches game state.
 
-- **Fixed tick:** 60 ticks/s × 10 s = **600 ticks per turn**; `TICKS_PER_SECOND = 60` constant. Second-slot events fire at exact tick indices `slot * 60` — which by construction fixes the Unity slot-9/10 loss bug (two disagreeing clocks) and makes slot 10 (turn-end) a legal, reliable slot.
+- **Fixed tick:** 60 ticks/s × 10 s = **600 tick intervals per turn**; `TICKS_PER_SECOND = 60` constant. **State the endpoint convention explicitly, because the Unity bug was exactly an endpoint ambiguity:** a turn spans tick indices **0..=600 inclusive** (601 boundary evaluations over 600 intervals); ship poses use `t = tick / 600` so `t = 1.0` is actually reached (preserving the exit-tangent carry and the preview-equals-execution promise); slot-*k* events fire when the counter reaches `k × 60`, and **slot 10 (tick 600) is processed before turn-boundary evaluation**. A unit test asserts that orders queued at slot 0 and slot 10 both fire — the two cases Unity's dual clocks lost.
 - **Timers:** a single `SimTimer { duration_ticks, elapsed_ticks }` advanced only by the tick — the design the Unity author already sketched (the unused `TimingSimulated`) but never adopted. No pause/resume state mutation (Unity's `Timing.Resume()` destructively rewrote durations — a bug, not a feature). Render-side smoothing/camera/UI timers use render time and never feed the sim.
 - **Within-turn schedule per tick:** integrate ship poses (closed-form Bézier at `t = tick/600`), step projectiles, resolve collisions/sweeps, then at second boundaries fire queued weapons and run boarding dice; mission goals and win/loss evaluate at the turn boundary exactly as the original does.
 - **The movement contract from DESIGN §3 ports verbatim into `sim_core`:** quadratic Bézier with `control = start + last_velocity/2.5`, cross-turn tangent carry, slerp rotation, drift ×0.25, boost/brake rules, `MaxThrusterRange` modifiers. Planning previews call the same functions — preview-equals-execution is preserved by construction.
@@ -96,11 +100,12 @@ crates/
 
 **Decision:** f32 with strict discipline — not fixed-point — plus structural safeguards that make silent breakage recoverable.
 
-- **Float policy:** basic arithmetic (`+ − × ÷ sqrt`) is IEEE-exact and portable across x86-64/ARM64/wasm (Rust does not auto-contract FMA). The real hazard is **platform libm transcendentals** (`sin`, `cos`, `atan2`, `powf` differ per OS). Mitigation: `sim_core` uses `glam` with its **`libm` feature** (pure-Rust math, identical everywhere); no `std` transcendentals, no `mul_add`, no SIMD features, no NaN-tolerant logic (NaN = assertion failure in debug).
+- **Float policy:** basic arithmetic (`+ − × ÷ sqrt`) is IEEE-exact and portable across x86-64/ARM64/wasm (Rust does not auto-contract FMA). The real hazard is **platform libm transcendentals** (`sin`, `cos`, `atan2`, `powf` differ per OS). Mitigation: `sim_core` routes all math through `glam` configured for scalar libm — and because **glam enables SSE2/simd128 by default**, the exact manifest line matters: `glam = { version = "*", default-features = false, features = ["libm", "scalar-math", "serde"] }` (`scalar-math`, not the absence of a feature, is what disables the SIMD paths). No `std` transcendentals, no `mul_add`, no NaN-tolerant logic (NaN = assertion failure in debug).
 - **Fixed-point rejected** for this game: it costs every trig/vector routine and its payoff is already covered by libm discipline *plus* the snapshot safety net below. Fixed-point is the right call for 1000-unit lockstep RTSes without snapshots; we have the opposite profile.
 - **RNG:** seeded, stream-split PCG (`rand_pcg`) — **one RNG per turn**, seeded `hash(match_seed, turn_index)`, with per-consumer streams keyed `(ship_id, weapon_id, batch_index, …)`. Replays seek to any turn without replaying RNG history; a divergence in turn N cannot poison turn N+1. This replaces Unity's unseeded global `Random` (boarding dice, AI plans, missile scatter — the scatter radii 0.5/5.0/0.5 and the d6-success-on-5+ boarding table port as-is, just re-sourced). The dead `batchIndex` parameter in the Unity FX API shows this was the original intent.
 - **Ordering:** the authoritative sim iterates an explicitly ordered ship list (stable `ShipId`), *not* ECS queries — Bevy query iteration order is not guaranteed stable, and the parallel executor is nondeterministic. `sim_core` isn't an ECS at all; it's plain structs stepped in a loop (5–20 ships — an ECS buys nothing here). No `HashMap` iteration in sim logic (`BTreeMap`/`IndexMap`).
-- **Physics:** **hand-rolled kinematics** (~1–2k lines): Bézier pose evaluation, sphere/segment sweep tests for weapons and ramming, per-subsystem hit volumes (replacing Unity collider proxies — keeps subsystem aim-point targeting data-driven). No physics engine in the sim; `parry3d` optionally for shape-query math only. Rapier's `enhanced-determinism` is the documented fallback if design ever pivots to contact-rich dynamics.
+- **Physics:** **hand-rolled kinematics** (~1–2k lines): Bézier pose evaluation, sphere/segment sweep tests for weapons and ramming, per-subsystem hit volumes (replacing Unity collider proxies — keeps subsystem aim-point targeting data-driven). No physics engine in the sim; `parry3d` for shape-query math where useful. Rapier's `enhanced-determinism` is the documented fallback if design ever pivots to contact-rich dynamics.
+- **Terrain in the sim:** AI avoidance sweeps, stealth occlusion rays, and ramming all query *scene geometry* (blocker cubes, asteroid fields, the MissileAlley canyon), and ADR-2 forbids touching engine physics — so **terrain participates in `sim_core` as authored analytic collision proxies (spheres/capsules/boxes) declared in `scenario.ron`**, never as render meshes. Cheap, deterministic, faithful to the low-poly blocker maps; the scenario editor (ADR-8) authors these proxies alongside the visuals.
 - **The safety net (most important):** determinism *will* silently regress over years. Two structural mitigations make that a logged event instead of a corrupted match: (a) **per-turn boundary snapshots are authoritative** — any client whose re-sim hash mismatches falls back to fetching the snapshot; (b) a **CI cross-platform hash test** — simulate N scripted turns on Linux-x86_64, macOS-ARM, and wasm32; assert identical snapshot hashes on every commit.
 
 ---
@@ -136,6 +141,7 @@ ReplayFile {
 - **Server:** **axum + tokio + Postgres (sqlx)**, embedding `sim_core` — the same Rust sim code resolves turns authoritatively (impossible with a Firebase/Supabase TypeScript backend without contortions). Match persistence = the append-only `(match_id, turn, orders, snapshot, state_hash)` log — which *is* the replay format (ADR-5). A small VPS/Fly.io box handles thousands of correspondence matches; resolution is milliseconds.
 - **Why server-authoritative rather than deterministic-lockstep-by-mail:** with an authoritative server, cross-platform bit determinism stops being a *correctness cliff* and becomes a *quality bar* — a client desync self-corrects at the next boundary snapshot instead of poisoning the match, and cheating is structurally limited. The determinism discipline of ADR-4 is still worth every bit: it makes replays exact and keeps client-side preview/re-sim honest.
 - **Hot-seat and solo-async** (the campaign) use the same order/turn-record pipeline with a local "server" — one code path everywhere.
+- **PvP planning previews — a real design decision, not a free bonus.** The single-player UX shows enemy *committed* orders (ghost trajectories, snap-to-predicted-target, firing-solution recoloring) because the AI plans before the player does. Under simultaneous submission, opponents' orders must be hidden until both sides commit (or the second submitter gains a decisive information edge). **Decision:** in PvP, enemy ships are previewed by **momentum extrapolation** (continuing the drift Bézier from their last executed turn), visually marked as estimates; committed enemy orders are never revealed pre-resolution. Accepted knock-on: snap-rotation and second-timed alpha strikes become probabilistic against humans — that *is* the mind-game of WEGO PvP (Frozen Synapse's whole genre), and the sim's "simulate assuming X" API serves both this preview and the AI.
 - **Notifications ("your opponent moved"):** VAPID Web Push (desktop/Android/installed-PWA iOS) + **email fallback** — email is the only universal channel for correspondence games given iOS PWA push restrictions. Native builds poll or hold a socket.
 
 ---
@@ -160,7 +166,7 @@ This is the single largest custom rendering subsystem (est. 2–4 weeks) and the
 
 ### 7.3 Shader ports (Unity Shader Graph → WGSL, by hand)
 
-No production shader-graph tool exists in Rust; porting is mechanical (each node is a function) and the archive's graphs are fully decoded in DESIGN §10. Bevy's `Material`/`MaterialExtension` + WGSL hot-reload is the workhorse; effort estimates from the feasibility research:
+No production shader-graph tool exists in Rust; porting is mechanical (each node is a function). The port sources of truth are the `.shadergraph` assets themselves (`archive-model/Shaders/…`) plus the committed decoding in [`reference/SHADER_CATALOG.md`](./reference/SHADER_CATALOG.md) (node techniques, exposed parameters, and the per-planet material tables); DESIGN §10 is the feature summary. Bevy's `Material`/`MaterialExtension` + WGSL hot-reload is the workhorse; effort verdicts:
 
 | Effect | Path | Effort |
 |---|---|---|
@@ -221,7 +227,7 @@ The audit's capability list (DESIGN §9) is deliberately modest — lists, 3-sta
 
 - **Geometry:** headless Blender batch (`blender -b --python export.py`) → `.glb` for the 9 `.blend` sources; convert the 21 orphan FBX once (Blender import or maintained FBX2glTF fork), then **retire FBX entirely**. Mind the Unity↔glTF handedness/scale seam once, globally (Unity is left-handed Y-up; the nav-overlay ×100 child-scale hacks in the archive are a warning).
 - **Textures:** `toktx`/`basisu` → KTX2 UASTC + zstd (transcodes per-platform; matters for web GPU memory). Pixel-art UI stays PNG. Run all processing in a build script, not Bevy's asset processor (which doesn't run on wasm) — deploy processed output.
-- **Data conversion (one-shot tool):** parse the 79 ScriptableObject YAMLs (+ `.meta` GUID map + sprite-atlas fileID maps) → RON records (`WeaponDef`, `ShipClassDef` — merging card + prefab loadout, `FactionDef`, `MarineEfficiencyCurve`, `PlanetTemplate`, `LineStyle`, warning strings, reputation seeds), enums as names not Unity ints. **Repair the id corruption first** (five duplicate/self-colliding card ids, six missing ids, one duplicated weapon id — fully cataloged in the audit); assert id uniqueness at load forever after. Keep the composite per-mount weapon-save key scheme. Skip the audited dead data (ShipPrefabLibrary, orphan weapon assets/icons, `shotCountPerRound`, Mission3 card clones).
+- **Data conversion (one-shot tool):** parse the 79 ScriptableObject YAMLs (+ `.meta` GUID map + sprite-atlas fileID maps) → RON records (`WeaponDef`, `ShipClassDef` — merging card + prefab loadout, `FactionDef`, `MarineEfficiencyCurve`, `PlanetTemplate`, `LineStyle`, warning strings, reputation seeds), enums as names not Unity ints. **Repair the id corruption first** (five duplicate/self-colliding card ids, six missing ids, one duplicated weapon id — fully cataloged with asset paths in [`reference/DATA_AUDIT.md`](./reference/DATA_AUDIT.md)); assert id uniqueness at load forever after. Keep the composite per-mount weapon-save key scheme. Skip the audited dead data (ShipPrefabLibrary, orphan weapon assets/icons, `shotCountPerRound`, Mission3 card clones).
 - **Audio:** all source clips are lost from the archive — re-source ~8 slots (2 music, engine loop, afterburner, 2 explosion one-shots, UI); the audio system itself is tiny (one music channel + positional one-shots) via `bevy_kira_audio`.
 
 ---
@@ -247,7 +253,9 @@ The audit's capability list (DESIGN §9) is deliberately modest — lists, 3-sta
 
 **Phase 0 — Foundations (the bet-validating slice).** `sim_core` skeleton: ship state, Bézier movement, tick loop, orders; CI determinism hash test (3 platforms) from the *first week*. Bevy shell rendering sim state with interpolation; camera rig; minimal egui HUD (end turn, move order). *Exit: one ship flies a planned curve identically on native and wasm/WebGPU, hashes matching.*
 
-**Phase 1 — The tactical vertical slice.** Weapons (beam/cannon/missile) resolved in-sim + event-driven FX; subsystems/armor/drift; boarding; the nav widget + overlays (vector renderer v1) + predictive scrubber; skirmish goals; AI port. *Exit: a full Skirmish battle, feel-matched against the Unity build, replayable from a file.*
+**Phase 1 — The tactical vertical slice.** Weapons (beam/cannon/missile) resolved in-sim + event-driven FX; subsystems/armor/drift; boarding; the nav widget + overlays (vector renderer v1) + predictive scrubber; skirmish goals; AI port. *Exit: a full Skirmish battle, feel-matched (see below), replayable from a file.*
+
+*A note on the feel-match reference:* the archive as committed cannot produce a running Unity build (the DevLocker SceneReference package, `ProjectSettings/`, and all audio are missing). Either (a) resurrect a runnable Unity reference early in Phase 0 — reinstall DevLocker's SceneReference, reconstruct the layer/tag table documented in DESIGN §11.2, stub the 8 missing audio clips — or (b) if a playable build still exists outside the archive, use it; failing both, define feel-parity against recorded gameplay footage plus the documented constants and the shared preview/execution math. Decide which in Phase 0, because requirement 12 hangs on it.
 
 **Phase 2 — Look and authoring.** Hybrid shadow system prototype (**do this early — it's the top rendering risk**); planet/plume/skybox shader ports; asset pipeline + converted content; in-game scenario editor v1; remaining mission types + stealth.
 
