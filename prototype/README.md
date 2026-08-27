@@ -93,16 +93,21 @@ rather than assuming:
 Input goes through Pointer Events, so one code path serves mouse, pen and
 touch, and the harness runs on a phone as well as a desktop.
 
+A drag is routed by where it starts. Inside the dashed ring on the working
+altitude it is a move order; anywhere outside it belongs to the camera. The
+ring is drawn, so the boundary between "order" and "look around" is visible
+rather than guessed, and orbiting can never cost you an order by accident.
+
 | | desktop | touch |
 | --- | --- | --- |
-| place destination | drag in empty space | one finger drag |
+| place destination | drag inside the ring | one finger inside the ring |
 | working altitude, and so the slice | `Q` / `E` | the pad's up and down |
 | rotate heading | drag the white pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
 | select / target | click a ship | tap a ship, or a row in the Ships sheet |
-| orbit | right button drag | two finger drag, or the left pad's arrows |
-| pan | middle button drag | the left pad, with its centre button set to slide |
-| zoom | wheel | pinch, or the left pad's + and - |
-| centre on selected ship | the left pad's ◎ | the left pad's ◎ |
+| orbit | drag outside the ring, or right button drag | one finger outside the ring |
+| pan | middle button drag, or ✥ then drag outside | ✥ then one finger outside, or two fingers |
+| zoom | wheel | pinch |
+| centre on selected ship | ⊕ | ⊕ |
 | 15 degree yaw, face target | `A`/`D`, `F` | the round pad at the right edge |
 | frame the fleet and its envelope | `Fit view` | `Fit view` in the tab bar |
 
