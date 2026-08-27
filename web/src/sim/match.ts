@@ -59,6 +59,7 @@ export interface MatchExports {
   ft_ship_preview(ship: number, mode: number, samples: number): number;
   ft_read_class(index: number): number;
   ft_read_mount(classIdx: number, mount: number): number;
+  ft_nominal_reach(ship: number): number;
 }
 
 function v3(s: Float32Array, b: number): Vec3 {
@@ -201,6 +202,15 @@ export class Match {
       batch: s[OUT + 9] ?? 1,
       mount: v3(s, OUT + 10),
     };
+  }
+
+  /**
+   * How far this ship covers in a turn from rest. Only used to size the box
+   * the envelope is probed over: the shape inside it comes from flying every
+   * cell, not from this number.
+   */
+  nominalReach(ship: number): number {
+    return this.#ex.ft_nominal_reach(ship);
   }
 
   setFlight(ship: number, f: ClassInfo['flight']): void {

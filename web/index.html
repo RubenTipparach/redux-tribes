@@ -3,19 +3,266 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
 <title>Fallen Tribes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Michroma&family=Exo+2:wght@400;600;700&family=Rajdhani:wght@600;700&display=swap">
 <style>
-  :root { color-scheme: dark; }
-  html, body { margin:0; height:100%; background:#0A0E14; color:#D8E2EC;
-    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
-  canvas { display:block; width:100%; height:100%; touch-action:none; }
-  #hud { position:fixed; top:12px; left:14px; font-size:12px; line-height:1.6;
-    color:#7C8B9D; pointer-events:none; }
-  #hud b { color:#35C7FF; }
+/* Deliberately single theme: a dark tactical console, which is the game's own
+   world rather than a preference to be toggled. */
+:root {
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--ground); color:var(--ink);
+  font-family:"Exo 2",system-ui,-apple-system,"Segoe UI",sans-serif; font-size:14px;
+  overflow:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+
+/* minmax(0,1fr) rather than 1fr on both axes: a bare 1fr track carries an
+   automatic min-content minimum, so one wide child (the fire slot strip) can
+   inflate its row and push the rest of the layout off a phone screen. */
+#app { display:grid; grid-template-columns: 250px minmax(0,1fr) 290px;
+  grid-template-rows: 46px minmax(0,1fr) 78px; height:100vh; height:100dvh; min-width:0; }
+
+header { grid-column:1/4; display:flex; align-items:center; gap:16px; padding:0 14px;
+  background:var(--panel2); border-bottom:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
+header h1 { font-family:Michroma,"Rajdhani",sans-serif; font-size:13px; font-weight:400;
+  letter-spacing:.12em; margin:0; color:var(--cyan); white-space:nowrap; }
+.hgap { flex:1; }
+.stat { font-family:Rajdhani,system-ui,sans-serif; font-weight:600; font-size:12px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); white-space:nowrap; }
+.stat b { color:var(--ink); }
+
+button { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.1em;
+  text-transform:uppercase; font-size:12px; touch-action:manipulation;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:4px; padding:6px 12px; cursor:pointer; }
+button:hover { border-color:var(--cyan); color:var(--cyan); }
+button:disabled { opacity:.35; cursor:default; }
+button.primary { background:var(--cyan); color:#04131c; border-color:var(--cyan); }
+button.primary:hover { color:#04131c; filter:brightness(1.1); }
+button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
+
+#left, #right { background:var(--panel2); border-right:1px solid var(--line);
+  padding:10px; overflow-y:auto; }
+#right { border-right:0; border-left:1px solid var(--line); }
+.sect { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:12px 0 6px; }
+.sect:first-child { margin-top:0; }
+
+#cv { grid-column:2; grid-row:2; display:block; background:var(--ground); cursor:crosshair;
+  width:100%; height:100%; min-width:0; min-height:0; touch-action:none;
+  -webkit-user-select:none; user-select:none; }
+#cv.rotating { cursor:none; }
+
+footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px;
+  background:var(--panel2); border-top:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
+#slots { display:flex; gap:3px; }
+.slot { width:30px; height:30px; border:1px solid var(--line); border-radius:3px;
+  display:flex; align-items:center; justify-content:center;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
+  color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
+.slot:hover { border-color:var(--cyan); }
+.slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+.slot.mark::after { content:""; position:absolute; bottom:2px; left:50%;
+  transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
+#scrub { flex:1; }
+input[type=range] { width:100%; accent-color:var(--cyan); }
+
+#log { font-size:12px; line-height:1.5; }
+#log div { padding:1px 0; border-bottom:1px solid #131c29; color:var(--muted); }
+#log .hit { color:var(--ink); } #log .bad { color:var(--red); }
+#log .good { color:var(--green); } #log .warn { color:var(--orange); }
+
+.shipRow { padding:5px 6px; border:1px solid var(--line); border-radius:4px;
+  margin-bottom:5px; cursor:pointer; }
+.shipRow:hover { border-color:var(--cyan); }
+.shipRow.sel { border-color:var(--cyan); background:#0d2231; }
+.shipRow.gone { opacity:.4; }
+.shipRow .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.06em; }
+.bar { height:4px; background:#1a2634; border-radius:2px; margin-top:3px; overflow:hidden; }
+.bar i { display:block; height:100%; background:var(--cyan); }
+.enemy .bar i { background:var(--orange); }
+.sub { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); }
+.sub.dead { color:var(--red); text-decoration:line-through; }
+.wrow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
+  padding:3px 4px; border:1px solid var(--line); border-radius:4px; margin-bottom:4px;
+  cursor:pointer; }
+.wrow.armed { border-color:var(--cyan); background:#0d2231; }
+.wrow.spent { opacity:.4; cursor:default; }
+.wrow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.06em; }
+.hint { font-size:11px; color:var(--muted); line-height:1.5; }
+.modes { display:flex; flex-wrap:wrap; gap:4px; }
+.tune { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
+  margin-bottom:3px; }
+.tune span { flex:0 0 62px; }
+.tune input { flex:1; }
+.tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600; }
+kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
+  padding:0 4px; font-size:11px; }
+#lPlay { margin-left:10px; }
+#turns { margin-bottom:8px; }
+#turns button { padding:4px 8px; font-size:11px; }
+
+/* --------------------------------------------------------------- mobile --
+   Below 900px the three pane console collapses to a canvas first shell: the
+   side rails become bottom sheets on a tab bar, and the nudges that were
+   keyboard only get an on canvas pad, since a phone has no Q/E/A/D/F. */
+#tabbar { display:none; }
+
+/* One control row, sharing the canvas grid cell and pinned to its bottom edge,
+   at every size. It cannot overlap the footer, the tab bar or the sheets by
+   construction rather than by arithmetic. */
+#toolbar { display:flex; align-items:center; gap:6px;
+  grid-column:2; grid-row:2; align-self:end; justify-self:center;
+  z-index:6; margin-bottom:12px; pointer-events:none; }
+#toolbar button { pointer-events:auto; flex:0 0 auto;
+  width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
+  background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+#toolbar button.off { opacity:.28; }
+.tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+
+@media (max-width: 900px) {
+  #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
+  header { grid-column:1; grid-row:1; height:46px; gap:9px; padding:0 10px; min-width:0; }
+  header h1 { font-size:11px; letter-spacing:.07em; flex:0 0 auto; }
+  header h1 .lng { display:none; }
+  .diag { display:none; }            /* hash and seed are desk diagnostics */
+  #cv { grid-column:1; grid-row:2; }
+  footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px;
+    gap:8px 10px; min-width:0; }
+  #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
+  #slots::-webkit-scrollbar { display:none; }
+  #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
+  #scrub { min-width:130px; }
+
+  #left, #right { position:fixed; left:0; right:0; top:auto;
+    bottom:calc(var(--tabh) + var(--safe));
+    height:min(56dvh, 440px); z-index:7; border:0; border-top:1px solid var(--line);
+    box-shadow:0 -14px 34px #000a; padding:12px 12px 24px;
+    transform:translateY(calc(100% + var(--tabh) + var(--safe)));
+    transition:transform .22s ease; }
+  #left.open, #right.open { transform:none; }
+
+  #tabbar { display:flex; grid-column:1; grid-row:4; z-index:8;
+    height:calc(var(--tabh) + var(--safe)); padding-bottom:var(--safe);
+    background:var(--panel2); border-top:1px solid var(--line); }
+  #tabbar button { flex:1; height:100%; padding:0; border:0; border-radius:0;
+    background:transparent; color:var(--muted); font-size:11px; }
+  #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
+
+  #toolbar { grid-column:1; }
+  button { padding:10px 13px; }
+  .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
+  .shipRow { padding:9px 8px; margin-bottom:7px; }
+  .wrow { padding:8px 6px; }
+  .modes { gap:6px; }
+  input[type=range] { height:36px; }
+}
+
+/* Phone held sideways: only about 390px of height exists and stacked chrome
+   ate most of it. Stand the tab bar up as a left rail, put the transport on
+   one row, and slide the sheets in from the side. */
+@media (max-width: 900px) and (max-height: 560px) {
+  #app { grid-template-columns:54px minmax(0,1fr); grid-template-rows:40px minmax(0,1fr) auto; }
+  header { grid-column:1/3; grid-row:1; height:40px; }
+  #cv { grid-column:2; grid-row:2; }
+  #tabbar { flex-direction:column; grid-column:1; grid-row:2/4; width:54px; height:auto;
+    padding-bottom:0; border-top:0; border-right:1px solid var(--line); }
+  #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
+  #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
+  footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
+  #lSlots, #lPlay { display:none; }
+  .slot { width:32px; height:32px; }
+  input[type=range] { height:30px; }
+  #left, #right { left:54px; right:auto; top:40px; bottom:0;
+    width:min(330px, 54vw); height:auto; border-top:0; border-right:1px solid var(--line);
+    box-shadow:14px 0 34px #000a; transform:translateX(-110%); }
+  #left.open, #right.open { transform:none; }
+  #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
+  #toolbar button { width:38px; height:38px; font-size:13px; }
+}
+
+@media (prefers-reduced-motion: reduce) { #left, #right { transition:none; } }
 </style>
 </head>
 <body>
-<div id="hud">loading simulation…</div>
+<div id="app">
+  <header>
+    <h1>FALLEN&nbsp;TRIBES<span class="lng"> &middot; TACTICAL</span></h1>
+    <span class="stat">turn <b id="hTurn">0</b></span>
+    <span class="stat diag">hash <b id="hHash">-</b></span>
+    <span class="stat diag">seed <b id="hSeed">-</b></span>
+    <span class="hgap"></span>
+    <span class="stat" id="hPhase">PLANNING</span>
+    <button id="bEnd" class="primary">End Turn</button>
+  </header>
+
+  <div id="left">
+    <div class="sect">Fleet</div>
+    <div id="fleet"></div>
+    <div class="sect">Hostiles</div>
+    <div id="hostiles"></div>
+    <div class="sect">Selected &middot; Move Mode</div>
+    <div class="modes" id="modes"></div>
+    <div class="sect">Movement Envelope</div>
+    <div id="env" class="hint"></div>
+    <div class="sect">Flight Envelope</div>
+    <div id="envTune"></div>
+    <div class="sect">Weapons <span class="hint">(pick a weapon, then a slot)</span></div>
+    <div id="weps"></div>
+    <div class="sect">Boarding</div>
+    <button id="bBoard" disabled>Board Target</button>
+    <div class="sect">Session</div>
+    <div class="modes">
+      <button id="bRestart">Restart</button>
+    </div>
+    <div class="sect">Help</div>
+    <div class="hint" id="help"></div>
+  </div>
+
+  <canvas id="cv"></canvas>
+
+  <div id="right">
+    <div class="sect">Events</div>
+    <div class="modes" id="turns"></div>
+    <div id="log"></div>
+  </div>
+
+  <div id="tabbar">
+    <button id="tShips" aria-pressed="false">Ships</button>
+    <button id="tLog" aria-pressed="false">Events</button>
+    <button id="tFit">Fit view</button>
+  </div>
+
+  <div id="toolbar" aria-label="Camera and ship controls">
+    <button id="cMode" title="Drag on empty space orbits. Tap to pan instead.">&#10227;</button>
+    <button id="cCentre" title="Centre the camera on the selected ship">&#8853;</button>
+    <span class="tbsep"></span>
+    <button id="pUp" class="shipctl" title="Working altitude +5 (E)">&#9650;</button>
+    <button id="pDown" class="shipctl" title="Working altitude -5 (Q)">&#9660;</button>
+    <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left (A)">&#8634;</button>
+    <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">&#8635;</button>
+    <button id="pFace" class="shipctl" title="Face the target (F)">&#9678;</button>
+  </div>
+
+  <footer>
+    <span class="stat" id="lSlots">fire slot</span>
+    <div id="slots"></div>
+    <span class="stat" id="lPlay">playback</span>
+    <button id="bSpeed">1x</button>
+    <input type="range" id="scrub" min="0" max="600" value="0">
+    <span class="stat"><b id="hSec">0.0</b>s</span>
+  </footer>
+</div>
 <script type="module" src="./main.js"></script>
 </body>
 </html>

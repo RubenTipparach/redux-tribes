@@ -719,3 +719,18 @@ pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
     s[OUT + 12] = m.mount.z;
     1
 }
+
+/// A ship's nominal reach: roughly how far it covers in a turn from rest.
+///
+/// Not a movement rule, and not what the envelope is made of. The integrator
+/// decides where a ship can go and the client probes it cell by cell; this
+/// only says how big a box is worth probing. Exposed rather than recomputed on
+/// the client so the box, the AI's engagement distances and the flight stats
+/// all come from one number instead of two that can drift apart.
+#[no_mangle]
+pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
+    sim_opt()
+        .and_then(|s| s.ships.get(ship as usize))
+        .map(|sh| sh.flight.nominal_reach())
+        .unwrap_or(0.0)
+}
