@@ -8,13 +8,13 @@
 # Adapted from the high-frontier-fan-game deployment, which had already learned
 # most of these lessons the hard way. Bootstrap once with flyctl:
 #
-#   fly apps create fallen-tribes
+#   fly apps create redux-tribes
 #   fly volumes create ft_data --size 1 --region ams
 #
 # No secrets to configure: the server is passwordless and per player tokens are
 # stored only as sha256 hashes. Deploys are automatic thereafter.
 
-app = "fallen-tribes"
+app = "redux-tribes"
 primary_region = "ams"
 
 [build]
