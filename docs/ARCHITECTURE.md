@@ -49,6 +49,36 @@ Two facts from the code audit shape everything below:
 - One breaking Bevy migration every ~4–5 months (mitigation: thin dependency surface — see the "no netcode crate" and "own snapshot structs" decisions below; pin and batch upgrades).
 - No official editor for realistically another year+ (mitigation: ADR-8's two-track authoring; the community/official editor becomes an upgrade, not a dependency).
 - Wasm is effectively single-threaded (fine for 5–20 kinematic ships; budget procgen work per-frame).
+- **Compile times and dev-mode performance** — the owner's lived pain with Bevy, addressed head-on in the addendum below rather than waved away.
+
+### ADR-1 Addendum: Iteration Speed — the Owner's Objection and the Alternatives Shortlist
+
+The owner has shipped Bevy work before and disliked two things: **cold/incremental build times** and **dev-mode slowdowns**. Both are real, both have known causes, and both are now recorded acceptance criteria — if the mitigated dev loop still feels bad at the Phase 1 exit, the fallback order below is the plan, not a scramble.
+
+**First, the mitigation stack for staying on Bevy** (these transform the experience and most people never configure them):
+
+1. **Dev-mode slowdowns are mostly unoptimized dependencies.** The standard fix in `Cargo.toml`: your own crate at `opt-level = 1`, all dependencies at `opt-level = 3` (`[profile.dev.package."*"]`). Bevy in a plain debug profile is genuinely unplayable; with this split it's fine — this alone usually cures the "dev mode is slow" complaint.
+2. **Incremental link time:** `bevy/dynamic_linking` for dev builds (note: it briefly broke in the 0.18 release — churn evidence, [bevy#22654](https://github.com/bevyengine/bevy/issues/22654)) plus a fast linker (`mold` on Linux, `lld` elsewhere).
+3. **Codegen:** the **Cranelift** backend for the dev profile compiles dramatically faster than LLVM (cost: worse debug-info/inspection — [bevy#19916](https://github.com/bevyengine/bevy/issues/19916)).
+4. **Hotpatching:** the Dioxus `subsecond`-based hotpatch path ([TheBevyFlock/bevy_hotpatching_experiments](https://github.com/TheBevyFlock/bevy_hotpatching_experiments)) edits running systems without a restart, and WGSL shader hot-reload is built in — together they cover the two tightest loops this project has (gameplay tuning and shader porting).
+5. **Structural:** the ADR-2 split already keeps `sim_core` a small, fast-compiling crate — sim iteration (the balance/feel loop) never pays Bevy's compile bill at all, and its tests run headless in seconds.
+
+**The alternatives shortlist**, judged against the requirements (WebGPU req 7, wasm req 8, rendering reqs 1–3, editor req 4) and iteration speed:
+
+| Option | Iteration speed | What it is | Honest fit here |
+|---|---|---|---|
+| **sokol** (+ official auto-generated `sokol-rust` bindings) | Excellent — C headers, seconds to build | Thin cross-platform GPU/app/audio layer; backends: Metal, D3D11, GL, **and an actively maintained WebGPU backend** | The best *custom-engine core* on the list: keeps req 7 alive on web, tiny and stable. But it is a graphics layer, not an engine — scene graph, glTF, CSM shadows, post stack, UI, asset pipeline are all yours to build, so ADR-1's 12–24-month custom-engine estimate still applies (minus the lowest-level plumbing). Wasm via Emscripten, not wasm-bindgen. |
+| **raylib 5.5/6** (`raylib-rs` / the maintained `sola-raylib` fork) | Excellent | Batteries-included C library: windowing, 2D/3D drawing, input, audio, raygui | The fastest way to see pixels, and a superb **prototyping frontend** — but the renderer is OpenGL-class (a wgpu port is [only a discussion](https://github.com/raysan5/raylib/discussions/4505)), there's no PBR/CSM pipeline of the sort reqs 1–3 demand, and web is Emscripten/WebGL. Prototype in it; don't ship the space-visuals bar with it. |
+| **macroquad/miniquad** | Excellent — pure Rust, near-instant builds, tiny wasm | Minimal Rust game lib | Same verdict as raylib but Rust-native with painless wasm. Ideal for the **debug/replay viewer and Phase 0–1 sim visualizer** (which we want anyway). Minimal 3D, GL-class — not the shipping renderer. |
+| **Fyrox 1.0** | Good — notably quick iterative compiles, prebuilt editor | Full engine + shipped editor (see ADR-1 table) | Iteration speed and FyroxEd are its genuine strengths; still fails req 7 (OpenGL/WebGL2 only, no wgpu backend scheduled) and carries the bus-factor risk. |
+| **Godot 4.6 + gdext** | **Best on the list** — the engine is prebuilt; you recompile only a small gameplay dylib, with editor hot-reload | Full engine + editor, Rust as an extension | Under an iteration-speed criterion Godot's case *strengthens*: near-instant builds, live editor. The blockers are unchanged (WebGL2-class web, experimental gdext wasm toolchain — ADR-1). The recorded fallback if web fidelity is negotiable. |
+| **three-d / rend3 / SDL3-GPU bindings** | Good | Small Rust renderers / the new SDL3 GPU abstraction | three-d is GL-class; rend3 is unmaintained; SDL3's modern-API GPU layer is promising but its browser story is immature. Watch items, not foundations. |
+
+**The synthesis — and why this is a cheap decision now:** the ADR-2/ADR-6 architecture (engine-free `sim_core`, lockstep, event-driven FX) makes the renderer a *swappable frontend*. So the plan:
+
+1. **Phase 0–1 builds the sim with a thin visualizer** (macroquad or raylib — pick whichever feels better in an afternoon), which doubles as the permanent debug/replay viewer. All feel-critical iteration (movement constants, combat, collision) happens here at C-like compile speeds, insulated from any engine.
+2. **Bevy is adopted for the real renderer with the full mitigation stack from day one**, and judged on the Phase 1 slice: if the mitigated loop still grates, fall back — **Godot+gdext** if the web build may be WebGL2-class, **sokol as the custom-engine core** if WebGPU-on-web stays non-negotiable and the tooling bill is accepted.
+3. Either way `sim_core`, the replay format, the content data, and the server move unchanged — the engine choice stops being a years-long bet and becomes a revisitable frontend decision.
 
 ---
 
