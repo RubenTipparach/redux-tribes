@@ -670,12 +670,22 @@ impl Sim {
                 .filter(|_| self.ships[si].marines <= 0);
             if let Some(pi) = capture {
                 let party = self.ships[si].boarding_parties[pi];
-                let now_player = self.ships.iter().any(|s| s.is_player && s.faction == party.faction);
+                // A captured hull joins whichever side already flies that
+                // faction, and picks up that side's kind of commander. Reading
+                // the side off an existing ship rather than assuming side 1 is
+                // what makes a three way capture chain land correctly.
+                let new_side = self
+                    .ships
+                    .iter()
+                    .find(|s| s.faction == party.faction)
+                    .map(|s| s.side)
+                    .unwrap_or(0);
+                let now_human = self.side_is_human(new_side);
                 let ship = &mut self.ships[si];
                 ship.faction = party.faction;
                 ship.marines = party.count;
-                ship.is_player = now_player;
-                ship.ai_enabled = !now_player;
+                ship.side = new_side;
+                ship.ai_enabled = !now_human;
                 ship.boarding_parties.remove(pi);
 
                 // The prize crew gets the engines turning again: the archive's
@@ -818,11 +828,11 @@ impl Sim {
         }
 
         // Win and lose are decided at the turn boundary only.
-        let player_alive = self.ships.iter().any(|s| !s.destroyed && s.is_player);
-        let enemy_alive = self.ships.iter().any(|s| !s.destroyed && !s.is_player);
-        if !enemy_alive && player_alive {
+        let side0_alive = self.ships.iter().any(|s| !s.destroyed && s.side == 0);
+        let side1_alive = self.ships.iter().any(|s| !s.destroyed && s.side != 0);
+        if !side1_alive && side0_alive {
             self.game_over = Some(Winner::Player);
-        } else if !player_alive {
+        } else if !side0_alive {
             self.game_over = Some(Winner::Enemy);
         }
         if let Some(w) = self.game_over {
@@ -919,7 +929,7 @@ impl Sim {
         for s in &self.ships {
             int(s.id as i32, &mut byte);
             int(s.faction.index() as i32, &mut byte);
-            int(s.is_player as i32, &mut byte);
+            int(s.side as i32, &mut byte);
             int(s.destroyed as i32, &mut byte);
             for v in [s.pos.x, s.pos.y, s.pos.z, s.vel.x, s.vel.y, s.vel.z] {
                 num(v, &mut byte);

@@ -73,11 +73,26 @@ $ curl -sS https://redux-tribes.fly.dev/healthz
 All four must pass before a push:
 
 ```sh
-node prototype/cli.js test                  # 18, the JS design reference
-cd engine/sim_core && cargo test            # the Rust core (tests/, not the lib target)
-npm --prefix web test                       # the wasm boundary
-npm --prefix server test                    # the lockstep API
+node prototype/cli.js test                  # 21, the JS design reference
+cd engine/sim_core && cargo test            # 23, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 16, the wasm boundary
+npm --prefix server test                    # 9, the lobby and the lockstep API
 ```
+
+`npm --prefix server test` builds first on purpose. It used to run straight
+against `dist/`, so a change to the server could pass a suite that had never
+seen it.
+
+## Sides are a match fact, not a point of view
+
+A ship's `side` is 0 or 1 for everyone. It is NOT "mine". The state hash covers
+it, so a flag meaning "the ships I control" makes two clients playing each
+other disagree from the first turn and read as a desync. Whether a hull is
+yours is `side === mySide`, and only the client knows `mySide`.
+
+The same goes for who flies a side: `humanSides` is a bitmask passed to
+`ft_match_new`, because an AI side plans its own orders and retaliates, which
+changes the simulation. Both clients must pass the same value.
 
 Determinism is checked, not assumed:
 `NODE_PATH=/opt/node22/lib/node_modules node prototype/tools/xclient-check.js`.

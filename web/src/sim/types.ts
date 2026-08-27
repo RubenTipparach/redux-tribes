@@ -159,7 +159,13 @@ export interface ShipState {
   readonly id: number;
   readonly cls: number;
   readonly faction: number;
-  readonly isPlayer: boolean;
+  /**
+   * Which side of the match this hull fights for, 0 or 1. NOT "mine": the
+   * simulation has no idea who is looking at it, and must not, or two clients
+   * playing each other would hash differently from the first turn. Whether a
+   * ship is yours is `side === mySide`, which only the client knows.
+   */
+  readonly side: number;
   readonly destroyed: boolean;
   readonly hull: number;
   readonly hullMax: number;

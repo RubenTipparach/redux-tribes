@@ -83,6 +83,11 @@ export class View {
 
   #ships: ShipState[] = [];
   #selected = -1;
+  /**
+   * Which side this client is sitting in. A rendering concern only: the
+   * simulation never knows, which is what lets both seats hash the same.
+   */
+  mySide = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
   #shellKey = '';
   #planeKey = '';
@@ -171,7 +176,10 @@ export class View {
 
   orbit(dx: number, dy: number): void {
     this.#yaw -= dx * 0.005;
-    this.#pitch = Math.max(-1.45, Math.min(1.45, this.#pitch - dy * 0.005));
+    // Dragging down raises the camera, so you end up looking down at the
+    // fleet. That is the way three.js OrbitControls and most 3D tools go, and
+    // it was backwards here.
+    this.#pitch = Math.max(-1.45, Math.min(1.45, this.#pitch + dy * 0.005));
   }
 
   pan(dx: number, dy: number): void {
@@ -275,7 +283,7 @@ export class View {
         const geo = new THREE.ConeGeometry(s.radius * 0.62, s.radius * 2.1, 5);
         geo.rotateX(Math.PI / 2);
         mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-          color: s.isPlayer ? CYAN : ORANGE, flatShading: true, roughness: 0.55,
+          color: s.side === this.mySide ? CYAN : ORANGE, flatShading: true, roughness: 0.55,
         }));
         this.#hulls.set(s.id, mesh);
         this.#scene.add(mesh);
@@ -284,7 +292,9 @@ export class View {
       mesh.quaternion.set(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
       mesh.visible = !s.destroyed;
       const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.color.setHex(s.destroyed ? 0x33404f : s.drifting ? RED : s.isPlayer ? CYAN : ORANGE);
+      mat.color.setHex(
+        s.destroyed ? 0x33404f : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE,
+      );
     }
   }
 

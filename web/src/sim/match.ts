@@ -30,7 +30,7 @@ export interface MatchExports {
   readonly memory: WebAssembly.Memory;
   ft_scratch_ptr(): number;
   ft_scratch_len(): number;
-  ft_match_new(seedHi: number, seedLo: number, scenario: number): number;
+  ft_match_new(seedHi: number, seedLo: number, scenario: number, humanSides: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
   ft_game_over(): number;
@@ -97,11 +97,16 @@ export class Match {
    * Start a match. The seed is the same 16 hex character string the server
    * issues, split into halves because the boundary carries 32 bit values.
    */
-  start(seed: string, scenario: Scenario): void {
+  /**
+   * Start a match. `humanSides` is a bit per side, set where a person plays
+   * it. It goes to the core rather than staying here because it changes the
+   * simulation, and two clients that disagreed about it would part on turn one.
+   */
+  start(seed: string, scenario: Scenario, humanSides = 0b01): void {
     const clean = seed.replace(/[^0-9a-f]/gi, '').padStart(16, '0').slice(-16);
     const hi = parseInt(clean.slice(0, 8), 16) >>> 0;
     const lo = parseInt(clean.slice(8), 16) >>> 0;
-    this.#ex.ft_match_new(hi, lo, scenario);
+    this.#ex.ft_match_new(hi, lo, scenario, humanSides);
     this.orders.clear();
     this.history.length = 0;
   }
@@ -141,7 +146,7 @@ export class Match {
         id: s[b] ?? i,
         cls: s[b + 1] ?? 0,
         faction: s[b + 2] ?? 0,
-        isPlayer: (s[b + 3] ?? 0) !== 0,
+        side: s[b + 3] ?? 0,
         destroyed: (s[b + 4] ?? 0) !== 0,
         hull: s[b + 5] ?? 0,
         hullMax: s[b + 6] ?? 1,
@@ -257,13 +262,18 @@ export class Match {
   }
 
   /**
-   * Push every planned order into the core and resolve. Everything the player
-   * decided crosses in one go, immediately before the turn runs, so nothing
-   * the core holds can be stale relative to what is on screen.
+   * Resolve the turn from a complete order set.
+   *
+   * Every seat's orders come in together, which is what makes this the same
+   * call in a solo game and a versus one: offline, the set is just this
+   * client's own plan, and the core plans the AI side itself. Ships are staged
+   * in id order rather than map order so two clients that received the same
+   * orders in a different sequence still stage them identically.
    */
-  endTurn(): SimEvent[] {
+  resolveWith(all: ReadonlyMap<number, PlannedOrder>): SimEvent[] {
     this.#ex.ft_orders_clear();
-    for (const [ship, o] of this.orders) {
+    for (const ship of [...all.keys()].sort((a, b) => a - b)) {
+      const o = all.get(ship)!;
       const t = o.target;
       const f = o.face;
       this.#ex.ft_set_move(
@@ -302,6 +312,11 @@ export class Match {
     // has already watched play out.
     this.orders.clear();
     return events;
+  }
+
+  /** Resolve from this client's own plan alone: offline, or a solo game. */
+  endTurn(): SimEvent[] {
+    return this.resolveWith(this.orders);
   }
 
   // ------------------------------------------------------------ playback --

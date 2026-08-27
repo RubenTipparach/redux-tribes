@@ -35,7 +35,7 @@
 //!
 //! Record layouts, all f32, all written from slot 64:
 //!
-//!   ship   40 slots: id, class, faction, isPlayer, destroyed, hull, hullMax,
+//!   ship   40 slots: id, class, faction, side, destroyed, hull, hullMax,
 //!          marines, pos(3), quat(4), vel(3), mode, drifting, subCount,
 //!          sub hp+dead (3 pairs), weaponCount, lastFiredTurn (3),
 //!          partyCount, party faction+count (2 pairs)
@@ -217,13 +217,19 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
 
 // ------------------------------------------------------------- the match --
 
-/// Start a skirmish. The seed arrives as two u32 halves and is reassembled
-/// into the same 16 character hex string the server issues, so a client and
-/// the server name the same match without any string marshalling.
+/// Start a match. The seed arrives as two u32 halves and is reassembled into
+/// the same 16 character hex string the server issues, so a client and the
+/// server name the same match without any string marshalling.
+///
+/// `human_sides` is a bit per side: set means a person plays it, clear means
+/// the AI does. It belongs here rather than on the client because it changes
+/// the simulation (an AI side plans its own orders and retaliates), and two
+/// clients that disagreed about it would part on the first turn. 1 is a solo
+/// game against the AI, 3 is two people.
 ///
 /// Returns the number of ships.
 #[no_mangle]
-pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32) -> u32 {
+pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_sides: u32) -> u32 {
     // Written out by hand rather than with format!, which would drag Rust's
     // whole formatting machinery into the module for sixteen characters. The
     // result is byte identical to the server's lowercase hex seed, so a match
@@ -235,10 +241,11 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32) -> u32
         *byte = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + (nibble as u8 - 10) };
     }
     let seed = core::str::from_utf8(&hex).unwrap_or("0000000000000000");
+    let mask = (human_sides & 0b11) as u8;
     let sim = match scenario {
-        1 => scenario_duel(seed),
-        2 => scenario_convoy(seed),
-        _ => scenario_skirmish(seed),
+        1 => scenario_duel(seed, mask),
+        2 => scenario_convoy(seed, mask),
+        _ => scenario_skirmish(seed, mask),
     };
     let n = sim.ships.len();
     unsafe {
@@ -258,7 +265,7 @@ fn spec(class: crate::data::ShipClassId, p: (f32, f32, f32), f: (f32, f32, f32))
     SpawnSpec { class, pos: V3::new(p.0, p.1, p.2), facing: V3::new(f.0, f.1, f.2) }
 }
 
-fn scenario_skirmish(seed: &str) -> Sim {
+fn scenario_skirmish(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
     Sim::new_skirmish(
         seed,
@@ -271,22 +278,24 @@ fn scenario_skirmish(seed: &str) -> Sim {
             spec(RogueFrigate, (40.0, -4.0, -10.0), (-1.0, 0.0, 0.0)),
         ],
         Faction::Karisen,
+        human_sides,
     )
 }
 
-fn scenario_duel(seed: &str) -> Sim {
+fn scenario_duel(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
     Sim::new_skirmish(
         seed,
         &[spec(TerranFrigate, (-30.0, 0.0, 0.0), (1.0, 0.0, 0.0))],
         &[spec(KarisenFrigate, (30.0, 0.0, 0.0), (-1.0, 0.0, 0.0))],
         Faction::Karisen,
+        human_sides,
     )
 }
 
 /// A freighter worth taking rather than killing, escorted by something that
 /// objects. The boarding rules only bite when there is a hull worth boarding.
-fn scenario_convoy(seed: &str) -> Sim {
+fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
     Sim::new_skirmish(
         seed,
@@ -299,6 +308,7 @@ fn scenario_convoy(seed: &str) -> Sim {
             spec(BenefactorFrigate, (30.0, -3.0, 18.0), (-1.0, 0.0, 0.0)),
         ],
         Faction::Benefactor,
+        human_sides,
     )
 }
 
@@ -312,7 +322,8 @@ pub extern "C" fn ft_turn_index() -> i32 {
     sim_opt().map(|s| s.turn).unwrap_or(0)
 }
 
-/// -1 while the match is live, else the winner: 0 player, 1 enemy.
+/// -1 while the match is live, else the winning SIDE, 0 or 1. Which of those
+/// is a victory is the client's question, since it depends on the seat.
 #[no_mangle]
 pub extern "C" fn ft_game_over() -> i32 {
     match sim_opt().and_then(|s| s.game_over) {
@@ -348,7 +359,7 @@ pub extern "C" fn ft_read_ships() -> u32 {
         s[b] = ship.id as f32;
         s[b + 1] = class_index(ship.class) as f32;
         s[b + 2] = ship.faction.index() as f32;
-        s[b + 3] = ship.is_player as u32 as f32;
+        s[b + 3] = ship.side as f32;
         s[b + 4] = ship.destroyed as u32 as f32;
         s[b + 5] = ship.hull;
         s[b + 6] = ship.hull_max;

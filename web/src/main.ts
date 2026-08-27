@@ -11,6 +11,8 @@
 import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
 import { View } from './app/view.js';
+import { Lobby, randomSeed, type Launch } from './app/lobby.js';
+import { Api } from './net/api.js';
 import {
   type Flight, type PlannedOrder, type ShipState, type SimEvent, type Vec3,
   CLASS_NAMES, EventKind, FACTION_NAMES, Mode, Scenario,
@@ -59,18 +61,25 @@ let speed = 1;
 /** null means live; a number means a past turn is being reviewed. */
 let reviewTurn: number | null = null;
 let flightOverride = new Map<number, Flight>();
+/** How this match was entered, which decides how its turns are resolved. */
+let launch: Launch = { kind: 'offline', seed: '', scenario: 'skirmish', humanSides: 0b01, side: 0 };
+/** True while a committed turn is waiting on the other seat. */
+let waiting = false;
 
-function randomSeed(): string {
-  const b = new Uint8Array(8);
-  crypto.getRandomValues(b);
-  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
-}
+/**
+ * Is this hull mine? The simulation only knows sides, deliberately, so this
+ * is the one place the seat is applied and everything else asks here.
+ */
+const mine = (s: ShipState): boolean => s.side === launch.side;
 
 function start(): void {
-  match.start(seed, Scenario.Skirmish);
+  match.start(seed, Scenario.Skirmish, launch.humanSides);
+  view.mySide = launch.side;
+  waiting = false;
+  banner(false);
   flightOverride = new Map();
   ships = match.ships();
-  selected = ships.find(s => s.isPlayer)?.id ?? -1;
+  selected = ships.find(mine)?.id ?? -1;
   armedWeapon = -1;
   playTick = null;
   playing = false;
@@ -96,12 +105,12 @@ function flightOf(id: number): Flight {
 }
 
 const shipName = (s: ShipState): string =>
-  `${s.isPlayer ? 'P' : 'E'}${s.id + 1} ${CLASS_NAMES[s.cls] ?? '?'}`;
+  `${mine(s) ? 'P' : 'E'}${s.id + 1} ${CLASS_NAMES[s.cls] ?? '?'}`;
 
 /** Planning is only possible on a live player ship, on the live turn. */
 const canPlan = (): boolean => {
   const s = selectedShip();
-  return reviewTurn === null && playTick === null && !!s && s.isPlayer && !s.destroyed;
+  return reviewTurn === null && playTick === null && !waiting && !!s && mine(s) && !s.destroyed;
 };
 
 // ------------------------------------------------------------- panels --
@@ -126,8 +135,8 @@ function renderFleet(): void {
       host.appendChild(div);
     }
   };
-  rows(ships.filter(s => s.isPlayer), $('fleet'), false);
-  rows(ships.filter(s => !s.isPlayer), $('hostiles'), true);
+  rows(ships.filter(mine), $('fleet'), false);
+  rows(ships.filter(s => !mine(s)), $('hostiles'), true);
 }
 
 function renderModes(): void {
@@ -239,7 +248,7 @@ function renderSlots(): void {
         refreshAll();
         return;
       }
-      const target = ships.find(t => !t.isPlayer && !t.destroyed);
+      const target = ships.find(t => !mine(t) && !t.destroyed);
       if (!target) return;
       o.weapons = o.weapons.filter(w => w.weaponIndex !== armedWeapon);
       o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: target.id, targetSub: -1 });
@@ -254,7 +263,7 @@ function renderBoard(): void {
   const b = $<HTMLButtonElement>('bBoard');
   const s = selectedShip();
   if (!s || !canPlan()) { b.disabled = true; b.textContent = 'Board Target'; return; }
-  const target = ships.find(t => !t.isPlayer && !t.destroyed);
+  const target = ships.find(t => !mine(t) && !t.destroyed);
   const dist = target ? Math.hypot(s.pos.x - target.pos.x, s.pos.y - target.pos.y, s.pos.z - target.pos.z) : Infinity;
   const inRange = dist <= s.boardingRange;
   const order = match.order(s.id);
@@ -312,7 +321,10 @@ function describe(e: SimEvent): { text: string; cls: string } | null {
     case EventKind.BoardingStarted: return { text: `${t}${who(e.other)} sends ${e.aux} marines to ${who(e.ship)}`, cls: 'good' };
     case EventKind.BoardingTick: return { text: `${t}${who(e.ship)} boarding: ${e.amount.toFixed(0)} vs ${e.aux}`, cls: '' };
     case EventKind.ShipCaptured: return { text: `${t}${who(e.ship)} captured`, cls: 'good' };
-    case EventKind.GameOver: return { text: e.aux === 0 ? 'VICTORY' : 'DEFEAT', cls: e.aux === 0 ? 'good' : 'bad' };
+    case EventKind.GameOver: {
+      const won = e.aux === launch.side;
+      return { text: won ? 'VICTORY' : 'DEFEAT', cls: won ? 'good' : 'bad' };
+    }
     default: return null;
   }
 }
@@ -347,10 +359,12 @@ function renderHeader(): void {
   $('hTurn').textContent = String(match.turn);
   $('hHash').textContent = match.hash.slice(0, 8);
   $('hSeed').textContent = seed.slice(0, 8);
+  // gameOver reports the winning SIDE, not a verdict: which of those is a
+  // victory depends on the seat, and only the client knows the seat.
   const over = match.gameOver;
-  $('hPhase').textContent = over === 0 ? 'VICTORY'
-    : over === 1 ? 'DEFEAT'
+  $('hPhase').textContent = over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
     : reviewTurn !== null ? `REVIEW T${reviewTurn}`
+    : waiting ? 'COMMITTED'
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
   $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
@@ -579,7 +593,7 @@ addEventListener('keydown', ev => {
     case 'a': nudgeHeading(-15); break;
     case 'd': nudgeHeading(15); break;
     case 'f': {
-      const t = ships.find(x => !x.isPlayer && !x.destroyed);
+      const t = ships.find(x => !mine(x) && !x.destroyed);
       if (!t || !canPlan()) break;
       const o = match.order(s.id);
       const d = { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z };
@@ -607,17 +621,100 @@ function forwardOf(s: ShipState): Vec3 {
 
 // ------------------------------------------------------------ controls --
 
-$('bEnd').onclick = () => {
-  if (match.gameOver >= 0 || playTick !== null || reviewTurn !== null) return;
-  match.endTurn();
+$('bEnd').onclick = () => { void endTurn(); };
+
+/**
+ * Commit the turn.
+ *
+ * One pipeline for every way a match can be played. Offline there is nobody to
+ * wait for, so the client's own plan IS the whole order set. Served, the plan
+ * goes up, the turn is withheld until every seat has committed (which is the
+ * entire point of simultaneous turns), and then every seat's orders come back
+ * together and are resolved by each client independently. A solo served game
+ * releases on the first commit, because the AI's orders were never going to
+ * arrive over the wire.
+ *
+ * The state hash goes back afterwards. The server cannot say which client is
+ * right, only that two disagree, and that is the one thing a client cannot
+ * discover about itself.
+ */
+async function endTurn(): Promise<void> {
+  if (match.gameOver >= 0 || playTick !== null || reviewTurn !== null || waiting) return;
+
+  const turn = match.turn;
+  const own = new Map(match.orders);
+
+  if (launch.kind === 'served') {
+    try {
+      waiting = true;
+      refreshAll();
+      const wire: Record<string, PlannedOrder> = {};
+      for (const [ship, o] of own) wire[String(ship)] = o;
+      const res = await api.submitOrders(turn, { ships: wire });
+      banner(!res.ready, res.waitingOn);
+      const all = await awaitTurn(turn);
+      if (!all) { waiting = false; banner(false); refreshAll(); return; }
+      match.resolveWith(all);
+      void api.reportHash(turn, match.hash).then(r => {
+        if (r.diverged) {
+          $('hPhase').textContent = 'DESYNC';
+          $('lobbyErr').textContent = 'Clients disagree on the state after this turn.';
+        }
+      }).catch(() => { /* reporting is diagnostic, never load bearing */ });
+    } catch (e) {
+      waiting = false;
+      banner(false);
+      $('hPhase').textContent = 'OFFLINE';
+      console.error(e);
+      refreshAll();
+      return;
+    }
+  } else {
+    match.resolveWith(own);
+  }
+
+  waiting = false;
+  banner(false);
   ships = match.ships();
   view.setShips(ships);
   playTick = 0;
   playing = true;
   refreshAll();
-};
+}
 
-$('bRestart').onclick = () => { seed = randomSeed(); start(); };
+/**
+ * Wait for every seat, then merge the released orders into one set keyed by
+ * ship. Polling rather than trusting the socket: the socket is a notifier, and
+ * a turn that only completes when a push arrives is a turn that hangs on a
+ * flaky connection.
+ */
+async function awaitTurn(turn: number): Promise<Map<number, PlannedOrder> | null> {
+  for (let tries = 0; tries < 600; tries++) {
+    const released = await api.fetchTurn(turn);
+    if (released) {
+      const merged = new Map<number, PlannedOrder>();
+      for (const body of Object.values(released.orders)) {
+        const ships = (body as { ships?: Record<string, PlannedOrder> }).ships ?? {};
+        for (const [id, o] of Object.entries(ships)) merged.set(Number(id), o);
+      }
+      return merged;
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return null;
+}
+
+function banner(on: boolean, waitingOn = 0): void {
+  const el = $('waitBanner');
+  el.classList.toggle('hidden', !on);
+  el.textContent = waitingOn > 1 ? `waiting for ${waitingOn} players` : 'waiting for opponent';
+}
+
+$('bRestart').onclick = () => {
+  // Back to the lobby rather than straight into another match: the room you
+  // were in is finished, and picking the next one is a decision.
+  lobby.show();
+};
 
 // Touch only, now that a mouse has two buttons to do this with. A phone has
 // one finger and no second button, so the toggle is how it reaches the gesture
@@ -699,7 +796,7 @@ function frame(): void {
       ships = match.ships();
       view.setShips(ships);
       if (!ships.some(s => s.id === selected && !s.destroyed)) {
-        selected = ships.find(s => s.isPlayer && !s.destroyed)?.id ?? selected;
+        selected = ships.find(s => mine(s) && !s.destroyed)?.id ?? selected;
       }
       view.setSelection(selected);
       view.invalidateEnvelope();
@@ -724,10 +821,19 @@ Object.defineProperty(window, 'ftDebug', {
   value: {
     order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
     selected: () => selected,
+    side: () => launch.side,
+    kind: () => launch.kind,
     canPlan,
   },
 });
 
+const api = new Api();
+const lobby = new Lobby(api, (l: Launch) => {
+  launch = l;
+  seed = l.seed;
+  start();
+});
+
 renderHelp();
-start();
 frame();
+void lobby.signIn().then(() => lobby.show());

@@ -77,7 +77,15 @@ pub struct Ship {
     pub id: ShipId,
     pub class: ShipClassId,
     pub faction: Faction,
-    pub is_player: bool,
+    /// Which side of the match this hull fights for, 0 or 1.
+    ///
+    /// A match-wide fact, deliberately NOT "mine". Two clients playing each
+    /// other must agree on every field the state hash covers, and this is one
+    /// of them, so a flag meaning "the ship I control" would make the two
+    /// disagree from the first turn and read as a desync. Which side a given
+    /// client is sitting in is that client's business and lives nowhere near
+    /// the simulation.
+    pub side: u8,
 
     pub pos: V3,
     pub quat: Quat,
@@ -133,7 +141,8 @@ impl Ship {
         id: ShipId,
         class: ShipClassId,
         faction: Faction,
-        is_player: bool,
+        side: u8,
+        ai_enabled: bool,
         pos: V3,
         facing: V3,
     ) -> Self {
@@ -142,7 +151,7 @@ impl Ship {
             id,
             class,
             faction,
-            is_player,
+            side,
             pos,
             quat: Quat::look(facing, None),
             vel: V3::ZERO,
@@ -169,7 +178,7 @@ impl Ship {
             has_boosted: false,
             stopped: false,
             destroyed: false,
-            ai_enabled: !is_player,
+            ai_enabled,
             ai_target: None,
             ai_fire_probability: 0.5,
             ai_can_chase: true,
@@ -290,6 +299,11 @@ pub struct TrackFrame {
 
 pub struct Sim {
     pub seed: String,
+    /// Bit per side: set means a person plays it, clear means the AI does.
+    /// Part of the match rather than of the viewer, for the same reason
+    /// `Ship::side` is: it changes the simulation, so both clients must hold
+    /// the same value or their hashes part.
+    pub human_sides: u8,
     /// The seed, hashed once. Every draw mixes this rather than re-hashing the
     /// string, which is the difference between hashing 16 bytes at match start
     /// and hashing them again for every random number in the match.
@@ -315,21 +329,24 @@ pub struct SpawnSpec {
 impl Sim {
     pub fn new_skirmish(
         seed: &str,
-        player: &[SpawnSpec],
-        enemy: &[SpawnSpec],
-        enemy_faction: Faction,
+        side0: &[SpawnSpec],
+        side1: &[SpawnSpec],
+        side1_faction: Faction,
+        human_sides: u8,
     ) -> Self {
-        let mut ships = Vec::with_capacity(player.len() + enemy.len());
-        for s in player {
+        let human = |side: u8| human_sides & (1 << side) != 0;
+        let mut ships = Vec::with_capacity(side0.len() + side1.len());
+        for s in side0 {
             let id = ships.len() as ShipId;
-            ships.push(Ship::new(id, s.class, Faction::Terran, true, s.pos, s.facing));
+            ships.push(Ship::new(id, s.class, Faction::Terran, 0, !human(0), s.pos, s.facing));
         }
-        for s in enemy {
+        for s in side1 {
             let id = ships.len() as ShipId;
-            ships.push(Ship::new(id, s.class, enemy_faction, false, s.pos, s.facing));
+            ships.push(Ship::new(id, s.class, side1_faction, 1, !human(1), s.pos, s.facing));
         }
         Self {
             seed: seed.to_string(),
+            human_sides,
             seed_hash: crate::rng::fnv1a(seed),
             turn: 0,
             ships,
@@ -343,6 +360,12 @@ impl Sim {
 
     pub fn ship(&self, id: ShipId) -> Option<&Ship> {
         self.ships.get(id as usize)
+    }
+
+    /// Is this side played by a person? Used when a captured hull changes
+    /// hands and has to pick up the right kind of commander.
+    pub fn side_is_human(&self, side: u8) -> bool {
+        self.human_sides & (1 << side) != 0
     }
 
     /// Segment a->b against sphere (c, r): the parameter of the first

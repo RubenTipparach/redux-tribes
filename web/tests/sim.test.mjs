@@ -137,8 +137,8 @@ test('a match starts with the scenario it was asked for', () => {
   assert.equal(m.shipCount, 4);
   const ships = m.ships();
   assert.equal(ships.length, 4);
-  assert.equal(ships.filter(s => s.isPlayer).length, 2);
-  assert.equal(ships.filter(s => !s.isPlayer).length, 2);
+  assert.equal(ships.filter(s => s.side === 0).length, 2);
+  assert.equal(ships.filter(s => s.side === 1).length, 2);
   // Ship records must survive the crossing intact, not merely arrive.
   for (const s of ships) {
     assert.ok(s.hull > 0 && s.hull === s.hullMax, `hull ${s.hull} of ${s.hullMax}`);
@@ -269,4 +269,42 @@ test('retuning a flight envelope changes what a ship can reach', () => {
     dist(start, after) > dist(start, before) * 1.5,
     `a tripled drive should reach much further: ${dist(start, before)} -> ${dist(start, after)}`,
   );
+});
+
+test('two seats in the same match agree on every hash', () => {
+  // The boundary version of the property the core test pins: nothing the state
+  // hash covers may mean "mine". Two clients build the same match, receive the
+  // same orders for both sides, and must not part.
+  const VERSUS = 0b11;
+  const play = () => {
+    const m = sim.match();
+    m.start('00000000cafef00d', 1, VERSUS);
+    const hashes = [];
+    for (let t = 0; t < 3; t++) {
+      const all = new Map([
+        [0, { mode: Mode.MoveAndTurn, target: { x: -10, y: 2, z: 4 }, weapons: [
+          { weaponIndex: 0, second: 2, targetShip: 1, targetSub: -1 }] }],
+        [1, { mode: Mode.MoveAndTurn, target: { x: 10, y: -1, z: -3 }, weapons: [
+          { weaponIndex: 0, second: 3, targetShip: 0, targetSub: -1 }] }],
+      ]);
+      m.resolveWith(all);
+      hashes.push(m.hash);
+    }
+    return hashes;
+  };
+  assert.deepEqual(play(), play(), 'two seats must agree turn for turn');
+});
+
+test('who flies a side is a property of the match, not the viewer', () => {
+  // A solo game and a versus game of the same scenario and seed must NOT be
+  // the same simulation: in one, side 1 is planned by the AI. If humanSides
+  // were ignored, these would match and a versus match would be quietly
+  // fighting a ghost.
+  const run = (humanSides) => {
+    const m = sim.match();
+    m.start('0000000000000123', 1, humanSides);
+    m.resolveWith(new Map([[0, { mode: Mode.MoveAndTurn, target: { x: 0, y: 0, z: 0 }, weapons: [] }]]));
+    return m.hash;
+  };
+  assert.notEqual(run(0b01), run(0b11), 'an AI side and an idle side are different matches');
 });

@@ -11,6 +11,9 @@ use sim_core::math::V3;
 use sim_core::state::{Faction, SpawnSpec, Sim};
 use sim_core::turn::{EventKind, FireOrder, Order};
 
+/// Side 0 is a person, side 1 is the AI: the shape every test here wants.
+const SOLO: u8 = 0b01;
+
 fn spec(class: ShipClassId, pos: V3, facing: V3) -> SpawnSpec {
     SpawnSpec { class, pos, facing }
 }
@@ -22,6 +25,7 @@ fn duel(seed: &str, sep: f32) -> Sim {
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0))],
         &[spec(ShipClassId::KarisenFrigate, V3::new(0.0, 0.0, sep), V3::new(0.0, 0.0, -1.0))],
         Faction::Karisen,
+        SOLO,
     )
 }
 
@@ -41,6 +45,7 @@ fn scripted(seed: &str) -> Sim {
             spec(ShipClassId::RogueFrigate, V3::new(40.0, -4.0, -10.0), V3::new(-1.0, 0.0, 0.0)),
         ],
         Faction::Karisen,
+        SOLO,
     )
 }
 
@@ -169,6 +174,7 @@ fn hulls_never_interpenetrate() {
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, 0.0, -30.0), V3::new(0.0, 0.0, 1.0))],
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, 0.0, 30.0), V3::new(0.0, 0.0, -1.0))],
         Faction::Karisen,
+        SOLO,
     );
     let min_sep = sim.ships[0].class_def().radius + sim.ships[1].class_def().radius;
     for _ in 0..3 {
@@ -194,6 +200,7 @@ fn a_ram_costs_both_ships_hull() {
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, 0.0, -25.0), V3::new(0.0, 0.0, 1.0))],
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, 0.0, 25.0), V3::new(0.0, 0.0, -1.0))],
         Faction::Karisen,
+        SOLO,
     );
     let before = (sim.ships[0].hull, sim.ships[1].hull);
     let mut saw_collision = false;
@@ -291,6 +298,7 @@ fn boarding_a_softened_hull_captures_it() {
         &[spec(ShipClassId::RogueFrigate, V3::new(0.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0))],
         &[spec(ShipClassId::Freighter, V3::new(0.0, 0.0, 15.0), V3::new(0.0, 0.0, 1.0))],
         Faction::Karisen,
+        SOLO,
     );
     // Hold both still and let the marines decide it: this is a test of
     // boarding, not of whether the AI flies away mid boarding action.
@@ -314,7 +322,7 @@ fn boarding_a_softened_hull_captures_it() {
     }
     assert!(captured, "a hull at 20% with five defenders cannot hold its decks");
     assert_eq!(sim.ships[1].faction, Faction::Terran, "a captured ship flips faction");
-    assert!(sim.ships[1].is_player, "and changes sides for good");
+    assert_eq!(sim.ships[1].side, 0, "and changes sides for good");
 }
 
 #[test]
@@ -334,4 +342,76 @@ fn a_destroyed_ship_ends_the_match() {
     let res = sim.resolve_turn(&mut orders);
     assert!(sim.ships[1].destroyed, "a 1 hull ship under three beams dies");
     assert!(res.events.iter().any(|e| e.kind == EventKind::GameOver));
+}
+
+#[test]
+fn two_people_playing_each_other_hash_the_same() {
+    // The reason sides are a match-wide fact rather than a point of view.
+    //
+    // Both clients build the same match, receive the same orders for both
+    // sides, and resolve. If anything the hash covers meant "mine" instead of
+    // "side 0", these two would part on the very first turn and lockstep would
+    // report a desync that is really just two honest clients disagreeing about
+    // which ships are theirs.
+    const VERSUS: u8 = 0b11;
+    let build = || {
+        Sim::new_skirmish(
+            "seed-pvp",
+            &[spec(ShipClassId::TerranFrigate, V3::new(-30.0, 0.0, 0.0), V3::new(1.0, 0.0, 0.0))],
+            &[spec(ShipClassId::KarisenFrigate, V3::new(30.0, 0.0, 0.0), V3::new(-1.0, 0.0, 0.0))],
+            Faction::Karisen,
+            VERSUS,
+        )
+    };
+    let orders = || -> Vec<Option<Order>> {
+        vec![
+            Some(Order {
+                mode: Some(Mode::MoveAndTurn),
+                target: Some(V3::new(-10.0, 2.0, 4.0)),
+                weapons: vec![FireOrder { weapon_index: 0, second: 2, target_ship: 1, target_sub: None }],
+                ..Default::default()
+            }),
+            Some(Order {
+                mode: Some(Mode::MoveAndTurn),
+                target: Some(V3::new(10.0, -1.0, -3.0)),
+                weapons: vec![FireOrder { weapon_index: 0, second: 3, target_ship: 0, target_sub: None }],
+                ..Default::default()
+            }),
+        ]
+    };
+
+    let mut a = build();
+    let mut b = build();
+    for _ in 0..3 {
+        let ha = a.resolve_turn(&mut orders()).hash;
+        let hb = b.resolve_turn(&mut orders()).hash;
+        assert_eq!(ha, hb, "two seats must agree on every turn");
+    }
+}
+
+#[test]
+fn a_human_side_is_never_planned_for_by_the_ai() {
+    // In a versus match nobody's ships get quietly flown by the AI when their
+    // orders are simply absent for a turn, because ai_enabled is off for both
+    // sides. Retaliation writes ai_target only for AI ships, and ai_target is
+    // hashed, so this is a determinism property and not only a fairness one.
+    let sim = Sim::new_skirmish(
+        "seed-versus",
+        &[spec(ShipClassId::TerranFrigate, V3::new(-30.0, 0.0, 0.0), V3::new(1.0, 0.0, 0.0))],
+        &[spec(ShipClassId::KarisenFrigate, V3::new(30.0, 0.0, 0.0), V3::new(-1.0, 0.0, 0.0))],
+        Faction::Karisen,
+        0b11,
+    );
+    assert!(sim.ships.iter().all(|s| !s.ai_enabled), "no AI in a versus match");
+
+    // And in a solo game exactly the other side is the AI.
+    let solo = Sim::new_skirmish(
+        "seed-solo",
+        &[spec(ShipClassId::TerranFrigate, V3::new(-30.0, 0.0, 0.0), V3::new(1.0, 0.0, 0.0))],
+        &[spec(ShipClassId::KarisenFrigate, V3::new(30.0, 0.0, 0.0), V3::new(-1.0, 0.0, 0.0))],
+        Faction::Karisen,
+        SOLO,
+    );
+    assert!(!solo.ships[0].ai_enabled, "the person flies side 0");
+    assert!(solo.ships[1].ai_enabled, "the AI flies side 1");
 }

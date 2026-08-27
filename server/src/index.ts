@@ -23,6 +23,7 @@ import { resolve, join } from 'node:path';
 import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { db, nowMs } from './db.ts';
+import { mountLobby } from './lobby.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8080);
 const app = express();
@@ -77,9 +78,12 @@ function auth(req: express.Request, matchId: string): PlayerRow | null {
 }
 
 // ------------------------------------------------------------------ sockets --
+// One map, keyed by whatever the client asked to watch. A room and a match are
+// different things with different ids, so they cannot collide, and a client
+// that follows a room into a match simply reconnects with the other key.
 const sockets = new Map<string, Set<WebSocket>>();
-function publish(matchId: string, event: unknown): void {
-  const set = sockets.get(matchId);
+function publishTo(topic: string, event: unknown): void {
+  const set = sockets.get(topic);
   if (!set) return;
   const payload = JSON.stringify(event);
   for (const ws of set) {
@@ -88,6 +92,11 @@ function publish(matchId: string, event: unknown): void {
 }
 
 // -------------------------------------------------------------------- routes --
+// Anonymous accounts, rooms and the lobby. Kept in its own module because it
+// is a different job from brokering turns: this one is about who is playing,
+// the rest of this file is about what they did.
+mountLobby(app, publishTo);
+
 // Fly sets these inside the machine. Reporting them makes "where is this
 // actually running" answerable from outside with a single request, rather
 // than by reading a deploy log or trusting fly.toml to describe reality:
@@ -130,7 +139,7 @@ app.post('/v1/matches/:id/join', (req, res) => {
   const token = randomBytes(24).toString('base64url');
   db.prepare('INSERT INTO players (match_id, player_id, name, token_hash, joined_ms) VALUES (?, ?, ?, ?, ?)')
     .run(match.id, playerId, name, sha(token), nowMs());
-  publish(match.id, { type: 'playerJoined', matchId: match.id, playerId, name });
+  publishTo(match.id, { type: 'playerJoined', matchId: match.id, playerId, name });
   res.status(201).json({ matchId: match.id, seed: match.seed, scenario: match.scenario, playerId, token });
 });
 
@@ -171,9 +180,9 @@ app.post('/v1/matches/:id/turns/:turn/orders', (req, res) => {
   const ready = submitted.length >= players.length && players.length > 0;
   if (ready) {
     db.prepare('UPDATE matches SET turn = ? WHERE id = ?').run(turn + 1, match.id);
-    publish(match.id, { type: 'turnReady', matchId: match.id, turn });
+    publishTo(match.id, { type: 'turnReady', matchId: match.id, turn });
   } else {
-    publish(match.id, { type: 'ordersReceived', matchId: match.id, turn, playerId: who.player_id });
+    publishTo(match.id, { type: 'ordersReceived', matchId: match.id, turn, playerId: who.player_id });
   }
   res.json({ ok: true, turn, ready, waitingOn: players.length - submitted.length });
 });
@@ -222,7 +231,7 @@ app.post('/v1/matches/:id/turns/:turn/hash', (req, res) => {
   const distinct = [...new Set(rows.map(r => r.hash))];
   const diverged = distinct.length > 1;
   if (diverged) {
-    publish(match.id, { type: 'diverged', matchId: match.id, turn, hashes: rows });
+    publishTo(match.id, { type: 'diverged', matchId: match.id, turn, hashes: rows });
   }
   res.json({ ok: true, turn, reported: rows.length, diverged, distinct });
 });
@@ -265,14 +274,15 @@ if (existsSync(CLIENT_DIR)) {
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws, req) => {
-  const matchId = new URL(req.url ?? '/', 'http://x').searchParams.get('match') ?? '';
-  if (!matchId) { ws.close(1008, 'match required'); return; }
-  let set = sockets.get(matchId);
-  if (!set) { set = new Set(); sockets.set(matchId, set); }
+  const params = new URL(req.url ?? '/', 'http://x').searchParams;
+  const topic = params.get('match') ?? params.get('room') ?? '';
+  if (!topic) { ws.close(1008, 'match or room required'); return; }
+  let set = sockets.get(topic);
+  if (!set) { set = new Set(); sockets.set(topic, set); }
   set.add(ws);
   ws.on('close', () => {
     set?.delete(ws);
-    if (set && set.size === 0) sockets.delete(matchId);
+    if (set && set.size === 0) sockets.delete(topic);
   });
 });
 

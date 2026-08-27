@@ -192,9 +192,117 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 }
 
 @media (prefers-reduced-motion: reduce) { #left, #right { transition:none; } }
+
+/* ---------------------------------------------------------------- lobby --
+   A full screen layer over the console rather than a separate page: the game
+   is already loaded and the wasm already instantiated behind it, so entering a
+   match is a class change and not a navigation. */
+#lobby { position:fixed; inset:0; z-index:20; background:var(--ground);
+  display:flex; flex-direction:column; overflow-y:auto;
+  padding:max(24px, env(safe-area-inset-top)) 20px calc(24px + var(--safe)); }
+#lobby.hidden { display:none; }
+#lobby .wrap { width:100%; max-width:560px; margin:auto; }
+#lobby h2 { font-family:Michroma,"Rajdhani",sans-serif; font-size:15px; font-weight:400;
+  letter-spacing:.14em; color:var(--cyan); margin:0 0 4px; }
+#lobby .who { font-size:12px; color:var(--muted); margin-bottom:18px; }
+#lobby .who b { color:var(--ink); }
+#lobby .who button { padding:3px 8px; font-size:10px; margin-left:6px; }
+.card { border:1px solid var(--line); border-radius:6px; background:var(--panel2);
+  padding:12px; margin-bottom:10px; }
+.card .row { display:flex; align-items:center; gap:10px; }
+.card .grow { flex:1; min-width:0; }
+.card .t { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.05em; }
+/* Not scoped to .card: the lobby uses it for the room count and the empty
+   state too, and a class that only works in one container is a class that
+   quietly does nothing in the others. */
+#lobby .s { font-size:11px; color:var(--muted); }
+.roomRow { cursor:pointer; }
+.roomRow:hover { border-color:var(--cyan); }
+.tag { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:10px;
+  letter-spacing:.12em; text-transform:uppercase; padding:2px 7px; border-radius:3px;
+  border:1px solid var(--line); color:var(--muted); flex:0 0 auto; }
+.tag.pvp { color:var(--orange); border-color:var(--orange); }
+.tag.pve { color:var(--green); border-color:var(--green); }
+.seatRow { display:flex; align-items:center; gap:10px; padding:7px 8px;
+  border:1px solid var(--line); border-radius:4px; margin-bottom:6px; }
+.seatRow.me { border-color:var(--cyan); background:#0d2231; }
+.seatRow .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
+.seatRow.rdy .dot { background:var(--green); }
+.seatRow .empty { color:var(--muted); font-style:italic; }
+#lobbyErr { color:var(--red); font-size:12px; min-height:16px; margin-top:8px; }
+#lobby input[type=text] { background:var(--panel); color:var(--ink);
+  border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:13px;
+  font-family:inherit; width:100%; }
+#waitBanner { position:fixed; left:50%; transform:translateX(-50%);
+  top:calc(46px + 12px); z-index:9; background:#111823ee; border:1px solid var(--cyan);
+  color:var(--cyan); border-radius:4px; padding:7px 14px; font-family:Rajdhani,sans-serif;
+  font-weight:700; font-size:12px; letter-spacing:.1em; text-transform:uppercase;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#waitBanner.hidden { display:none; }
 </style>
 </head>
 <body>
+<div id="lobby">
+  <div class="wrap">
+    <h2>FALLEN TRIBES</h2>
+    <div class="who">signed in as <b id="whoName">...</b>
+      <button id="bRename">Rename</button>
+    </div>
+
+    <div id="lobbyPanel">
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="t">Practice</div>
+            <div class="s">Play the AI offline. Nothing is sent anywhere.</div>
+          </div>
+          <button id="bPractice" class="primary">Play</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="t">New room</div>
+            <div class="s">Against the AI, or open a seat for someone else.</div>
+          </div>
+          <button id="bNewPve">vs AI</button>
+          <button id="bNewPvp" class="primary">vs Player</button>
+        </div>
+      </div>
+
+      <div class="sect">Open rooms <span class="s" id="roomCount"></span></div>
+      <div id="roomList"></div>
+      <div class="s" id="roomEmpty">No open rooms. Make one.</div>
+    </div>
+
+    <div id="roomPanel" style="display:none">
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="t" id="roomName">room</div>
+            <div class="s" id="roomInfo"></div>
+          </div>
+          <span class="tag" id="roomMode">pve</span>
+        </div>
+      </div>
+      <div class="sect">Seats</div>
+      <div id="seatList"></div>
+      <div class="row" style="gap:8px; margin-top:12px;">
+        <button id="bReady" class="primary">Ready</button>
+        <button id="bStart">Start</button>
+        <span class="grow"></span>
+        <button id="bLeave">Leave</button>
+      </div>
+    </div>
+
+    <div id="lobbyErr"></div>
+  </div>
+</div>
+
+<div id="waitBanner" class="hidden">waiting for opponent</div>
+
 <div id="app">
   <header>
     <h1>FALLEN&nbsp;TRIBES<span class="lng"> &middot; TACTICAL</span></h1>

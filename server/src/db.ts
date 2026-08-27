@@ -58,6 +58,52 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS orders_by_turn ON orders(match_id, turn);
   CREATE INDEX IF NOT EXISTS hashes_by_turn ON hashes(match_id, turn);
+
+  -- Anonymous accounts. No email, no password, nothing to lose if it leaks:
+  -- an id and a secret minted on first visit and kept in the browser. The
+  -- point is continuity across rooms and matches, not identity in any
+  -- stronger sense, so the cheapest thing that survives a page reload wins.
+  CREATE TABLE IF NOT EXISTS accounts (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    token_hash  TEXT NOT NULL,
+    created_ms  INTEGER NOT NULL,
+    seen_ms     INTEGER NOT NULL
+  );
+
+  -- A room is where people gather before a match exists. It becomes a match
+  -- when it starts, and keeps the match id so a late arrival can be told
+  -- where everyone went.
+  CREATE TABLE IF NOT EXISTS rooms (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    scenario    TEXT NOT NULL,
+    -- 'pve' seats one person against the AI, 'pvp' seats two people.
+    mode        TEXT NOT NULL,
+    host_id     TEXT NOT NULL REFERENCES accounts(id),
+    -- open -> playing -> done. A room never returns to open: starting it
+    -- mints a match, and a match is the thing that has a history.
+    status      TEXT NOT NULL DEFAULT 'open',
+    match_id    TEXT,
+    seed        TEXT NOT NULL,
+    created_ms  INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL
+  );
+
+  -- Who is in a room, and which side they will fly. Seat is 0 or 1 and is
+  -- what the client maps its own ships through; the simulation only knows
+  -- sides, never whose they are.
+  CREATE TABLE IF NOT EXISTS seats (
+    room_id     TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    account_id  TEXT NOT NULL REFERENCES accounts(id),
+    side        INTEGER NOT NULL,
+    ready       INTEGER NOT NULL DEFAULT 0,
+    joined_ms   INTEGER NOT NULL,
+    PRIMARY KEY (room_id, account_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS rooms_open ON rooms(status, updated_ms);
+  CREATE INDEX IF NOT EXISTS seats_by_room ON seats(room_id, side);
 `);
 
 export const nowMs = (): number => Date.now();
