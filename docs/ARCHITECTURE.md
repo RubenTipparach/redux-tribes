@@ -16,10 +16,12 @@
 10. **Async playability** (correspondence play; players submit turns hours apart)
 11. **Game recording & playback — state-based snapshots of each turn, replayable anywhere**
 12. Intuitive, fluent ship movement (preserve the existing system)
+13. **Deterministic no-clip collision:** ships must not interpenetrate (the Unity build lets them clip inside each other while taking timer-tick damage); collisions resolve with rigid-body-style response and deal damage — and the whole turn must resolve **identically on every machine from orders alone**, so multiplayer exchanges only each side's inputs at the start of the turn
+14. *(Stretch)* Runs on a **Raspberry Pi 5** — pursued as long as it doesn't distort the architecture; droppable by agreement
 
 Two facts from the code audit shape everything below:
 
-- **The game is small-N and kinematic.** 5–20 ships, closed-form Bézier trajectories, per-second discrete events, no rigid-body dynamics. This makes a fully deterministic, headless, hand-rolled simulation *cheap* — the single greatest architectural gift the Unity code gives us.
+- **The game is small-N and kinematic.** 5–20 ships, closed-form Bézier trajectories, per-second discrete events, no rigid-body dynamics in the original. This makes a fully deterministic, headless, hand-rolled simulation *cheap* — the single greatest architectural gift the Unity code gives us — and it keeps the contact resolution requirement 13 adds (ADR-4) tractable at the same small scale.
 - **The replay system is an empty stub and the current sim is unreplayable** (unseeded global RNG, wall-clock timers, FX-layer damage authority, physics-timing-dependent hits). Requirements 9–11 therefore don't constrain us to any legacy format — but they demand we design determinism in from day one, because retrofitting it is famously miserable.
 
 ---
@@ -68,8 +70,9 @@ crates/
                 # Mirrors sim entities via ShipId ↔ Entity map. May be as
                 # nondeterministic as it likes. The scenario editor (ADR-8) is a
                 # feature-gated mode of this binary, not a separate crate.
-  server        # axum + sim_core + sim_campaign + sim_replay: authoritative turn
-                # resolution, match persistence, replay hosting. No renderer.
+  server        # axum + sim_core + sim_campaign + sim_replay: order relay + store,
+                # canonical re-resolution/verification (ADR-6), match persistence,
+                # replay hosting. No renderer.
 ```
 
 **Why this is the most important decision in the document:**
@@ -104,9 +107,17 @@ crates/
 - **Fixed-point rejected** for this game: it costs every trig/vector routine and its payoff is already covered by libm discipline *plus* the snapshot safety net below. Fixed-point is the right call for 1000-unit lockstep RTSes without snapshots; we have the opposite profile.
 - **RNG:** seeded, stream-split PCG (`rand_pcg`) — **one RNG per turn**, seeded `hash(match_seed, turn_index)`, with per-consumer streams keyed `(ship_id, weapon_id, batch_index, …)`. Replays seek to any turn without replaying RNG history; a divergence in turn N cannot poison turn N+1. This replaces Unity's unseeded global `Random` (boarding dice, AI plans, missile scatter — the scatter radii 0.5/5.0/0.5 and the d6-success-on-5+ boarding table port as-is, just re-sourced). The dead `batchIndex` parameter in the Unity FX API shows this was the original intent.
 - **Ordering:** the authoritative sim iterates an explicitly ordered ship list (stable `ShipId`), *not* ECS queries — Bevy query iteration order is not guaranteed stable, and the parallel executor is nondeterministic. `sim_core` isn't an ECS at all; it's plain structs stepped in a loop (5–20 ships — an ECS buys nothing here). No `HashMap` iteration in sim logic (`BTreeMap`/`IndexMap`).
-- **Physics:** **hand-rolled kinematics** (~1–2k lines): Bézier pose evaluation, sphere/segment sweep tests for weapons and ramming, per-subsystem hit volumes (replacing Unity collider proxies — keeps subsystem aim-point targeting data-driven). No physics engine in the sim; `parry3d` for shape-query math where useful. Rapier's `enhanced-determinism` is the documented fallback if design ever pivots to contact-rich dynamics.
+- **Physics:** **hand-rolled kinematics plus deterministic contact resolution** (req 13). The Unity original has no collision response at all — ships carry frozen-constraint rigidbodies, interpenetrate freely, and tick 20 damage per 0.2 s of overlap. The rebuild replaces that wholesale:
+  - **Hulls:** each ship class authors a convex compound proxy (spheres/capsules/boxes) — the same volumes that serve subsystem aim-point targeting; N ≤ ~20 makes the broadphase a trivial pair loop.
+  - **Motion:** ships follow their planned Bézier via a velocity-following controller (velocity = spline derivative per tick) instead of direct position writes, so contact forces can genuinely deflect them.
+  - **Resolution:** a swept/speculative contact pass each tick, then **position-based (PBD-style) separation with impulse exchange** — fixed iteration count, contact pairs processed in sorted `(ShipId, ShipId)` order, scalar math only. Interpenetration can never persist a tick.
+  - **Damage** = f(relative normal velocity, masses) at contact, with a short per-pair cooldown so grinding hulls don't shred instantly — replacing the timer-tick model and making ramming a real maneuver with real physics.
+  - **After contact,** a deflected ship re-plans the remainder of the turn (recompute the Bézier from its current pose to the planned endpoint; ballistic if thrusters are dead), so orders stay meaningful.
+  - **Cold-start rule:** every turn's resolution begins from the boundary snapshot with *no carried solver state* (no warm starts) — replays and lockstep peers (ADR-6) converge by construction, and physics state never needs serializing beyond pose/velocity.
+  - **Buy option:** Rapier with `enhanced-determinism` (bit-exact cross-platform incl. wasm; no SIMD/parallel — irrelevant at this scale) driven the same way under the same cold-start-per-turn contract, if hand-rolled contacts prove annoying. The earlier objection (snapshotting hidden solver state) dissolves under cold-start.
+  - **Preview consequence:** planned trajectories are exact *until contact* — and because turn resolution is an instant headless run (ADR-2), the planner can show **collision-inclusive previews** by simply simulating the draft orders (exact against the committed AI in single-player; estimated against humans per ADR-6).
 - **Terrain in the sim:** AI avoidance sweeps, stealth occlusion rays, and ramming all query *scene geometry* (blocker cubes, asteroid fields, the MissileAlley canyon), and ADR-2 forbids touching engine physics — so **terrain participates in `sim_core` as authored analytic collision proxies (spheres/capsules/boxes) declared in `scenario.ron`**, never as render meshes. Cheap, deterministic, faithful to the low-poly blocker maps; the scenario editor (ADR-8) authors these proxies alongside the visuals.
-- **The safety net (most important):** determinism *will* silently regress over years. Two structural mitigations make that a logged event instead of a corrupted match: (a) **per-turn boundary snapshots are authoritative** — any client whose re-sim hash mismatches falls back to fetching the snapshot; (b) a **CI cross-platform hash test** — simulate N scripted turns on Linux-x86_64, macOS-ARM, and wasm32; assert identical snapshot hashes on every commit.
+- **The safety net (most important):** determinism *will* silently regress over years. Two structural mitigations make that a logged event instead of a corrupted match: (a) **per-turn boundary snapshots are authoritative** — any client whose re-sim hash mismatches falls back to fetching the snapshot; (b) a **CI cross-platform hash test** — simulate N scripted turns on Linux-x86_64, macOS-ARM, Linux-ARM64 (the Pi 5 target, ADR-13), and wasm32; assert identical snapshot hashes on every commit. Under ADR-6's lockstep model this test is *gating*, not advisory.
 
 ---
 
@@ -135,11 +146,12 @@ ReplayFile {
 
 ## ADR-6: Multiplayer and Async Play
 
-**Decision:** **Server-authoritative turn resolution over plain HTTPS/WebSocket. No netcode crate.**
+**Decision:** **Deterministic lockstep — only orders cross the wire.** Each player submits `Orders{match, turn, commands}` at the start of the turn; every machine resolves the turn independently with the shared `sim_core` and arrives at bit-identical state (owner requirement 13). No state replication, no netcode crate.
 
-- **Why no replication library:** bevy_replicon / lightyear / matchbox / naia solve continuous state replication, prediction, and rollback — a WEGO correspondence game has none of that. Its traffic is: *submit `Orders{match, turn, commands}` → server stores → on all-submitted (or deadline) server runs `sim_core::resolve_turn` → clients fetch and play back*. That is a ~500–2000-line protocol on `serde`+`postcard` messages, identical on native and wasm (plain `fetch`/WebSocket; no COOP/COEP, no WebRTC signaling), with zero crates chained to Bevy's release cadence. Keep replicon in the back pocket for a hypothetical live-spectate mode.
-- **Server:** **axum + tokio + Postgres (sqlx)**, embedding `sim_core` — the same Rust sim code resolves turns authoritatively (impossible with a Firebase/Supabase TypeScript backend without contortions). Match persistence = the append-only `(match_id, turn, orders, snapshot, state_hash)` log — which *is* the replay format (ADR-5). A small VPS/Fly.io box handles thousands of correspondence matches; resolution is milliseconds.
-- **Why server-authoritative rather than deterministic-lockstep-by-mail:** with an authoritative server, cross-platform bit determinism stops being a *correctness cliff* and becomes a *quality bar* — a client desync self-corrects at the next boundary snapshot instead of poisoning the match, and cheating is structurally limited. The determinism discipline of ADR-4 is still worth every bit: it makes replays exact and keeps client-side preview/re-sim honest.
+- **Why no replication library:** bevy_replicon / lightyear / matchbox / naia solve continuous state replication, prediction, and rollback — a WEGO correspondence game has none of that, and under lockstep there is no state to replicate at all. The traffic is: *submit orders → relay/store → when all sides have submitted (or the deadline fires), everyone fetches the order set and resolves locally*. That is a ~500–2000-line protocol on `serde`+`postcard` messages, identical on native and wasm (plain `fetch`/WebSocket; no COOP/COEP, no WebRTC signaling), with zero crates chained to Bevy's release cadence. Per-turn bandwidth is a few hundred bytes of orders — nothing else.
+- **Divergence detection and recovery:** every client attaches its `snapshot_hash` for turn N when submitting orders for turn N+1. A hash mismatch is a *logged, recoverable event*, not a corrupted match: the diverged client fetches the canonical boundary snapshot (ADR-5) and rejoins. This is the safety net that makes lockstep shippable by a solo dev — determinism bugs degrade to a snapshot download instead of a broken game.
+- **Server:** **axum + tokio + Postgres (sqlx)** as the relay + store; match persistence = the append-only `(match_id, turn, orders, snapshot_hash)` log — which *is* the replay format (ADR-5). **Recommended: the server also links `sim_core` and re-resolves each turn** — it costs milliseconds, produces the canonical snapshot for recovery, arbitrates ties, and structurally limits cheating; but because the clients don't *depend* on it for resolution, the same protocol also runs serverless (dumb relay, host-peer canonical) for LAN/hot-seat play. A small VPS/Fly.io box handles thousands of correspondence matches.
+- **What this hardens:** ADR-4's determinism discipline is now **load-bearing correctness**, not a quality bar — a single `f32::sin` from platform libm, an unsorted contact pair, or a carried solver warm-start desyncs matches. Hence the mandatory pieces: scalar-libm math, per-turn seeded RNG, sorted iteration, cold-start physics per turn, and the gating CI hash test across x86-64, macOS-ARM, **Linux-ARM64**, and wasm32.
 - **Hot-seat and solo-async** (the campaign) use the same order/turn-record pipeline with a local "server" — one code path everywhere.
 - **PvP planning previews — a real design decision, not a free bonus.** The single-player UX shows enemy *committed* orders (ghost trajectories, snap-to-predicted-target, firing-solution recoloring) because the AI plans before the player does. Under simultaneous submission, opponents' orders must be hidden until both sides commit (or the second submitter gains a decisive information edge). **Decision:** in PvP, enemy ships are previewed by **momentum extrapolation** (continuing the drift Bézier from their last executed turn), visually marked as estimates; committed enemy orders are never revealed pre-resolution. Accepted knock-on: snap-rotation and second-timed alpha strikes become probabilistic against humans — that *is* the mind-game of WEGO PvP (Frozen Synapse's whole genre), and the sim's "simulate assuming X" API serves both this preview and the AI.
 - **Notifications ("your opponent moved"):** VAPID Web Push (desktop/Android/installed-PWA iOS) + **email fallback** — email is the only universal channel for correspondence games given iOS PWA push restrictions. Native builds poll or hold a socket.
@@ -249,15 +261,34 @@ The audit's capability list (DESIGN §9) is deliberately modest — lists, 3-sta
 
 ---
 
+## ADR-13: Platform Targets — and the Raspberry Pi 5 Question (req 14)
+
+**Decision:** Primary targets are desktop (Windows/macOS/Linux) native + WebGPU browser. **Raspberry Pi 5 is a stretch target pursued through mechanisms we need anyway — never an architecture driver.** Verdict up front: *plausible but not guaranteed today*; validate cheaply and drop by agreement if it fights back.
+
+**The honest state of it (verified Aug 2026):**
+
+- The API path exists: the Pi 5's VideoCore VII driver (Mesa `v3dv`) is **Vulkan 1.3-conformant since Mesa 24.3**, and wgpu's Vulkan backend runs on it. The CPU side is a non-issue — four Cortex-A76 cores dwarf what a 20-ship deterministic sim needs; a Pi could resolve turns in microseconds.
+- The renderer is the risk: Bevy's stock 3D pipeline currently trips VideoCore limits — a reported Pi 5 crash (*"Too many bindings of type StorageBuffers"*, bevy#18867) and a history of Pi performance regressions and stutter (bevy#14253). Some of this is fixable with feature trimming; none of it is guaranteed fixable by us.
+- The browser path on Pi (WebGPU in Chromium on Linux-ARM) is behind flags — **native ARM64 is the only serious Pi route.**
+
+**What we do about it (all things the project wants regardless):**
+
+1. **A quality-preset ladder** as a first-class system: shadow map 4096→1024 and 3→1 cascades, SSAO off, CPU particles, bloom-only post, capped render scale. Turn-based play is perfectly comfortable at 30 fps.
+2. **The sim/render split does the heavy lifting:** worst case, a Pi 5 is still a *perfect* headless server, turn-resolution node, or replay host even if the full battle renderer never fits — the game's logic runs anywhere Rust does.
+3. **A validation spike, early:** when the Phase 1 slice renders, build for `aarch64-unknown-linux-gnu` and run it on a real Pi 5 (Wayland). One afternoon answers the question with data instead of hope. Linux-ARM64 is already in the determinism CI matrix (ADR-4), so the sim side is continuously proven on the Pi's architecture from day one.
+4. **The exit clause, per the owner:** if VideoCore limits require distorting the renderer (bespoke render paths, abandoning the deferred/clustered features the art direction wants), the requirement is dropped rather than paid for.
+
+---
+
 ## Migration Roadmap
 
 **Phase 0 — Foundations (the bet-validating slice).** `sim_core` skeleton: ship state, Bézier movement, tick loop, orders; CI determinism hash test (3 platforms) from the *first week*. Bevy shell rendering sim state with interpolation; camera rig; minimal egui HUD (end turn, move order). *Exit: one ship flies a planned curve identically on native and wasm/WebGPU, hashes matching.*
 
-**Phase 1 — The tactical vertical slice.** Weapons (beam/cannon/missile) resolved in-sim + event-driven FX; subsystems/armor/drift; boarding; the nav widget + overlays (vector renderer v1) + predictive scrubber; skirmish goals; AI port. *Exit: a full Skirmish battle, feel-matched (see below), replayable from a file.*
+**Phase 1 — The tactical vertical slice.** Weapons (beam/cannon/missile) resolved in-sim + event-driven FX; **contact resolution + impulse ram damage (ADR-4 — ships can no longer clip)**; subsystems/armor/drift; boarding; the nav widget + overlays (vector renderer v1) + predictive scrubber; skirmish goals; AI port. *Exit: a full Skirmish battle, feel-matched (see below), replayable from a file — and two builds resolving the same orders to identical hashes (the lockstep proof).*
 
 *A note on the feel-match reference:* the archive as committed cannot produce a running Unity build (the DevLocker SceneReference package, `ProjectSettings/`, and all audio are missing). Either (a) resurrect a runnable Unity reference early in Phase 0 — reinstall DevLocker's SceneReference, reconstruct the layer/tag table documented in DESIGN §11.2, stub the 8 missing audio clips — or (b) if a playable build still exists outside the archive, use it; failing both, define feel-parity against recorded gameplay footage plus the documented constants and the shared preview/execution math. Decide which in Phase 0, because requirement 12 hangs on it.
 
-**Phase 2 — Look and authoring.** Hybrid shadow system prototype (**do this early — it's the top rendering risk**); planet/plume/skybox shader ports; asset pipeline + converted content; in-game scenario editor v1; remaining mission types + stealth.
+**Phase 2 — Look and authoring.** Hybrid shadow system prototype (**do this early — it's the top rendering risk**); planet/plume/skybox shader ports; asset pipeline + converted content; in-game scenario editor v1; remaining mission types + stealth; **Raspberry Pi 5 render spike** (ADR-13 — one afternoon on real hardware decides the stretch goal).
 
 **Phase 3 — Campaign + shell.** Campaign map, travel, persistence (single save system), fleet/repair UI, menus, tutorials.
 

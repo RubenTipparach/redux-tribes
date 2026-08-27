@@ -133,7 +133,7 @@ There is **no abstract to-hit roll and no shield→armor→hull pipeline**. Hit 
   - **Weapons:** absorb 75% (50% on missile launchers); dead mounts just can't fire.
   - **Thrusters:** absorb 10–60%; when dead, further hits pass 100% to hull, engine FX/audio stop, and the ship **drifts** (§3.3); healable (used by the capture emergency-repair).
   - **Bare hull:** full damage; internal (collision) damage also spawns explosions. Terran frigate hull = 300 HP.
-- **Ramming:** sustained collision deals 20 damage per 0.2 s tick.
+- **Ramming:** sustained collision deals 20 damage per 0.2 s tick — and **there is no collision response at all**: ship rigidbodies have every axis frozen, so overlapping hulls clip straight through each other while the damage timer runs. A known defect, replaced by real deterministic contact resolution in the rebuild (ARCHITECTURE ADR-4).
 - Damage events carry a `FiredEvent{firedShip}` — the AI aggro/retaliation signal.
 - Damage feedback: health-threshold smoke trails (below 25–40% health), contact explosions, death explosion + 0.5 s destruction.
 - **Repair:** a repair-priority queue exists in UI and data but **nothing consumes it** — battlefield repair is unfinished intent (Ludwegg the engineer was scripted to teach "parts-limited subsystem repair").
