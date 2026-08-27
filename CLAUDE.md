@@ -34,6 +34,25 @@ The deploy is only reached on pushes that CI passes, so a red run means the live
 still serving the previous build. Say that plainly instead of pasting the live link as
 though it carried the change.
 
+## Mobile stays supported
+
+**This section is the rule. It holds until someone deletes this section.** While it
+is here, every change to the client keeps working on a phone, and "works" means
+checked, not assumed:
+
+- The whole console fits a 390x844 viewport with no horizontal scroll, and fits a
+  390x560 landscape one, where only about 390px of height exists.
+- Every control a player needs is reachable by thumb. The side rails are bottom
+  sheets on a tab bar; the nudges that are keyboard only on a desktop (elevation,
+  heading, face target) have on canvas buttons, because a phone has no Q/E/A/D/F.
+- Touch does what a mouse does. There is no second mouse button on a phone, so any
+  gesture given to the right button needs a touch route as well: one finger, the
+  orbit and pan toggle, or a control.
+- Nothing depends on hover to be discoverable.
+
+Check it in a real browser at both sizes before pushing, not by reading the CSS.
+A layout that only fails on a phone fails silently everywhere else.
+
 ## What is deployed, and where
 
 One Fly machine in `ord` (Chicago) serves the TypeScript client AND the match API from

@@ -358,13 +358,17 @@ function renderHeader(): void {
 
 function renderHelp(): void {
   $('help').innerHTML =
-    'Drag inside the <span style="color:var(--green)">green shell</span> to set a destination; '
-    + 'drag outside it to move the camera. Pinch or scroll to zoom.<br><br>'
+    '<b>Left drag</b> inside the <span style="color:var(--green)">green outline</span> sets a '
+    + 'destination; anywhere else it pans. <b>Right drag</b> orbits. Scroll or pinch to zoom.'
+    + '<br><br>'
+    + 'Hold <kbd>Shift</kbd> and drag inside the outline to swing the heading instead.<br><br>'
     + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
     + '<kbd>F</kbd> face the target.<br><br>'
-    + 'The shell is <b>probed, not derived</b>: every cell is a flight the core actually flew, '
-    + 'so it changes shape as your velocity and stats do. An '
-    + '<span style="color:#FFD24B">amber pip</span> means the hull cannot reach the point you asked for.';
+    + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
+    + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
+    + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
+    + 'do. On a phone, one finger does what the left button does and the '
+    + '<span style="color:var(--cyan)">&#10227;</span> button swaps it for orbiting.';
 }
 
 function refreshAll(): void {
@@ -407,6 +411,7 @@ function probeEnvelopeIfWanted(): void {
   if (!s) return;
   const order: PlannedOrder = selected >= 0 ? match.order(selected) : { mode: Mode.MoveAndTurn, weapons: [] };
   view.drawEnvelope(canPlan() ? s : undefined, order, flightOf(s.id));
+  view.drawPlaneShape(canPlan() ? s : undefined, order, flightOf(s.id));
   $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id));
 }
 
@@ -426,14 +431,27 @@ interface Drag {
   y: number;
   moved: boolean;
   /** 'plan' issues a move order, 'heading' swings the nose, else camera. */
-  kind: 'plan' | 'heading' | 'camera';
+  kind: 'plan' | 'heading' | 'pan' | 'orbit';
 }
 let drag: Drag | null = null;
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
 
+// The right button is a camera control now, so its menu has to go. Bound on
+// the canvas only: a right click on a panel should still behave like the rest
+// of the page.
+canvas.addEventListener('contextmenu', ev => ev.preventDefault());
+
 canvas.addEventListener('pointerdown', ev => {
-  canvas.setPointerCapture(ev.pointerId);
+  // Capture is a convenience, not a precondition: it keeps a drag alive when
+  // the pointer leaves the canvas. It throws for a pointer the browser does
+  // not consider active, and letting that escape would abort the handler
+  // before any routing happened, turning a failed nicety into a dead gesture.
+  try {
+    canvas.setPointerCapture(ev.pointerId);
+  } catch {
+    // carry on uncaptured
+  }
   pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -442,22 +460,33 @@ canvas.addEventListener('pointerdown', ev => {
     return;
   }
 
+  // Right button is always the camera, orbiting, whatever is under it. A
+  // camera control that sometimes issues orders instead is one nobody trusts
+  // near their own ships.
+  if (ev.pointerType === 'mouse' && ev.button === 2) {
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'orbit' };
+    return;
+  }
+
   const picked = view.pickShip(ev.clientX, ev.clientY);
   if (picked >= 0 && picked !== selected) { select(picked); }
 
-  // Routing: a drag that lands inside the drawn envelope is a move order, a
-  // drag with shift held swings the heading, and anything else is camera.
-  // Deciding by where the drag STARTS, not where it ends, means the meaning of
-  // a gesture never changes underneath the finger.
+  // Routing, decided by where the drag STARTS so a gesture's meaning never
+  // changes underneath the hand.
+  //
+  // A move order needs a point the ship can actually finish its turn at, which
+  // is the core's question rather than a radius: the reachable set is a lobe
+  // along the nose, so a radius accepts clicks far outside it in one direction
+  // and rejects nothing at all behind a ship carrying velocity.
   const p = view.planePoint(ev.clientX, ev.clientY);
   const s = selectedShip();
-  let kind: Drag['kind'] = 'camera';
-  if (canPlan() && p && s) {
-    // The same box the shell was probed over, so "inside the green shell"
-    // means the same thing to the router as it does to the eye.
-    const reach = view.probeHalf(s, flightOf(s.id));
-    const within = Math.hypot(p.x - s.pos.x, p.y - s.pos.y, p.z - s.pos.z) <= reach;
-    if (within) kind = ev.shiftKey ? 'heading' : 'plan';
+  let kind: Drag['kind'] = 'pan';
+  if (canPlan() && p && s && view.canReachPoint(s, flightOf(s.id), match.order(s.id), p)) {
+    kind = ev.shiftKey ? 'heading' : 'plan';
+  } else if (ev.pointerType !== 'mouse' && !view.panMode) {
+    // Touch has no second button, so the toolbar toggle still decides what one
+    // finger on empty space does.
+    kind = 'orbit';
   }
   if (kind === 'heading') canvas.classList.add('rotating');
   drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind };
@@ -481,15 +510,19 @@ canvas.addEventListener('pointermove', ev => {
   drag.y = ev.clientY;
   if (Math.abs(dx) + Math.abs(dy) > 1) drag.moved = true;
 
-  if (drag.kind === 'camera') {
-    if (view.panMode) view.pan(dx, dy); else view.orbit(dx, dy);
-    return;
-  }
+  if (drag.kind === 'pan') { view.pan(dx, dy); return; }
+  if (drag.kind === 'orbit') { view.orbit(dx, dy); return; }
+
   const p = view.planePoint(ev.clientX, ev.clientY);
   const s = selectedShip();
   if (!p || !s) return;
   const o = match.order(s.id);
   if (drag.kind === 'plan') {
+    // Keep the destination inside what the ship can reach. Dragging past the
+    // boundary leaves the marker at the last point that was real rather than
+    // parking it where the turn cannot end, so the plan on screen is always a
+    // plan the ship could fly.
+    if (!view.canReachPoint(s, flightOf(s.id), o, p)) return;
     o.target = p;
     // A commanded destination with a held heading is a slide; asking for both
     // through Move would silently drop the heading, so the mode follows the
@@ -514,7 +547,7 @@ function endPointer(ev: PointerEvent): void {
   if (pointers.size < 2) pinchDist = 0;
   if (drag && drag.id === ev.pointerId) {
     canvas.classList.remove('rotating');
-    const wasPlan = drag.kind !== 'camera';
+    const wasPlan = drag.kind === 'plan' || drag.kind === 'heading';
     drag = null;
     if (wasPlan) refreshAll();
   }
@@ -586,13 +619,17 @@ $('bEnd').onclick = () => {
 
 $('bRestart').onclick = () => { seed = randomSeed(); start(); };
 
+// Touch only, now that a mouse has two buttons to do this with. A phone has
+// one finger and no second button, so the toggle is how it reaches the gesture
+// the right button covers on a desktop.
 $('cMode').onclick = () => {
   view.panMode = !view.panMode;
   const b = $('cMode');
   b.classList.toggle('on', view.panMode);
-  b.textContent = view.panMode ? '✥' : '⟳';
-  b.title = view.panMode ? 'Drag on empty space pans. Tap to orbit instead.'
-    : 'Drag on empty space orbits. Tap to pan instead.';
+  b.textContent = view.panMode ? '\u2725' : '\u27F3';
+  b.title = view.panMode
+    ? 'One finger on empty space pans. Tap to orbit instead. (Mouse: left pans, right orbits.)'
+    : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
 $('pUp').onclick = () => { view.workAlt += 5; view.setSelection(selected); draw(); };
@@ -672,6 +709,24 @@ function frame(): void {
   view.render();
   requestAnimationFrame(frame);
 }
+
+/**
+ * A read only window onto client state, for browser checks.
+ *
+ * Input routing is the one part of this client that cannot be tested from the
+ * headless suites: it is about which gesture on which button does what, and
+ * that only exists in a browser. Pixels cannot answer it either, because a pan
+ * and a move order both change every pixel. So the check needs to read the
+ * plan, and this is the smallest surface that lets it. Read only on purpose:
+ * a test that can WRITE state stops testing the app and starts testing itself.
+ */
+Object.defineProperty(window, 'ftDebug', {
+  value: {
+    order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
+    selected: () => selected,
+    canPlan,
+  },
+});
 
 renderHelp();
 start();

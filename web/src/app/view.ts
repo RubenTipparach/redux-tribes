@@ -27,6 +27,28 @@ const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
 const GRID_N = 14;
+/** How finely the movable AREA on the working plane is probed. */
+const PLANE_N = 40;
+/**
+ * "Close enough to count as arriving", for both the drawn boundary and the
+ * click router. One constant on purpose: if the contour and the router used
+ * different tolerances, the line on screen would stop being the line you can
+ * click inside, and only at the edge, which is where every click that matters
+ * lands.
+ */
+const REACH_EPS = 1.6;
+
+/**
+ * Marching squares: which edge midpoints to join, per corner membership code.
+ * Edges are 0 top, 1 right, 2 bottom, 3 left. The two saddle cases (5 and 10)
+ * emit both segments rather than guessing which way the region connects.
+ */
+const MARCHING: number[][] = [
+  [], [3, 0], [0, 1], [3, 1],
+  [1, 2], [3, 0, 1, 2], [0, 2], [3, 2],
+  [2, 3], [2, 0], [0, 1, 2, 3], [2, 1],
+  [1, 3], [1, 0], [0, 3], [],
+];
 
 export class View {
   readonly #canvas: HTMLCanvasElement;
@@ -53,6 +75,8 @@ export class View {
   #planPip: THREE.Mesh;
   #headingArrow: THREE.Line;
   #shell: THREE.Points;
+  /** The outline of where a click actually becomes a move order. */
+  #planeShape: THREE.LineSegments;
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
@@ -61,6 +85,7 @@ export class View {
   #selected = -1;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
   #shellKey = '';
+  #planeKey = '';
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
     this.#canvas = canvas;
@@ -120,6 +145,15 @@ export class View {
       }),
     );
     this.#scene.add(this.#shell);
+
+    // Where the shell meets the working plane. The shell says where the ship
+    // can go; this says where a click means it, which is the part a hand needs
+    // rather than an eye.
+    this.#planeShape = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: GREEN, transparent: true, opacity: 0.9 }),
+    );
+    this.#scene.add(this.#planeShape);
 
     this.#scene.add(this.#projGroup);
     this.#scene.add(this.#beamGroup);
@@ -378,7 +412,7 @@ export class View {
       ? { mode: order.mode, face: order.face }
       : { mode: order.mode };
     const grid = this.#sim.reachGrid(
-      body, flight, flyOrder, ship.pos, half, GRID_N, 1.6, PROBE_STEPS,
+      body, flight, flyOrder, ship.pos, half, GRID_N, REACH_EPS, PROBE_STEPS,
     );
 
     // Keep only cells on the surface: a reachable cell with at least one
@@ -413,6 +447,101 @@ export class View {
   }
 
   /**
+   * Can this ship finish its turn at this exact point?
+   *
+   * The one authority on whether a click is a move order. Asking the core the
+   * real question costs a single flight, which is nothing, and it means the
+   * router can never disagree with the model about what is reachable. The
+   * alternative, a radius, was wrong in both directions at once: it accepted
+   * clicks far outside a lobe that does not extend that way, and rejected
+   * nothing at all behind a ship carrying velocity.
+   */
+  canReachPoint(ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3): boolean {
+    if (isCommitted(order.mode)) return false;
+    const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
+    const flyOrder = order.face
+      ? { mode: order.mode, face: order.face }
+      : { mode: order.mode };
+    return this.#sim.canReach(body, flight, flyOrder, p, REACH_EPS, PROBE_STEPS);
+  }
+
+  /**
+   * Trace the movable area where it crosses the working plane.
+   *
+   * The shell is a cloud of points in three dimensions, which reads well as a
+   * shape and badly as a target. A click happens on the plane, so the plane is
+   * where the boundary has to be drawn. Marching squares over the same
+   * predicate the router uses, so the line and the rule are one thing: the
+   * contour is a discretisation of it, and can disagree by under half a cell
+   * right at the edge, which is the only honest way to draw a curve on a grid.
+   */
+  drawPlaneShape(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
+    if (!ship || ship.destroyed || isCommitted(order.mode)) {
+      this.#planeShape.visible = false;
+      return;
+    }
+    const half = this.probeHalf(ship, flight);
+    const y = this.planeY();
+    const key = [
+      ship.id, order.mode, half.toFixed(1), y.toFixed(2),
+      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
+      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
+      order.face?.x.toFixed(3) ?? '-', order.face?.z.toFixed(3) ?? '-',
+      flight.yawRate, flight.pitchRate, flight.accelFwd,
+      flight.accelRetro, flight.accelLat, flight.maxSpeed,
+    ].join('|');
+    if (key === this.#planeKey) return;
+    this.#planeKey = key;
+
+    const step = (2 * half) / PLANE_N;
+    const x0 = ship.pos.x - half;
+    const z0 = ship.pos.z - half;
+    const px = (i: number) => x0 + i * step;
+    const pz = (j: number) => z0 + j * step;
+
+    // Membership at every grid CORNER, so a cell can read its four corners
+    // without probing any point twice.
+    const n = PLANE_N + 1;
+    const inside = new Uint8Array(n * n);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        inside[i * n + j] =
+          this.canReachPoint(ship, flight, order, { x: px(i), y, z: pz(j) }) ? 1 : 0;
+      }
+    }
+
+    const pts: number[] = [];
+    const mid = (e: number, i: number, j: number): [number, number] => {
+      switch (e) {
+        case 0: return [px(i + 0.5), pz(j)];
+        case 1: return [px(i + 1), pz(j + 0.5)];
+        case 2: return [px(i + 0.5), pz(j + 1)];
+        default: return [px(i), pz(j + 0.5)];
+      }
+    };
+    for (let i = 0; i < PLANE_N; i++) {
+      for (let j = 0; j < PLANE_N; j++) {
+        const code =
+          (inside[i * n + j] ?? 0) |
+          ((inside[(i + 1) * n + j] ?? 0) << 1) |
+          ((inside[(i + 1) * n + j + 1] ?? 0) << 2) |
+          ((inside[i * n + j + 1] ?? 0) << 3);
+        const edges = MARCHING[code] ?? [];
+        for (let e = 0; e < edges.length; e += 2) {
+          const a = mid(edges[e] ?? 0, i, j);
+          const b = mid(edges[e + 1] ?? 0, i, j);
+          pts.push(a[0], y, a[1], b[0], y, b[1]);
+        }
+      }
+    }
+    this.#planeShape.geometry.dispose();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    this.#planeShape.geometry = geo;
+    this.#planeShape.visible = pts.length > 0;
+  }
+
+  /**
    * How far out to probe. The core owns the reach; the momentum term is this
    * side's business, since it is about framing rather than about flight.
    */
@@ -434,6 +563,7 @@ export class View {
 
   invalidateEnvelope(): void {
     this.#shellKey = '';
+    this.#planeKey = '';
   }
 
   render(): void {
