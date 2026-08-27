@@ -75,7 +75,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
    side rails become bottom sheets on a tab bar, and the nudges that were
    keyboard only (elevation, rotate, face target) get an on canvas pad, since
    a phone has no Q/E/A/D/F to press. Desktop is untouched. */
-#tabbar, #pad { display:none; }
+#tabbar, #pad, #campad { display:none; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -123,6 +123,20 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     bottom:calc(var(--tabh) + var(--safe) + 104px);
   }
   #pad.hide { display:none; }
+
+  /* camera cluster, mirrored on the left edge: right hand flies the ship,
+     left hand flies the camera */
+  #campad {
+    display:grid; grid-template-columns:repeat(3, 42px); gap:5px;
+    position:fixed; left:9px; z-index:6;
+    bottom:calc(var(--tabh) + var(--safe) + 104px);
+  }
+  #campad button {
+    width:42px; height:42px; padding:0; font-size:14px; border-radius:50%;
+    background:#111823e6; -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+  }
+  #campad button.sp { visibility:hidden; pointer-events:none; }
+  #campad button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
   #pad button {
     width:46px; height:46px; padding:0; font-size:16px; border-radius:50%;
     background:#111823e6; -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
@@ -170,6 +184,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
 
   #pad { grid-auto-flow:column; top:48px; right:9px; bottom:auto; gap:6px; }
   #pad button { width:40px; height:40px; font-size:14px; }
+  /* clear the vertical tab rail when the phone is on its side */
+  #campad { left:63px; top:48px; bottom:auto; grid-template-columns:repeat(3, 36px); gap:4px; }
+  #campad button { width:36px; height:36px; font-size:13px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -221,11 +238,14 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
       <b>Drag the white pip</b> on the ring at the destination, or <b>shift-drag</b>, to swing the heading.<br>
       <b>Click or tap</b> own ship: select · same on an enemy: target<br>
       <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target · <kbd>Enter</kbd> end turn<br>
-      <b>RMB drag</b> orbits · <kbd>wheel</kbd> zooms · <b>timeline slider</b> scrubs the
+      <b>RMB drag</b> orbits · <b>middle drag</b> pans · <kbd>wheel</kbd> zooms · <b>timeline slider</b> scrubs the
       <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
       Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) - real orders stay hidden until resolution, lockstep-style.
-      <br><br><b>On touch:</b> one finger drags the destination, two fingers orbit and pinch to
-      zoom, and the round pad at the right edge covers the keys a phone does not have.
+      <br><br><b>On touch:</b> one finger drags the destination and two fingers orbit and pinch
+      to zoom. The pad on the <b>right</b> edge covers the keys a phone does not have; the cluster
+      on the <b>left</b> flies the camera. Its centre button swaps the arrows between swinging the
+      camera and sliding it, <b>◎</b> snaps to the selected ship, and holding an arrow keeps it
+      moving rather than stepping once per tap.
       Tap a sheet's tab again to close it, or tap the map.
       <br><br>The envelope is <b>probed from the sim</b>, not drawn from a formula: every cell
       goes through the same planner the turn resolver uses. Boost and Stop therefore show one
@@ -247,6 +267,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <button id="tLog" aria-pressed="false">Events</button>
     <button id="tFit">Fit view</button>
   </nav>
+
+  <div id="campad" aria-label="Camera controls">
+    <button class="sp" tabindex="-1"></button>
+    <button id="cUp" title="Look from higher">▲</button>
+    <button class="sp" tabindex="-1"></button>
+    <button id="cLeft" title="Swing left">◀</button>
+    <button id="cMode" title="Switch the pad between orbit and pan">⟳</button>
+    <button id="cRight" title="Swing right">▶</button>
+    <button class="sp" tabindex="-1"></button>
+    <button id="cDown" title="Look from lower">▼</button>
+    <button class="sp" tabindex="-1"></button>
+    <button id="cOut" title="Zoom out">－</button>
+    <button id="cCentre" title="Centre on the selected ship">◎</button>
+    <button id="cIn" title="Zoom in">＋</button>
+  </div>
 
   <div id="pad" class="hide" aria-label="Heading and elevation nudges">
     <button id="pUp" title="Elevation +5" aria-label="Elevation up 5">▲</button>
@@ -434,6 +469,27 @@ function zoomToFit() {
   const r = Math.max(30, box.getSize(new THREE.Vector3()).length() * 0.5);
   cam.tx = c.x; cam.ty = c.y; cam.tz = c.z;
   cam.dist = Math.min(1200, (r + 60) / Math.tan(camera.fov * Math.PI / 360) * 1.15);
+  draw();
+}
+
+// Slide the look-at point across the ground plane. dx is screen right, dy is
+// screen away, and the step scales with distance so panning feels the same
+// zoomed in as zoomed out.
+function panCamera(dx, dy, scale) {
+  const s = cam.dist * 0.0016 * (scale || 1);
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  cam.tx += (cy * dx - sy * dy) * s;
+  cam.tz += (-sy * dx - cy * dy) * s;
+}
+
+// Put the camera on the selected ship without changing how far off it sits.
+// During a review this follows the ship as it was in the turn being replayed.
+function centreOnSelection() {
+  const ships = viewState().ships.filter(sh => !sh.destroyed);
+  if (!ships.length) return;
+  const target = (sel && ships.find(sh => sh.id === sel.id))
+    || ships.find(sh => sh.isPlayer) || ships[0];
+  cam.tx = target.pos.x; cam.ty = target.pos.y; cam.tz = target.pos.z;
   draw();
 }
 
@@ -870,6 +926,7 @@ function render() {
 // Orbit is the right button or two fingers; zoom is the wheel or a pinch.
 const PIP_HIT = COARSE ? 3.2 : 1.8;
 let orbiting = false, orbitStart = null, dragMove = false, dragRotate = false;
+let panning = false, panStart = null;   // middle button drag on desktop
 const pointers = new Map();   // live pointerId -> {x, y} in canvas space
 let pinch = null;             // {dist, camDist, mx, my, yaw, pitch} while 2+ down
 let preDragTarget = null;     // destination before a drag, to undo on pinch
@@ -951,7 +1008,7 @@ cv.addEventListener("pointerdown", e => {
   // it was in the middle of moving) and switch to pinch-zoom + orbit
   if (pointers.size === 2) {
     if (dragMove && sel) ordFor(sel).move.target = preDragTarget;
-    dragMove = false; dragRotate = false; orbiting = false;
+    dragMove = false; dragRotate = false; orbiting = false; panning = false;
     const c = pointerCentroid();
     pinch = { dist: pointerSpread(), camDist: cam.dist, mx: c.x, my: c.y, yaw: cam.yaw, pitch: cam.pitch };
     draw();
@@ -961,6 +1018,7 @@ cv.addEventListener("pointerdown", e => {
 
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
 
+  if (e.button === 1) { panning = true; panStart = { x: p.x, y: p.y }; return; }
   if (e.button === 2) { orbiting = true; orbitStart = { x: p.x, y: p.y, yaw: cam.yaw, pitch: cam.pitch }; return; }
   if (e.button > 0 || phase !== "planning") return;
 
@@ -994,7 +1052,11 @@ cv.addEventListener("pointermove", e => {
     draw();
     return;
   }
-  if (orbiting) {
+  if (panning) {
+    panCamera(-(p.x - panStart.x), (p.y - panStart.y), 0.6);
+    panStart = { x: p.x, y: p.y };
+    draw();
+  } else if (orbiting) {
     cam.yaw = orbitStart.yaw - (p.x - orbitStart.x) * 0.007;
     cam.pitch = orbitStart.pitch + (p.y - orbitStart.y) * 0.007;
     draw();
@@ -1012,7 +1074,7 @@ function releasePointer(e) {
   try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
   if (pointers.size < 2) pinch = null;
   if (pointers.size === 0) {
-    orbiting = false;
+    orbiting = false; panning = false;
     if (dragMove || dragRotate) { dragMove = false; dragRotate = false; refresh(); }
   }
 }
@@ -1073,7 +1135,8 @@ function bump(o, dy) {
 const ui = {};
 for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay",
                   "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace",
-                  "env","envTune","turns"])
+                  "env","envTune","turns",
+                  "campad","cUp","cDown","cLeft","cRight","cMode","cIn","cOut","cCentre"])
   ui[id] = document.getElementById(id);
 
 const MODES = [["MOVE_AND_TURN","Move"],["TURN_SLIDE","Slide"],["FULL_SPEED","Boost"],["FULL_STOP","Stop"]];
@@ -1135,6 +1198,43 @@ function buildFlightUi() {
     ui.envTune.appendChild(wrap);
   }
 }
+
+// The camera pad. Held buttons repeat on the animation frame rather than
+// stepping once per tap, which is the difference between nudging a camera and
+// fighting one.
+let camMode = "orbit";
+function holdButton(el, fn) {
+  let raf = null, live = false;
+  const step = () => { if (!live) return; fn(); draw(); raf = requestAnimationFrame(step); };
+  const start = e => {
+    e.preventDefault();
+    if (live) return;
+    live = true;
+    try { el.setPointerCapture(e.pointerId); } catch (_) {}
+    step();
+  };
+  const stop = () => { live = false; if (raf) cancelAnimationFrame(raf); raf = null; };
+  el.addEventListener("pointerdown", start);
+  el.addEventListener("pointerup", stop);
+  el.addEventListener("pointercancel", stop);
+  el.addEventListener("pointerleave", stop);
+}
+const ORBIT_YAW = 0.018, ORBIT_PITCH = 0.014, PAN_STEP = 1.6;
+holdButton(ui.cLeft, () => camMode === "orbit" ? (cam.yaw += ORBIT_YAW) : panCamera(-PAN_STEP, 0));
+holdButton(ui.cRight, () => camMode === "orbit" ? (cam.yaw -= ORBIT_YAW) : panCamera(PAN_STEP, 0));
+holdButton(ui.cUp, () => camMode === "orbit" ? (cam.pitch += ORBIT_PITCH) : panCamera(0, PAN_STEP));
+holdButton(ui.cDown, () => camMode === "orbit" ? (cam.pitch -= ORBIT_PITCH) : panCamera(0, -PAN_STEP));
+holdButton(ui.cIn, () => { cam.dist *= 0.985; });
+holdButton(ui.cOut, () => { cam.dist *= 1.015; });
+ui.cMode.onclick = () => {
+  camMode = camMode === "orbit" ? "pan" : "orbit";
+  ui.cMode.textContent = camMode === "orbit" ? "\u21bb" : "\u2725";
+  ui.cMode.title = camMode === "orbit"
+    ? "Pad swings the camera. Tap to pan instead."
+    : "Pad slides the camera. Tap to orbit instead.";
+  ui.cMode.classList.toggle("on", camMode === "pan");
+};
+ui.cCentre.onclick = () => centreOnSelection();
 
 ui.tShips.onclick = () => toggleSheet("ships");
 ui.tLog.onclick = () => toggleSheet("log");

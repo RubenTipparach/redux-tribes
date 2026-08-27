@@ -99,8 +99,10 @@ touch, and the harness runs on a phone as well as a desktop.
 | working altitude, and so the slice | `Q` / `E` | the pad's up and down |
 | rotate heading | drag the white pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
 | select / target | click a ship | tap a ship, or a row in the Ships sheet |
-| orbit | right button drag | two finger drag |
-| zoom | wheel | pinch |
+| orbit | right button drag | two finger drag, or the left pad's arrows |
+| pan | middle button drag | the left pad, with its centre button set to slide |
+| zoom | wheel | pinch, or the left pad's + and - |
+| centre on selected ship | the left pad's ◎ | the left pad's ◎ |
 | 15 degree yaw, face target | `A`/`D`, `F` | the round pad at the right edge |
 | frame the fleet and its envelope | `Fit view` | `Fit view` in the tab bar |
 
