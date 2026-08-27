@@ -1,0 +1,21 @@
+[package]
+name = "sim_core"
+version = "0.1.0"
+edition = "2021"
+description = "Fallen Tribes deterministic simulation core. No engine, no renderer, no I/O."
+license = "MIT"
+
+[lib]
+# rlib so a native Rust client can link it directly; cdylib so the same code
+# compiles to wasm32 for the TypeScript client. One crate, two consumers, which
+# is the whole point: swapping the renderer must not fork the simulation.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Deliberately none. Every dependency is a determinism risk: a crate that calls
+# a libm intrinsic or reorders a float sum breaks lockstep silently. See ADR-4.
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"

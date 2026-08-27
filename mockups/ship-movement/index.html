@@ -1,0 +1,548 @@
+<title>Ship Movement Model</title>
+<meta name="description" content="Four movement models compared over a swept reachability field: how carried velocity turns the reachable set from a circle into a committed envelope.">
+<style>
+/* Self-contained: no network, no remote fonts, no CDN (mockup rule 2.1). */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --amber:#FFC24B;
+  --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:14px;overflow:hidden}
+#app{display:grid;grid-template-columns:270px 1fr 250px;grid-template-rows:50px 1fr;height:100vh}
+header{grid-column:1/4;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--panel2);border-bottom:1px solid var(--line)}
+header h1{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0;color:var(--cyan);white-space:nowrap}
+.gap{flex:1}
+.pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:3px 10px}
+.pill b{color:var(--ink)}
+aside{background:var(--panel2);padding:12px;overflow-y:auto}
+#left{border-right:1px solid var(--line)}
+#right{border-left:1px solid var(--line)}
+h2{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+h2:first-child{margin-top:0}
+canvas{display:block;width:100%;height:100%;background:var(--ground);cursor:crosshair}
+button{font:inherit;font-size:12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:var(--cyan);color:var(--cyan)}
+button.on{background:#0d2231;border-color:var(--cyan);color:var(--cyan)}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.modes{display:flex;flex-direction:column;gap:5px}
+.modes button{text-align:left;line-height:1.35}
+.modes button i{display:block;font-style:normal;font-size:11px;color:var(--muted);margin-top:2px}
+.modes button.on i{color:#9dd9f5}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}
+.row label{font-size:11px;color:var(--muted)}
+.row output{font-family:var(--mono);font-size:11px;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--cyan);margin:0 0 8px}
+.legend{font-size:11px;color:var(--muted);line-height:1.7}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.note{font-size:11px;color:var(--muted);line-height:1.55;background:var(--panel);border-left:2px solid var(--cyan);padding:8px 10px;border-radius:0 4px 4px 0;margin-top:10px}
+.note b{color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:11px;margin-top:4px}
+td{padding:3px 0;border-bottom:1px solid #16202e;color:var(--muted)}
+td:last-child{text-align:right;font-family:var(--mono);color:var(--ink)}
+.verdict{font-size:12px;line-height:1.5;padding:8px 10px;border-radius:5px;margin-top:8px}
+.verdict.good{background:#0d2418;border:1px solid #1f5c38;color:#a8e9c3}
+.verdict.bad{background:#2a1214;border:1px solid #5c2326;color:#f3b4b7}
+kbd{font-family:var(--mono);font-size:10px;background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1px 4px}
+</style>
+<div id="app">
+  <header>
+    <h1>Ship Movement · Model Comparison</h1>
+    <span class="pill">turn <b id="pTurn">1</b></span>
+    <span class="pill">speed <b id="pSpeed">0.0</b> u/s</span>
+    <span class="pill">heading <b id="pHead">0</b>°</span>
+    <span class="gap"></span>
+    <button id="bCommit">Commit move &amp; carry velocity →</button>
+    <button id="bReset">Reset</button>
+  </header>
+
+  <aside id="left">
+    <h2>Movement model</h2>
+    <div class="modes" id="modes"></div>
+
+    <h2>Ship envelope</h2>
+    <div class="row"><label>Forward thrust</label><output id="oFwd"></output></div>
+    <input type="range" id="sFwd" min="0.1" max="3" step="0.05" value="0.8">
+    <div class="row"><label>Retro thrust</label><output id="oBack"></output></div>
+    <input type="range" id="sBack" min="0" max="3" step="0.05" value="0.3">
+    <div class="row"><label>Lateral thrust</label><output id="oLat"></output></div>
+    <input type="range" id="sLat" min="0" max="3" step="0.05" value="0.25">
+    <div class="row"><label>Rotation rate</label><output id="oRot"></output></div>
+    <input type="range" id="sRot" min="1" max="36" step="1" value="6">
+    <div class="row"><label>Max speed</label><output id="oMax"></output></div>
+    <input type="range" id="sMax" min="2" max="20" step="0.5" value="8">
+
+    <h2>Current velocity</h2>
+    <div class="row"><label>Speed</label><output id="oVel"></output></div>
+    <input type="range" id="sVel" min="0" max="20" step="0.25" value="4">
+    <div class="row"><label>Drift angle</label><output id="oVdir"></output></div>
+    <input type="range" id="sVdir" min="-180" max="180" step="5" value="0">
+
+    <div class="note" id="modeNote"></div>
+  </aside>
+
+  <canvas id="cv"></canvas>
+
+  <aside id="right">
+    <h2>Reachable set</h2>
+    <div class="legend">
+      <span class="sw" style="background:#4CD97B"></span>reachable this turn<br>
+      <span class="sw" style="background:#243040"></span>out of envelope<br>
+      <span class="sw" style="background:#FA6A0A"></span>Fallen Tribes today<br>
+      <span class="sw" style="background:#35C7FF"></span>committed path<br>
+      <span class="sw" style="background:#FFC24B"></span>carried velocity
+    </div>
+    <table id="stats"></table>
+    <div id="verdict"></div>
+
+    <h2>What this decides</h2>
+    <div class="legend" style="line-height:1.6">
+      Click anywhere to plot a course. The green field is every position the
+      ship can actually hold at end of turn, given the velocity it already
+      carries. Commit a move and the envelope moves with you.
+    </div>
+    <div class="note">
+      <b>Fallen Tribes today:</b> the envelope is a circle centred on the ship
+      and heading is free - 360° per turn, momentum only bends the path
+      cosmetically. Nothing you did last turn constrains this one.
+    </div>
+    <h2>Controls</h2>
+    <div class="legend">
+      <kbd>click</kbd> plot course · <kbd>drag</kbd> pan · <kbd>wheel</kbd> zoom<br>
+      <kbd>C</kbd> commit · <kbd>R</kbd> reset · <kbd>1-4</kbd> switch model
+    </div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- constants
+// Numbers carried from the real project so the mockup answers the real question:
+//   prototype/sim/data.js - TURN_SECONDS 10, TICKS_PER_SECOND 60, thrusterRange 40
+//   heavyphoton boat-movement.html - 10 solver segments per manoeuvre, local-frame
+//   thrust (fwd/back/lateral asymmetric), rotation rate in deg/s, max-speed clamp.
+const TURN_SECONDS = 10;
+const SEGMENTS = 10;                 // matches both the boat demo and FT's second slots
+const SEG_T = TURN_SECONDS / SEGMENTS;
+const FT_THRUSTER_RANGE = 40;        // Fallen Tribes' maxThrusterRangeValue (shipped)
+
+const MODES = [
+  { key: "ft", name: "1 · Fallen Tribes (today)",
+    blurb: "Circle of radius 40 centred on the ship. Heading free, 360°/turn.",
+    note: "<b>The baseline, and the flaw.</b> Every position within 40 units is equally available every turn, and the ship can face any direction on arrival. Velocity is decorative: it bends the Bézier but never limits where you may end up. Two ships at rest and at full burn have identical options." },
+  { key: "newtonian", name: "2 · Full Newtonian",
+    blurb: "Heading independent of travel. Thrust in local frame. Nothing damps.",
+    note: "<b>Everything carries.</b> Velocity persists in full; the envelope is a disc around where momentum is already taking you, sized by what thrust can add in 10 s. You can fly backwards, drift sideways while facing the enemy - real broadside work. Cost: recovering from a bad burn takes several turns, and new players will fly into things." },
+  { key: "assisted", name: "3 · Assisted Newtonian",
+    blurb: "Newtonian, plus lateral drift bleeds off each segment.",
+    note: "<b>The recommended middle.</b> Momentum along the hull's axis carries fully, but sideways drift decays (35%/segment). You still commit to a vector and still cannot stop on a coin, yet the ship answers its helm and the envelope stays legible. Slide manoeuvres remain possible, they just cost thrust to hold." },
+  { key: "coupled", name: "4 · Coupled (boat)",
+    blurb: "Velocity always along heading. Turn rate limited. No drift.",
+    note: "<b>Arcade end.</b> The ship goes where it points, turning is rate-limited, so the envelope is an arc swept by the turn circle. Very readable and very easy to fly - but it removes the drift/slide vocabulary the original had, and space stops feeling like space." },
+];
+
+// ------------------------------------------------------------------- state
+// Defaults chosen against Fallen Tribes' real scale: a shipped frigate moves
+// maxThrusterRangeValue = 40 units per 10 s turn. Forward thrust 0.8 u/s² gives
+// ½at² = 40 u of manoeuvre authority in one turn, so the dynamic envelope is
+// directly comparable to FT's 40-unit circle. 4 u/s carried = exactly one
+// FT-move's worth of momentum. Rotation 6°/s = 60°/turn, against FT's free 360°.
+const S = {
+  mode: "assisted",
+  fwd: 0.8, back: 0.3, lat: 0.25, rot: 6, max: 8,
+  vel: 4, vdir: 0,
+  heading: 0,                        // radians, +x = 0
+  pos: { x: 0, y: 0 },
+  turn: 1,
+  target: null,                      // {x,y} world
+  path: null,
+  history: [],                       // committed paths
+  cam: { x: 0, y: 0, scale: 3.2 },
+};
+
+function currentVel() {
+  const a = S.vdir * Math.PI / 180;   // drift angle measured off the nose
+  const h = S.heading + a;
+  return { x: Math.cos(h) * S.vel, y: Math.sin(h) * S.vel };
+}
+
+// ------------------------------------------------------- the movement models
+// One solver, parameterised by mode (guideline 5.1: no divergent code paths for
+// like functionality). Returns { reached, path, finalSpeed, finalHeading }.
+function solve(tx, ty, mode) {
+  const v0 = currentVel();
+  let x = S.pos.x, y = S.pos.y, vx = v0.x, vy = v0.y, heading = S.heading;
+  const path = [{ x, y, vx, vy, heading }];
+
+  // Fallen Tribes: no dynamics at all. Inside the circle => reachable, and the
+  // path is the momentum Bézier (cosmetic only).
+  if (mode === "ft") {
+    const dx = tx - S.pos.x, dy = ty - S.pos.y;
+    const dist = Math.hypot(dx, dy);
+    const reached = dist <= FT_THRUSTER_RANGE;
+    const cpx = S.pos.x + v0.x * (TURN_SECONDS / 2.5) / TURN_SECONDS * 4;
+    const cpy = S.pos.y + v0.y * (TURN_SECONDS / 2.5) / TURN_SECONDS * 4;
+    const pts = [];
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const t = i / SEGMENTS;
+      const ax = (1 - t) * (1 - t) * S.pos.x + 2 * (1 - t) * t * cpx + t * t * tx;
+      const ay = (1 - t) * (1 - t) * S.pos.y + 2 * (1 - t) * t * cpy + t * t * ty;
+      pts.push({ x: ax, y: ay, vx: 0, vy: 0, heading: Math.atan2(ty - S.pos.y, tx - S.pos.x) });
+    }
+    return { reached, path: pts, finalSpeed: dist / TURN_SECONDS,
+             finalHeading: pts[pts.length - 1].heading,
+             finalDistance: Math.max(0, dist - FT_THRUSTER_RANGE) };
+  }
+
+  const rotRate = S.rot * Math.PI / 180;
+  const maxRotSeg = rotRate * SEG_T;
+  const desiredHeading = Math.atan2(ty - S.pos.y, tx - S.pos.x);
+
+  for (let seg = 1; seg <= SEGMENTS; seg++) {
+    // --- rotate toward the course, rate limited (this is the fix for 360°/turn)
+    let err = desiredHeading - heading;
+    while (err > Math.PI) err -= 2 * Math.PI;
+    while (err < -Math.PI) err += 2 * Math.PI;
+    heading += Math.max(-maxRotSeg, Math.min(maxRotSeg, err));
+
+    if (mode === "coupled") {
+      // velocity is slaved to heading; thrust only changes its magnitude
+      const dist = Math.hypot(tx - x, ty - y);
+      const remain = (SEGMENTS - seg + 1) * SEG_T;
+      let speed = Math.hypot(vx, vy);
+      const want = Math.min(S.max, dist / remain);
+      const dv = want - speed;
+      const acc = dv > 0 ? Math.min(dv, S.fwd * SEG_T) : Math.max(dv, -S.back * SEG_T);
+      speed = Math.max(0, Math.min(S.max, speed + acc));
+      vx = Math.cos(heading) * speed;
+      vy = Math.sin(heading) * speed;
+    } else {
+      // --- Newtonian / assisted: solve the Δv that closes on the target, then
+      //     clamp it by what the thrusters can actually deliver in ship frame.
+      const remain = (SEGMENTS - seg + 1) * SEG_T;
+      const desVx = (tx - x) / remain;
+      const desVy = (ty - y) / remain;
+      let ndvx = desVx - vx, ndvy = desVy - vy;
+
+      const cosH = Math.cos(heading), sinH = Math.sin(heading);
+      const localF = ndvx * cosH + ndvy * sinH;      // along the nose
+      const localR = -ndvx * sinH + ndvy * cosH;     // to starboard
+
+      const tF = localF > 0
+        ? Math.min(localF / SEG_T, S.fwd)
+        : Math.max(localF / SEG_T, -S.back);
+      const tR = localR > 0
+        ? Math.min(localR / SEG_T, S.lat)
+        : Math.max(localR / SEG_T, -S.lat);
+
+      vx += (tF * cosH - tR * sinH) * SEG_T;
+      vy += (tF * sinH + tR * cosH) * SEG_T;
+
+      if (mode === "assisted") {
+        // bleed the component perpendicular to the hull: the ship "bites"
+        const alongX = cosH, alongY = sinH;
+        const along = vx * alongX + vy * alongY;
+        let perpX = vx - along * alongX, perpY = vy - along * alongY;
+        perpX *= 0.65; perpY *= 0.65;               // 35% of drift shed per segment
+        vx = along * alongX + perpX;
+        vy = along * alongY + perpY;
+      }
+
+      const sp = Math.hypot(vx, vy);
+      if (sp > S.max) { vx = vx * S.max / sp; vy = vy * S.max / sp; }
+    }
+
+    x += vx * SEG_T;
+    y += vy * SEG_T;
+    path.push({ x, y, vx, vy, heading });
+  }
+
+  const finalDist = Math.hypot(tx - x, ty - y);
+  return {
+    reached: finalDist <= 3.0,
+    path,
+    finalSpeed: Math.hypot(vx, vy),
+    finalHeading: heading,
+    finalDistance: finalDist,
+  };
+}
+
+// ------------------------------------------------------- reachability sweep
+let field = null;   // {cells:Float32Array-ish, n, step, ox, oy}
+const FIELD_N = 46;
+
+function computeField() {
+  const v0 = currentVel();
+  // Sweep a window that always contains BOTH the ship and the point momentum
+  // alone would carry it to, so every model's envelope is measured over the
+  // same area and the percentages compare honestly.
+  const driftX = v0.x * TURN_SECONDS, driftY = v0.y * TURN_SECONDS;
+  const cx = S.pos.x + driftX * 0.5;
+  const cy = S.pos.y + driftY * 0.5;
+  const span = Math.max(FT_THRUSTER_RANGE * 3.2, Math.hypot(driftX, driftY) + FT_THRUSTER_RANGE * 2.4);
+  const step = span / FIELD_N;
+  const cells = new Uint8Array((FIELD_N + 1) * (FIELD_N + 1));
+  for (let i = 0; i <= FIELD_N; i++) {
+    for (let j = 0; j <= FIELD_N; j++) {
+      const wx = cx + (i - FIELD_N / 2) * step;
+      const wy = cy + (j - FIELD_N / 2) * step;
+      cells[i * (FIELD_N + 1) + j] = solve(wx, wy, S.mode).reached ? 1 : 0;
+    }
+  }
+  field = { cells, n: FIELD_N, step, ox: cx - (FIELD_N / 2) * step, oy: cy - (FIELD_N / 2) * step };
+}
+
+// --------------------------------------------------------------- rendering
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+const DPR = () => window.devicePixelRatio || 1;
+function fit() { const r = cv.getBoundingClientRect(); cv.width = r.width * DPR(); cv.height = r.height * DPR(); }
+function w2s(p) {
+  return { x: cv.width / 2 + (p.x - S.cam.x) * S.cam.scale * DPR(),
+           y: cv.height / 2 + (p.y - S.cam.y) * S.cam.scale * DPR() };
+}
+function s2w(sx, sy) {
+  return { x: S.cam.x + (sx * DPR() - cv.width / 2) / (S.cam.scale * DPR()),
+           y: S.cam.y + (sy * DPR() - cv.height / 2) / (S.cam.scale * DPR()) };
+}
+
+function draw() {
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  const d = DPR();
+
+  // grid
+  const g = 20 * S.cam.scale * d;
+  ctx.fillStyle = "#141d29";
+  const ox = (cv.width / 2 - S.cam.x * S.cam.scale * d) % g;
+  const oy = (cv.height / 2 - S.cam.y * S.cam.scale * d) % g;
+  for (let x = ox; x < cv.width; x += g) for (let y = oy; y < cv.height; y += g) ctx.fillRect(x - 1, y - 1, 2, 2);
+
+  // reachable field
+  if (field) {
+    const cell = field.step * S.cam.scale * d;
+    for (let i = 0; i <= field.n; i++) {
+      for (let j = 0; j <= field.n; j++) {
+        if (!field.cells[i * (field.n + 1) + j]) continue;
+        const p = w2s({ x: field.ox + i * field.step, y: field.oy + j * field.step });
+        ctx.fillStyle = "rgba(76,217,123,0.30)";
+        ctx.fillRect(p.x - cell / 2, p.y - cell / 2, cell + 1, cell + 1);
+      }
+    }
+  }
+
+  // Fallen Tribes comparison circle, always drawn as the baseline
+  const c = w2s(S.pos);
+  ctx.strokeStyle = "#FA6A0A"; ctx.globalAlpha = .55; ctx.lineWidth = 1.2 * d;
+  ctx.setLineDash([5 * d, 5 * d]);
+  ctx.beginPath(); ctx.arc(c.x, c.y, FT_THRUSTER_RANGE * S.cam.scale * d, 0, 7); ctx.stroke();
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  ctx.fillStyle = "#FA6A0A"; ctx.globalAlpha = .8; ctx.font = `${10 * d}px ui-monospace,monospace`;
+  ctx.fillText("FT envelope (r=40)", c.x + FT_THRUSTER_RANGE * S.cam.scale * d + 6 * d, c.y - 4 * d);
+  ctx.globalAlpha = 1;
+
+  // committed history
+  for (const h of S.history) {
+    ctx.strokeStyle = "#35C7FF"; ctx.globalAlpha = .25; ctx.lineWidth = 1.5 * d;
+    ctx.beginPath();
+    h.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
+    ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  // carried velocity vector
+  const v0 = currentVel();
+  if (S.vel > 0.1) {
+    const tip = w2s({ x: S.pos.x + v0.x * TURN_SECONDS, y: S.pos.y + v0.y * TURN_SECONDS });
+    ctx.strokeStyle = "#FFC24B"; ctx.lineWidth = 2 * d; ctx.globalAlpha = .85;
+    ctx.setLineDash([7 * d, 4 * d]);
+    ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(tip.x, tip.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#FFC24B";
+    ctx.beginPath(); ctx.arc(tip.x, tip.y, 3.5 * d, 0, 7); ctx.fill();
+    ctx.font = `${10 * d}px ui-monospace,monospace`;
+    ctx.fillText("carried velocity ×10s", tip.x + 7 * d, tip.y + 3 * d);
+    ctx.globalAlpha = 1;
+  }
+
+  // plotted course
+  if (S.path) {
+    const ok = S.path.reached;
+    ctx.strokeStyle = ok ? "#35C7FF" : "#FF4B4B"; ctx.lineWidth = 2.2 * d;
+    ctx.beginPath();
+    S.path.path.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
+    ctx.stroke();
+    // per-second ticks + hull ghosts
+    S.path.path.forEach((p, i) => {
+      if (i === 0) return;
+      const s = w2s(p);
+      ctx.fillStyle = ok ? "#35C7FF" : "#FF4B4B"; ctx.globalAlpha = .55;
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2 * d, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+      if (i % 2 === 0) ghost(p.x, p.y, p.heading, ok ? "#35C7FF" : "#FF4B4B", .35);
+    });
+    const end = S.path.path[S.path.path.length - 1];
+    ghost(end.x, end.y, end.heading, ok ? "#35C7FF" : "#FF4B4B", .95);
+  }
+
+  // the target marker
+  if (S.target) {
+    const t = w2s(S.target);
+    ctx.strokeStyle = S.path && S.path.reached ? "#4CD97B" : "#FF4B4B";
+    ctx.lineWidth = 1.5 * d;
+    ctx.beginPath(); ctx.arc(t.x, t.y, 7 * d, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(t.x - 11 * d, t.y); ctx.lineTo(t.x + 11 * d, t.y);
+    ctx.moveTo(t.x, t.y - 11 * d); ctx.lineTo(t.x, t.y + 11 * d); ctx.stroke();
+  }
+
+  // the ship
+  ghost(S.pos.x, S.pos.y, S.heading, "#FFFFFF", 1, true);
+}
+
+function ghost(x, y, heading, color, alpha, solid) {
+  const d = DPR(), s = w2s({ x, y }), r = 7 * d;
+  ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(heading + Math.PI / 2);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1.4 * d;
+  ctx.beginPath();
+  ctx.moveTo(0, -r); ctx.lineTo(r * .62, r * .78); ctx.lineTo(0, r * .38); ctx.lineTo(-r * .62, r * .78);
+  ctx.closePath();
+  solid ? ctx.fill() : ctx.stroke();
+  ctx.globalAlpha = 1; ctx.restore();
+}
+
+// --------------------------------------------------------------------- UI
+const $ = id => document.getElementById(id);
+
+function buildModes() {
+  const box = $("modes"); box.innerHTML = "";
+  MODES.forEach(m => {
+    const b = document.createElement("button");
+    b.className = S.mode === m.key ? "on" : "";
+    b.innerHTML = `<span>${m.name}</span><i>${m.blurb}</i>`;
+    b.onclick = () => { S.mode = m.key; recompute(); };
+    box.appendChild(b);
+  });
+  $("modeNote").innerHTML = MODES.find(m => m.key === S.mode).note;
+}
+
+const SLIDERS = [
+  ["sFwd", "oFwd", "fwd", v => v.toFixed(1) + " u/s²"],
+  ["sBack", "oBack", "back", v => v.toFixed(1) + " u/s²"],
+  ["sLat", "oLat", "lat", v => v.toFixed(1) + " u/s²"],
+  ["sRot", "oRot", "rot", v => v.toFixed(0) + "°/s  (" + (v * TURN_SECONDS).toFixed(0) + "°/turn)"],
+  ["sMax", "oMax", "max", v => v.toFixed(0) + " u/s"],
+  ["sVel", "oVel", "vel", v => v.toFixed(1) + " u/s"],
+  ["sVdir", "oVdir", "vdir", v => v.toFixed(0) + "° off nose"],
+];
+function bindSliders() {
+  for (const [sid, oid, key, fmt] of SLIDERS) {
+    const el = $(sid);
+    el.value = S[key];
+    const sync = () => { S[key] = parseFloat(el.value); $(oid).textContent = fmt(S[key]); };
+    sync();
+    el.addEventListener("input", () => { sync(); recompute(); });
+  }
+}
+
+function stats() {
+  const v0 = currentVel();
+  const carry = Math.hypot(v0.x, v0.y) * TURN_SECONDS;
+  let reach = 0;
+  if (field) for (let k = 0; k < field.cells.length; k++) reach += field.cells[k];
+  const cellArea = field ? field.step * field.step : 0;
+  const area = reach * cellArea;
+  const ftArea = Math.PI * FT_THRUSTER_RANGE * FT_THRUSTER_RANGE;
+  // The constraint that actually matters: at speed, can the ship still stop
+  // where it is? In FT it always can (envelope is centred on the hull). In any
+  // velocity-carrying model it cannot, and that is the whole design point.
+  const canHold = solve(S.pos.x, S.pos.y, S.mode).reached;
+  const rows = [
+    ["carried this turn", carry.toFixed(0) + " u"],
+    ["can hold station", canHold ? "yes" : "NO - committed"],
+    ["envelope area", Math.round(area) + " u²"],
+    ["vs FT circle", (area / ftArea * 100).toFixed(0) + "%"],
+    ["turn authority", S.mode === "ft" ? "free (any facing)" : (S.rot * TURN_SECONDS).toFixed(0) + "°/turn"],
+    ["envelope moves with you", S.mode === "ft" ? "no" : "yes"],
+  ];
+  if (S.path) {
+    rows.push(["course end speed", S.path.finalSpeed.toFixed(1) + " u/s"]);
+    if (S.path.finalDistance !== undefined) rows.push(["miss distance", S.path.finalDistance.toFixed(1) + " u"]);
+  }
+  $("stats").innerHTML = rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
+
+  const v = $("verdict");
+  if (!S.path) { v.innerHTML = ""; return; }
+  v.className = "verdict " + (S.path.reached ? "good" : "bad");
+  v.textContent = S.path.reached
+    ? "Reachable - the ship can hold that position at end of turn."
+    : "Out of envelope - misses by " + S.path.finalDistance.toFixed(1) + " u. Bleed speed or turn earlier.";
+}
+
+function recompute() {
+  buildModes();
+  computeField();
+  if (S.target) S.path = solve(S.target.x, S.target.y, S.mode);
+  $("pTurn").textContent = S.turn;
+  $("pSpeed").textContent = S.vel.toFixed(1);
+  $("pHead").textContent = Math.round(((S.heading * 180 / Math.PI) % 360 + 360) % 360);
+  stats();
+  draw();
+}
+
+// interactions
+let panning = false, panStart = null;
+cv.addEventListener("mousedown", e => {
+  if (e.button === 2 || e.shiftKey) { panning = true; panStart = { x: e.offsetX, y: e.offsetY, cx: S.cam.x, cy: S.cam.y }; return; }
+  const w = s2w(e.offsetX, e.offsetY);
+  S.target = w; S.path = solve(w.x, w.y, S.mode); stats(); draw();
+});
+cv.addEventListener("mousemove", e => {
+  if (!panning) return;
+  S.cam.x = panStart.cx - (e.offsetX - panStart.x) / S.cam.scale;
+  S.cam.y = panStart.cy - (e.offsetY - panStart.y) / S.cam.scale;
+  draw();
+});
+addEventListener("mouseup", () => panning = false);
+cv.addEventListener("contextmenu", e => e.preventDefault());
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  S.cam.scale = Math.max(1, Math.min(14, S.cam.scale * (e.deltaY < 0 ? 1.12 : .89)));
+  draw();
+}, { passive: false });
+
+function commit() {
+  if (!S.path || !S.path.reached) return;
+  const end = S.path.path[S.path.path.length - 1];
+  S.history.push(S.path.path.map(p => ({ x: p.x, y: p.y })));
+  S.pos = { x: end.x, y: end.y };
+  S.heading = end.heading;
+  if (S.mode !== "ft") {
+    const sp = Math.hypot(end.vx, end.vy);
+    S.vel = Math.min(parseFloat($("sMax").value), sp);
+    let drift = Math.atan2(end.vy, end.vx) - end.heading;
+    while (drift > Math.PI) drift -= 2 * Math.PI;
+    while (drift < -Math.PI) drift += 2 * Math.PI;
+    S.vdir = drift * 180 / Math.PI;
+  }
+  $("sVel").value = S.vel; $("sVdir").value = S.vdir;
+  for (const [sid, oid, key, fmt] of SLIDERS) $(oid).textContent = fmt(S[key]);
+  S.cam.x = S.pos.x; S.cam.y = S.pos.y;
+  S.target = null; S.path = null; S.turn++;
+  recompute();
+}
+function reset() {
+  S.pos = { x: 0, y: 0 }; S.heading = 0; S.turn = 1; S.history = [];
+  S.target = null; S.path = null; S.vel = 14; S.vdir = 0;
+  $("sVel").value = 14; $("sVdir").value = 0;
+  S.cam.x = 0; S.cam.y = 0;
+  bindSliders(); recompute();
+}
+$("bCommit").onclick = commit;
+$("bReset").onclick = reset;
+addEventListener("keydown", e => {
+  if (e.key === "c" || e.key === "C") commit();
+  else if (e.key === "r" || e.key === "R") reset();
+  else if (e.key >= "1" && e.key <= "4") { S.mode = MODES[+e.key - 1].key; recompute(); }
+});
+addEventListener("resize", () => { fit(); draw(); });
+
+fit(); bindSliders(); recompute();
+</script>

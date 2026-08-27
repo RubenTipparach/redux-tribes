@@ -1,0 +1,463 @@
+<title>Reachable Volume</title>
+<meta name="description" content="The reachable set as a volume: orbit the envelope carried velocity leaves you, at true ship scale, against Fallen Tribes' sphere.">
+<script src="../vendor/three.global.js"></script>
+<style>
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --amber:#FFC24B;
+  --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:14px;overflow:hidden}
+#app{display:grid;grid-template-columns:265px 1fr 240px;grid-template-rows:50px 1fr;height:100vh}
+header{grid-column:1/4;display:flex;align-items:center;gap:12px;padding:0 14px;background:var(--panel2);border-bottom:1px solid var(--line)}
+header h1{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin:0;color:var(--cyan);white-space:nowrap}
+.gap{flex:1}
+.pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:3px 10px;white-space:nowrap}
+.pill b{color:var(--ink)}
+aside{background:var(--panel2);padding:12px;overflow-y:auto}
+#left{border-right:1px solid var(--line)}
+#right{border-left:1px solid var(--line)}
+h2{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:var(--muted);margin:15px 0 7px}
+h2:first-child{margin-top:0}
+#view{position:relative}
+canvas{display:block}
+button{font:inherit;font-size:12px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:6px 10px;cursor:pointer}
+button:hover{border-color:var(--cyan);color:var(--cyan)}
+button.on{background:#0d2231;border-color:var(--cyan);color:var(--cyan)}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.modes{display:flex;flex-direction:column;gap:5px}
+.modes button{text-align:left;line-height:1.3}
+.modes button i{display:block;font-style:normal;font-size:11px;color:var(--muted);margin-top:2px}
+.modes button.on i{color:#9dd9f5}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.row label{font-size:11px;color:var(--muted)}
+.row output{font-family:var(--mono);font-size:11px;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--cyan);margin:1px 0 7px}
+.toggles{display:flex;flex-wrap:wrap;gap:4px}
+.toggles button{padding:4px 8px;font-size:11px}
+.legend{font-size:11px;color:var(--muted);line-height:1.65}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+.note{font-size:11px;color:var(--muted);line-height:1.5;background:var(--panel);border-left:2px solid var(--cyan);padding:8px 10px;border-radius:0 4px 4px 0;margin-top:9px}
+.note b{color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:11px}
+td{padding:3px 0;border-bottom:1px solid #16202e;color:var(--muted)}
+td:last-child{text-align:right;font-family:var(--mono);color:var(--ink)}
+kbd{font-family:var(--mono);font-size:10px;background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:1px 4px}
+#hint{position:absolute;left:12px;bottom:10px;font-size:11px;color:var(--muted);background:rgba(10,14,20,.8);border:1px solid var(--line);border-radius:5px;padding:6px 9px;pointer-events:none}
+</style>
+
+<div id="app">
+  <header>
+    <h1>Reachable Volume</h1>
+    <span class="pill">turn <b id="pTurn">1</b></span>
+    <span class="pill">speed <b id="pSpeed">4.0</b> u/s</span>
+    <span class="pill">reachable <b id="pCells">0</b></span>
+    <span class="gap"></span>
+    <button id="bCommit">Commit &amp; carry velocity</button>
+    <button id="bReset">Reset</button>
+  </header>
+
+  <aside id="left">
+    <h2>Movement model</h2>
+    <div class="modes" id="modes"></div>
+
+    <h2>Ship envelope</h2>
+    <div class="row"><label>Forward thrust</label><output id="oFwd"></output></div>
+    <input type="range" id="sFwd" min="0.1" max="3" step="0.05" value="0.8">
+    <div class="row"><label>Retro thrust</label><output id="oBack"></output></div>
+    <input type="range" id="sBack" min="0" max="3" step="0.05" value="0.3">
+    <div class="row"><label>Lateral / vertical thrust</label><output id="oLat"></output></div>
+    <input type="range" id="sLat" min="0" max="3" step="0.05" value="0.25">
+    <div class="row"><label>Rotation rate</label><output id="oRot"></output></div>
+    <input type="range" id="sRot" min="1" max="36" step="1" value="6">
+    <div class="row"><label>Max speed</label><output id="oMax"></output></div>
+    <input type="range" id="sMax" min="2" max="20" step="0.5" value="8">
+
+    <h2>Carried velocity</h2>
+    <div class="row"><label>Speed</label><output id="oVel"></output></div>
+    <input type="range" id="sVel" min="0" max="20" step="0.25" value="4">
+    <div class="row"><label>Yaw off nose</label><output id="oVyaw"></output></div>
+    <input type="range" id="sVyaw" min="-180" max="180" step="5" value="0">
+    <div class="row"><label>Pitch off nose</label><output id="oVpitch"></output></div>
+    <input type="range" id="sVpitch" min="-80" max="80" step="5" value="0">
+
+    <div class="note" id="modeNote"></div>
+  </aside>
+
+  <div id="view"><div id="hint">drag orbit &middot; wheel zoom &middot; arrows / +- keyboard</div></div>
+
+  <aside id="right">
+    <h2>Show</h2>
+    <div class="toggles" id="toggles"></div>
+
+    <h2>Reachable volume</h2>
+    <div class="legend">
+      <span class="sw" style="background:#4CD97B"></span>reachable this turn<br>
+      <span class="sw" style="background:#FA6A0A"></span>FT sphere (r=40)<br>
+      <span class="sw" style="background:#FFC24B"></span>carried velocity<br>
+      <span class="sw" style="background:#35C7FF"></span>committed track
+    </div>
+    <table id="stats"></table>
+    <div class="note" id="verdict"></div>
+
+    <h2>Scale</h2>
+    <div class="legend">
+      The frigate is drawn at its shipped size: <b>6.9 u</b> long, the hull
+      radius <b>3.5 u</b> the sim collides with. The floor grid is <b>20 u</b>
+      per square and the vertical stalks read altitude off the tactical plane,
+      exactly as the original's nav widget did.
+    </div>
+
+    <h2>Controls</h2>
+    <div class="legend">
+      <kbd>drag</kbd> orbit &middot; <kbd>wheel</kbd> zoom &middot; <kbd>arrows</kbd> orbit<br>
+      <kbd>+</kbd>/<kbd>-</kbd> zoom &middot; <kbd>1-4</kbd> model &middot; <kbd>C</kbd> commit &middot; <kbd>R</kbd> reset
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+"use strict";
+// Numbers from the real project (GUIDELINES.md rule 2.1):
+//   prototype/sim/data.js - TURN_SECONDS 10, thrusterRange 40, frigate radius 3.5
+//   ship_1.fbx measures 6.9 x 3.4 x 4.0 u (docs/DESIGN.md asset inventory)
+// Solver ported from heavyphoton boat-movement.html, extended to three axes:
+// thrust is applied in the ship's local frame, so "lateral" covers both
+// starboard and dorsal translation, and rotation is rate limited in yaw+pitch.
+const TURN_SECONDS = 10, SEGMENTS = 10, SEG_T = TURN_SECONDS / SEGMENTS;
+const FT_RANGE = 40;            // Fallen Tribes maxThrusterRangeValue
+const HULL_LEN = 6.9, HULL_R = 3.5;
+
+const MODES = [
+  { key:"ft", name:"1 - Fallen Tribes (today)",
+    blurb:"Sphere of radius 40 centred on the hull. Any facing, 360/turn.",
+    note:"<b>The baseline, and the flaw.</b> In three dimensions the envelope is a full sphere: every point within 40 u is equally available, at any attitude, every single turn. Velocity only bends the drawn path. Orbit it and the giveaway is that the ship sits dead centre, turn after turn." },
+  { key:"newtonian", name:"2 - Full Newtonian",
+    blurb:"Attitude free of travel. Local-frame thrust. Nothing damps.",
+    note:"<b>Everything carries.</b> The volume detaches and rides downrange on the velocity you already have. You can fly backwards or slide belly-first through a firing pass. Cost: a bad burn takes several turns to unwind, and the vertical axis is as unforgiving as the horizontal." },
+  { key:"assisted", name:"3 - Assisted Newtonian",
+    blurb:"Newtonian, plus off-axis drift bleeds 35% per segment.",
+    note:"<b>The recommended middle.</b> Momentum along the hull carries fully; drift across it decays. The volume still detaches, so you are still committed, but it stays a readable lozenge rather than a smear, and it recentres on the nose within a turn or two of flying straight." },
+  { key:"coupled", name:"4 - Coupled (boat)",
+    blurb:"Velocity follows the nose. Turn rate limited. No drift.",
+    note:"<b>Arcade end.</b> The volume becomes a curved shell swept by the turn rate: you go where you point, and the only choice is how hard you burn along it. Very easy to read, and it throws away the drift vocabulary that made the original feel like space." },
+];
+
+const S = {
+  mode:"assisted", fwd:.8, back:.3, lat:.25, rot:6, max:8,
+  vel:4, vyaw:0, vpitch:0, turn:1,
+  pos:new THREE.Vector3(0,0,0), quat:new THREE.Quaternion(),
+  history:[], show:{ envelope:true, ftSphere:true, grid:true, stalks:true, slice:false },
+};
+
+function carriedVel(){
+  const e = new THREE.Euler(S.vpitch*Math.PI/180, S.vyaw*Math.PI/180, 0, "YXZ");
+  const q = new THREE.Quaternion().setFromEuler(e);
+  return new THREE.Vector3(0,0,1).applyQuaternion(q).applyQuaternion(S.quat).multiplyScalar(S.vel);
+}
+
+// ---- one solver, parameterised by mode (GUIDELINES 5.1: no divergent paths) --
+function solve(target, mode){
+  const v0 = carriedVel();
+  if (mode === "ft"){
+    const d = S.pos.distanceTo(target);
+    return { reached: d <= FT_RANGE, miss: Math.max(0, d - FT_RANGE), endSpeed: d/TURN_SECONDS, path:[S.pos.clone(), target.clone()], endVel:new THREE.Vector3() };
+  }
+  const pos = S.pos.clone(), vel = v0.clone();
+  let quat = S.quat.clone();
+  const maxRotSeg = S.rot*Math.PI/180*SEG_T;
+  const path=[pos.clone()];
+  const desired = target.clone().sub(S.pos);
+  const wantQ = desired.lengthSq() > 1e-9
+    ? new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), desired.clone().normalize())
+    : quat.clone();
+
+  for (let seg=1; seg<=SEGMENTS; seg++){
+    // rotate toward the course, rate limited on the shortest arc
+    const ang = quat.angleTo(wantQ);
+    quat = ang > 1e-6 ? quat.clone().rotateTowards(wantQ, Math.min(ang, maxRotSeg)) : quat;
+
+    if (mode === "coupled"){
+      const remain=(SEGMENTS-seg+1)*SEG_T;
+      const nose=new THREE.Vector3(0,0,1).applyQuaternion(quat);
+      let sp=vel.length();
+      const want=Math.min(S.max, pos.distanceTo(target)/remain);
+      const dv=want-sp;
+      sp=Math.max(0, Math.min(S.max, sp + (dv>0?Math.min(dv,S.fwd*SEG_T):Math.max(dv,-S.back*SEG_T))));
+      vel.copy(nose).multiplyScalar(sp);
+    } else {
+      const remain=(SEGMENTS-seg+1)*SEG_T;
+      const need=target.clone().sub(pos).divideScalar(remain).sub(vel);
+      const inv=quat.clone().invert();
+      const local=need.clone().applyQuaternion(inv);       // x=starboard y=dorsal z=nose
+      const tz = local.z>0 ? Math.min(local.z/SEG_T,S.fwd) : Math.max(local.z/SEG_T,-S.back);
+      const tx = Math.max(-S.lat, Math.min(S.lat, local.x/SEG_T));
+      const ty = Math.max(-S.lat, Math.min(S.lat, local.y/SEG_T));
+      vel.add(new THREE.Vector3(tx,ty,tz).multiplyScalar(SEG_T).applyQuaternion(quat));
+
+      if (mode === "assisted"){
+        const nose=new THREE.Vector3(0,0,1).applyQuaternion(quat);
+        const along=nose.clone().multiplyScalar(vel.dot(nose));
+        vel.copy(along.add(vel.clone().sub(along).multiplyScalar(.65)));
+      }
+      if (vel.length() > S.max) vel.setLength(S.max);
+    }
+    pos.add(vel.clone().multiplyScalar(SEG_T));
+    path.push(pos.clone());
+  }
+  const miss = pos.distanceTo(target);
+  return { reached: miss <= 3, miss, endSpeed: vel.length(), path, endVel: vel, endQuat: quat };
+}
+
+// ------------------------------------------------------------------ three.js
+const view = document.getElementById("view");
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0A0E14);
+scene.fog = new THREE.Fog(0x0A0E14, 260, 620);
+const camera = new THREE.PerspectiveCamera(45, 1, .5, 3000);
+const cam = { yaw:-0.7, pitch:0.5, dist:190, target:new THREE.Vector3() };
+
+scene.add(new THREE.AmbientLight(0x4a5a6a, 2));
+const key = new THREE.DirectionalLight(0xbfe4ff, 2.2); key.position.set(60,120,40); scene.add(key);
+const rim = new THREE.DirectionalLight(0xFA6A0A, .7); rim.position.set(-70,-30,-60); scene.add(rim);
+
+const gGrid = new THREE.GridHelper(400, 20, 0x24405c, 0x18293a);
+gGrid.material.transparent = true; gGrid.material.opacity = .55; scene.add(gGrid);
+
+// the ship, at true measured size
+const gShip = new THREE.Group();
+{
+  const body = new THREE.Mesh(
+    new THREE.ConeGeometry(HULL_R*0.55, HULL_LEN, 12),
+    new THREE.MeshStandardMaterial({ color:0xdfefff, metalness:.3, roughness:.5 }));
+  body.rotation.x = Math.PI/2; gShip.add(body);
+  const hull = new THREE.Mesh(new THREE.SphereGeometry(HULL_R, 20, 14),
+    new THREE.MeshBasicMaterial({ color:0x35C7FF, wireframe:true, transparent:true, opacity:.18 }));
+  gShip.add(hull);
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(.5,8,6), new THREE.MeshBasicMaterial({color:0x35C7FF}));
+  nose.position.z = HULL_LEN/2; gShip.add(nose);
+}
+scene.add(gShip);
+
+// FT reference sphere
+const gFT = new THREE.Mesh(new THREE.SphereGeometry(FT_RANGE, 28, 18),
+  new THREE.MeshBasicMaterial({ color:0xFA6A0A, wireframe:true, transparent:true, opacity:.16 }));
+scene.add(gFT);
+
+// reachable volume, drawn as instanced cubes
+const FIELD_N = 17;
+const cellGeo = new THREE.BoxGeometry(1,1,1);
+const cellMat = new THREE.MeshStandardMaterial({ color:0x4CD97B, transparent:true, opacity:.30, metalness:0, roughness:1 });
+const gCells = new THREE.InstancedMesh(cellGeo, cellMat, (FIELD_N+1)**3);
+gCells.count = 0; scene.add(gCells);
+
+// carried velocity arrow + committed tracks + course
+let gVel = null, gCourse = null;
+const gTracks = new THREE.Group(); scene.add(gTracks);
+const gStalks = new THREE.Group(); scene.add(gStalks);
+
+function line(points, color, opacity, dashed){
+  const geo = new THREE.BufferGeometry().setFromPoints(points);
+  const mat = dashed
+    ? new THREE.LineDashedMaterial({ color, transparent:true, opacity, dashSize:3, gapSize:2.5 })
+    : new THREE.LineBasicMaterial({ color, transparent:true, opacity });
+  const l = new THREE.Line(geo, mat);
+  if (dashed) l.computeLineDistances();
+  return l;
+}
+
+function rebuild(){
+  // --- reachable volume -----------------------------------------------------
+  const v0 = carriedVel();
+  const drift = v0.clone().multiplyScalar(TURN_SECONDS);
+  const centre = S.pos.clone().add(drift.clone().multiplyScalar(.5));
+  const span = Math.max(FT_RANGE*3, drift.length() + FT_RANGE*2.4);
+  const step = span / FIELD_N;
+  const m = new THREE.Matrix4(); const t = new THREE.Vector3();
+  let n = 0;
+  for (let i=0;i<=FIELD_N;i++) for (let j=0;j<=FIELD_N;j++) for (let k=0;k<=FIELD_N;k++){
+    t.set(centre.x + (i-FIELD_N/2)*step, centre.y + (j-FIELD_N/2)*step, centre.z + (k-FIELD_N/2)*step);
+    if (!solve(t, S.mode).reached) continue;
+    m.makeTranslation(t.x,t.y,t.z);
+    m.scale(new THREE.Vector3(step*.72, step*.72, step*.72));
+    gCells.setMatrixAt(n++, m);
+  }
+  gCells.count = S.show.envelope ? n : 0;
+  gCells.instanceMatrix.needsUpdate = true;
+  document.getElementById("pCells").textContent = n;
+
+  // --- ship, sphere, velocity ----------------------------------------------
+  gShip.position.copy(S.pos); gShip.quaternion.copy(S.quat);
+  gFT.position.copy(S.pos); gFT.visible = S.show.ftSphere;
+  gGrid.visible = S.show.grid;
+
+  if (gVel) { scene.remove(gVel); gVel.geometry.dispose(); }
+  gVel = null;
+  if (S.vel > .05){
+    gVel = line([S.pos.clone(), S.pos.clone().add(drift)], 0xFFC24B, .95, true);
+    scene.add(gVel);
+  }
+
+  // --- altitude stalks: the read the original's nav widget gave you ---------
+  gStalks.clear();
+  if (S.show.stalks){
+    const drop = (p, col) => {
+      gStalks.add(line([p.clone(), new THREE.Vector3(p.x,0,p.z)], col, .5, true));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6,2.1,20),
+        new THREE.MeshBasicMaterial({ color:col, transparent:true, opacity:.5, side:THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI/2; ring.position.set(p.x, .05, p.z); gStalks.add(ring);
+    };
+    drop(S.pos, 0x35C7FF);
+    if (S.vel > .05) drop(S.pos.clone().add(drift), 0xFFC24B);
+  }
+  stats();
+}
+
+function stats(){
+  const canHold = solve(S.pos.clone(), S.mode).reached;
+  const drift = carriedVel().length()*TURN_SECONDS;
+  const rows = [
+    ["carried this turn", drift.toFixed(0)+" u"],
+    ["can hold station", canHold ? "yes" : "NO - committed"],
+    ["turn authority", S.mode==="ft" ? "free (any attitude)" : (S.rot*TURN_SECONDS).toFixed(0)+"/turn"],
+    ["volume moves with you", S.mode==="ft" ? "no" : "yes"],
+    ["vertical is free", S.mode==="ft" ? "yes" : "no - costs thrust"],
+  ];
+  document.getElementById("stats").innerHTML =
+    rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join("");
+  document.getElementById("verdict").innerHTML = MODES.find(m=>m.key===S.mode).note;
+  document.getElementById("pTurn").textContent = S.turn;
+  document.getElementById("pSpeed").textContent = S.vel.toFixed(1);
+}
+
+// ------------------------------------------------------------------ controls
+function resize(){
+  const r = view.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height);
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+
+let drag=false, lx=0, ly=0;
+renderer.domElement.addEventListener("mousedown", e=>{ drag=true; lx=e.clientX; ly=e.clientY; });
+addEventListener("mouseup", ()=>drag=false);
+addEventListener("mousemove", e=>{
+  if(!drag) return;
+  cam.yaw -= (e.clientX-lx)*.006; cam.pitch += (e.clientY-ly)*.006;
+  cam.pitch = Math.max(-1.45, Math.min(1.45, cam.pitch));
+  lx=e.clientX; ly=e.clientY;
+});
+renderer.domElement.addEventListener("wheel", e=>{
+  e.preventDefault();
+  cam.dist = Math.max(25, Math.min(700, cam.dist * (e.deltaY<0?.9:1.11)));
+}, {passive:false});
+// keyboard fallback so it works without a pointer (mockup rule 2.2)
+addEventListener("keydown", e=>{
+  if(e.key==="ArrowLeft") cam.yaw -= .09;
+  else if(e.key==="ArrowRight") cam.yaw += .09;
+  else if(e.key==="ArrowUp") cam.pitch = Math.min(1.45, cam.pitch+.07);
+  else if(e.key==="ArrowDown") cam.pitch = Math.max(-1.45, cam.pitch-.07);
+  else if(e.key==="+"||e.key==="=") cam.dist = Math.max(25, cam.dist*.88);
+  else if(e.key==="-"||e.key==="_") cam.dist = Math.min(700, cam.dist*1.14);
+  else if(e.key>="1"&&e.key<="4"){ S.mode=MODES[+e.key-1].key; buildModes(); rebuild(); }
+  else if(e.key==="c"||e.key==="C") commit();
+  else if(e.key==="r"||e.key==="R") reset();
+  else return;
+  e.preventDefault();
+});
+
+// --------------------------------------------------------------------- UI
+const $ = id => document.getElementById(id);
+function buildModes(){
+  const box=$("modes"); box.innerHTML="";
+  MODES.forEach(mm=>{
+    const b=document.createElement("button");
+    b.className = S.mode===mm.key ? "on":"";
+    b.innerHTML = `<span>${mm.name}</span><i>${mm.blurb}</i>`;
+    b.onclick = ()=>{ S.mode=mm.key; buildModes(); rebuild(); };
+    box.appendChild(b);
+  });
+  $("modeNote").innerHTML = MODES.find(mm=>mm.key===S.mode).note;
+}
+const TOGGLES = [["envelope","envelope"],["ftSphere","FT sphere"],["grid","grid"],["stalks","altitude"]];
+function buildToggles(){
+  const box=$("toggles"); box.innerHTML="";
+  TOGGLES.forEach(([k,label])=>{
+    const b=document.createElement("button");
+    b.textContent=label; b.className=S.show[k]?"on":"";
+    b.onclick=()=>{ S.show[k]=!S.show[k]; buildToggles(); rebuild(); };
+    box.appendChild(b);
+  });
+}
+const SLIDERS=[
+  ["sFwd","oFwd","fwd",v=>v.toFixed(2)+" u/s2"],
+  ["sBack","oBack","back",v=>v.toFixed(2)+" u/s2"],
+  ["sLat","oLat","lat",v=>v.toFixed(2)+" u/s2"],
+  ["sRot","oRot","rot",v=>v.toFixed(0)+"/s ("+(v*TURN_SECONDS).toFixed(0)+"/turn)"],
+  ["sMax","oMax","max",v=>v.toFixed(1)+" u/s"],
+  ["sVel","oVel","vel",v=>v.toFixed(2)+" u/s"],
+  ["sVyaw","oVyaw","vyaw",v=>v.toFixed(0)+" off nose"],
+  ["sVpitch","oVpitch","vpitch",v=>v.toFixed(0)+" off nose"],
+];
+function bindSliders(){
+  for(const [sid,oid,key,fmt] of SLIDERS){
+    const el=$(sid); el.value=S[key];
+    const sync=()=>{ S[key]=parseFloat(el.value); $(oid).textContent=fmt(S[key]); };
+    sync();
+    el.addEventListener("input", ()=>{ sync(); rebuild(); });
+  }
+}
+function syncOutputs(){ for(const [,oid,key,fmt] of SLIDERS) $(oid).textContent = fmt(S[key]); }
+
+function commit(){
+  // fly the envelope's forward edge: commit to the best reachable point ahead
+  const v0 = carriedVel();
+  const aim = S.pos.clone().add(v0.clone().multiplyScalar(TURN_SECONDS))
+                  .add(new THREE.Vector3(0,0,1).applyQuaternion(S.quat).multiplyScalar(FT_RANGE*.45));
+  const r = solve(aim, S.mode);
+  gTracks.add(line(r.path, 0x35C7FF, .45, false));
+  S.pos.copy(r.path[r.path.length-1]);
+  if (S.mode !== "ft" && r.endQuat) S.quat.copy(r.endQuat);
+  if (S.mode !== "ft"){
+    S.vel = Math.min(parseFloat($("sMax").value), r.endVel.length());
+    const local = r.endVel.clone().applyQuaternion(S.quat.clone().invert());
+    S.vyaw = Math.atan2(local.x, local.z)*180/Math.PI;
+    S.vpitch = Math.atan2(local.y, Math.hypot(local.x, local.z))*180/Math.PI;
+    $("sVel").value=S.vel; $("sVyaw").value=S.vyaw; $("sVpitch").value=S.vpitch;
+    syncOutputs();
+  }
+  cam.target.copy(S.pos);
+  S.turn++; rebuild();
+}
+function reset(){
+  S.pos.set(0,0,0); S.quat.identity(); S.turn=1;
+  S.vel=4; S.vyaw=0; S.vpitch=0;
+  gTracks.clear();
+  $("sVel").value=4; $("sVyaw").value=0; $("sVpitch").value=0;
+  syncOutputs(); cam.target.set(0,0,0); rebuild();
+}
+$("bCommit").onclick=commit;
+$("bReset").onclick=reset;
+
+function frame(){
+  requestAnimationFrame(frame);
+  cam.target.lerp(S.pos, .08);
+  camera.position.set(
+    cam.target.x + Math.cos(cam.pitch)*Math.sin(cam.yaw)*cam.dist,
+    cam.target.y + Math.sin(cam.pitch)*cam.dist,
+    cam.target.z + Math.cos(cam.pitch)*Math.cos(cam.yaw)*cam.dist);
+  camera.lookAt(cam.target);
+  renderer.render(scene, camera);
+}
+
+buildModes(); buildToggles(); bindSliders(); resize(); rebuild(); frame();
+})();
+</script>

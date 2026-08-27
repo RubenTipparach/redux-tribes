@@ -1,0 +1,1706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
+<title>Fallen Tribes Sim Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Michroma&family=Exo+2:wght@400;600;700&family=Rajdhani:wght@600;700&display=swap">
+<style>
+/* Deliberately single-theme: a dark tactical console (the game's own world). */
+:root {
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--ground); color:var(--ink); font-family:"Exo 2",system-ui,sans-serif; font-size:14px; overflow:hidden;
+  overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+#app { display:grid; grid-template-columns: 250px minmax(0,1fr) 290px; grid-template-rows: 46px minmax(0,1fr) 78px;
+  height:100vh; height:100dvh; min-width:0; }
+header { grid-column:1/4; display:flex; align-items:center; gap:16px; padding:0 14px; background:var(--panel2); border-bottom:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
+header h1 { font-family:Michroma; font-size:13px; font-weight:400; letter-spacing:.12em; margin:0; color:var(--cyan); white-space:nowrap; }
+.hgap { flex:1; }
+.stat { font-family:Rajdhani; font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); white-space:nowrap; }
+.stat b { color:var(--ink); }
+button { font-family:Rajdhani; font-weight:700; letter-spacing:.1em; text-transform:uppercase; font-size:12px; touch-action:manipulation;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:6px 12px; cursor:pointer; }
+button:hover { border-color:var(--cyan); color:var(--cyan); }
+button:disabled { opacity:.35; cursor:default; }
+button.primary { background:var(--cyan); color:#04131c; border-color:var(--cyan); }
+button.primary:hover { color:#04131c; filter:brightness(1.1); }
+button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
+#left, #right { background:var(--panel2); border-right:1px solid var(--line); padding:10px; overflow-y:auto; }
+#right { border-right:0; border-left:1px solid var(--line); }
+.sect { font-family:Rajdhani; font-weight:700; font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:12px 0 6px; }
+.sect:first-child { margin-top:0; }
+#cv { grid-column:2; grid-row:2; display:block; background:var(--ground); cursor:crosshair; width:100%; height:100%;
+  min-width:0; min-height:0; touch-action:none; -webkit-user-select:none; user-select:none; }
+footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--panel2); border-top:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
+#slots { display:flex; gap:3px; }
+.slot { width:30px; height:30px; border:1px solid var(--line); border-radius:3px; display:flex; align-items:center; justify-content:center;
+  font-family:Rajdhani; font-weight:700; font-size:11px; color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
+.slot:hover { border-color:var(--cyan); }
+.slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+.slot.mark::after { content:""; position:absolute; bottom:2px; left:50%; transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
+#scrub { flex:1; }
+input[type=range] { width:100%; accent-color:var(--cyan); }
+#log { font-size:12px; line-height:1.5; }
+#log div { padding:1px 0; border-bottom:1px solid #131c29; color:var(--muted); }
+#log .hit { color:var(--ink); } #log .bad { color:var(--red); } #log .good { color:var(--green); } #log .warn { color:var(--orange); }
+.shipRow { padding:5px 6px; border:1px solid var(--line); border-radius:4px; margin-bottom:5px; cursor:pointer; }
+.shipRow:hover { border-color:var(--cyan); }
+.shipRow.sel { border-color:var(--cyan); background:#0d2231; }
+.shipRow .nm { font-family:Rajdhani; font-weight:700; font-size:12px; letter-spacing:.06em; }
+.bar { height:4px; background:#1a2634; border-radius:2px; margin-top:3px; overflow:hidden; }
+.bar i { display:block; height:100%; background:var(--cyan); }
+.enemy .bar i { background:var(--orange); }
+.sub { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); }
+.sub.dead { color:var(--red); text-decoration:line-through; }
+.wrow { display:flex; align-items:center; justify-content:space-between; font-size:12px; padding:3px 4px; border:1px solid var(--line); border-radius:4px; margin-bottom:4px; }
+.wrow.armed { border-color:var(--cyan); }
+.wrow .k { font-family:Rajdhani; font-weight:700; letter-spacing:.06em; }
+.hint { font-size:11px; color:var(--muted); line-height:1.5; }
+.modes { display:flex; flex-wrap:wrap; gap:4px; }
+textarea { width:100%; height:120px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; font-size:10px; }
+kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+#lPlay { margin-left:10px; }
+
+/* --------------------------------------------------------------- mobile --
+   Below 900px the three pane console collapses to a canvas first shell. The
+   side rails become bottom sheets on a tab bar, and the nudges that were
+   keyboard only (elevation, rotate, face target) get an on canvas pad, since
+   a phone has no Q/E/A/D/F to press. Desktop is untouched. */
+#tabbar { display:none; }
+
+/* One control row, sharing the canvas grid cell and pinned to its bottom edge,
+   on every screen size. It cannot overlap the footer, the tab bar or the
+   sheets by construction rather than by arithmetic. */
+#toolbar {
+  display:flex; align-items:center; gap:6px;
+  grid-column:2; grid-row:2; align-self:end; justify-self:center;
+  z-index:6; margin-bottom:12px; pointer-events:none;
+}
+#toolbar button {
+  pointer-events:auto; flex:0 0 auto;
+  width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
+  background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+}
+#toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+#toolbar button.off { opacity:.28; }
+.tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+
+@media (max-width: 900px) {
+  #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
+
+  header { grid-column:1; grid-row:1; height:46px; gap:9px; padding:0 10px; min-width:0; }
+  header h1 { font-size:11px; letter-spacing:.07em; flex:0 0 auto; }
+  header h1 .lng { display:none; }
+  .diag { display:none; }            /* hash + seed are desk diagnostics */
+
+  #cv { grid-column:1; grid-row:2; }
+
+  footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px; gap:8px 10px; min-width:0; }
+  #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
+  #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
+  #slots::-webkit-scrollbar { display:none; }
+  #scrub { min-width:130px; }
+
+  /* rails become sheets that slide up over the canvas, above the tab bar */
+  #left, #right {
+    position:fixed; left:0; right:0; top:auto;
+    bottom:calc(var(--tabh) + var(--safe));
+    height:min(56dvh, 440px); z-index:7;
+    border:0; border-top:1px solid var(--line);
+    box-shadow:0 -14px 34px #000a;
+    padding:12px 12px 24px;
+    transform:translateY(calc(100% + var(--tabh) + var(--safe)));
+    transition:transform .22s ease;
+  }
+  #left.open, #right.open { transform:none; }
+
+  #tabbar {
+    display:flex; grid-column:1; grid-row:4; z-index:8;
+    height:calc(var(--tabh) + var(--safe)); padding-bottom:var(--safe);
+    background:var(--panel2); border-top:1px solid var(--line);
+  }
+  #tabbar button {
+    flex:1; height:100%; padding:0; border:0; border-radius:0;
+    background:transparent; color:var(--muted); font-size:11px;
+  }
+  #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
+
+  #toolbar { grid-column:1; }
+
+  /* fingertip sized targets */
+  button { padding:10px 13px; }
+  .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
+  .shipRow { padding:9px 8px; margin-bottom:7px; }
+  .wrow { padding:8px 6px; }
+  .modes { gap:6px; }
+  input[type=range] { height:36px; }
+}
+
+/* Phone held sideways: only ~390px of height exists, and stacked chrome ate
+   most of it. Stand the tab bar up as a left rail, put the transport on one
+   row, and the sheets slide in from the side instead of the bottom. */
+@media (max-width: 900px) and (max-height: 560px) {
+  #app { grid-template-columns:54px minmax(0,1fr); grid-template-rows:40px minmax(0,1fr) auto; }
+
+  header { grid-column:1/3; grid-row:1; height:40px; }
+  #cv { grid-column:2; grid-row:2; }
+
+  #tabbar {
+    flex-direction:column; grid-column:1; grid-row:2/4;
+    width:54px; height:auto; padding-bottom:0;
+    border-top:0; border-right:1px solid var(--line);
+  }
+  #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
+  #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
+
+  footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
+  #lSlots, #lPlay { display:none; }   /* no room for labels, no row break needed */
+  .slot { width:32px; height:32px; }
+  input[type=range] { height:30px; }
+
+  #left, #right {
+    left:54px; right:auto; top:40px; bottom:0;
+    width:min(330px, 54vw); height:auto;
+    border-top:0; border-right:1px solid var(--line);
+    box-shadow:14px 0 34px #000a;
+    transform:translateX(-110%);
+  }
+  #left.open, #right.open { transform:none; }
+
+  #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
+  #toolbar button { width:38px; height:38px; font-size:13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #left, #right { transition:none; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>FALLEN TRIBES<span class="lng"> · SIM PROTOTYPE</span></h1>
+    <span class="stat">turn <b id="hTurn">0</b></span>
+    <span class="stat diag">hash <b id="hHash"> - </b></span>
+    <span class="stat diag">seed <b id="hSeed"> - </b></span>
+    <span class="hgap"></span>
+    <span class="stat" id="hPhase">PLANNING</span>
+    <button id="bEnd" class="primary">End Turn ⏎</button>
+  </header>
+
+  <div id="left">
+    <div class="sect">Fleet</div>
+    <div id="fleet"></div>
+    <div class="sect">Hostiles</div>
+    <div id="hostiles"></div>
+    <div class="sect">Selected - Move Mode</div>
+    <div class="modes" id="modes"></div>
+    <div class="sect">Movement Envelope</div>
+    <div id="env" class="hint"></div>
+    <div class="sect">Flight Envelope</div>
+    <div id="envTune"></div>
+    <div class="sect">Weapons <span class="hint">(click weapon, then a timeline slot)</span></div>
+    <div id="weps"></div>
+    <div class="sect">Boarding</div>
+    <button id="bBoard" disabled>Board Target</button>
+    <div class="sect">Session</div>
+    <div class="modes">
+      <button id="bRestart">Restart</button>
+      <button id="bReplay">Replay JSON</button>
+    </div>
+
+    <div class="sect">Help</div>
+    <div class="hint">
+      <b>Drag inside the dashed ring</b> to place the destination. The ring is the
+      grabbable part of the <span style="color:var(--green)">working altitude</span>, which is
+      also the plane the envelope is sliced at, so the two are one idea rather than a hidden
+      number. <b>Drag anywhere outside it and the camera moves instead</b>, so looking around
+      never costs you an order you did not mean to give.<br>
+      <kbd>Q</kbd>/<kbd>E</kbd>, or <b>▼</b>/<b>▲</b> in the row under the map, raise and lower
+      that plane by 5. Watch the
+      <span style="color:var(--green)">slice</span> shrink as you climb away from the hull:
+      that is the spherical slice, and it is what the altitude costs you in lateral room.<br>
+      <b>Drag the pip</b> on the ring at the destination, or <b>shift-drag</b>, to command a
+      heading. The solid arrow is the heading the hull can actually reach in one turn; if you ask
+      for more than <kbd>yaw</kbd>/<kbd>pitch</kbd> allows, a
+      <span style="color:#FFD24B">dashed arrow and an amber pip</span> mark the part you will not
+      get, and the readout says how far short. A wireframe hull at the destination shows the
+      attitude you end the turn in. Commanding a heading switches to <b>Slide</b>, because Move
+      points the nose wherever thrust is needed and cannot honour a facing order.<br>
+      <b>Click or tap</b> own ship: select · same on an enemy: target<br>
+      <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target · <kbd>Enter</kbd> end turn<br>
+      <b>RMB drag</b> orbits · <b>middle drag</b> pans · <kbd>wheel</kbd> zooms · <b>timeline slider</b> scrubs the
+      <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
+      Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) - real orders stay hidden until resolution, lockstep-style.
+      <br><br><b>The row under the map</b> works everywhere: <b>⟳ / ✥</b> swaps what a drag
+      outside the ring does between swinging the camera and sliding it, <b>⊕</b> snaps the camera
+      onto the selected ship, and the five on the right mirror
+      <kbd>E</kbd>/<kbd>Q</kbd>/<kbd>A</kbd>/<kbd>D</kbd>/<kbd>F</kbd>. They grey out when no
+      ship is selected.
+      <br><br><b>On touch:</b> one finger inside the ring drags the destination, one finger
+      outside it flies the camera, and two fingers pinch to zoom and slide the view.
+      Tap a sheet's tab again to close it, or tap the map.
+      <br><br>The envelope is <b>probed from the sim</b>, not drawn from a formula: every cell
+      goes through the same planner the turn resolver uses. Boost and Stop therefore show one
+      committed point instead of a volume, and when the movement model changes the shape
+      changes with it.
+    </div>
+  </div>
+
+  <canvas id="cv"></canvas>
+
+  <div id="right">
+    <div class="sect">Events</div>
+    <div class="modes" id="turns"></div>
+    <div id="log"></div>
+  </div>
+
+  <nav id="tabbar" aria-label="Panels">
+    <button id="tShips" aria-pressed="false">Ships</button>
+    <button id="tLog" aria-pressed="false">Events</button>
+    <button id="tFit">Fit view</button>
+  </nav>
+
+  <div id="toolbar" aria-label="Camera and ship controls">
+    <button id="cMode" title="Drag on empty space orbits. Tap to pan instead.">⟳</button>
+    <button id="cCentre" title="Centre the camera on the selected ship">⊕</button>
+    <span class="tbsep"></span>
+    <button id="pUp" class="shipctl" title="Working altitude +5 (E)">▲</button>
+    <button id="pDown" class="shipctl" title="Working altitude -5 (Q)">▼</button>
+    <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left (A)">↺</button>
+    <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">↻</button>
+    <button id="pFace" class="shipctl" title="Face the target (F)">◎</button>
+  </div>
+
+  <footer>
+    <span class="stat" id="lSlots">fire slot</span>
+    <div id="slots"></div>
+    <span class="stat" id="lPlay">playback</span>
+    <button id="bSpeed">1×</button>
+    <input type="range" id="scrub" min="0" max="600" value="0">
+    <span class="stat"><b id="hSec">0.0</b>s</span>
+  </footer>
+</div>
+
+<div id="replayModal" style="display:none; position:fixed; inset:0; background:#000a; z-index:9;">
+  <div style="max-width:640px; margin:8vh auto; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px;">
+    <div class="sect">Replay file (orders + per-turn snapshots + hashes) - copy to save</div>
+    <textarea id="replayText" readonly></textarea>
+    <div style="text-align:right; margin-top:8px;"><button onclick="document.getElementById('replayModal').style.display='none'">Close</button></div>
+  </div>
+</div>
+
+<!-- three.js r169 (MIT), vendored alongside the mockups: one copy, no network -->
+<script src="../mockups/vendor/three.global.js"></script>
+<script src="sim/dmath.js"></script>
+<script src="sim/rng.js"></script>
+<script src="sim/data.js"></script>
+<script src="sim/snapshot.js"></script>
+<script src="sim/ai.js"></script>
+<script src="sim/sim.js"></script>
+<script>
+(function () {
+"use strict";
+const { V, Q } = FT.dmath;
+const sim = FT.sim, snap = FT.snapshot, DATA = FT.data;
+const T = DATA.CONST.TICKS_PER_TURN;
+
+// ------------------------------------------------------------------ setup --
+let seed = "pilot-1";
+let state, phase, orders, sel, selWeapon, replayFile;
+let playback = null; // {tracks, events, tick, speed, playing}
+
+function newMatch(s) {
+  seed = s || seed;
+  state = sim.createSkirmish(seed, {
+    player: [
+      { classKey: "terran_frigate", pos: V.v3(-55, 0, 10), facing: V.v3(1, 0, 0) },
+      { classKey: "terran_frigate", pos: V.v3(-55, 4, -14), facing: V.v3(1, 0, 0) },
+      { classKey: "rogue_frigate", pos: V.v3(-62, -3, -2), facing: V.v3(1, 0, 0) },
+    ],
+    enemy: [
+      { classKey: "karisen_frigate", pos: V.v3(55, 0, -6), facing: V.v3(-1, 0, 0) },
+      { classKey: "karisen_frigate", pos: V.v3(55, 5, 14), facing: V.v3(-1, 0, 0) },
+      { classKey: "benefactor_frigate", pos: V.v3(64, -4, 2), facing: V.v3(-1, 0, 0) },
+    ],
+    enemyFaction: "karisen",
+  });
+  // the rogue frigate joins the player side (it's the fun boarding toy)
+  const rogue = state.ships.find(s2 => s2.id === "P3");
+  rogue.faction = "terran";
+  // Fleets enter with way on: seed each ship's carried momentum along its
+  // heading so the Bezier curvature (and the whole momentum game) is visible
+  // from turn 0 rather than after the first straight-line turn.
+  for (const sh of state.ships) {
+    const fwd = Q.forward(sh.quat);
+    sh.vel = V.scale(fwd, sh.flight.maxSpeed * 0.55);
+  }
+  phase = "planning"; orders = {}; sel = null; selWeapon = null; playback = null;
+  history.length = 0;
+  replayFile = { seed, turns: [] };
+  log("New match · seed “" + seed + "”", "good");
+  zoomToFit();
+  ui.hSeed.textContent = seed;
+  ui.hHash.textContent = " - ";
+  refresh();
+}
+
+// per-ship planning scratch (move target etc.)
+function ordFor(ship) {
+  if (!orders[ship.id]) orders[ship.id] = {
+    move: { mode: "MOVE_AND_TURN", target: null },
+    weapons: [], board: undefined, _targetShip: null, _targetSub: null,
+  };
+  return orders[ship.id];
+}
+
+// ------------------------------------------------------------------- view --
+// A real 3D scene. The sim has always been 3D (every position is x/y/z and
+// weapons have vertical arcs); the old top-down canvas flattened it, which hid
+// the one thing this prototype exists to judge: how much space a ship can
+// actually reach in a turn, and how elevation eats into it.
+
+const COARSE = matchMedia("(pointer: coarse)").matches;
+const FACING_HANDLE_R = 9;      // world units from the destination
+const cv = document.getElementById("cv");
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: !COARSE });
+renderer.setClearColor(0x0a0e14, 1);
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x0a0e14, 400, 1400);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 4000);
+
+// orbit state: a look-at point plus spherical offset
+const cam = { tx: 0, ty: 0, tz: 0, yaw: 0.65, pitch: 0.62, dist: 200 };
+let planScrub = 0;              // planning-phase timeline position, 0..600 ticks
+let dirty = true;
+function draw() { dirty = true; }
+
+scene.add(new THREE.HemisphereLight(0x5f7fa0, 0x0a0e14, 1.5));
+const keyLight = new THREE.DirectionalLight(0xdfefff, 1.1);
+keyLight.position.set(0.4, 1, 0.25);
+scene.add(keyLight);
+
+// The tactical plane, the same nav plane the original drew its widget on.
+const grid = new THREE.GridHelper(1200, 60, 0x1e2a3a, 0x141d29);
+grid.material.transparent = true; grid.material.opacity = 0.55;
+scene.add(grid);
+
+const gShips = new THREE.Group(), gPaths = new THREE.Group();
+const gFx = new THREE.Group(), gEnv = new THREE.Group();
+scene.add(gShips, gPaths, gFx, gEnv);
+
+const FACTION_COLOR = f => (f === "terran" ? "#35C7FF" : f === "karisen" ? "#FA6A0A" : "#C77DFF");
+const FACTION_HEX = f => (f === "terran" ? 0x35c7ff : f === "karisen" ? 0xfa6a0a : 0xc77dff);
+
+// The facing the ship will hold at end of turn: explicit order if set,
+// else auto-face travel (MOVE_AND_TURN) / keep current heading (TURN_SLIDE).
+function plannedFacing(ship, o, dest) {
+  if (o.move.face) return V.v3(o.move.face[0], o.move.face[1], o.move.face[2]);
+  if (o.move.mode === "TURN_SLIDE") return Q.forward(ship.quat);
+  const off = V.sub(dest, ship.pos);
+  return V.len(off) > 1e-6 ? V.norm(off) : Q.forward(ship.quat);
+}
+
+// The altitude the planner is working at. This is both the plane a drag
+// projects onto and the plane the envelope is sliced at, so moving elevation
+// with Q/E (or the pad) slides one plane and the reachable disc shrinks or
+// grows with it.
+function planeY() {
+  if (!sel) return 0;
+  const o = orders[sel.id];
+  return (o && o.move.target) ? o.move.target[1] : sel.pos.y;
+}
+
+function fit() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const r = cv.getBoundingClientRect();
+  const w = Math.max(1, Math.round(r.width)), h = Math.max(1, Math.round(r.height));
+  renderer.setPixelRatio(DPR);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+function onResize() {
+  if (innerWidth > 900) closeSheets();
+  fit(); draw();
+}
+addEventListener("resize", onResize);
+// iOS fires orientationchange before the new metrics land, and retracting the
+// URL bar resizes the visual viewport without firing a window resize at all.
+addEventListener("orientationchange", () => setTimeout(onResize, 180));
+if (window.visualViewport) visualViewport.addEventListener("resize", onResize);
+
+// Frame every living ship. A phone has no wheel and no keyboard, so this is
+// the only reliable way back out of a lost camera.
+function zoomToFit() {
+  const live = state.ships.filter(sh => !sh.destroyed);
+  if (!live.length) return;
+  const box = new THREE.Box3();
+  for (const sh of live) box.expandByPoint(new THREE.Vector3(sh.pos.x, sh.pos.y, sh.pos.z));
+  // include the selected ship's reach, or framing the fleet crops the very
+  // volume the planner is being asked to judge
+  if (sel && !sel.destroyed) {
+    const reach = DATA.nominalReach(sel.flight) + V.len(sel.vel) * DATA.CONST.TURN_SECONDS;
+    box.expandByPoint(new THREE.Vector3(sel.pos.x - reach, sel.pos.y - reach, sel.pos.z - reach));
+    box.expandByPoint(new THREE.Vector3(sel.pos.x + reach, sel.pos.y + reach, sel.pos.z + reach));
+  }
+  const c = box.getCenter(new THREE.Vector3());
+  const r = Math.max(30, box.getSize(new THREE.Vector3()).length() * 0.5);
+  cam.tx = c.x; cam.ty = c.y; cam.tz = c.z;
+  cam.dist = Math.min(1200, (r + 60) / Math.tan(camera.fov * Math.PI / 360) * 1.15);
+  draw();
+}
+
+// Slide the look-at point across the ground plane. dx is screen right, dy is
+// screen away, and the step scales with distance so panning feels the same
+// zoomed in as zoomed out.
+function panCamera(dx, dy, scale) {
+  const s = cam.dist * 0.0016 * (scale || 1);
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  cam.tx += (cy * dx - sy * dy) * s;
+  cam.tz += (-sy * dx - cy * dy) * s;
+}
+
+// Put the camera on the selected ship without changing how far off it sits.
+// During a review this follows the ship as it was in the turn being replayed.
+function centreOnSelection() {
+  const ships = viewState().ships.filter(sh => !sh.destroyed);
+  if (!ships.length) return;
+  const target = (sel && ships.find(sh => sh.id === sel.id))
+    || ships.find(sh => sh.isPlayer) || ships[0];
+  cam.tx = target.pos.x; cam.ty = target.pos.y; cam.tz = target.pos.z;
+  draw();
+}
+
+function applyCamera() {
+  cam.pitch = Math.max(-1.45, Math.min(1.45, cam.pitch));
+  cam.dist = Math.max(18, Math.min(1600, cam.dist));
+  const cp = Math.cos(cam.pitch);
+  camera.position.set(
+    cam.tx + Math.sin(cam.yaw) * cp * cam.dist,
+    cam.ty + Math.sin(cam.pitch) * cam.dist,
+    cam.tz + Math.cos(cam.yaw) * cp * cam.dist);
+  camera.lookAt(cam.tx, cam.ty, cam.tz);
+}
+
+// ---------------------------------------------------------------- helpers --
+function disposeGroup(g) {
+  for (const c of g.children.slice()) {
+    g.remove(c);
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) (Array.isArray(c.material) ? c.material : [c.material]).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+  }
+}
+function lineFrom(points, color, opacity, dashed) {
+  const g = new THREE.BufferGeometry().setFromPoints(
+    points.map(p => new THREE.Vector3(p.x, p.y, p.z)));
+  const m = dashed
+    ? new THREE.LineDashedMaterial({ color, transparent: true, opacity, dashSize: 3, gapSize: 3 })
+    : new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+  const l = new THREE.Line(g, m);
+  if (dashed) l.computeLineDistances();
+  return l;
+}
+// A hull outline that can be pointed somewhere. The scrub ghost used to be a
+// wireframe sphere, which is why a rotation could not be previewed: a sphere
+// has no heading to show.
+function ghostHull(radius, color, opacity) {
+  const g = new THREE.ConeGeometry(radius * 0.62, radius * 2.1, 5);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color, wireframe: true, transparent: true, opacity, depthWrite: false,
+  }));
+  m.geometry.rotateX(Math.PI / 2);      // cone points down +Z, the sim's forward
+  return m;
+}
+function circlePoints(cx, cy, cz, r, n) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy, z: cz + Math.sin(a) * r });
+  }
+  return pts;
+}
+function labelSprite(text, color) {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 48;
+  const g = c.getContext("2d");
+  g.font = "700 30px Rajdhani, sans-serif";
+  g.fillStyle = color; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(text, 64, 24);
+  const tex = new THREE.CanvasTexture(c);
+  tex.minFilter = THREE.LinearFilter;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sp.scale.set(11, 4.1, 1);
+  return sp;
+}
+
+// ------------------------------------------------------------ ship meshes --
+// Built once per ship and reused; rebuilt only when the roster changes, so a
+// restart or a capture repaints without leaking geometry.
+const shipMeshes = new Map();
+let rosterKey = "";
+
+function makeShipMesh(ship) {
+  const cls = DATA.SHIP_CLASSES[ship.classKey];
+  const col = FACTION_HEX(ship.faction);
+  const grp = new THREE.Group();
+  // hull: a wedge pointing down +Z, which is the sim's forward
+  const hull = new THREE.Mesh(
+    new THREE.ConeGeometry(cls.radius * 0.62, cls.radius * 2.1, 5),
+    new THREE.MeshStandardMaterial({ color: col, metalness: 0.3, roughness: 0.55, flatShading: true }));
+  hull.rotation.x = Math.PI / 2;
+  grp.add(hull);
+  // selection cage
+  const cage = new THREE.Mesh(
+    new THREE.SphereGeometry(cls.radius, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.16 }));
+  cage.visible = false; cage.name = "cage";
+  grp.add(cage);
+  // hull integrity ring, lies flat so it reads from any camera angle
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(cls.radius * 1.35, cls.radius * 1.6, 24),
+    new THREE.MeshBasicMaterial({ color: 0x4cd97b, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }));
+  ring.rotation.x = -Math.PI / 2; ring.name = "hp";
+  grp.add(ring);
+  const lab = labelSprite(ship.id, FACTION_COLOR(ship.faction));
+  lab.position.set(0, cls.radius + 3.4, 0); lab.name = "label";
+  grp.add(lab);
+  // altitude stalk down to the tactical plane, the original's nav widget cue
+  const stalk = lineFrom([{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }], col, 0.35, false);
+  stalk.name = "stalk";
+  grp.add(stalk);
+  grp.userData.shipId = ship.id;
+  hull.userData.shipId = ship.id;
+  return grp;
+}
+
+function syncShipMeshes() {
+  const ships = viewState().ships;
+  const key = ships.map(s => s.id + ":" + s.faction + ":" + (s.destroyed ? "x" : "o")).join(",");
+  if (key === rosterKey) return;
+  rosterKey = key;
+  for (const [id, m] of shipMeshes) { gShips.remove(m); shipMeshes.delete(id); }
+  disposeGroup(gShips);
+  for (const ship of ships) {
+    if (ship.destroyed) continue;
+    const m = makeShipMesh(ship);
+    shipMeshes.set(ship.id, m);
+    gShips.add(m);
+  }
+}
+
+function placeShip(ship, pos, quat) {
+  const m = shipMeshes.get(ship.id);
+  if (!m) return;
+  m.position.set(pos.x, pos.y, pos.z);
+  m.quaternion.set(quat.x, quat.y, quat.z, quat.w);
+  const cage = m.getObjectByName("cage");
+  if (cage) cage.visible = (ship === sel);
+  const hp = m.getObjectByName("hp");
+  if (hp) {
+    const frac = Math.max(0, ship.hull / ship.hullMax);
+    hp.material.color.setHex(frac > 0.5 ? 0x4cd97b : frac > 0.25 ? 0xffd24b : 0xff4b4b);
+    hp.scale.setScalar(0.35 + 0.65 * frac);
+    // counter-rotate so the ring stays flat regardless of hull attitude
+    hp.quaternion.copy(m.quaternion).invert();
+    hp.rotateX(-Math.PI / 2);
+  }
+  const lab = m.getObjectByName("label");
+  if (lab) {
+    const up = new THREE.Vector3(0, DATA.SHIP_CLASSES[ship.classKey].radius + 3.4, 0);
+    lab.position.copy(up.applyQuaternion(new THREE.Quaternion(quat.x, quat.y, quat.z, quat.w).invert()));
+  }
+  const stalk = m.getObjectByName("stalk");
+  if (stalk) {
+    const inv = new THREE.Quaternion(quat.x, quat.y, quat.z, quat.w).invert();
+    const down = new THREE.Vector3(0, -pos.y, 0).applyQuaternion(inv);
+    stalk.geometry.setFromPoints([new THREE.Vector3(0, 0, 0), down]);
+    stalk.geometry.attributes.position.needsUpdate = true;
+    stalk.visible = Math.abs(pos.y) > 0.5;
+  }
+}
+
+// -------------------------------------------------------- movement volume --
+// The reachable set, discovered by probing the sim rather than assumed. Every
+// candidate cell is put through sim.plannedTarget: if the planner hands the
+// point straight back, the ship can end the turn there. That keeps the drawing
+// honest across move modes (Move and Slide clamp to a sphere, Boost and Stop
+// ignore the destination and commit to a single point) and it will keep being
+// honest when the movement model changes, because nothing here hardcodes a
+// sphere.
+let envKey = "";
+let envStats = null;
+
+// The envelope is the sim's own integrator asked a yes or no question, cell by
+// cell: sim.canReach flies the whole turn under the ship's rotation stats, its
+// per local axis thrust limits and its carried velocity, and reports whether it
+// arrived. Nothing here knows or assumes a shape, which is why the result comes
+// out as a lobe off the nose rather than a ball around the hull.
+// Rebuild only when something the envelope depends on actually changed, and do
+// it on demand so the readout never reports the previous interaction's numbers.
+function ensureEnvelope() {
+  const key = envelopeKey();
+  if (key === envKey) return;
+  envKey = key;
+  buildEnvelope();
+}
+
+function envelopeKey() {
+  if (!sel || phase !== "planning" || sel.destroyed) return "";
+  const o = ordFor(sel);
+  const m = sel.move;
+  return [sel.id, o.move.mode, planeY().toFixed(2),
+    sel.pos.x.toFixed(2), sel.pos.y.toFixed(2), sel.pos.z.toFixed(2),
+    sel.vel.x.toFixed(2), sel.vel.y.toFixed(2), sel.vel.z.toFixed(2),
+    m.hasBoosted ? 1 : 0, m.stopped ? 1 : 0, m.lastMode, sel.drift.active ? 1 : 0,
+    sel.quat.x.toFixed(3), sel.quat.y.toFixed(3), sel.quat.z.toFixed(3), sel.quat.w.toFixed(3),
+    JSON.stringify(sel.flight), JSON.stringify(o.move.face || null)].join("|");
+}
+
+function buildEnvelope() {
+  disposeGroup(gEnv);
+  envStats = null;
+  if (!sel || phase !== "planning" || sel.destroyed) return;
+
+  const o = ordFor(sel);
+  const mode = o.move.mode;
+  const cls = DATA.SHIP_CLASSES[sel.classKey];
+  const plan = sim.plannedTarget(sel, null, mode);
+  const py = planeY();
+
+  // Committed modes have no envelope at all: the order does not choose a
+  // destination, so the reachable set is exactly one point. Saying so is more
+  // useful than drawing an empty box.
+  if (plan.committed) {
+    const t = plan.target;
+    gEnv.add(lineFrom([sel.pos, t], 0xffd24b, 0.85, true));
+    const dot = new THREE.Mesh(
+      new THREE.SphereGeometry(1.6, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffd24b }));
+    dot.position.set(t.x, t.y, t.z);
+    gEnv.add(dot);
+    envStats = {
+      committed: true, mode, cells: 1, volume: 0,
+      sliceCells: 0, sliceArea: 0, sliceR: 0,
+      R: V.dist(sel.pos, t), dy: t.y - sel.pos.y,
+      note: sel.drift.active ? "adrift, no control" : "committed, the order picks no destination",
+    };
+    return;
+  }
+
+  // The set hangs off where momentum is taking the ship, not off the hull, so
+  // the search box is centred on the coast point and only has to be as wide as
+  // what thrust can add to it either way.
+  // Size the box, and the yardstick below, off the ship's STRONGEST axis. That
+  // makes "freedom" mean "the share of an omnidirectional version of this same
+  // hull that you can actually use", which stays a fraction even if someone
+  // tunes the RCS above the main drive.
+  const best = Math.max(sel.flight.accelFwd, sel.flight.accelRetro, sel.flight.accelLat);
+  const reach = DATA.nominalReach({ accelFwd: best, maxSpeed: sel.flight.maxSpeed });
+  const R = reach * 1.15;
+  const N = COARSE ? 14 : 20;                 // cells per axis
+  const step = (2 * R) / N;
+  const thresh = Math.max(1.5, step * 0.5);
+  // Probing means flying thousands of candidate turns, so the probe integrates
+  // in 60 slices rather than 600 ticks. Worst case endpoint error against the
+  // executed flight is about 0.75 units on a 44 unit reach, under 2%.
+  const reaches = (x, y, z) => sim.canReach(sel, [x, y, z], mode, thresh, 60, o.move.face);
+  // centre the search on the midpoint between the hull and where it coasts to,
+  // so a fast ship's envelope does not fall out of the box
+  const coast = V.add(sel.pos, V.scale(sel.vel, DATA.CONST.TURN_SECONDS));
+  const c0 = coast;
+  const at = i => -R + (i + 0.5) * step;   // cell centre, not lattice corner
+  const inside = [];
+  const occ = new Set();
+  for (let i = 0; i < N; i++) {
+    const x = c0.x + at(i);
+    for (let j = 0; j < N; j++) {
+      const y = c0.y + at(j);
+      for (let k = 0; k < N; k++) {
+        const z = c0.z + at(k);
+        if (!reaches(x, y, z)) continue;
+        occ.add(i + "," + j + "," + k);
+        inside.push([x, y, z, i, j, k]);
+      }
+    }
+  }
+  // Draw the boundary only. Filling the interior stacked thousands of points
+  // into a solid ball that hid both the fleet and the shape of the envelope;
+  // the surface is what carries the information. The integral below still
+  // counts every cell, so the volume figure is unaffected.
+  const shell = inside.filter(c =>
+    !occ.has((c[3] - 1) + "," + c[4] + "," + c[5]) || !occ.has((c[3] + 1) + "," + c[4] + "," + c[5]) ||
+    !occ.has(c[3] + "," + (c[4] - 1) + "," + c[5]) || !occ.has(c[3] + "," + (c[4] + 1) + "," + c[5]) ||
+    !occ.has(c[3] + "," + c[4] + "," + (c[5] - 1)) || !occ.has(c[3] + "," + c[4] + "," + (c[5] + 1)));
+  // the slice gets its own pass on the real plane: the working altitude almost
+  // never coincides with a lattice layer, so picking the nearest one would
+  // report a disc from the wrong height
+  let sliceMax = 0;
+  const sliceCells = [];
+  for (let i = 0; i < N; i++) {
+    const x = c0.x + at(i);
+    for (let k = 0; k < N; k++) {
+      const z = c0.z + at(k);
+      if (!reaches(x, py, z)) continue;
+      sliceCells.push([x, z]);
+      sliceMax = Math.max(sliceMax, Math.hypot(x - c0.x, z - c0.z));
+    }
+  }
+
+  // the shell, as an additive point cloud
+  if (shell.length) {
+    const pos = new Float32Array(shell.length * 3);
+    shell.forEach((p, n) => { pos[n * 3] = p[0]; pos[n * 3 + 1] = p[1]; pos[n * 3 + 2] = p[2]; });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    gEnv.add(new THREE.Points(g, new THREE.PointsMaterial({
+      color: 0x35c7ff, size: step * 0.42, sizeAttenuation: true,
+      transparent: true, opacity: 0.75, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })));
+  }
+  // the slice at the working altitude, brighter and larger
+  if (sliceCells.length) {
+    const im = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(step * 0.72, step * 0.10, step * 0.72),
+      new THREE.MeshBasicMaterial({ color: 0x4cd97b, transparent: true, opacity: 0.30, depthWrite: false }),
+      sliceCells.length);
+    const mtx = new THREE.Matrix4();
+    sliceCells.forEach((c, n) => { mtx.makeTranslation(c[0], py, c[1]); im.setMatrixAt(n, mtx); });
+    im.instanceMatrix.needsUpdate = true;
+    gEnv.add(im);
+  }
+
+  // The grabbable plane. Press inside this ring and the drag is a move order;
+  // press outside and it belongs to the camera. Drawing the edge is the whole
+  // trick: the boundary between "order" and "look around" has to be visible or
+  // the input model is a guessing game.
+  const grabR = Math.max(sliceMax + step, reach * 0.3);
+  gEnv.add(lineFrom(circlePoints(c0.x, py, c0.z, grabR, 72), 0x35c7ff, 0.45, true));
+  const grabDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(grabR, 56),
+    new THREE.MeshBasicMaterial({ color: 0x35c7ff, transparent: true, opacity: 0.035,
+      side: THREE.DoubleSide, depthWrite: false }));
+  grabDisc.rotation.x = -Math.PI / 2;
+  grabDisc.position.set(c0.x, py, c0.z);
+  gEnv.add(grabDisc);
+
+  // Where momentum alone would put the ship: the envelope hangs off this
+  // point, not off the hull, and the gap between them IS the commitment.
+  const dy = py - sel.pos.y;
+  gEnv.add(lineFrom([sel.pos, coast], 0xffd24b, 0.55, true));
+  const coastDot = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd24b, transparent: true, opacity: 0.8 }));
+  coastDot.position.set(coast.x, coast.y, coast.z);
+  gEnv.add(coastDot);
+  // a plumb line from the hull to the working altitude, so the offset reads
+  if (Math.abs(dy) > 0.4) {
+    gEnv.add(lineFrom([sel.pos, { x: sel.pos.x, y: py, z: sel.pos.z }], 0x4cd97b, 0.5, true));
+  }
+
+  envStats = {
+    committed: false, mode, cells: inside.length, shell: shell.length,
+    volume: inside.length * step * step * step,
+    sliceCells: sliceCells.length, sliceArea: sliceCells.length * step * step,
+    dy, step, reach, thresh, grabR, cx: c0.x, cz: c0.z,
+    coastDist: V.dist(sel.pos, coast),
+    speed: V.len(sel.vel),
+    // the share of an unconstrained sphere of the same reach that the hull can
+    // actually use: the single number that makes commitment legible
+    freedom: (inside.length * step * step * step) / ((4 / 3) * Math.PI * reach * reach * reach),
+  };
+}
+
+// --------------------------------------------------------------- the draw --
+function shipsAtPlaybackTick(tick) {
+  return playback.tracks[Math.min(tick, playback.tracks.length - 1)];
+}
+
+let pipMesh = null;
+let headingInfo = null;     // requested vs reachable heading, for the readout
+
+function render() {
+  syncShipMeshes();
+  const inPlayback = (phase === "playback" || phase === "review") && playback;
+  const frame = inPlayback ? shipsAtPlaybackTick(playback.tick | 0) : null;
+
+  disposeGroup(gPaths);
+  disposeGroup(gFx);
+  pipMesh = null;
+
+  if (!inPlayback) {
+    ensureEnvelope();
+    const tScrub = planScrub / T;
+    for (const ship of state.ships) {
+      if (ship.destroyed) continue;
+      const col = FACTION_HEX(ship.faction);
+      let pts, quats, dashed;
+      if (ship.isPlayer) {
+        const o = orders[ship.id];
+        const tgt = (o && o.move.target) ? o.move.target : null;
+        const path = sim.previewPath(ship, tgt, o ? o.move.mode : "MOVE_AND_TURN", 48,
+          o && o.move.face);
+        pts = path.points; quats = path.quats; dashed = false;
+        gPaths.add(lineFrom(pts, col, ship === sel ? 0.95 : 0.5));
+        const dot = new THREE.Mesh(new THREE.SphereGeometry(1.15, 10, 8),
+          new THREE.MeshBasicMaterial({ color: col }));
+        dot.position.set(path.target.x, path.target.y, path.target.z);
+        gPaths.add(dot);
+        // over-range stub: what you asked for beyond what the drives can give
+        if (o && o.move.target) {
+          const raw = { x: o.move.target[0], y: o.move.target[1], z: o.move.target[2] };
+          if (V.dist(raw, path.target) > 0.5) gPaths.add(lineFrom([path.target, raw], col, 0.4, true));
+        }
+        // End of turn ghost, at the attitude the ship will actually hold. This
+        // is the rotation preview: the hull is drawn where it ends up, pointing
+        // where the flight model can get it pointed.
+        if (ship === sel) {
+          const o2 = ordFor(sel);
+          const cls = DATA.SHIP_CLASSES[ship.classKey];
+          const endGhost = ghostHull(cls.radius, col, 0.55);
+          endGhost.position.set(path.target.x, path.target.y, path.target.z);
+          endGhost.quaternion.set(path.endQuat.x, path.endQuat.y, path.endQuat.z, path.endQuat.w);
+          gPaths.add(endGhost);
+
+          // The heading widget shows both sides of the rotation limit: a solid
+          // arrow to the heading the ship can reach, and a dashed one to the
+          // heading you asked for when the hull cannot swing that far in a turn.
+          const achieved = Q.forward(path.endQuat);
+          const wanted = o2.move.face
+            ? V.norm(V.v3(o2.move.face[0], o2.move.face[1], o2.move.face[2]))
+            : achieved;
+          const R = FACING_HANDLE_R;
+          const at = d => ({ x: path.target.x + d.x * R, y: path.target.y + d.y * R, z: path.target.z + d.z * R });
+          gPaths.add(lineFrom(circlePoints(path.target.x, path.target.y, path.target.z, R, 40), col, 0.3));
+          gPaths.add(lineFrom([path.target, at(achieved)], col, 0.85));
+          const tip = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8),
+            new THREE.MeshBasicMaterial({ color: col }));
+          const ap = at(achieved);
+          tip.position.set(ap.x, ap.y, ap.z);
+          gPaths.add(tip);
+
+          const shortfall = Math.acos(Math.max(-1, Math.min(1, V.dot(achieved, wanted)))) * 180 / Math.PI;
+          if (shortfall > 1.5) {
+            gPaths.add(lineFrom([path.target, at(wanted)], 0xffd24b, 0.75, true));
+          }
+          // the grabbable handle sits on what you asked for, so dragging is direct
+          const pip = new THREE.Mesh(new THREE.SphereGeometry(COARSE ? 3.0 : 2.1, 12, 10),
+            new THREE.MeshBasicMaterial({ color: shortfall > 1.5 ? 0xffd24b : 0xffffff }));
+          const wp = at(wanted);
+          pip.position.set(wp.x, wp.y, wp.z);
+          pip.name = "pip";
+          gPaths.add(pip);
+          pipMesh = pip;
+          headingInfo = { wanted, achieved, shortfall };
+        }
+      } else {
+        // enemy estimate: momentum extrapolation, dashed (ADR-6 preview rule)
+        const est = sim.previewPath(ship, null, "MOVE_AND_TURN", 48);
+        pts = est.points; quats = est.quats; dashed = true;
+        gPaths.add(lineFrom(pts, col, 0.5, true));
+      }
+      if (planScrub > 0 && pts) {
+        const i = Math.min(pts.length - 2, Math.floor(tScrub * (pts.length - 1)));
+        const gp = V.lerp(pts[i], pts[i + 1], tScrub * (pts.length - 1) - i);
+        const gm = ghostHull(DATA.SHIP_CLASSES[ship.classKey].radius, col, dashed ? 0.4 : 0.75);
+        gm.position.set(gp.x, gp.y, gp.z);
+        if (quats && quats[i]) gm.quaternion.set(quats[i].x, quats[i].y, quats[i].z, quats[i].w);
+        gPaths.add(gm);
+      }
+    }
+    for (const ship of state.ships) if (!ship.destroyed) placeShip(ship, ship.pos, ship.quat);
+  } else {
+    if (envKey) { envKey = ""; disposeGroup(gEnv); envStats = null; }
+    for (const s of frame.ships) {
+      if (s.destroyed) continue;
+      const ship = viewState().ships.find(x => x.id === s.id);
+      if (ship) placeShip(ship, { x: s.x, y: s.y, z: s.z }, { x: s.q[0], y: s.q[1], z: s.q[2], w: s.q[3] });
+    }
+    for (const p of frame.projectiles) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(p.kind === "missile" ? 0.9 : 0.6, 8, 6),
+        new THREE.MeshBasicMaterial({ color: p.kind === "missile" ? 0xffd24b : 0x9be8ff }));
+      m.position.set(p.x, p.y, p.z);
+      gFx.add(m);
+    }
+    for (const ev of playback.events) {
+      if (ev.type === "ShotFired" && ev.kind === "beam" && playback.tick >= ev.tick && playback.tick < ev.tick + 30) {
+        gFx.add(lineFrom([{ x: ev.from[0], y: ev.from[1], z: ev.from[2] }, { x: ev.to[0], y: ev.to[1], z: ev.to[2] }],
+          0x9be8ff, 1 - (playback.tick - ev.tick) / 30));
+      }
+      if ((ev.type === "ShotHit" || ev.type === "Collision") && ev.pos &&
+          playback.tick >= ev.tick && playback.tick < ev.tick + 40) {
+        const k = (playback.tick - ev.tick) / 40;
+        const m = new THREE.Mesh(new THREE.SphereGeometry(1.5 + k * 9, 12, 8),
+          new THREE.MeshBasicMaterial({
+            color: ev.type === "Collision" ? 0xff4b4b : 0xffc24b,
+            wireframe: true, transparent: true, opacity: 1 - k,
+          }));
+        m.position.set(ev.pos[0], ev.pos[1], ev.pos[2]);
+        gFx.add(m);
+      }
+    }
+  }
+
+  ui.hSec.textContent = inPlayback ? (playback.tick / 60).toFixed(1) : (planScrub / 60).toFixed(1);
+  applyCamera();
+  renderer.render(scene, camera);
+}
+
+(function loop() {
+  requestAnimationFrame(loop);
+  if (!dirty || !state) return;      // the first pass runs before newMatch
+  dirty = false;
+  try { render(); } catch (err) { console.error(err); }
+})();
+
+// ------------------------------------------------------------------ input --
+// Pointer Events throughout, so one code path drives mouse, pen and touch.
+//
+// The 3D model needs a plane to project a drag onto, and the natural one is
+// already there: the working altitude. A drag places the destination on that
+// plane, Q/E (or the pad) raise and lower it, and the envelope slice follows,
+// so elevation is a single readable idea rather than a hidden number.
+// Orbit is the right button or two fingers; zoom is the wheel or a pinch.
+const PIP_HIT = COARSE ? 3.2 : 1.8;
+let orbiting = false, orbitStart = null, dragMove = false, dragRotate = false;
+let panning = false, panStart = null;   // middle button drag on desktop
+const pointers = new Map();   // live pointerId -> {x, y} in canvas space
+let pinch = null;             // {dist, camDist, mx, my, yaw, pitch} while 2+ down
+let preDragTarget = null;     // destination before a drag, to undo on pinch
+
+cv.addEventListener("contextmenu", e => e.preventDefault());
+
+// offsetX/offsetY go unreliable once a second finger lands, so always derive
+// canvas-local coordinates from the bounding rect.
+function localXY(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function pointerCentroid() {
+  let x = 0, y = 0;
+  for (const q of pointers.values()) { x += q.x; y += q.y; }
+  return { x: x / pointers.size, y: y / pointers.size };
+}
+function pointerSpread() {
+  const it = pointers.values();
+  const a = it.next().value, b = it.next().value;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+function castFrom(p) {
+  const r = cv.getBoundingClientRect();
+  ndc.set((p.x / r.width) * 2 - 1, -(p.y / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster;
+}
+// Where a screen point lands on the working altitude plane.
+const workPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const hitPoint = new THREE.Vector3();
+function s2w(p) {
+  workPlane.constant = -planeY();
+  const rc = castFrom(p);
+  if (!rc.ray.intersectPlane(workPlane, hitPoint)) return null;
+  return { x: hitPoint.x, y: planeY(), z: hitPoint.z };
+}
+function pickShipAt(p) {
+  const rc = castFrom(p);
+  const hits = rc.intersectObjects(gShips.children, true);
+  for (const h of hits) {
+    let o = h.object;
+    while (o && !o.userData.shipId) o = o.parent;
+    if (o) return state.ships.find(s => s.id === o.userData.shipId && !s.destroyed) || null;
+  }
+  return null;
+}
+function pipHit(p) {
+  if (!pipMesh) return false;
+  const rc = castFrom(p);
+  return rc.intersectObject(pipMesh, false).length > 0;
+}
+
+// Is this point on the plane inside the region that takes move orders?
+function onMovementPlane(w) {
+  if (!w || !sel || phase !== "planning" || !envStats || envStats.committed) return false;
+  return Math.hypot(w.x - envStats.cx, w.z - envStats.cz) <= envStats.grabR;
+}
+
+function setMoveTarget(w) {
+  if (!w) return;
+  const o = ordFor(sel);
+  o.move.target = [w.x, w.y, w.z];
+  if (o.move.mode === "FULL_SPEED" || o.move.mode === "FULL_STOP") o.move.mode = "MOVE_AND_TURN";
+}
+// Commanding a heading only means something in a mode that lets you command
+// one. Under the flight model MOVE_AND_TURN points the nose wherever thrust is
+// needed, so a facing order there is silently discarded, which made the widget
+// look broken. Asking for a heading therefore switches to the mode that honours
+// it, the same way dragging a destination already drops Boost and Stop.
+function commandHeading(o, dir) {
+  o.move.face = [dir.x, dir.y, dir.z];
+  if (o.move.mode !== "TURN_SLIDE") {
+    o.move.mode = "TURN_SLIDE";
+    log(sel.id + " holds a heading: move mode is now Slide", "warn");
+  }
+}
+
+// Rotating hides the pointer: the cursor sits exactly on the pip and the
+// heading arrow under it, which is the thing you are trying to aim.
+function startRotateDrag(p) {
+  dragRotate = true;
+  cv.style.cursor = "none";
+  setFacingFromCursor(s2w(p));
+  draw();
+}
+
+function setFacingFromCursor(w) {
+  if (!w) return;
+  const o = ordFor(sel);
+  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
+  const dir = V.sub(V.v3(w.x, dest.y, w.z), dest);
+  if (V.len(dir) > 0.3) commandHeading(o, V.norm(dir));
+}
+
+cv.addEventListener("pointerdown", e => {
+  // with a sheet up, the exposed map is a "get me back" target: close and stop
+  if (openSheet) { closeSheets(); return; }
+
+  const p = localXY(e);
+  pointers.set(e.pointerId, p);
+
+  // second finger down: abandon the half-made drag (restoring the destination
+  // it was in the middle of moving) and switch to pinch-zoom + orbit
+  if (pointers.size === 2) {
+    if (dragMove && sel) ordFor(sel).move.target = preDragTarget;
+    dragMove = false; dragRotate = false; orbiting = false; panning = false;
+    const c = pointerCentroid();
+    pinch = { dist: pointerSpread(), camDist: cam.dist, mx: c.x, my: c.y };
+    draw();
+    return;
+  }
+  if (pointers.size > 2) return;
+
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+
+  if (e.button === 1) { panning = true; panStart = { x: p.x, y: p.y }; return; }
+  if (e.button === 2) { orbiting = true; orbitStart = { x: p.x, y: p.y, yaw: cam.yaw, pitch: cam.pitch }; return; }
+  if (e.button > 0) return;
+
+  const startCamera = () => {
+    if (camMode === "pan") { panning = true; panStart = { x: p.x, y: p.y }; }
+    else { orbiting = true; orbitStart = { x: p.x, y: p.y, yaw: cam.yaw, pitch: cam.pitch }; }
+  };
+  if (phase !== "planning") { startCamera(); return; }
+
+  // rotation pip takes priority: grab it to swing the planned heading
+  if (sel && pipHit(p)) { startRotateDrag(p); return; }
+
+  const picked = pickShipAt(p);
+  if (picked && picked.isPlayer) { sel = picked; selWeapon = null; refresh(); return; }
+  if (picked && !picked.isPlayer) {
+    if (sel) { const o = ordFor(sel); o._targetShip = picked.id; o._targetSub = null; syncWeaponTargets(o); log(sel.id + " targets " + picked.id, "warn"); refresh(); }
+    return;
+  }
+  // shift-drag anywhere also rotates (no need to hit the pip)
+  if (sel && e.shiftKey) { startRotateDrag(p); return; }
+
+  // Empty space belongs to the camera. Only a press that lands inside the
+  // drawn movement plane is read as a destination, so looking around never
+  // costs you an order you did not mean to give.
+  const w = s2w(p);
+  if (sel && onMovementPlane(w)) {
+    const o = ordFor(sel);
+    preDragTarget = o.move.target ? o.move.target.slice() : null;
+    dragMove = true; setMoveTarget(w); draw();
+    return;
+  }
+  startCamera();
+});
+
+cv.addEventListener("pointermove", e => {
+  const p = localXY(e);
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+
+  if (pinch && pointers.size >= 2) {
+    const d = pointerSpread(), c = pointerCentroid();
+    if (pinch.dist > 8) cam.dist = pinch.camDist * (pinch.dist / Math.max(1, d));
+    // two fingers pinch and slide the map; one finger already handles orbit
+    panCamera(-(c.x - pinch.mx), (c.y - pinch.my), 0.6);
+    pinch.mx = c.x; pinch.my = c.y;
+    draw();
+    return;
+  }
+  if (panning) {
+    panCamera(-(p.x - panStart.x), (p.y - panStart.y), 0.6);
+    panStart = { x: p.x, y: p.y };
+    draw();
+  } else if (orbiting) {
+    cam.yaw = orbitStart.yaw - (p.x - orbitStart.x) * 0.007;
+    cam.pitch = orbitStart.pitch + (p.y - orbitStart.y) * 0.007;
+    draw();
+  } else if (dragRotate && sel && phase === "planning") {
+    setFacingFromCursor(s2w(p)); draw();
+  } else if (dragMove && sel && phase === "planning") {
+    setMoveTarget(s2w(p)); draw();            // live path preview while dragging
+  } else if (e.pointerType === "mouse" && phase === "planning" && sel && !dragRotate) {
+    cv.style.cursor = pipHit(p) ? "grab" : "crosshair";
+  }
+});
+
+function releasePointer(e) {
+  pointers.delete(e.pointerId);
+  try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) {
+    orbiting = false; panning = false;
+    if (dragMove || dragRotate) {
+      if (dragRotate) cv.style.cursor = "crosshair";
+      dragMove = false; dragRotate = false; refresh();
+    }
+  }
+}
+addEventListener("pointerup", releasePointer);
+addEventListener("pointercancel", releasePointer);
+
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.dist *= e.deltaY < 0 ? 0.88 : 1.14;
+  draw();
+}, { passive: false });
+
+addEventListener("keydown", e => {
+  if (phase !== "planning" || !sel) {
+    if (e.key === "Enter" && phase === "planning") endTurn();
+    return;
+  }
+  const o = ordFor(sel);
+  if (e.key === "q" || e.key === "Q") { bump(o, -5); }
+  else if (e.key === "e" || e.key === "E") { bump(o, 5); }
+  else if (e.key === "a" || e.key === "A") { rotateFacing(o, -15); }
+  else if (e.key === "d" || e.key === "D") { rotateFacing(o, 15); }
+  else if (e.key === "f" || e.key === "F") { faceTarget(o); }
+  else if (e.key === "Enter") endTurn();
+});
+// A/D swing the planned heading in 15 degree steps; F snaps to the target's
+// PREDICTED end-of-turn position (the original's snap-rotation button).
+function rotateFacing(o, deg) {
+  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
+  const cur = plannedFacing(sel, o, dest);
+  const a = Math.atan2(cur.x, cur.z) + deg * Math.PI / 180;
+  commandHeading(o, V.v3(Math.sin(a), cur.y, Math.cos(a)));
+  refresh();
+}
+function faceTarget(o) {
+  if (!o._targetShip) { log("No target to face", "bad"); return; }
+  const tgt = state.ships.find(s2 => s2.id === o._targetShip);
+  if (!tgt) return;
+  const myDest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
+  // predict where the target ends up (momentum): aim at the future, not the now
+  const tDest = sim.previewPath(tgt, null, "MOVE_AND_TURN", 4).target;
+  commandHeading(o, V.norm(V.sub(tDest, myDest)));
+  log(sel.id + " snaps heading to " + tgt.id + "'s predicted position", "warn");
+  refresh();
+}
+// Elevation moves the working plane, which is also the envelope's slice plane.
+function bump(o, dy) {
+  if (!o.move.target) {
+    const d = sim.previewPath(sel, null, o.move.mode, 2, o.move.face).target;
+    o.move.target = [d.x, d.y, d.z];
+  }
+  o.move.target[1] += dy;
+  refresh();
+}
+
+// -------------------------------------------------------------------- ui --
+const ui = {};
+for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay",
+                  "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace",
+                  "env","envTune","turns",
+                  "toolbar","cMode","cCentre"])
+  ui[id] = document.getElementById(id);
+
+const MODES = [["MOVE_AND_TURN","Move"],["TURN_SLIDE","Slide"],["FULL_SPEED","Boost"],["FULL_STOP","Stop"]];
+
+// ------------------------------------------------------- sheets and pad --
+// Mobile only in effect: the CSS keeps #tabbar and #pad display:none above
+// 900px, so these handlers simply never get a chance to fire on desktop.
+let openSheet = null;
+
+function closeSheets() {
+  openSheet = null;
+  ui.left.classList.remove("open"); ui.right.classList.remove("open");
+  for (const b of [ui.tShips, ui.tLog]) { b.classList.remove("on"); b.setAttribute("aria-pressed", "false"); }
+}
+function toggleSheet(key) {
+  const wasOpen = openSheet === key;
+  closeSheets();
+  if (wasOpen) return;                       // tapping the live tab closes it
+  openSheet = key;
+  const panel = key === "ships" ? ui.left : ui.right;
+  const tab = key === "ships" ? ui.tShips : ui.tLog;
+  panel.classList.add("open");
+  tab.classList.add("on"); tab.setAttribute("aria-pressed", "true");
+  if (key === "log") ui.log.scrollTop = ui.log.scrollHeight;
+}
+// The estimator picker. Switching it changes only the drawing, never the sim:
+// "sim" shows what the code does today, "boat" shows what the candidate
+// coupled model would give, on the same ship with the same carried velocity.
+// The flight envelope of the SELECTED ship, editable live. These are the only
+// numbers the movement model reads: how fast the hull swings about each axis,
+// and how hard it can push along each of its own axes. Changing one re-flies
+// every preview immediately, and because they are real ship state they are
+// serialised and hashed like anything else that affects the sim.
+const FLIGHT_TUNE = [
+  { key: "yawRate", label: "yaw rate", min: 0.5, max: 30, step: 0.5,
+    fmt: v => v.toFixed(1) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
+  { key: "pitchRate", label: "pitch rate", min: 0.5, max: 30, step: 0.5,
+    fmt: v => v.toFixed(1) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
+  { key: "accelFwd", label: "main drive", min: 0.1, max: 3, step: 0.05, fmt: v => v.toFixed(2) + " u/s2 fwd" },
+  { key: "accelRetro", label: "retros", min: 0.05, max: 2, step: 0.05, fmt: v => v.toFixed(2) + " u/s2 aft" },
+  { key: "accelLat", label: "RCS", min: 0.02, max: 1.5, step: 0.02, fmt: v => v.toFixed(2) + " u/s2 lateral" },
+  { key: "maxSpeed", label: "top speed", min: 1, max: 20, step: 0.5, fmt: v => v.toFixed(1) + " u/s" },
+];
+function buildFlightUi() {
+  ui.envTune.innerHTML = "";
+  if (!sel || phase !== "planning") return;
+  for (const t of FLIGHT_TUNE) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<div class="sub"><span>' + t.label +
+      '</span><span style="color:var(--ink)" data-v>' + t.fmt(sel.flight[t.key]) + '</span></div>';
+    const r = document.createElement("input");
+    r.type = "range"; r.min = t.min; r.max = t.max; r.step = t.step; r.value = sel.flight[t.key];
+    r.oninput = () => {
+      sel.flight[t.key] = parseFloat(r.value);
+      wrap.querySelector("[data-v]").textContent = t.fmt(sel.flight[t.key]);
+      refresh();
+    };
+    wrap.appendChild(r);
+    ui.envTune.appendChild(wrap);
+  }
+}
+
+// The orbit/pan toggle no longer drives a D-pad, it decides what a drag on
+// empty space does. Zoom has no button at all: pinch and the wheel cover it.
+let camMode = "orbit";
+ui.cMode.onclick = () => {
+  camMode = camMode === "orbit" ? "pan" : "orbit";
+  ui.cMode.textContent = camMode === "orbit" ? "\u21bb" : "\u2725";
+  ui.cMode.title = camMode === "orbit"
+    ? "Drag on empty space orbits. Tap to pan instead."
+    : "Drag on empty space pans. Tap to orbit instead.";
+  ui.cMode.classList.toggle("on", camMode === "pan");
+};
+ui.cCentre.onclick = () => centreOnSelection();
+
+ui.tShips.onclick = () => toggleSheet("ships");
+ui.tLog.onclick = () => toggleSheet("log");
+ui.tFit.onclick = () => zoomToFit();
+
+// The pad stands in for Q/E/A/D/F, which a phone cannot send.
+function padAct(fn) {
+  return () => { if (sel && phase === "planning") fn(ordFor(sel)); };
+}
+ui.pUp.onclick = padAct(o => bump(o, 5));
+ui.pDown.onclick = padAct(o => bump(o, -5));
+ui.pCCW.onclick = padAct(o => rotateFacing(o, -15));
+ui.pCW.onclick = padAct(o => rotateFacing(o, 15));
+ui.pFace.onclick = padAct(o => faceTarget(o));
+
+function refresh() {
+  ui.hTurn.textContent = state.turn;
+  const reviewing = playback && playback.review !== undefined;
+  ui.hPhase.textContent = reviewing
+    ? "REVIEW · TURN " + history[playback.review].turn
+    : phase.toUpperCase() + (state.gameOver ? " · " + state.gameOver.winner.toUpperCase() + " WINS" : "");
+  ui.bEnd.disabled = phase !== "planning" || !!state.gameOver;
+
+  // rosters
+  ui.fleet.innerHTML = ""; ui.hostiles.innerHTML = "";
+  for (const ship of viewState().ships) {
+    if (ship.destroyed) continue;
+    const cls = DATA.SHIP_CLASSES[ship.classKey];
+    const div = document.createElement("div");
+    div.className = "shipRow" + (ship === sel ? " sel" : "") + (ship.isPlayer ? "" : " enemy");
+    let subs = "";
+    for (const su of ship.subsystems)
+      subs += `<div class="sub${su.dead ? " dead" : ""}"><span>${su.id}</span><span>${Math.round(su.hp)}</span></div>`;
+    div.innerHTML = `<div class="nm">${ship.id} · ${cls.name}${ship.drift.active ? " ⚠ ADRIFT" : ""}</div>
+      <div class="bar"><i style="width:${(100 * ship.hull / ship.hullMax).toFixed(0)}%"></i></div>
+      ${ship === sel || (!ship.isPlayer && sel && ordFor(sel)._targetShip === ship.id) ? subs + `<div class="sub"><span>marines</span><span>${ship.marines}</span></div>` : ""}`;
+    div.onclick = () => {
+      if (phase !== "planning") { log("Return to Live to give orders", "warn"); return; }
+      if (ship.isPlayer) { sel = ship; selWeapon = null; }
+      else if (sel) { const o = ordFor(sel); o._targetShip = ship.id; syncWeaponTargets(o); }
+      refresh();
+    };
+    (ship.isPlayer ? ui.fleet : ui.hostiles).appendChild(div);
+  }
+
+  // modes
+  ui.modes.innerHTML = "";
+  if (sel) {
+    const o = ordFor(sel);
+    for (const [mode, label] of MODES) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = o.move.mode === mode ? "on" : "";
+      b.onclick = () => { o.move.mode = mode; refresh(); };
+      ui.modes.appendChild(b);
+    }
+  }
+
+  // weapons
+  ui.weps.innerHTML = "";
+  if (sel) {
+    const o = ordFor(sel);
+    sel.weapons.forEach((w, i) => {
+      const wd = DATA.WEAPONS[w.key];
+      const armed = o.weapons.find(x => x.weaponIndex === i);
+      const div = document.createElement("div");
+      div.className = "wrow" + (armed ? " armed" : "") + (selWeapon === i ? " armed" : "");
+      const ready = state.turn - w.lastFiredTurn >= Math.max(1, wd.cooldownTurns) || w.lastFiredTurn < 0;
+      div.innerHTML = `<span class="k">${i + 1}·${w.key}</span>
+        <span class="hint">${armed ? "s" + armed.second : ready ? "ready" : "cooling"}${o._targetSub ? " → " + o._targetSub : ""}</span>`;
+      div.style.cursor = "pointer";
+      div.onclick = () => { selWeapon = selWeapon === i ? null : i; refresh(); };
+      ui.weps.appendChild(div);
+    });
+    // subsystem aim selector
+    if (o._targetShip) {
+      const tgt = state.ships.find(s2 => s2.id === o._targetShip);
+      if (tgt) {
+        const selDiv = document.createElement("div");
+        selDiv.className = "hint";
+        selDiv.innerHTML = "aim: ";
+        const opts = [["", "hull"]].concat(tgt.subsystems.filter(su => !su.dead).map(su => [su.id, su.id]));
+        for (const [val, label] of opts) {
+          const b = document.createElement("button");
+          b.textContent = label; b.style.marginRight = "3px";
+          b.className = (o._targetSub || "") === val ? "on" : "";
+          b.onclick = () => { o._targetSub = val || null; syncWeaponTargets(o); refresh(); };
+          selDiv.appendChild(b);
+        }
+        ui.weps.appendChild(selDiv);
+      }
+    }
+  }
+
+  // boarding button
+  if (sel) {
+    const o = ordFor(sel);
+    const cls = DATA.SHIP_CLASSES[sel.classKey];
+    const tgt = o._targetShip ? state.ships.find(s2 => s2.id === o._targetShip) : null;
+    const can = tgt && !tgt.destroyed && V.dist(sel.pos, tgt.pos) <= cls.boardingRange && sel.marines > 0;
+    ui.bBoard.disabled = !can && !o.board;
+    ui.bBoard.textContent = o.board ? "Boarding: " + o.board + " ✕" : can ? "Board " + tgt.id : "Board Target";
+    ui.bBoard.onclick = () => { o.board = o.board ? undefined : (can ? tgt.id : undefined); refresh(); };
+  } else { ui.bBoard.disabled = true; ui.bBoard.textContent = "Board Target"; }
+
+  // slots
+  ui.slots.innerHTML = "";
+  for (let s2 = 0; s2 <= 10; s2++) {
+    const d = document.createElement("div");
+    d.className = "slot";
+    d.textContent = s2;
+    if (sel) {
+      const o = ordFor(sel);
+      const mine = o.weapons.filter(x => x.second === s2);
+      if (mine.length) d.classList.add("mark");
+      if (selWeapon !== null && mine.some(x => x.weaponIndex === selWeapon)) d.classList.add("q");
+      d.onclick = () => {
+        if (selWeapon === null) return;
+        const o2 = ordFor(sel);
+        const ix = o2.weapons.findIndex(x => x.weaponIndex === selWeapon);
+        if (ix >= 0 && o2.weapons[ix].second === s2) o2.weapons.splice(ix, 1);   // toggle off
+        else {
+          if (!o2._targetShip) { log("Pick an enemy target first", "bad"); return; }
+          if (ix >= 0) o2.weapons.splice(ix, 1);
+          o2.weapons.push({ weaponIndex: selWeapon, second: s2, targetShipId: o2._targetShip, targetSub: o2._targetSub || undefined });
+        }
+        refresh();
+      };
+    }
+    ui.slots.appendChild(d);
+  }
+  const canOrder = !!(sel && phase === "planning");
+  for (const el of document.querySelectorAll(".shipctl")) {
+    el.classList.toggle("off", !canOrder);
+    el.disabled = !canOrder;
+  }
+  renderTurnStrip();
+  buildFlightUi();
+  draw();
+  renderEnvelopeReadout();
+}
+
+// The envelope in numbers. The volume is the integral of the reachable set,
+// summed over the cells the probe accepted; the slice is that set cut at the
+// working altitude, which for the current model is the spherical slice the
+// original game had. Both come from the sampler, so if the movement model
+// changes to something that couples heading to travel, these follow it.
+const MODE_NOTE = {
+  MOVE_AND_TURN: "coupled, heading follows travel",
+  TURN_SLIDE: "decoupled, heading is yours to set",
+  FULL_SPEED: "boost, locked along momentum",
+  FULL_STOP: "stop, locked to half momentum",
+};
+function fmt(n, unit) {
+  const a = Math.abs(n);
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + "M " + unit;
+  if (a >= 1e4) return (n / 1e3).toFixed(1) + "k " + unit;
+  return n.toFixed(a < 10 ? 1 : 0) + " " + unit;
+}
+function row(k, v) {
+  return '<div class="sub"><span>' + k + '</span><span style="color:var(--ink)">' + v + '</span></div>';
+}
+function renderEnvelopeReadout() {
+  if (!sel || phase !== "planning") {
+    ui.env.innerHTML = phase === "planning"
+      ? "Select a ship to see the volume it can reach this turn."
+      : "Resolving. The envelope returns at the next planning phase.";
+    return;
+  }
+  ensureEnvelope();
+  const st = envStats;
+  if (!st) { ui.env.innerHTML = "No envelope: this ship has no move order yet."; return; }
+  let h = row("mode", MODE_NOTE[st.mode] || st.mode);
+  if (st.committed) {
+    h += row("envelope", "single point");
+    h += row("freedom", "0%, no destination to choose");
+    h += row("travels", fmt(st.R, "u"));
+    h += row("volume", "0 (" + st.note + ")");
+    ui.env.innerHTML = h;
+    return;
+  }
+  // No closed form exists for this model, so every figure here is sampled by
+  // flying the turn. That is the honest way to measure a coupled envelope.
+  h += row("volume", fmt(st.volume, "u3") + " over " + st.cells + " cells");
+  h += row("slice at alt", fmt(st.sliceArea, "u2") + " over " + st.sliceCells + " cells");
+  h += row("working alt", (st.dy >= 0 ? "+" : "") + st.dy.toFixed(1) + " off hull");
+  h += row("carrying", st.speed.toFixed(2) + " u/s (" + fmt(st.coastDist, "u") + " a turn)");
+  h += row("freedom", (100 * st.freedom).toFixed(0) + "% of a free sphere");
+  if (headingInfo) {
+    const bearing = d => (Math.atan2(d.x, d.z) * 180 / Math.PI).toFixed(0) + " deg";
+    h += row("heading held", bearing(headingInfo.achieved));
+    if (headingInfo.shortfall > 1.5) {
+      h += row("asked for", bearing(headingInfo.wanted) +
+        " (" + headingInfo.shortfall.toFixed(0) + " short)");
+    }
+    h += row("turn authority",
+      (sel.flight.yawRate * DATA.CONST.TURN_SECONDS).toFixed(0) + " yaw / " +
+      (sel.flight.pitchRate * DATA.CONST.TURN_SECONDS).toFixed(0) + " pitch per turn");
+  }
+  h += row("can hold station",
+    sim.canReach(sel, [sel.pos.x, sel.pos.y, sel.pos.z], st.mode, Math.max(1.5, st.step * 0.5))
+      ? "yes" : "NO, committed");
+  ui.env.innerHTML = h;
+}
+
+function syncWeaponTargets(o) {
+  for (const w of o.weapons) { w.targetShipId = o._targetShip; w.targetSub = o._targetSub || undefined; }
+}
+
+function log(msg, cls) {
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = msg;
+  ui.log.prepend(d);
+  while (ui.log.children.length > 120) ui.log.lastChild.remove();
+}
+
+// ---------------------------------------------------------- turn history --
+// Every resolved turn keeps the snapshot it STARTED from, its orders, and the
+// state hash it produced. Reviewing turn n therefore does not need stored
+// frames: restore the pre state, re-run resolveTurn with the same orders, and
+// the sim reproduces the turn exactly. The stored hash is then a free
+// self check, and a mismatch would be a determinism bug worth shouting about.
+// This is ADR-5's replay format doing real work rather than being described.
+const history = [];
+
+function reviewTurn(n) {
+  const h = history[n];
+  if (!h) return;
+  const st = snap.restore(h.pre);
+  const r = sim.resolveTurn(st, JSON.parse(JSON.stringify(h.orders)), { record: true });
+  const ok = r.hash === h.hash;
+  playback = {
+    tracks: r.tracks, events: r.events, tick: 0, speed: 1, playing: true,
+    logged: new Set(), state: st, review: n,
+  };
+  phase = "playback";
+  ui.log.innerHTML = "";
+  log("Reviewing turn " + h.turn + (ok
+    ? " · re-simulated, hash matches " + h.hash.slice(0, 8)
+    : " · HASH MISMATCH, expected " + h.hash.slice(0, 8) + " got " + r.hash.slice(0, 8)),
+    ok ? "good" : "bad");
+  ui.scrub.value = 0;
+  refresh();
+  requestAnimationFrame(stepPlayback);
+}
+
+function backToLive() {
+  playback = null;
+  phase = state.gameOver ? "gameover" : "planning";
+  ui.scrub.value = 0; planScrub = 0;
+  ui.log.innerHTML = "";
+  log("Back to live · turn " + state.turn, "good");
+  refresh();
+}
+
+// The state the view should draw: a review shows the turn being reviewed, so
+// hull bars and rosters match the moment on screen rather than the live match.
+function viewState() {
+  return (playback && playback.state) ? playback.state : state;
+}
+
+function renderTurnStrip() {
+  ui.turns.innerHTML = "";
+  const reviewing = playback && playback.review !== undefined;
+  const live = document.createElement("button");
+  live.textContent = "Live";
+  live.className = reviewing ? "" : "on";
+  live.onclick = backToLive;
+  ui.turns.appendChild(live);
+  for (let i = 0; i < history.length; i++) {
+    const b = document.createElement("button");
+    b.textContent = "T" + history[i].turn;
+    b.className = (reviewing && playback.review === i) ? "on" : "";
+    b.title = "Re-simulate turn " + history[i].turn + " (hash " + history[i].hash.slice(0, 8) + ")";
+    b.onclick = () => reviewTurn(i);
+    ui.turns.appendChild(b);
+  }
+  if (!history.length) {
+    const n = document.createElement("span");
+    n.className = "hint";
+    n.textContent = "Resolved turns appear here to replay.";
+    ui.turns.appendChild(n);
+  }
+}
+
+// -------------------------------------------------------------- turn flow --
+function endTurn() {
+  if (phase !== "planning" || state.gameOver) return;
+  phase = "playback";
+  // strip planning scratch before handing to the sim
+  const clean = {};
+  for (const id in orders) {
+    const o = orders[id];
+    clean[id] = { move: { mode: o.move.mode, target: o.move.target || undefined }, weapons: o.weapons, board: o.board };
+  }
+  const pre = snap.serialize(state);
+  const turnIndex = state.turn;
+  const r = sim.resolveTurn(state, clean, { record: true });
+  replayFile.turns.push({ turn: turnIndex, orders: clean, hash: r.hash, snapshot: r.snapshot });
+  history.push({ turn: turnIndex, pre, post: r.snapshot, orders: clean, hash: r.hash });
+  ui.hHash.textContent = r.hash.slice(0, 8);
+  playback = { tracks: r.tracks, events: r.events, tick: 0, speed: 1, playing: true, logged: new Set() };
+  ui.scrub.value = 0; planScrub = 0;
+  orders = {};
+  refresh();
+  requestAnimationFrame(stepPlayback);
+}
+
+let lastTs = 0;
+function stepPlayback(ts) {
+  if (!playback) return;
+  const dt = lastTs ? (ts - lastTs) / 1000 : 0;
+  lastTs = ts;
+  if (playback.playing) {
+    playback.tick = Math.min(T, playback.tick + dt * 60 * playback.speed);
+    ui.scrub.value = playback.tick | 0;
+  }
+  // stream events into the log as the playhead reaches them
+  for (const ev of playback.events) {
+    if (ev.tick <= playback.tick && !playback.logged.has(ev)) {
+      playback.logged.add(ev);
+      logEvent(ev);
+    }
+  }
+  draw();
+  if (playback.tick >= T && playback.playing) {
+    playback.playing = false;
+    // a review holds at the end of the turn it replayed; only the live turn
+    // hands control back to planning
+    phase = playback.review !== undefined ? "review"
+      : (state.gameOver ? "gameover" : "planning");
+    lastTs = 0;
+    refresh();
+    return;
+  }
+  requestAnimationFrame(stepPlayback);
+}
+
+function logEvent(ev) {
+  const t = (ev.tick / 60).toFixed(1) + "s ";
+  switch (ev.type) {
+    case "TurnStart": log(" - turn " + ev.turn + " - "); break;
+    case "ShotFired": log(t + ev.ship + " fires " + ev.weapon, "hit"); break;
+    case "ProjectileSpawned": log(t + ev.owner + " launches " + ev.kind, "hit"); break;
+    case "ShotHit": log(t + "hit " + ev.ship + (ev.sub ? " [" + ev.sub + "]" : ""), "hit"); break;
+    case "ShotSkipped": log(t + ev.ship + " holds fire (" + ev.reason + ")"); break;
+    case "Collision": log(t + "COLLISION " + ev.a + "×" + ev.b + " (" + ev.dmg + " dmg)", "bad"); break;
+    case "SubsystemDestroyed": log(t + ev.ship + " loses " + ev.sub, "warn"); break;
+    case "ShipDrifting": log(t + ev.ship + " is ADRIFT", "warn"); break;
+    case "ShipDestroyed": log(t + ev.ship + " DESTROYED", "bad"); break;
+    case "BoardingStarted": log(t + ev.from + " boards " + ev.ship + " (" + ev.marines + " marines)", "warn"); break;
+    case "ShipCaptured": log(t + ev.ship + " CAPTURED by " + ev.byFaction, "good"); break;
+    case "GameOver": log("GAME OVER - " + ev.winner + " wins", ev.winner === "player" ? "good" : "bad"); break;
+  }
+}
+
+// footer controls
+ui.bEnd.onclick = endTurn;
+ui.bRestart.onclick = () => {
+  const s = prompt("Match seed:", seed);
+  if (s !== null) { ui.log.innerHTML = ""; newMatch(s || seed); }
+};
+ui.bSpeed.onclick = () => {
+  if (!playback) return;
+  playback.speed = playback.speed === 1 ? 2 : playback.speed === 2 ? 4 : 1;
+  ui.bSpeed.textContent = playback.speed + "×";
+};
+ui.scrub.oninput = () => {
+  if (phase === "planning") {
+    // predictive scrubber: ghosts slide along every ship's Bezier
+    planScrub = +ui.scrub.value;
+    ui.hSec.textContent = (planScrub / 60).toFixed(1);
+    draw();
+    return;
+  }
+  if (!playback) return;
+  playback.tick = +ui.scrub.value;
+  playback.playing = false;
+  draw();
+};
+ui.scrub.onchange = () => {
+  if ((phase === "playback" || phase === "review") && playback && playback.tick < T) {
+    playback.playing = true;
+    if (phase === "review") phase = "playback";
+    requestAnimationFrame(stepPlayback);
+  }
+};
+ui.bReplay.onclick = () => {
+  document.getElementById("replayText").value = JSON.stringify(replayFile);
+  document.getElementById("replayModal").style.display = "block";
+};
+
+// go
+fit();
+newMatch(seed);
+zoomToFit();
+})();
+</script>
+</body>
+</html>

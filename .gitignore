@@ -1,0 +1,7 @@
+node_modules/
+dist/
+target/
+*.db
+*.db-wal
+*.db-shm
+web/public/sim_core.wasm
