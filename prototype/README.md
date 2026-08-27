@@ -19,20 +19,53 @@ node prototype/cli.js demo     # demo battle only
 Browser: open `prototype/harness.html` (or serve the folder - `npx serve prototype`).
 Rebuild the single-file bundle with `python3 prototype/tools/bundle.py out.html`.
 
+### The view
+
+The harness renders in 3D (three.js, vendored, no network). The sim was always
+3D: every position is x/y/z and weapons have vertical arcs. The old top-down
+canvas flattened that, which hid the thing the prototype exists to judge.
+
+**The movement envelope.** Select a ship and the volume it can reach this turn
+is drawn as a point cloud, with the exact reachable set outlined by three great
+circles. That volume is *probed from the sim*, never drawn from a formula:
+every candidate cell is put through `sim.plannedTarget`, the same call the turn
+resolver uses, and kept only if the planner hands the point back unchanged. So
+the drawing cannot drift from the rules, and when the movement model changes
+the shape changes with it.
+
+**The elevation slice.** The working altitude is one plane doing two jobs: a
+drag places the destination on it, and the envelope is sliced at it. `Q`/`E`
+raise and lower it, and the green disc is the spherical slice, radius
+`sqrt(R^2 - dy^2)`. Climbing 20 units off the hull on a 40 unit envelope leaves
+a 34.6 unit disc, which is 75% of the lateral room you had at hull level. The
+readout gives that as a closed form volume and as a numerical integral over the
+accepted cells, which agree to about 1%.
+
+**Per mode.** The envelope is not the same shape for every order, which is the
+whole point of probing rather than assuming:
+
+| mode | envelope |
+| --- | --- |
+| Move | sphere, radius 40; heading coupled to travel |
+| Slide | same sphere; heading decoupled, yours to set |
+| Boost | a single committed point, 80 units along carried momentum |
+| Stop | a single committed point at half carried momentum |
+
 ### Controls
 
-The harness runs on a phone as well as a desktop. Input goes through Pointer
-Events, so one code path serves mouse, pen and touch.
+Input goes through Pointer Events, so one code path serves mouse, pen and
+touch, and the harness runs on a phone as well as a desktop.
 
 | | desktop | touch |
 | --- | --- | --- |
 | place destination | drag in empty space | one finger drag |
-| rotate heading | drag the heading pip, or shift-drag | drag the heading pip (wider hit radius on a coarse pointer) |
+| working altitude, and so the slice | `Q` / `E` | the pad's up and down |
+| rotate heading | drag the white pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
 | select / target | click a ship | tap a ship, or a row in the Ships sheet |
+| orbit | right button drag | two finger drag |
 | zoom | wheel | pinch |
-| pan | right button drag | two finger drag |
-| elevation, 15 degree yaw, face target | `Q`/`E`, `A`/`D`, `F` | the round pad at the right edge |
-| frame the fleets | resets on a new match | `Fit view` in the tab bar |
+| 15 degree yaw, face target | `A`/`D`, `F` | the round pad at the right edge |
+| frame the fleet and its envelope | `Fit view` | `Fit view` in the tab bar |
 
 Below 900px the three pane console collapses: the side rails become bottom
 sheets on a tab bar, and the fire slot strip scrolls. Held sideways (under

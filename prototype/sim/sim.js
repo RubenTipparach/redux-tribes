@@ -139,7 +139,6 @@
     const cls = SHIP_CLASSES[ship.classKey];
     const mv = ship.move;
     let mode = (order && order.move && order.move.mode) || "MOVE_AND_TURN";
-    let effRange = cls.thrusterRange;
 
     if (ship.drift.active) {
       // no control: continue drifting
@@ -150,33 +149,15 @@
       return;
     }
 
-    // gates (from ShipController): boost requires previous MOVE_AND_TURN
-    if (mode === "FULL_SPEED" && !(mv.lastMode === "MOVE_AND_TURN" && !mv.hasBoosted && !mv.stopped)) {
-      mode = "MOVE_AND_TURN";
-    }
-
-    let target;
-    if (mode === "FULL_SPEED") {
-      effRange = cls.thrusterRange * CONST.BOOST_MULT;
-      const dir = V.len(ship.lastVel) > 1e-9 ? V.norm(ship.lastVel) : Q.forward(ship.quat);
-      target = V.add(ship.pos, V.scale(dir, effRange)); // locked straight, exactly full range
-      mv.hasBoosted = true;
-    } else if (mode === "FULL_STOP") {
-      if (mv.stopped) {
-        target = V.clone(ship.pos); // fully stopped: point segment
-      } else {
-        target = V.add(ship.pos, V.scale(ship.lastVel, CONST.FULLSTOP_MULT)); // half speed this turn
-        mv.stopped = true;
-      }
-    } else {
-      // MOVE_AND_TURN / TURN_SLIDE: destination from order, clamped; default = momentum
-      const want = (order && order.move && order.move.target)
-        ? V.v3(order.move.target[0], order.move.target[1], order.move.target[2])
-        : V.add(ship.pos, ship.lastVel);
-      target = clampToRange(ship.pos, want, effRange);
-      if (mode !== "FULL_STOP") mv.stopped = false;
-      mv.hasBoosted = false;
-    }
+    // Endpoint comes from plannedTarget, the same call the planner draws with
+    // (it also applies the boost gate: boost requires a previous MOVE_AND_TURN).
+    // Only the state transitions live here.
+    const plan = plannedTarget(ship, order && order.move && order.move.target, mode);
+    const target = plan.target;
+    mode = plan.mode;
+    if (mode === "FULL_SPEED") mv.hasBoosted = true;
+    else if (mode === "FULL_STOP") mv.stopped = true;
+    else { mv.stopped = false; mv.hasBoosted = false; }
 
     const start = V.clone(ship.pos);
     let lastVel = ship.lastVel;
@@ -537,21 +518,53 @@
     return { events, snapshot, hash, tracks };
   }
 
-  // Planning preview: the same math the sim runs - preview equals execution.
-  function previewPath(ship, targetArr, mode, samples) {
+  // Where a mode will actually put the ship this turn. This is the single
+  // source of truth for the endpoint: planMovement calls it during resolution
+  // and the planner calls it to draw, so preview genuinely equals execution.
+  //
+  // It also means the reachable set can be discovered by sampling rather than
+  // assumed: Move and Slide clamp to a sphere, but Boost and Stop ignore the
+  // requested destination entirely and commit to one point, so their "envelope"
+  // is a single cell. A renderer that probes this function gets the right shape
+  // for free, including after the movement model changes.
+  function plannedTarget(ship, targetArr, mode) {
     const cls = SHIP_CLASSES[ship.classKey];
-    const range = mode === "FULL_SPEED" ? cls.thrusterRange * 2 : mode === "FULL_STOP" ? cls.thrusterRange * 0.5 : cls.thrusterRange;
-    const target = clampToRange(ship.pos, V.v3(targetArr[0], targetArr[1], targetArr[2]), range);
+    const mv = ship.move;
+    let m = mode || "MOVE_AND_TURN";
+    // the boost gate: needs an unspent boost after a MOVE_AND_TURN turn
+    if (m === "FULL_SPEED" && !(mv.lastMode === "MOVE_AND_TURN" && !mv.hasBoosted && !mv.stopped)) {
+      m = "MOVE_AND_TURN";
+    }
+    if (m === "FULL_SPEED") {
+      const dir = V.len(ship.lastVel) > 1e-9 ? V.norm(ship.lastVel) : Q.forward(ship.quat);
+      return { target: V.add(ship.pos, V.scale(dir, cls.thrusterRange * CONST.BOOST_MULT)), mode: m, committed: true };
+    }
+    if (m === "FULL_STOP") {
+      const target = mv.stopped ? V.clone(ship.pos) : V.add(ship.pos, V.scale(ship.lastVel, CONST.FULLSTOP_MULT));
+      return { target, mode: m, committed: true };
+    }
+    const want = targetArr
+      ? V.v3(targetArr[0], targetArr[1], targetArr[2])
+      : V.add(ship.pos, ship.lastVel);
+    return { target: clampToRange(ship.pos, want, cls.thrusterRange), mode: m, committed: false };
+  }
+
+  // Planning preview: the path the sim will fly, endpoint from plannedTarget.
+  function previewPath(ship, targetArr, mode, samples) {
+    const plan = plannedTarget(ship, targetArr, mode);
+    const target = plan.target;
     let lastVel = ship.lastVel;
     if (V.len(lastVel) < 1e-9) lastVel = V.sub(target, ship.pos);
-    const cp = V.add(ship.pos, V.scale(lastVel, 1 / CONST.INERTIA_DIVISOR));
+    const cp = (V.dist(ship.pos, target) < 1e-9)
+      ? V.clone(target)
+      : V.add(ship.pos, V.scale(lastVel, 1 / CONST.INERTIA_DIVISOR));
     const pts = [];
     const n = samples || 16;
     for (let i = 0; i <= n; i++) pts.push(bezier2(ship.pos, cp, target, i / n));
-    return { points: pts, target };
+    return { points: pts, target, mode: plan.mode, committed: plan.committed };
   }
 
-  const api = { createSkirmish, makeShip, resolveTurn, previewPath, raycastShips, CONST };
+  const api = { createSkirmish, makeShip, resolveTurn, previewPath, plannedTarget, raycastShips, CONST };
   global.FT = global.FT || {};
   global.FT.sim = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
