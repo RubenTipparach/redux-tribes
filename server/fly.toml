@@ -1,15 +1,20 @@
-# Fly.io config for the Fallen Tribes match API.
+# Fly.io config for Fallen Tribes.
+#
+# One machine serves the whole game: the static client (built into the image
+# from web/, against the Rust core compiled to wasm) and the match API that
+# brokers turns between players. The page and the API it talks to are therefore
+# always the same build, which two separate deploy targets cannot promise.
 #
 # Adapted from the high-frontier-fan-game deployment, which had already learned
 # most of these lessons the hard way. Bootstrap once with flyctl:
 #
-#   fly apps create fallen-tribes-api
+#   fly apps create fallen-tribes
 #   fly volumes create ft_data --size 1 --region ams
 #
 # No secrets to configure: the server is passwordless and per player tokens are
 # stored only as sha256 hashes. Deploys are automatic thereafter.
 
-app = "fallen-tribes-api"
+app = "fallen-tribes"
 primary_region = "ams"
 
 [build]
@@ -49,4 +54,4 @@ primary_region = "ams"
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 256
+  memory_mb = 512

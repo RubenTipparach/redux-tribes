@@ -18,6 +18,8 @@
  */
 import express from 'express';
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { db, nowMs } from './db.ts';
@@ -221,6 +223,31 @@ app.get('/v1/matches/:id/turns/:turn/hash', (req, res) => {
   const distinct = [...new Set(rows.map(r => r.hash))];
   res.json({ turn, reported: rows.length, diverged: distinct.length > 1, hashes: rows });
 });
+
+// -------------------------------------------------------------- the client --
+// One deploy target, not two. The same machine that brokers turns serves the
+// page that plays them, which removes a whole second pipeline (Pages, its
+// enablement, and its artifact quota) for a static bundle measured in
+// hundreds of kilobytes.
+const CLIENT_DIR = resolve(process.env['CLIENT_DIR'] ?? '../web/dist');
+if (existsSync(CLIENT_DIR)) {
+  app.use(express.static(CLIENT_DIR, {
+    // WebAssembly.instantiateStreaming REFUSES a module served as anything
+    // other than application/wasm, and fails at runtime rather than at build,
+    // so the type is set here rather than trusted to a lookup table.
+    setHeaders: (res, path) => {
+      if (path.endsWith('.wasm')) res.setHeader('Content-Type', 'application/wasm');
+      // The bundle is content addressed by its build, the shell is not.
+      if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
+  // Anything not an API route, and not a file, is the app shell.
+  app.get(/^(?!\/v1\/|\/healthz|\/ws).*/, (_req, res) => {
+    res.sendFile(join(CLIENT_DIR, 'index.html'));
+  });
+} else {
+  console.warn(`no client build at ${CLIENT_DIR}; serving the API only`);
+}
 
 // --------------------------------------------------------------------- boot --
 const server = createServer(app);
