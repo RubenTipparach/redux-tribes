@@ -415,7 +415,7 @@
             const dir = V.len(p.lastVel) > 1e-9 ? V.norm(p.lastVel) : V.v3(0, 0, 1);
             next = V.add(p.pos, V.scale(dir, CONST.MISSILE_PURSUIT_SPEED));
           }
-          p.seg = { start: V.clone(p.pos), cp: V.add(p.pos, V.scale(p.lastVel, 1 / CONST.INERTIA_DIVISOR)), target: next };
+          p.seg = { start: V.clone(p.pos), cp: V.add(p.pos, V.scale(p.lastVel, 1 / CONST.MISSILE_INERTIA_DIVISOR)), target: next };
         }
         const t = (p.segTick + 1) / CONST.MISSILE_HOP_TICKS;
         p.pos = bezier2(p.seg.start, p.seg.cp, p.seg.target, Math.min(1, t));

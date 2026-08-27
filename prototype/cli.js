@@ -148,6 +148,30 @@ function tests() {
   check("slot 0 order fires at tick 0", fired.some(e => e.tick === 0));
   check("slot 10 order fires at tick 600", fired.some(e => e.tick === 600));
 
+  console.log("\n== missiles fly a finite path and connect ==");
+  // Regression: stepProjectiles built each bezier leg from
+  // CONST.INERTIA_DIVISOR, which was deleted with the ship movement model
+  // (ADR-14) and left behind as a name. 1/undefined is NaN, so every missile
+  // went NaN at its first hop: it never hit, never expired, and rode into the
+  // state hash as NaN. Nothing failed loudly, missiles just stopped existing.
+  const mState = sim.createSkirmish("seed-missile", {
+    player: [{ classKey: "terran_frigate", pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) }],
+    enemy: [{ classKey: "karisen_frigate", pos: V.v3(0, 0, 120), facing: V.v3(0, 0, -1) }],
+    enemyFaction: "karisen",
+  });
+  const mHullBefore = mState.ships[0].hull;
+  const mRes = sim.resolveTurn(mState, {
+    P1: { move: { mode: "MOVE_AND_TURN", target: [0, 0, 0] }, weapons: [] },
+    E1: { move: { mode: "MOVE_AND_TURN", target: [0, 0, 120] }, weapons: [{ weaponIndex: 1, second: 0, targetShipId: "P1" }] },
+  }, {});
+  const launched = mRes.events.filter(e => e.type === "ProjectileSpawned" && e.kind === "missile");
+  check("a missile launcher spawns its batch", launched.length === 2, "spawned " + launched.length);
+  const anyNaN = mState.projectiles.some(p => !Number.isFinite(p.pos.x) || !Number.isFinite(p.pos.y) || !Number.isFinite(p.pos.z));
+  check("no missile position is NaN after a full turn", !anyNaN);
+  const mHits = mRes.events.filter(e => e.type === "ShotHit" && e.projectile);
+  check("missiles reach the target and damage it", mHits.length === 2 && mState.ships[0].hull < mHullBefore,
+    mHits.length + " hits, hull " + mHullBefore + " -> " + mState.ships[0].hull);
+
   console.log("\n== collision: no interpenetration + impulse damage ==");
   const cState = sim.createSkirmish("seed-ram", {
     player: [{ classKey: "terran_frigate", pos: V.v3(-20, 0, 0), facing: V.v3(1, 0, 0) }],

@@ -25,6 +25,11 @@
     MISSILE_LAUNCH_SCATTER: 5,
     MISSILE_HOP_SCATTER: 0.5,
     MISSILE_HOP_TICKS: 60,      // re-plan every 1 s
+    // Tangent of a missile leg: control point = pos + lastVel / this. Missiles
+    // still fly quadratic bezier hops; only the SHIP movement model was
+    // replaced (ADR-14), and this constant survived that removal by name only,
+    // leaving stepProjectiles dividing by undefined.
+    MISSILE_INERTIA_DIVISOR: 2.5,
     MISSILE_LIFE_TICKS: 1200,   // 20 s - missiles persist across turns
     BEAM_SCATTER: 0.5,          // insideUnitCircle * 0.5 at the aim point
     PROJECTILE_RADIUS: 0.5,
