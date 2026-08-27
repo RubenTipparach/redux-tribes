@@ -1,0 +1,401 @@
+/* Shared chrome for every mockup in this repo. See mockups/common/harness.js.
+   The page around the screen is deliberately plain: the screen is the subject,
+   everything else is a caption. */
+
+:root {
+  --ink: #D8E2EC;
+  --ink-dim: #7C8B9D;
+  --ink-faint: #566578;
+  --bg: #0A0E14;
+  --bg-panel: #111823;
+  --bg-raised: #16202E;
+  --line: #1E2A3A;
+  --accent: #35C7FF;
+  --accent-dim: #1B6C8C;
+  --good: #57d98a;
+  --warn: #ffa23f;
+  --bad: #ff5f6d;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 16px 96px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 1040px; margin: 0 auto; }
+
+header { padding: 40px 0 20px; border-bottom: 1px solid var(--line); margin-bottom: 28px; }
+
+h1 {
+  margin: 0 0 6px;
+  font-size: clamp(24px, 5vw, 38px);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.kicker {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-dim);
+  margin: 0 0 12px;
+}
+
+.lede { margin: 0; color: var(--ink-dim); font-size: 17px; max-width: 68ch; }
+
+h2 {
+  font-size: 13px;
+  font-family: var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-dim);
+  margin: 40px 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+h3 { font-size: 15px; margin: 22px 0 8px; color: var(--ink); }
+
+p { margin: 0 0 14px; max-width: 72ch; color: var(--ink-dim); }
+p strong, li strong { color: var(--ink); font-weight: 600; }
+ul { margin: 0 0 14px; padding-left: 20px; color: var(--ink-dim); max-width: 72ch; }
+li { margin-bottom: 5px; }
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+  background: var(--bg-raised);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent);
+}
+a { color: var(--accent); }
+
+/* ---- the console screen ------------------------------------------------- */
+
+/* The stage centres the screen and gives it somewhere to sit. The screen's own
+   size is set in JS as an integer multiple of 320x240 and never by CSS, so the
+   upscale stays exact and the mockup cannot lie about how much fits on screen. */
+.n64-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 22px 12px;
+  background: #05040a;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+/* The host the screen is mounted into must be full width. It used to be a
+   shrink-to-fit flex item, so its width was whatever the screen already was,
+   which is circular: the screen asked its parent how much room there was, the
+   parent answered zero, and every mockup rendered at 1x forever. */
+.n64-stage > * {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.n64-screen {
+  position: relative;
+  line-height: 0;
+  background: #000;
+  box-shadow: 0 0 0 3px #2a2536, 0 14px 44px rgba(0, 0, 0, 0.7);
+  border-radius: 3px;
+  touch-action: none;
+}
+
+.n64-screen canvas {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* The whole point: 320x240 magnified with hard pixel edges, no smoothing. */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+.n64-screen canvas.n64-gl { position: relative; }
+.n64-screen canvas.n64-hud { pointer-events: none; }
+
+/* ---- the virtual controller ---------------------------------------------
+   A mockup that can only be driven by arrow keys is a mockup nobody can try on
+   a phone, and a phone is where these pages actually get looked at. The pad
+   overlays the screen rather than sitting under it so the thumb never covers
+   the picture it is meant to be judging, and it feeds the SAME key state the
+   keyboard does, so no page has two input paths (CLAUDE.md 5.1). */
+.n64-pad {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  touch-action: none;
+  line-height: 1;
+}
+
+.n64-pad-stick {
+  position: absolute;
+  left: 3.5%;
+  bottom: 5%;
+  width: 23%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 230, 240, 0.22);
+  background: rgba(13, 11, 20, 0.28);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.n64-pad-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 42%;
+  aspect-ratio: 1;
+  margin: -21% 0 0 -21%;
+  border-radius: 50%;
+  background: rgba(232, 230, 240, 0.42);
+  border: 2px solid rgba(13, 11, 20, 0.45);
+  transition: background .12s;
+}
+
+.n64-pad-stick[data-held="1"] .n64-pad-knob { background: var(--accent); }
+
+.n64-pad-buttons {
+  position: absolute;
+  right: 3.5%;
+  bottom: 5%;
+  display: flex;
+  gap: 3%;
+  align-items: flex-end;
+  pointer-events: auto;
+}
+
+.n64-pad-btn {
+  width: 62px;
+  height: 62px;
+  border-radius: 50%;
+  border: 2px solid rgba(232, 230, 240, 0.22);
+  background: rgba(13, 11, 20, 0.28);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  pointer-events: auto;
+  touch-action: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.n64-pad-btn:active,
+.n64-pad-btn[data-held="1"] { background: var(--accent); color: #0d0b14; }
+
+.n64-pad-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 560px) {
+  .n64-pad-btn { width: 52px; height: 52px; font-size: 10px; }
+}
+
+.n64-caption {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+  letter-spacing: 0.08em;
+  margin-top: 14px;
+  text-align: center;
+}
+
+/* ---- controls ----------------------------------------------------------- */
+
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 18px 0 0;
+}
+
+/* A line of instruction over a row of buttons, for the cases where what the
+   buttons are FOR is not obvious from their labels. */
+.bar-note {
+  margin: 20px 0 -6px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+button {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 8px 13px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+button:hover { background: var(--bg-raised); color: var(--ink); }
+button[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17120a;
+  font-weight: 700;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin: 16px 0 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.legend b { color: var(--ink-dim); font-weight: 400; }
+kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--accent);
+  margin-right: 5px;
+}
+
+/* ---- notes -------------------------------------------------------------- */
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 16px 0; }
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 15px 17px;
+}
+.card h4 {
+  margin: 0 0 7px;
+  font-size: 12px;
+  font-family: var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.card p { margin: 0; font-size: 14px; }
+.card p + p { margin-top: 9px; }
+
+.note {
+  border-left: 3px solid var(--accent-dim);
+  background: var(--bg-panel);
+  padding: 13px 17px;
+  border-radius: 0 6px 6px 0;
+  margin: 18px 0;
+}
+.note p:last-child { margin-bottom: 0; }
+.note.warn { border-left-color: var(--bad); }
+
+table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--accent-dim);
+  font-weight: 400;
+}
+td { color: var(--ink-dim); }
+td:first-child { color: var(--ink); font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+
+.scroll-x { overflow-x: auto; }
+
+footer {
+  margin-top: 56px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+@media (max-width: 560px) {
+  body { padding: 0 12px 64px; font-size: 14px; }
+  .n64-stage { padding: 14px 6px; }
+}
+
+/* Annotated component diagram. Its own block so the SVG can breathe and scroll
+   sideways on a phone rather than squashing the callout labels into the art. */
+.anatomy {
+  background: #05070d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px 20px;
+  margin: 16px 0;
+  overflow-x: auto;
+}
+.anatomy svg { display: block; width: 100%; min-width: 520px; height: auto; }
+
+.station-h {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 30px 0 10px;
+}
+.sw { font-weight: 600; }
+.sw.g { color: #8ef0a8; }
+.sw.a { color: #ffb03f; }
+.sw.r { color: #ff5f6d; }
+
+/* Numbered legend under a marked-up diagram. Markers beat leader lines once the
+   art is dense: a line routed around four boxes ends up crossing the thing it is
+   not pointing at, which reads as pointing at it. */
+.legend-list {
+  counter-reset: mk;
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 18px;
+  max-width: 72ch;
+}
+.legend-list li {
+  position: relative;
+  padding-left: 34px;
+  margin-bottom: 9px;
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+.legend-list li::before {
+  counter-increment: mk;
+  content: counter(mk);
+  position: absolute;
+  left: 0;
+  top: 1px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #17120a;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
