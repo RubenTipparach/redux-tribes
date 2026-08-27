@@ -229,7 +229,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
       that plane by 5. Watch the
       <span style="color:var(--green)">slice</span> shrink as you climb away from the hull:
       that is the spherical slice, and it is what the altitude costs you in lateral room.<br>
-      <b>Drag the white pip</b> on the ring at the destination, or <b>shift-drag</b>, to swing the heading.<br>
+      <b>Drag the pip</b> on the ring at the destination, or <b>shift-drag</b>, to command a
+      heading. The solid arrow is the heading the hull can actually reach in one turn; if you ask
+      for more than <kbd>yaw</kbd>/<kbd>pitch</kbd> allows, a
+      <span style="color:#FFD24B">dashed arrow and an amber pip</span> mark the part you will not
+      get, and the readout says how far short. A wireframe hull at the destination shows the
+      attitude you end the turn in. Commanding a heading switches to <b>Slide</b>, because Move
+      points the nose wherever thrust is needed and cannot honour a facing order.<br>
       <b>Click or tap</b> own ship: select · same on an enemy: target<br>
       <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target · <kbd>Enter</kbd> end turn<br>
       <b>RMB drag</b> orbits · <b>middle drag</b> pans · <kbd>wheel</kbd> zooms · <b>timeline slider</b> scrubs the
@@ -506,6 +512,17 @@ function lineFrom(points, color, opacity, dashed) {
   if (dashed) l.computeLineDistances();
   return l;
 }
+// A hull outline that can be pointed somewhere. The scrub ghost used to be a
+// wireframe sphere, which is why a rotation could not be previewed: a sphere
+// has no heading to show.
+function ghostHull(radius, color, opacity) {
+  const g = new THREE.ConeGeometry(radius * 0.62, radius * 2.1, 5);
+  const m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+    color, wireframe: true, transparent: true, opacity, depthWrite: false,
+  }));
+  m.geometry.rotateX(Math.PI / 2);      // cone points down +Z, the sim's forward
+  return m;
+}
 function circlePoints(cx, cy, cz, r, n) {
   const pts = [];
   for (let i = 0; i <= n; i++) {
@@ -648,7 +665,7 @@ function envelopeKey() {
     sel.vel.x.toFixed(2), sel.vel.y.toFixed(2), sel.vel.z.toFixed(2),
     m.hasBoosted ? 1 : 0, m.stopped ? 1 : 0, m.lastMode, sel.drift.active ? 1 : 0,
     sel.quat.x.toFixed(3), sel.quat.y.toFixed(3), sel.quat.z.toFixed(3), sel.quat.w.toFixed(3),
-    JSON.stringify(sel.flight)].join("|");
+    JSON.stringify(sel.flight), JSON.stringify(o.move.face || null)].join("|");
 }
 
 function buildEnvelope() {
@@ -698,7 +715,7 @@ function buildEnvelope() {
   // Probing means flying thousands of candidate turns, so the probe integrates
   // in 60 slices rather than 600 ticks. Worst case endpoint error against the
   // executed flight is about 0.75 units on a 44 unit reach, under 2%.
-  const reaches = (x, y, z) => sim.canReach(sel, [x, y, z], mode, thresh, 60);
+  const reaches = (x, y, z) => sim.canReach(sel, [x, y, z], mode, thresh, 60, o.move.face);
   // centre the search on the midpoint between the hull and where it coasts to,
   // so a fast ship's envelope does not fall out of the box
   const coast = V.add(sel.pos, V.scale(sel.vel, DATA.CONST.TURN_SECONDS));
@@ -811,6 +828,7 @@ function shipsAtPlaybackTick(tick) {
 }
 
 let pipMesh = null;
+let headingInfo = null;     // requested vs reachable heading, for the readout
 
 function render() {
   syncShipMeshes();
@@ -827,12 +845,13 @@ function render() {
     for (const ship of state.ships) {
       if (ship.destroyed) continue;
       const col = FACTION_HEX(ship.faction);
-      let pts, dashed;
+      let pts, quats, dashed;
       if (ship.isPlayer) {
         const o = orders[ship.id];
         const tgt = (o && o.move.target) ? o.move.target : null;
-        const path = sim.previewPath(ship, tgt, o ? o.move.mode : "MOVE_AND_TURN", 48);
-        pts = path.points; dashed = false;
+        const path = sim.previewPath(ship, tgt, o ? o.move.mode : "MOVE_AND_TURN", 48,
+          o && o.move.face);
+        pts = path.points; quats = path.quats; dashed = false;
         gPaths.add(lineFrom(pts, col, ship === sel ? 0.95 : 0.5));
         const dot = new THREE.Mesh(new THREE.SphereGeometry(1.15, 10, 8),
           new THREE.MeshBasicMaterial({ color: col }));
@@ -843,32 +862,60 @@ function render() {
           const raw = { x: o.move.target[0], y: o.move.target[1], z: o.move.target[2] };
           if (V.dist(raw, path.target) > 0.5) gPaths.add(lineFrom([path.target, raw], col, 0.4, true));
         }
-        // heading pip: a grabbable handle on a ring at the destination
+        // End of turn ghost, at the attitude the ship will actually hold. This
+        // is the rotation preview: the hull is drawn where it ends up, pointing
+        // where the flight model can get it pointed.
         if (ship === sel) {
           const o2 = ordFor(sel);
-          const f = plannedFacing(sel, o2, path.target);
-          gPaths.add(lineFrom(circlePoints(path.target.x, path.target.y, path.target.z, FACING_HANDLE_R, 40), col, 0.3));
+          const cls = DATA.SHIP_CLASSES[ship.classKey];
+          const endGhost = ghostHull(cls.radius, col, 0.55);
+          endGhost.position.set(path.target.x, path.target.y, path.target.z);
+          endGhost.quaternion.set(path.endQuat.x, path.endQuat.y, path.endQuat.z, path.endQuat.w);
+          gPaths.add(endGhost);
+
+          // The heading widget shows both sides of the rotation limit: a solid
+          // arrow to the heading the ship can reach, and a dashed one to the
+          // heading you asked for when the hull cannot swing that far in a turn.
+          const achieved = Q.forward(path.endQuat);
+          const wanted = o2.move.face
+            ? V.norm(V.v3(o2.move.face[0], o2.move.face[1], o2.move.face[2]))
+            : achieved;
+          const R = FACING_HANDLE_R;
+          const at = d => ({ x: path.target.x + d.x * R, y: path.target.y + d.y * R, z: path.target.z + d.z * R });
+          gPaths.add(lineFrom(circlePoints(path.target.x, path.target.y, path.target.z, R, 40), col, 0.3));
+          gPaths.add(lineFrom([path.target, at(achieved)], col, 0.85));
+          const tip = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8),
+            new THREE.MeshBasicMaterial({ color: col }));
+          const ap = at(achieved);
+          tip.position.set(ap.x, ap.y, ap.z);
+          gPaths.add(tip);
+
+          const shortfall = Math.acos(Math.max(-1, Math.min(1, V.dot(achieved, wanted)))) * 180 / Math.PI;
+          if (shortfall > 1.5) {
+            gPaths.add(lineFrom([path.target, at(wanted)], 0xffd24b, 0.75, true));
+          }
+          // the grabbable handle sits on what you asked for, so dragging is direct
           const pip = new THREE.Mesh(new THREE.SphereGeometry(COARSE ? 3.0 : 2.1, 12, 10),
-            new THREE.MeshBasicMaterial({ color: 0xffffff }));
-          pip.position.set(path.target.x + f.x * FACING_HANDLE_R, path.target.y + f.y * FACING_HANDLE_R, path.target.z + f.z * FACING_HANDLE_R);
+            new THREE.MeshBasicMaterial({ color: shortfall > 1.5 ? 0xffd24b : 0xffffff }));
+          const wp = at(wanted);
+          pip.position.set(wp.x, wp.y, wp.z);
           pip.name = "pip";
           gPaths.add(pip);
-          gPaths.add(lineFrom([path.target, { x: pip.position.x, y: pip.position.y, z: pip.position.z }], col, 0.6));
           pipMesh = pip;
+          headingInfo = { wanted, achieved, shortfall };
         }
       } else {
         // enemy estimate: momentum extrapolation, dashed (ADR-6 preview rule)
         const est = sim.previewPath(ship, null, "MOVE_AND_TURN", 48);
-        pts = est.points; dashed = true;
+        pts = est.points; quats = est.quats; dashed = true;
         gPaths.add(lineFrom(pts, col, 0.5, true));
       }
       if (planScrub > 0 && pts) {
         const i = Math.min(pts.length - 2, Math.floor(tScrub * (pts.length - 1)));
         const gp = V.lerp(pts[i], pts[i + 1], tScrub * (pts.length - 1) - i);
-        const gm = new THREE.Mesh(
-          new THREE.SphereGeometry(DATA.SHIP_CLASSES[ship.classKey].radius * 0.8, 10, 8),
-          new THREE.MeshBasicMaterial({ color: col, wireframe: true, transparent: true, opacity: dashed ? 0.4 : 0.7 }));
+        const gm = ghostHull(DATA.SHIP_CLASSES[ship.classKey].radius, col, dashed ? 0.4 : 0.75);
         gm.position.set(gp.x, gp.y, gp.z);
+        if (quats && quats[i]) gm.quaternion.set(quats[i].x, quats[i].y, quats[i].z, quats[i].w);
         gPaths.add(gm);
       }
     }
@@ -996,12 +1043,25 @@ function setMoveTarget(w) {
   o.move.target = [w.x, w.y, w.z];
   if (o.move.mode === "FULL_SPEED" || o.move.mode === "FULL_STOP") o.move.mode = "MOVE_AND_TURN";
 }
+// Commanding a heading only means something in a mode that lets you command
+// one. Under the flight model MOVE_AND_TURN points the nose wherever thrust is
+// needed, so a facing order there is silently discarded, which made the widget
+// look broken. Asking for a heading therefore switches to the mode that honours
+// it, the same way dragging a destination already drops Boost and Stop.
+function commandHeading(o, dir) {
+  o.move.face = [dir.x, dir.y, dir.z];
+  if (o.move.mode !== "TURN_SLIDE") {
+    o.move.mode = "TURN_SLIDE";
+    log(sel.id + " holds a heading: move mode is now Slide", "warn");
+  }
+}
+
 function setFacingFromCursor(w) {
   if (!w) return;
   const o = ordFor(sel);
-  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4).target;
+  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
   const dir = V.sub(V.v3(w.x, dest.y, w.z), dest);
-  if (V.len(dir) > 0.3) { const n = V.norm(dir); o.move.face = [n.x, n.y, n.z]; }
+  if (V.len(dir) > 0.3) commandHeading(o, V.norm(dir));
 }
 
 cv.addEventListener("pointerdown", e => {
@@ -1124,28 +1184,27 @@ addEventListener("keydown", e => {
 // A/D swing the planned heading in 15 degree steps; F snaps to the target's
 // PREDICTED end-of-turn position (the original's snap-rotation button).
 function rotateFacing(o, deg) {
-  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4).target;
+  const dest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
   const cur = plannedFacing(sel, o, dest);
   const a = Math.atan2(cur.x, cur.z) + deg * Math.PI / 180;
-  o.move.face = [Math.sin(a), cur.y, Math.cos(a)];
+  commandHeading(o, V.v3(Math.sin(a), cur.y, Math.cos(a)));
   refresh();
 }
 function faceTarget(o) {
   if (!o._targetShip) { log("No target to face", "bad"); return; }
   const tgt = state.ships.find(s2 => s2.id === o._targetShip);
   if (!tgt) return;
-  const myDest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4).target;
+  const myDest = sim.previewPath(sel, o.move.target || null, o.move.mode, 4, o.move.face).target;
   // predict where the target ends up (momentum): aim at the future, not the now
   const tDest = sim.previewPath(tgt, null, "MOVE_AND_TURN", 4).target;
-  const dir = V.norm(V.sub(tDest, myDest));
-  o.move.face = [dir.x, dir.y, dir.z];
+  commandHeading(o, V.norm(V.sub(tDest, myDest)));
   log(sel.id + " snaps heading to " + tgt.id + "'s predicted position", "warn");
   refresh();
 }
 // Elevation moves the working plane, which is also the envelope's slice plane.
 function bump(o, dy) {
   if (!o.move.target) {
-    const d = sim.previewPath(sel, null, o.move.mode, 2).target;
+    const d = sim.previewPath(sel, null, o.move.mode, 2, o.move.face).target;
     o.move.target = [d.x, d.y, d.z];
   }
   o.move.target[1] += dy;
@@ -1420,6 +1479,17 @@ function renderEnvelopeReadout() {
   h += row("working alt", (st.dy >= 0 ? "+" : "") + st.dy.toFixed(1) + " off hull");
   h += row("carrying", st.speed.toFixed(2) + " u/s (" + fmt(st.coastDist, "u") + " a turn)");
   h += row("freedom", (100 * st.freedom).toFixed(0) + "% of a free sphere");
+  if (headingInfo) {
+    const bearing = d => (Math.atan2(d.x, d.z) * 180 / Math.PI).toFixed(0) + " deg";
+    h += row("heading held", bearing(headingInfo.achieved));
+    if (headingInfo.shortfall > 1.5) {
+      h += row("asked for", bearing(headingInfo.wanted) +
+        " (" + headingInfo.shortfall.toFixed(0) + " short)");
+    }
+    h += row("turn authority",
+      (sel.flight.yawRate * DATA.CONST.TURN_SECONDS).toFixed(0) + " yaw / " +
+      (sel.flight.pitchRate * DATA.CONST.TURN_SECONDS).toFixed(0) + " pitch per turn");
+  }
   h += row("can hold station",
     sim.canReach(sel, [sel.pos.x, sel.pos.y, sel.pos.z], st.mode, Math.max(1.5, st.step * 0.5))
       ? "yes" : "NO, committed");

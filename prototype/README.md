@@ -73,6 +73,18 @@ carried speed, whether the ship can still hold station, and `freedom`, the
 share of an omnidirectional version of the same hull that it can actually use.
 A frigate under way sits around 13%.
 
+**Previewing rotation.** A wireframe hull at the destination shows the attitude
+the ship ends the turn in, and the scrub ghost is an oriented hull too, so a
+rotation can be watched across the turn rather than inferred. The heading
+widget draws both sides of the limit: a solid arrow to the heading the hull can
+reach, and a dashed amber one to the heading you asked for when `yawRate` and
+`pitchRate` cannot swing that far in ten seconds. The readout names the
+shortfall in degrees.
+
+Commanding a heading switches the ship to `Slide`. Under this model `Move`
+points the nose wherever thrust is needed, so it cannot honour a facing order
+at all, and silently discarding one made the widget look broken.
+
 **The elevation slice.** The working altitude is one plane doing two jobs: a
 drag places the destination on it, and the envelope is sliced at it. `Q`/`E`
 raise and lower it, so elevation is a visible thing rather than a hidden
@@ -102,7 +114,7 @@ rather than guessed, and orbiting can never cost you an order by accident.
 | --- | --- | --- |
 | place destination | drag inside the ring | one finger inside the ring |
 | working altitude, and so the slice | `Q` / `E`, or ▼ / ▲ under the map | ▼ / ▲ under the map |
-| rotate heading | drag the white pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
+| command a heading | drag the pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
 | select / target | click a ship | tap a ship, or a row in the Ships sheet |
 | orbit | drag outside the ring, or right button drag | one finger outside the ring |
 | pan | middle button drag, or ✥ then drag outside | ✥ then one finger outside, or two fingers |

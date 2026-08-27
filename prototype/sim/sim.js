@@ -654,7 +654,7 @@
   //
   // "committed" now means something sharper than it used to: a mode whose
   // outcome the destination cannot influence at all.
-  function plannedTarget(ship, targetArr, mode) {
+  function plannedTarget(ship, targetArr, mode, face) {
     const mv = ship.move;
     let m = mode || "MOVE_AND_TURN";
     if (ship.drift.active) m = "DRIFT";
@@ -662,12 +662,12 @@
       m = "MOVE_AND_TURN";
     }
     const committed = (m === "FULL_SPEED" || m === "FULL_STOP" || m === "DRIFT");
-    const flown = flyTurn(ship, committed ? null : targetArr, m, {});
+    const flown = flyTurn(ship, committed ? null : targetArr, m, { face });
     return { target: flown.endPos, mode: m, committed, endVel: flown.endVel, endQuat: flown.endQuat };
   }
 
   // Planning preview: the exact tick path the resolver will execute.
-  function previewPath(ship, targetArr, mode, samples) {
+  function previewPath(ship, targetArr, mode, samples, face) {
     const mv = ship.move;
     let m = mode || "MOVE_AND_TURN";
     if (ship.drift.active) m = "DRIFT";
@@ -675,20 +675,27 @@
       m = "MOVE_AND_TURN";
     }
     const committed = (m === "FULL_SPEED" || m === "FULL_STOP" || m === "DRIFT");
-    const flown = flyTurn(ship, committed ? null : targetArr, m, {});
+    // The facing order has to reach the integrator or a Slide preview flies with
+    // the heading the ship already has, which makes the widget look inert.
+    const flown = flyTurn(ship, committed ? null : targetArr, m, { face });
     const n = samples || 16;
-    const pts = [];
+    const pts = [], quats = [];
     for (let i = 0; i <= n; i++) {
-      pts.push(V.clone(flown.path[Math.round(i / n * (flown.path.length - 1))].pos));
+      const k = Math.round(i / n * (flown.path.length - 1));
+      pts.push(V.clone(flown.path[k].pos));
+      quats.push(flown.path[k].quat);
     }
-    return { points: pts, target: flown.endPos, mode: m, committed, endVel: flown.endVel };
+    return {
+      points: pts, quats, target: flown.endPos, endQuat: flown.endQuat,
+      mode: m, committed, endVel: flown.endVel,
+    };
   }
 
   // Can this ship finish the turn within `eps` of the given point? This is the
   // reachability oracle the planner draws its envelope from: no assumed shape,
   // just the integrator asked a yes or no question.
-  function canReach(ship, targetArr, mode, eps, steps) {
-    const flown = flyTurn(ship, targetArr, mode, { steps: steps || 60 });
+  function canReach(ship, targetArr, mode, eps, steps, face) {
+    const flown = flyTurn(ship, targetArr, mode, { steps: steps || 60, face });
     return V.dist(flown.endPos, V.v3(targetArr[0], targetArr[1], targetArr[2])) <= (eps || CONST.ARRIVE_EPS);
   }
 
