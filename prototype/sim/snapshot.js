@@ -13,7 +13,7 @@
       nextProjId: state.nextProjId,
       ships: state.ships.map(s => ({
         id: s.id, classKey: s.classKey, faction: s.faction, isPlayer: s.isPlayer,
-        pos: s.pos, quat: s.quat, lastVel: s.lastVel,
+        pos: s.pos, quat: s.quat, vel: s.vel, flight: s.flight,
         hull: s.hull, hullMax: s.hullMax,
         subsystems: s.subsystems.map(x => ({ id: x.id, type: x.type, hp: x.hp, maxHp: x.maxHp, blockPct: x.blockPct, offset: x.offset, radius: x.radius, dead: x.dead })),
         weapons: s.weapons.map(w => ({ key: w.key, mount: w.mount, lastFiredTurn: w.lastFiredTurn })),
@@ -63,7 +63,13 @@
       H.str(s.id); H.str(s.faction); H.num(s.isPlayer ? 1 : 0); H.num(s.destroyed ? 1 : 0);
       H.num(s.pos.x); H.num(s.pos.y); H.num(s.pos.z);
       H.num(s.quat.x); H.num(s.quat.y); H.num(s.quat.z); H.num(s.quat.w);
-      H.num(s.lastVel.x); H.num(s.lastVel.y); H.num(s.lastVel.z);
+      H.num(s.vel.x); H.num(s.vel.y); H.num(s.vel.z);
+      // flight stats are tunable at runtime and therefore affect the sim, so
+      // they belong in the hash: two clients flying different envelopes must
+      // not silently agree
+      H.num(s.flight.yawRate); H.num(s.flight.pitchRate);
+      H.num(s.flight.accelFwd); H.num(s.flight.accelRetro);
+      H.num(s.flight.accelLat); H.num(s.flight.maxSpeed);
       H.num(s.hull); H.num(s.marines);
       for (const x of s.subsystems) { H.str(x.id); H.num(x.hp); H.num(x.dead ? 1 : 0); }
       for (const w of s.weapons) { H.str(w.key); H.num(w.lastFiredTurn); }

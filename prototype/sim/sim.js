@@ -29,7 +29,8 @@
     return {
       id, classKey, faction, isPlayer: !!isPlayer,
       pos: V.clone(pos), quat,
-      lastVel: V.zero(),            // per-turn units: exit tangent of last turn
+      vel: V.zero(),                // units per SECOND, carried across turns
+      flight: Object.assign({}, cls.flight),   // per ship so it can be tuned live
       hull: cls.hull, hullMax: cls.hull,
       subsystems: cls.subsystems().map(s => ({ ...s, offset: V.clone(s.offset), maxHp: s.hp, dead: false })),
       weapons: cls.weapons.map(w => ({ key: w.key, mount: V.clone(w.mount), lastFiredTurn: -99 })),
@@ -107,9 +108,10 @@
         events.push({ tick, type: "SubsystemDestroyed", ship: ship.id, sub: sub.id });
         if (sub.type === "thruster" && !ship.subsystems.some(s => s.type === "thruster" && !s.dead)) {
           // engines out -> drift (dir = 0.25 * this turn's planned offset)
-          const seg = ship._seg;
-          const offset = seg ? V.sub(seg.target, seg.start) : ship.lastVel;
-          ship.drift = { active: true, dir: V.scale(offset, CONST.DRIFT_FACTOR) };
+          const coastVel = ship._flight ? shipVelAtTick(ship, tick) : V.clone(ship.vel);
+          ship.drift = { active: true, dir: V.clone(coastVel) };
+          // the rest of this turn is unpowered from right here
+          if (ship._flight) replanAfterCollision(ship, tick, coastVel);
           events.push({ tick, type: "ShipDrifting", ship: ship.id });
         }
       }
@@ -134,68 +136,189 @@
     return d > range ? V.add(pos, V.scale(off, range / d)) : V.clone(target);
   }
 
-  // Build this turn's movement segment for a ship from its order.
+  // ---------------------------------------------------------- flight model --
+  // Movement is a rate limited attitude plus per local axis thrust, integrated
+  // against carried velocity. There is no curve fitting and no closed form:
+  // where a ship can get to this turn is whatever this loop can fly it to.
+  //
+  // Three things restrict it, and only these three:
+  //   1. rotation stats     yawRate and pitchRate cap how fast the hull swings,
+  //                         so a heading you cannot reach is thrust you cannot
+  //                         apply.
+  //   2. local axis limits  accelFwd / accelRetro / accelLat are applied in the
+  //                         ship's OWN frame. The main drive is strong astern,
+  //                         retros weak, RCS weaker, so pushing sideways costs
+  //                         several times what pushing forward does.
+  //   3. carried velocity   momentum survives the turn boundary, so every plan
+  //                         starts from where the last one left the ship going.
+  //
+  // The consequence, and the point of the exercise: the reachable set is a lobe
+  // off the nose displaced downrange by momentum, not a sphere around the hull.
+
+  const DT = 1 / TPS;                       // seconds per tick
+
+  function clampLen(v, max) {
+    const l = V.len(v);
+    return l > max && l > 1e-12 ? V.scale(v, max / l) : v;
+  }
+
+  // Swing the hull toward `want`, spending at most yawRate/pitchRate this tick.
+  // The error is resolved in the BODY frame so the two axes are limited
+  // separately, which is what makes a sluggish nose feel different from a
+  // sluggish pitch rather than just "slow".
+  function rotateToward(quat, want, fl, dt) {
+    const local = Q.rot(Q.inv(quat), want);          // desired forward, body frame
+    const flat = Math.sqrt(local.x * local.x + local.z * local.z);
+    let yawErr = dmath.datan2(local.x, local.z);
+    let pitchErr = dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
+    const maxYaw = fl.yawRate * Math.PI / 180 * dt;
+    const maxPitch = fl.pitchRate * Math.PI / 180 * dt;
+    yawErr = Math.max(-maxYaw, Math.min(maxYaw, yawErr));
+    pitchErr = Math.max(-maxPitch, Math.min(maxPitch, pitchErr));
+    let q = Q.mul(quat, Q.axisAngle(V.v3(0, 1, 0), yawErr));
+    q = Q.mul(q, Q.axisAngle(V.v3(1, 0, 0), pitchErr));
+    return Q.norm(q);
+  }
+
+  // The velocity the controller wants this tick, before the hull gets a say.
+  function desiredVelocity(pos, vel, target, secondsLeft, fl, mode) {
+    if (mode === "FULL_STOP") return V.zero();
+    if (mode === "FULL_SPEED") return null;          // handled as pure burn
+    const aim = V.sub(target, pos);
+    const dist = V.len(aim);
+    if (dist < CONST.ARRIVE_EPS) return V.zero();
+    const t = Math.max(secondsLeft, 1e-3);
+    return clampLen(V.scale(aim, 1 / t), fl.maxSpeed);
+  }
+
+  // One tick of flight. Returns the new {pos, vel, quat}.
+  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt) {
+    dt = dt || DT;
+    const boosting = mode === "FULL_SPEED";
+    const accelFwd = fl.accelFwd * (boosting ? CONST.BOOST_ACCEL_MULT : 1);
+    const topSpeed = fl.maxSpeed * (boosting ? CONST.BOOST_SPEED_MULT : 1);
+
+    // what change in velocity we would like
+    let dv;
+    if (boosting) {
+      dv = V.scale(Q.forward(quat), accelFwd * dt);  // straight burn, no seeking
+    } else {
+      const want = desiredVelocity(pos, vel, target, secondsLeft, fl, mode);
+      dv = V.sub(want, vel);
+    }
+
+    // Point the hull. MOVE_AND_TURN aims the nose where thrust is needed, which
+    // is the most manoeuvrable thing a ship can do. TURN_SLIDE holds a commanded
+    // heading instead, so course changes are left to the RCS: a far smaller
+    // envelope, bought in exchange for keeping the guns on a bearing.
+    let aimDir;
+    if (mode === "TURN_SLIDE" && faceDir) aimDir = faceDir;
+    else if (boosting) aimDir = V.len(vel) > 1e-6 ? V.norm(vel) : Q.forward(quat);
+    else if (V.len(dv) > 1e-6) aimDir = V.norm(dv);
+    else aimDir = Q.forward(quat);
+    quat = rotateToward(quat, aimDir, fl, dt);
+
+    // Spend thrust in the ship's own frame, one budget per axis.
+    const local = Q.rot(Q.inv(quat), dv);
+    const zCap = local.z >= 0 ? accelFwd * dt : fl.accelRetro * dt;
+    const latCap = fl.accelLat * dt;
+    const applied = V.v3(
+      Math.max(-latCap, Math.min(latCap, local.x)),
+      Math.max(-latCap, Math.min(latCap, local.y)),
+      Math.max(-zCap, Math.min(zCap, local.z)));
+    vel = clampLen(V.add(vel, Q.rot(quat, applied)), topSpeed);
+    pos = V.add(pos, V.scale(vel, dt));
+    return { pos, vel, quat };
+  }
+
+  // Fly a whole turn (or the tail of one) and record every tick. Ships read
+  // their position and attitude straight out of this, so what the planner
+  // previews and what the resolver executes are the same array.
+  function flyTurn(ship, targetArr, mode, opts) {
+    opts = opts || {};
+    const fl = ship.flight || SHIP_CLASSES[ship.classKey].flight;
+    const fromTick = opts.fromTick || 0;
+    // steps: how many integration slices the remaining turn is cut into.
+    // Resolution always uses one per tick. A probe may ask for fewer.
+    const steps = opts.steps || (T - fromTick);
+    const sub = (T - fromTick) / steps;          // ticks per slice
+    const dt = sub * DT;
+    let pos = opts.pos ? V.clone(opts.pos) : V.clone(ship.pos);
+    let vel = opts.vel ? V.clone(opts.vel) : V.clone(ship.vel || V.zero());
+    let quat = opts.quat || ship.quat;
+    // A slide with no commanded heading holds the one the ship already has:
+    // that is what decoupling the nose from the course means, and it is what
+    // hands the course over to the weak lateral thrusters.
+    const faceDir = (opts.face && V.len(V.v3(opts.face[0], opts.face[1], opts.face[2])) > 1e-6)
+      ? V.norm(V.v3(opts.face[0], opts.face[1], opts.face[2]))
+      : Q.forward(quat);
+    const target = targetArr
+      ? V.v3(targetArr[0], targetArr[1], targetArr[2])
+      : V.add(pos, V.scale(vel, CONST.TURN_SECONDS));   // no order: hold course
+
+    // engines dead: no thrust, no attitude authority, just coast
+    const dead = ship.drift.active;
+    const path = [{ pos: V.clone(pos), quat }];
+    for (let i = 0; i < steps; i++) {
+      if (dead) {
+        pos = V.add(pos, V.scale(vel, dt));
+      } else {
+        const secondsLeft = (steps - i) * dt;
+        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt);
+        pos = r.pos; vel = r.vel; quat = r.quat;
+      }
+      path.push({ pos: V.clone(pos), quat });
+    }
+    return { path, endPos: pos, endVel: vel, endQuat: quat, fromTick,
+             target: targetArr || null, face: opts.face || null };
+  }
+
+  // Build this turn's flight plan for a ship from its order.
   function planMovement(ship, order) {
-    const cls = SHIP_CLASSES[ship.classKey];
     const mv = ship.move;
     let mode = (order && order.move && order.move.mode) || "MOVE_AND_TURN";
+    if (ship.drift.active) mode = "DRIFT";
 
-    if (ship.drift.active) {
-      // no control: continue drifting
-      const target = V.add(ship.pos, ship.drift.dir);
-      ship._seg = { start: V.clone(ship.pos), cp: V.add(ship.pos, V.scale(ship.drift.dir, 0.5)), target, t0: 0 };
-      ship._startQuat = ship.quat;
-      ship._plannedQuat = ship.quat; // rotation frozen while drifting
-      return;
+    // the boost gate, unchanged: a burn needs a prior MOVE_AND_TURN, unspent
+    if (mode === "FULL_SPEED" && !(mv.lastMode === "MOVE_AND_TURN" && !mv.hasBoosted && !mv.stopped)) {
+      mode = "MOVE_AND_TURN";
     }
-
-    // Endpoint comes from plannedTarget, the same call the planner draws with
-    // (it also applies the boost gate: boost requires a previous MOVE_AND_TURN).
-    // Only the state transitions live here.
-    const plan = plannedTarget(ship, order && order.move && order.move.target, mode);
-    const target = plan.target;
-    mode = plan.mode;
     if (mode === "FULL_SPEED") mv.hasBoosted = true;
     else if (mode === "FULL_STOP") mv.stopped = true;
-    else { mv.stopped = false; mv.hasBoosted = false; }
+    else if (mode !== "DRIFT") { mv.stopped = false; mv.hasBoosted = false; }
 
-    const start = V.clone(ship.pos);
-    let lastVel = ship.lastVel;
-    if (V.len(lastVel) < 1e-9) lastVel = V.sub(target, start); // first-turn seed (original behavior)
-    const cp = (V.dist(start, target) < 1e-9)
-      ? V.clone(target)                                    // full stop: degenerate point
-      : V.add(start, V.scale(lastVel, 1 / CONST.INERTIA_DIVISOR));
-    ship._seg = { start, cp, target, t0: 0 };
-
-    // planned orientation
-    ship._startQuat = ship.quat;
-    if (order && order.move && order.move.face) {
-      const f = order.move.face;
-      ship._plannedQuat = Q.look(V.v3(f[0], f[1], f[2]));
-    } else if (mode === "TURN_SLIDE") {
-      ship._plannedQuat = ship.quat;                       // facing decoupled, unchanged by default
-    } else {
-      const off = V.sub(target, start);
-      ship._plannedQuat = V.len(off) > 1e-9 ? Q.look(off) : ship.quat;
-    }
-    mv.lastMode = mode;
+    ship._flight = flyTurn(ship, order && order.move && order.move.target, mode, {
+      face: order && order.move && order.move.face,
+    });
+    mv.lastMode = mode === "DRIFT" ? mv.lastMode : mode;
     mv.mode = mode;
   }
 
   function shipPosAtTick(ship, tick) {
-    const seg = ship._seg;
-    const span = T - seg.t0;
-    const t = span > 0 ? Math.min(1, Math.max(0, (tick - seg.t0) / span)) : 1;
-    return bezier2(seg.start, seg.cp, seg.target, t);
+    const f = ship._flight;
+    const i = Math.max(0, Math.min(f.path.length - 1, tick - f.fromTick));
+    return V.clone(f.path[i].pos);
+  }
+  function shipVelAtTick(ship, tick) {
+    const f = ship._flight;
+    const i = Math.max(0, Math.min(f.path.length - 2, tick - f.fromTick));
+    return V.scale(V.sub(f.path[i + 1].pos, f.path[i].pos), TPS);
+  }
+  function shipQuatAtTick(ship, tick) {
+    const f = ship._flight;
+    const i = Math.max(0, Math.min(f.path.length - 1, tick - f.fromTick));
+    return f.path[i].quat;
   }
 
-  // Re-plan a ship's remaining path after a collision deflection.
-  function replanAfterCollision(ship, tick, exitVelPerTick) {
-    const carried = V.scale(exitVelPerTick, T); // per-turn units
-    const start = V.clone(ship.pos);
-    const target = ship._seg.target;            // still try to honor the order
-    const cp = V.add(start, V.scale(carried, 1 / CONST.INERTIA_DIVISOR));
-    ship._seg = { start, cp, target, t0: tick };
+  // Re-fly the remainder of the turn after a collision changed the velocity.
+  // The order still stands, so the ship keeps trying for the same destination
+  // from wherever the contact left it.
+  function replanAfterCollision(ship, tick, exitVel) {
+    const prev = ship._flight;
+    const target = prev.target || null;
+    ship._flight = flyTurn(ship, target, ship.move.mode, {
+      fromTick: tick, pos: ship.pos, vel: exitVel, quat: ship.quat, face: prev.face,
+    });
   }
 
   // ------------------------------------------------------------- weapons --
@@ -356,8 +479,8 @@
         const bounce = CONST.COLLISION_RESTITUTION;
         const vA2 = V.sub(vA, V.scale(n, (1 + bounce) * Math.max(0, V.dot(vA, n) - V.dot(vB, n)) * wA));
         const vB2 = V.add(vB, V.scale(n, (1 + bounce) * Math.max(0, V.dot(vA, n) - V.dot(vB, n)) * wB));
-        if (!A.destroyed) replanAfterCollision(A, tick, V.scale(vA2, 1 / TPS));
-        if (!B.destroyed) replanAfterCollision(B, tick, V.scale(vB2, 1 / TPS));
+        if (!A.destroyed) replanAfterCollision(A, tick, vA2);
+        if (!B.destroyed) replanAfterCollision(B, tick, vB2);
       }
     }
   }
@@ -453,7 +576,7 @@
         if (ship.destroyed) continue;
         prevPositions[ship.id] = V.clone(ship.pos);
         ship.pos = shipPosAtTick(ship, tick);
-        if (!ship.drift.active) ship.quat = Q.slerp(ship._startQuat, ship._plannedQuat, tick / T);
+        if (!ship.drift.active) ship.quat = shipQuatAtTick(ship, tick);
       }
       // 2. projectiles
       stepProjectiles(state, tick, events, rngFor);
@@ -503,12 +626,10 @@
     // finalize momentum: exit tangent = target - control point (original semantics)
     for (const ship of state.ships) {
       if (ship.destroyed) continue;
-      const seg = ship._seg;
-      ship.lastVel = (ship.move.mode === "FULL_STOP" && ship.move.stopped && V.dist(seg.start, seg.target) < 1e-9)
-        ? V.zero()
-        : V.sub(seg.target, seg.cp);
-      ship.quat = ship.drift.active ? ship.quat : ship._plannedQuat;
-      delete ship._seg; delete ship._startQuat; delete ship._plannedQuat;
+      // momentum carries: the turn ends with whatever the integrator produced
+      ship.vel = V.clone(ship._flight.endVel);
+      if (!ship.drift.active) ship.quat = ship._flight.endQuat;
+      delete ship._flight;
     }
 
     // win/lose at the turn boundary only (original behavior)
@@ -526,53 +647,56 @@
     return { events, snapshot, hash, tracks };
   }
 
-  // Where a mode will actually put the ship this turn. This is the single
-  // source of truth for the endpoint: planMovement calls it during resolution
-  // and the planner calls it to draw, so preview genuinely equals execution.
+  // Where a mode will actually put the ship this turn. There is no formula to
+  // consult: the only way to know is to fly it, so this flies it. Both the
+  // resolver and the planner come through here, which is what keeps the drawn
+  // preview and the executed turn the same thing.
   //
-  // It also means the reachable set can be discovered by sampling rather than
-  // assumed: Move and Slide clamp to a sphere, but Boost and Stop ignore the
-  // requested destination entirely and commit to one point, so their "envelope"
-  // is a single cell. A renderer that probes this function gets the right shape
-  // for free, including after the movement model changes.
+  // "committed" now means something sharper than it used to: a mode whose
+  // outcome the destination cannot influence at all.
   function plannedTarget(ship, targetArr, mode) {
-    const cls = SHIP_CLASSES[ship.classKey];
     const mv = ship.move;
     let m = mode || "MOVE_AND_TURN";
-    // the boost gate: needs an unspent boost after a MOVE_AND_TURN turn
+    if (ship.drift.active) m = "DRIFT";
     if (m === "FULL_SPEED" && !(mv.lastMode === "MOVE_AND_TURN" && !mv.hasBoosted && !mv.stopped)) {
       m = "MOVE_AND_TURN";
     }
-    if (m === "FULL_SPEED") {
-      const dir = V.len(ship.lastVel) > 1e-9 ? V.norm(ship.lastVel) : Q.forward(ship.quat);
-      return { target: V.add(ship.pos, V.scale(dir, cls.thrusterRange * CONST.BOOST_MULT)), mode: m, committed: true };
-    }
-    if (m === "FULL_STOP") {
-      const target = mv.stopped ? V.clone(ship.pos) : V.add(ship.pos, V.scale(ship.lastVel, CONST.FULLSTOP_MULT));
-      return { target, mode: m, committed: true };
-    }
-    const want = targetArr
-      ? V.v3(targetArr[0], targetArr[1], targetArr[2])
-      : V.add(ship.pos, ship.lastVel);
-    return { target: clampToRange(ship.pos, want, cls.thrusterRange), mode: m, committed: false };
+    const committed = (m === "FULL_SPEED" || m === "FULL_STOP" || m === "DRIFT");
+    const flown = flyTurn(ship, committed ? null : targetArr, m, {});
+    return { target: flown.endPos, mode: m, committed, endVel: flown.endVel, endQuat: flown.endQuat };
   }
 
-  // Planning preview: the path the sim will fly, endpoint from plannedTarget.
+  // Planning preview: the exact tick path the resolver will execute.
   function previewPath(ship, targetArr, mode, samples) {
-    const plan = plannedTarget(ship, targetArr, mode);
-    const target = plan.target;
-    let lastVel = ship.lastVel;
-    if (V.len(lastVel) < 1e-9) lastVel = V.sub(target, ship.pos);
-    const cp = (V.dist(ship.pos, target) < 1e-9)
-      ? V.clone(target)
-      : V.add(ship.pos, V.scale(lastVel, 1 / CONST.INERTIA_DIVISOR));
-    const pts = [];
+    const mv = ship.move;
+    let m = mode || "MOVE_AND_TURN";
+    if (ship.drift.active) m = "DRIFT";
+    if (m === "FULL_SPEED" && !(mv.lastMode === "MOVE_AND_TURN" && !mv.hasBoosted && !mv.stopped)) {
+      m = "MOVE_AND_TURN";
+    }
+    const committed = (m === "FULL_SPEED" || m === "FULL_STOP" || m === "DRIFT");
+    const flown = flyTurn(ship, committed ? null : targetArr, m, {});
     const n = samples || 16;
-    for (let i = 0; i <= n; i++) pts.push(bezier2(ship.pos, cp, target, i / n));
-    return { points: pts, target, mode: plan.mode, committed: plan.committed };
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      pts.push(V.clone(flown.path[Math.round(i / n * (flown.path.length - 1))].pos));
+    }
+    return { points: pts, target: flown.endPos, mode: m, committed, endVel: flown.endVel };
   }
 
-  const api = { createSkirmish, makeShip, resolveTurn, previewPath, plannedTarget, raycastShips, CONST };
+  // Can this ship finish the turn within `eps` of the given point? This is the
+  // reachability oracle the planner draws its envelope from: no assumed shape,
+  // just the integrator asked a yes or no question.
+  function canReach(ship, targetArr, mode, eps, steps) {
+    const flown = flyTurn(ship, targetArr, mode, { steps: steps || 60 });
+    return V.dist(flown.endPos, V.v3(targetArr[0], targetArr[1], targetArr[2])) <= (eps || CONST.ARRIVE_EPS);
+  }
+
+  const api = {
+    createSkirmish, makeShip, resolveTurn,
+    previewPath, plannedTarget, canReach, flyTurn,
+    raycastShips, CONST,
+  };
   global.FT = global.FT || {};
   global.FT.sim = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

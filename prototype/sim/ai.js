@@ -27,7 +27,8 @@
 
     // chase boost: if target beyond range, AI gets extra reach (the AIBoost cheat)
     const dist = V.dist(ship.pos, target.pos);
-    let range = cls.thrusterRange;
+    // engagement distance from what the hull can actually cover in a turn
+    let range = data.nominalReach(ship.flight || cls.flight);
     if (ship.ai.canChase && dist > range) range = range + 20;
 
     // destination: random point on a sphere around the target (25%..100% of range)

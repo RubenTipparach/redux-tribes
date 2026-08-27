@@ -126,7 +126,7 @@ crates/
 - **Fixed tick:** 60 ticks/s × 10 s = **600 tick intervals per turn**; `TICKS_PER_SECOND = 60` constant. **State the endpoint convention explicitly, because the Unity bug was exactly an endpoint ambiguity:** a turn spans tick indices **0..=600 inclusive** (601 boundary evaluations over 600 intervals); ship poses use `t = tick / 600` so `t = 1.0` is actually reached (preserving the exit-tangent carry and the preview-equals-execution promise); slot-*k* events fire when the counter reaches `k × 60`, and **slot 10 (tick 600) is processed before turn-boundary evaluation**. A unit test asserts that orders queued at slot 0 and slot 10 both fire - the two cases Unity's dual clocks lost.
 - **Timers:** a single `SimTimer { duration_ticks, elapsed_ticks }` advanced only by the tick - the design the Unity author already sketched (the unused `TimingSimulated`) but never adopted. No pause/resume state mutation (Unity's `Timing.Resume()` destructively rewrote durations - a bug, not a feature). Render-side smoothing/camera/UI timers use render time and never feed the sim.
 - **Within-turn schedule per tick:** integrate ship poses (closed-form Bézier at `t = tick/600`), step projectiles, resolve collisions/sweeps, then at second boundaries fire queued weapons and run boarding dice; mission goals and win/loss evaluate at the turn boundary exactly as the original does.
-- **The movement contract from DESIGN §3 ports verbatim into `sim_core`:** quadratic Bézier with `control = start + last_velocity/2.5`, cross-turn tangent carry, slerp rotation, drift ×0.25, boost/brake rules, `MaxThrusterRange` modifiers. Planning previews call the same functions - preview-equals-execution is preserved by construction.
+- **Movement: see ADR-14, which supersedes this.** The archive's Bézier contract from DESIGN §3 is *not* ported; it is replaced by a per-tick flight integrator restricted by rotation stats, local axis acceleration limits and carried velocity. Planning previews still call the same functions the resolver does, so preview-equals-execution is preserved by construction.
 - Campaign travel becomes stored progress (`travel_progress: f32` advanced by campaign delta and persisted), not a wall-clock timer.
 
 ---
@@ -141,10 +141,10 @@ crates/
 - **Ordering:** the authoritative sim iterates an explicitly ordered ship list (stable `ShipId`), *not* ECS queries - Bevy query iteration order is not guaranteed stable, and the parallel executor is nondeterministic. `sim_core` isn't an ECS at all; it's plain structs stepped in a loop (5 - 20 ships - an ECS buys nothing here). No `HashMap` iteration in sim logic (`BTreeMap`/`IndexMap`).
 - **Physics:** **hand-rolled kinematics plus deterministic contact resolution** (req 13). The Unity original has no collision response at all - ships carry frozen-constraint rigidbodies, interpenetrate freely, and tick 20 damage per 0.2 s of overlap. The rebuild replaces that wholesale:
   - **Hulls:** each ship class authors a convex compound proxy (spheres/capsules/boxes) - the same volumes that serve subsystem aim-point targeting; N ≤ ~20 makes the broadphase a trivial pair loop.
-  - **Motion:** ships follow their planned Bézier via a velocity-following controller (velocity = spline derivative per tick) instead of direct position writes, so contact forces can genuinely deflect them.
+  - **Motion:** superseded by ADR-14. The integrator carries a real velocity already, so no velocity-following controller is needed and contact forces deflect it directly.
   - **Resolution:** a swept/speculative contact pass each tick, then **position-based (PBD-style) separation with impulse exchange** - fixed iteration count, contact pairs processed in sorted `(ShipId, ShipId)` order, scalar math only. Interpenetration can never persist a tick.
   - **Damage** = f(relative normal velocity, masses) at contact, with a short per-pair cooldown so grinding hulls don't shred instantly - replacing the timer-tick model and making ramming a real maneuver with real physics.
-  - **After contact,** a deflected ship re-plans the remainder of the turn (recompute the Bézier from its current pose to the planned endpoint; ballistic if thrusters are dead), so orders stay meaningful.
+  - **After contact,** a deflected ship re-flies the remainder of the turn from its current pose and velocity toward the same ordered destination (a pure coast if thrusters are dead), so orders stay meaningful.
   - **Cold-start rule:** every turn's resolution begins from the boundary snapshot with *no carried solver state* (no warm starts) - replays and lockstep peers (ADR-6) converge by construction, and physics state never needs serializing beyond pose/velocity.
   - **Buy option:** Rapier with `enhanced-determinism` (bit-exact cross-platform incl. wasm; no SIMD/parallel - irrelevant at this scale) driven the same way under the same cold-start-per-turn contract, if hand-rolled contacts prove annoying. The earlier objection (snapshotting hidden solver state) dissolves under cold-start.
   - **Preview consequence:** planned trajectories are exact *until contact* - and because turn resolution is an instant headless run (ADR-2), the planner can show **collision-inclusive previews** by simply simulating the draft orders (exact against the committed AI in single-player; estimated against humans per ADR-6).
@@ -280,7 +280,8 @@ The audit's capability list (DESIGN §9) is deliberately modest - lists, 3-state
 
 | Unity subsystem | Disposition |
 |---|---|
-| WEGO loop, Bézier movement, move modes, boarding dice, damage splits, arc tests, AI decision procedure, mission goal semantics | **Port faithfully** into `sim_core` (constants preserved, then tuned) - DESIGN §§2 - 6 is the spec |
+| WEGO loop, move modes, boarding dice, damage splits, arc tests, AI decision procedure, mission goal semantics | **Port faithfully** into `sim_core` (constants preserved, then tuned) - DESIGN §§2 - 6 is the spec |
+| Bézier movement | **Replaced**, not ported - see ADR-14. The reachable set was the design flaw, not a constant to retune |
 | Campaign V2 model (systems/planets/battlegroups/travel/repair economy) | Port as data + `sim_campaign` logic; finish the JSON-ification the author started |
 | Replay/recording | **Greenfield** per ADR-5 (the stub's 8-event taxonomy seeds the `SimEvent` vocabulary) |
 | Timing (`Timing` class), FX-authoritative damage, unseeded RNG, dual clocks | **Deliberately not ported** - replaced by ADR-3/-4 (fixing the slot-10 bug, pause corruption, and frame-rate-dependent outcomes) |
@@ -312,9 +313,32 @@ The audit's capability list (DESIGN §9) is deliberately modest - lists, 3-state
 
 ---
 
+## ADR-14: Movement Model - Bezier Replaced by a Flight Integrator (supersedes the movement parts of ADR-3 and ADR-4)
+
+**Status:** decided by the owner after flying both in the prototype. This ADR overrides every reference to porting the Bezier movement contract elsewhere in this document, including ADR-3's tick schedule wording, ADR-4's velocity-following controller, ADR-12's port table row, and the Phase 0 exit criterion.
+
+**Decision.** Ship movement is no longer a closed-form curve. It is an integrator, run per tick, restricted by exactly three things:
+
+1. **Rotation stats.** `yawRate` and `pitchRate` (degrees per second, separate axes) cap how fast the hull can be pointed. A heading you cannot reach in time is thrust you cannot apply.
+2. **Local axis acceleration limits.** `accelFwd`, `accelRetro` and `accelLat` are applied in the ship's OWN frame. The main drive is strong astern, retros weak, RCS weaker still.
+3. **Carried velocity.** Momentum survives the turn boundary. Every plan starts from where the last one left the ship going.
+
+Nothing else feeds it. `MaxThrusterRange` is gone as a movement rule; a derived `nominalReach` survives only as a scalar for AI engagement distances and is computed from the flight stats so it cannot drift from them.
+
+**Why this and not the Bezier.** The archive's reachable set is a sphere centred on the hull, so a ship can always hold station and momentum never constrains the next decision. That is the single biggest flaw DESIGN identifies, and no amount of tuning the control point fixes it, because the shape is wrong rather than the size. Under the integrator the reachable set is a lobe off the nose displaced downrange by momentum: a frigate at rest covers 44.5 units forward but only 20.9 astern (it must turn first, then push on weak retros) and 21.3 vertically (pitch is slower than yaw). Carrying 6 u/s it can no longer hold station at all.
+
+**Consequences.**
+
+- **There is no closed form for the reachable set,** so the planner cannot draw one. It probes: every candidate cell is flown through `canReach` and kept only if the ship arrives. The drawing therefore cannot drift from the rules, and it follows any future tuning for free. A probe integrates in 60 slices rather than 600 ticks (worst-case endpoint error about 0.75 units on a 44 unit reach); execution always uses full tick resolution.
+- **Move modes are re-expressed, not dropped.** `MOVE_AND_TURN` points the nose where thrust is needed. `TURN_SLIDE` holds a commanded heading and hands the course to the RCS, which is a far smaller envelope bought in exchange for keeping guns on a bearing. `FULL_SPEED` and `FULL_STOP` are committed: the order chooses no destination, so their envelope is a single point, and the planner says so rather than drawing an empty volume.
+- **Contact resolution gets simpler, not harder.** ADR-4's velocity-following controller existed to give a spline something to be deflected from. The integrator already carries a real velocity, so a collision just changes it and the remainder of the turn is re-flown from the contact.
+- **Engines dead means unpowered.** Drift is no longer a 0.25 fudge on the last offset; it is the ship coasting on the velocity it had, with no attitude authority. If engines die mid-turn the rest of that turn is re-flown as a coast from that tick.
+- **Flight stats are per ship, serialised, and hashed.** They are tunable at runtime in the prototype, which makes them state that affects the simulation, so two clients flying different envelopes must not silently agree.
+- **Determinism is unaffected.** The integrator uses only arithmetic plus the existing deterministic trig in `dmath`, on the same libm discipline ADR-4 requires.
+
 ## Migration Roadmap
 
-**Phase 0 - Foundations (the bet-validating slice).** `sim_core` skeleton: ship state, Bézier movement, tick loop, orders; CI determinism hash test (3 platforms) from the *first week*. Bevy shell rendering sim state with interpolation; camera rig; minimal egui HUD (end turn, move order). *Exit: one ship flies a planned curve identically on native and wasm/WebGPU, hashes matching.*
+**Phase 0 - Foundations (the bet-validating slice).** `sim_core` skeleton: ship state, the ADR-14 flight integrator, tick loop, orders; CI determinism hash test (3 platforms) from the *first week*. Bevy shell rendering sim state with interpolation; camera rig; minimal egui HUD (end turn, move order). *Exit: one ship flies a planned turn identically on native and wasm/WebGPU, hashes matching.*
 
 **Phase 1 - The tactical vertical slice.** Weapons (beam/cannon/missile) resolved in-sim + event-driven FX; **contact resolution + impulse ram damage (ADR-4 - ships can no longer clip)**; subsystems/armor/drift; boarding; the nav widget + overlays (vector renderer v1) + predictive scrubber; skirmish goals; AI port. *Exit: a full Skirmish battle, feel-matched (see below), replayable from a file - and two builds resolving the same orders to identical hashes (the lockstep proof).*
 

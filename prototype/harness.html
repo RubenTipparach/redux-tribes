@@ -197,9 +197,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <div class="sect">Selected - Move Mode</div>
     <div class="modes" id="modes"></div>
     <div class="sect">Movement Envelope</div>
-    <div class="modes" id="estimators"></div>
-    <div id="envTune"></div>
     <div id="env" class="hint"></div>
+    <div class="sect">Flight Envelope</div>
+    <div id="envTune"></div>
     <div class="sect">Weapons <span class="hint">(click weapon, then a timeline slot)</span></div>
     <div id="weps"></div>
     <div class="sect">Boarding</div>
@@ -317,7 +317,7 @@ function newMatch(s) {
   // from turn 0 rather than after the first straight-line turn.
   for (const sh of state.ships) {
     const fwd = Q.forward(sh.quat);
-    sh.lastVel = V.scale(fwd, DATA.SHIP_CLASSES[sh.classKey].thrusterRange * 0.6);
+    sh.vel = V.scale(fwd, sh.flight.maxSpeed * 0.55);
   }
   phase = "planning"; orders = {}; sel = null; selWeapon = null; playback = null;
   history.length = 0;
@@ -426,7 +426,7 @@ function zoomToFit() {
   // include the selected ship's reach, or framing the fleet crops the very
   // volume the planner is being asked to judge
   if (sel && !sel.destroyed) {
-    const reach = DATA.SHIP_CLASSES[sel.classKey].thrusterRange;
+    const reach = DATA.nominalReach(sel.flight) + V.len(sel.vel) * DATA.CONST.TURN_SECONDS;
     box.expandByPoint(new THREE.Vector3(sel.pos.x - reach, sel.pos.y - reach, sel.pos.z - reach));
     box.expandByPoint(new THREE.Vector3(sel.pos.x + reach, sel.pos.y + reach, sel.pos.z + reach));
   }
@@ -585,61 +585,11 @@ function placeShip(ship, pos, quat) {
 let envKey = "";
 let envStats = null;
 
-// Two ways to answer "can this ship end the turn there?".
-//
-//   sim   probe sim.plannedTarget, the same call the turn resolver uses. This
-//         is what the code does TODAY, and it answers with a hull centred
-//         sphere, which is the flaw the redesign is about.
-//
-//   boat  the estimator from the boat-movement study, ported to 3D. It asks no
-//         formula: it flies the turn, ten segments of rate limited turning
-//         toward the target with thrust clamped each segment, then checks
-//         whether the ship actually arrived. That is the only honest test for a
-//         coupled model, because coupling has no closed form.
-//
-// Scaled into Fallen Tribes units: the study ran 10 second windows at speed 20
-// and accel 2, which is five times our reach. At accel 0.8 a ship from rest
-// covers 0.5*a*t^2 = 40 units in a turn and tops out at 8 u/s, so these
-// defaults put the boat envelope on the same scale as the 40 unit sphere it is
-// being compared against. Decel keeps the study's 1.5x ratio over accel.
-let ESTIMATOR = "sim";
-const BOAT = { turnRate: 6, maxSpeed: 8, accel: 0.8, segments: 10 };
-
-function boatReaches(ship, tx, ty, tz, thresh) {
-  const SEG = BOAT.segments, segT = DATA.CONST.TURN_SECONDS / SEG;
-  const decel = BOAT.accel * 1.5;
-  let cx = ship.pos.x, cy = ship.pos.y, cz = ship.pos.z;
-  // lastVel is a per-turn displacement; the controller works per second
-  let v = V.scale(ship.lastVel, 1 / DATA.CONST.TURN_SECONDS);
-  let dir = Q.forward(ship.quat);
-  for (let seg = 1; seg <= SEG; seg++) {
-    const left = SEG - seg + 1;
-    const remaining = left * segT;
-    const to = V.v3(tx - cx, ty - cy, tz - cz);
-    const dist = V.len(to);
-    const want = dist > 1e-6 ? V.scale(to, 1 / dist) : dir;
-    // rate limited turn, eased over the segments left, as the study does
-    const d = Math.max(-1, Math.min(1, V.dot(dir, want)));
-    const ang = FT.dmath.dacos(d);
-    if (ang > 1e-6) {
-      const stepAng = Math.min(ang / left, BOAT.turnRate * Math.PI / 180 * segT);
-      let axis = V.cross(dir, want);
-      if (V.len2(axis) < 1e-12) axis = V.v3(0, 1, 0);   // exactly astern
-      dir = V.norm(Q.rot(Q.axisAngle(V.norm(axis), stepAng), dir));
-    }
-    const desired = V.scale(dir, Math.min(dist / remaining, BOAT.maxSpeed));
-    const dv = V.sub(desired, v);
-    const dvm = V.len(dv);
-    if (dvm > 1e-3) {
-      const maxDv = (V.len(desired) > V.len(v) ? BOAT.accel : decel) * segT;
-      v = dvm > maxDv ? V.add(v, V.scale(dv, maxDv / dvm)) : desired;
-    }
-    cx += v.x * segT; cy += v.y * segT; cz += v.z * segT;
-  }
-  const ex = tx - cx, ey = ty - cy, ez = tz - cz;
-  return Math.sqrt(ex * ex + ey * ey + ez * ez) <= thresh;
-}
-
+// The envelope is the sim's own integrator asked a yes or no question, cell by
+// cell: sim.canReach flies the whole turn under the ship's rotation stats, its
+// per local axis thrust limits and its carried velocity, and reports whether it
+// arrived. Nothing here knows or assumes a shape, which is why the result comes
+// out as a lobe off the nose rather than a ball around the hull.
 // Rebuild only when something the envelope depends on actually changed, and do
 // it on demand so the readout never reports the previous interaction's numbers.
 function ensureEnvelope() {
@@ -655,10 +605,10 @@ function envelopeKey() {
   const m = sel.move;
   return [sel.id, o.move.mode, planeY().toFixed(2),
     sel.pos.x.toFixed(2), sel.pos.y.toFixed(2), sel.pos.z.toFixed(2),
-    sel.lastVel.x.toFixed(2), sel.lastVel.y.toFixed(2), sel.lastVel.z.toFixed(2),
+    sel.vel.x.toFixed(2), sel.vel.y.toFixed(2), sel.vel.z.toFixed(2),
     m.hasBoosted ? 1 : 0, m.stopped ? 1 : 0, m.lastMode, sel.drift.active ? 1 : 0,
-    ESTIMATOR, BOAT.turnRate, BOAT.maxSpeed, BOAT.accel,
-    sel.quat.x.toFixed(3), sel.quat.y.toFixed(3), sel.quat.z.toFixed(3), sel.quat.w.toFixed(3)].join("|");
+    sel.quat.x.toFixed(3), sel.quat.y.toFixed(3), sel.quat.z.toFixed(3), sel.quat.w.toFixed(3),
+    JSON.stringify(sel.flight)].join("|");
 }
 
 function buildEnvelope() {
@@ -675,7 +625,7 @@ function buildEnvelope() {
   // Committed modes have no envelope at all: the order does not choose a
   // destination, so the reachable set is exactly one point. Saying so is more
   // useful than drawing an empty box.
-  if (ESTIMATOR === "sim" && (plan.committed || sel.drift.active)) {
+  if (plan.committed) {
     const t = plan.target;
     gEnv.add(lineFrom([sel.pos, t], 0xffd24b, 0.85, true));
     const dot = new THREE.Mesh(
@@ -692,26 +642,36 @@ function buildEnvelope() {
     return;
   }
 
-  const R = cls.thrusterRange;
-  const N = COARSE ? 12 : 16;                 // cells per axis
+  // The set hangs off where momentum is taking the ship, not off the hull, so
+  // the search box is centred on the coast point and only has to be as wide as
+  // what thrust can add to it either way.
+  // Size the box, and the yardstick below, off the ship's STRONGEST axis. That
+  // makes "freedom" mean "the share of an omnidirectional version of this same
+  // hull that you can actually use", which stays a fraction even if someone
+  // tunes the RCS above the main drive.
+  const best = Math.max(sel.flight.accelFwd, sel.flight.accelRetro, sel.flight.accelLat);
+  const reach = DATA.nominalReach({ accelFwd: best, maxSpeed: sel.flight.maxSpeed });
+  const R = reach * 1.15;
+  const N = COARSE ? 14 : 20;                 // cells per axis
   const step = (2 * R) / N;
-  const EPS = 1e-6;
-  const thresh = Math.max(2.0, step * 0.5);
-  const reaches = ESTIMATOR === "boat"
-    ? (x, y, z) => boatReaches(sel, x, y, z, thresh)
-    : (x, y, z) => {
-      const got = sim.plannedTarget(sel, [x, y, z], mode).target;
-      return Math.abs(got.x - x) < EPS && Math.abs(got.y - y) < EPS && Math.abs(got.z - z) < EPS;
-    };
+  const thresh = Math.max(1.5, step * 0.5);
+  // Probing means flying thousands of candidate turns, so the probe integrates
+  // in 60 slices rather than 600 ticks. Worst case endpoint error against the
+  // executed flight is about 0.75 units on a 44 unit reach, under 2%.
+  const reaches = (x, y, z) => sim.canReach(sel, [x, y, z], mode, thresh, 60);
+  // centre the search on the midpoint between the hull and where it coasts to,
+  // so a fast ship's envelope does not fall out of the box
+  const coast = V.add(sel.pos, V.scale(sel.vel, DATA.CONST.TURN_SECONDS));
+  const c0 = coast;
   const at = i => -R + (i + 0.5) * step;   // cell centre, not lattice corner
   const inside = [];
   const occ = new Set();
   for (let i = 0; i < N; i++) {
-    const x = sel.pos.x + at(i);
+    const x = c0.x + at(i);
     for (let j = 0; j < N; j++) {
-      const y = sel.pos.y + at(j);
+      const y = c0.y + at(j);
       for (let k = 0; k < N; k++) {
-        const z = sel.pos.z + at(k);
+        const z = c0.z + at(k);
         if (!reaches(x, y, z)) continue;
         occ.add(i + "," + j + "," + k);
         inside.push([x, y, z, i, j, k]);
@@ -731,9 +691,9 @@ function buildEnvelope() {
   // report a disc from the wrong height
   const sliceCells = [];
   for (let i = 0; i < N; i++) {
-    const x = sel.pos.x + at(i);
+    const x = c0.x + at(i);
     for (let k = 0; k < N; k++) {
-      const z = sel.pos.z + at(k);
+      const z = c0.z + at(k);
       if (reaches(x, py, z)) sliceCells.push([x, z]);
     }
   }
@@ -762,48 +722,29 @@ function buildEnvelope() {
     gEnv.add(im);
   }
 
-  // The sphere outline and the sqrt(R^2 - dy^2) disc are properties of the
-  // model the sim implements today, not of reachability in general. Under the
-  // boat estimator the set is not a sphere, so drawing them there would lie.
-  const analytic = ESTIMATOR === "sim";
-  if (analytic) {
-    // three great circles, built origin-centred inside a group parked on the
-    // hull, so rotation cannot drag them off the sphere they are outlining
-    const cage = new THREE.Group();
-    cage.position.set(sel.pos.x, sel.pos.y, sel.pos.z);
-    for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
-      const c = lineFrom(circlePoints(0, 0, 0, R, 64), 0x35c7ff, 0.28);
-      c.rotation.set(rot[0], rot[1], rot[2]);
-      cage.add(c);
-    }
-    gEnv.add(cage);
-  }
+  // Where momentum alone would put the ship: the envelope hangs off this
+  // point, not off the hull, and the gap between them IS the commitment.
   const dy = py - sel.pos.y;
-  const sliceR = analytic ? Math.sqrt(Math.max(0, R * R - dy * dy)) : 0;
-  if (analytic && sliceR > 0.2) {
-    gEnv.add(lineFrom(circlePoints(sel.pos.x, py, sel.pos.z, sliceR, 64), 0x4cd97b, 0.95));
-    const disc = new THREE.Mesh(
-      new THREE.CircleGeometry(sliceR, 48),
-      new THREE.MeshBasicMaterial({ color: 0x4cd97b, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false }));
-    disc.rotation.x = -Math.PI / 2;
-    disc.position.set(sel.pos.x, py, sel.pos.z);
-    gEnv.add(disc);
-  }
+  gEnv.add(lineFrom([sel.pos, coast], 0xffd24b, 0.55, true));
+  const coastDot = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffd24b, transparent: true, opacity: 0.8 }));
+  coastDot.position.set(coast.x, coast.y, coast.z);
+  gEnv.add(coastDot);
   // a plumb line from the hull to the working altitude, so the offset reads
   if (Math.abs(dy) > 0.4) {
     gEnv.add(lineFrom([sel.pos, { x: sel.pos.x, y: py, z: sel.pos.z }], 0x4cd97b, 0.5, true));
   }
 
   envStats = {
-    committed: false, analytic, mode, cells: inside.length, shell: shell.length,
+    committed: false, mode, cells: inside.length, shell: shell.length,
     volume: inside.length * step * step * step,
     sliceCells: sliceCells.length, sliceArea: sliceCells.length * step * step,
-    sliceR, R, dy, step,
-    trueVolume: analytic ? (4 / 3) * Math.PI * R * R * R : 0,
-    trueSliceArea: analytic ? Math.PI * sliceR * sliceR : 0,
-    // the share of an unconstrained sphere the ship can actually use, which is
-    // the number that makes a committed model legible at a glance
-    freedom: inside.length * step * step * step / ((4 / 3) * Math.PI * R * R * R),
+    dy, step, reach, thresh,
+    coastDist: V.dist(sel.pos, coast),
+    speed: V.len(sel.vel),
+    // the share of an unconstrained sphere of the same reach that the hull can
+    // actually use: the single number that makes commitment legible
+    freedom: (inside.length * step * step * step) / ((4 / 3) * Math.PI * reach * reach * reach),
   };
 }
 
@@ -1132,7 +1073,7 @@ function bump(o, dy) {
 const ui = {};
 for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay",
                   "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace",
-                  "env","estimators","envTune","turns"])
+                  "env","envTune","turns"])
   ui[id] = document.getElementById(id);
 
 const MODES = [["MOVE_AND_TURN","Move"],["TURN_SLIDE","Slide"],["FULL_SPEED","Boost"],["FULL_STOP","Stop"]];
@@ -1161,40 +1102,39 @@ function toggleSheet(key) {
 // The estimator picker. Switching it changes only the drawing, never the sim:
 // "sim" shows what the code does today, "boat" shows what the candidate
 // coupled model would give, on the same ship with the same carried velocity.
-const ENV_TUNE = [
-  { key: "turnRate", label: "turn rate", min: 1, max: 90, step: 1,
-    fmt: v => v.toFixed(0) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
-  { key: "maxSpeed", label: "max speed", min: 2, max: 20, step: 0.5, fmt: v => v.toFixed(1) + " u/s" },
-  { key: "accel", label: "thrust", min: 0.2, max: 3, step: 0.1,
-    fmt: v => v.toFixed(1) + " u/s2 (decel " + (v * 1.5).toFixed(1) + ")" },
+// The flight envelope of the SELECTED ship, editable live. These are the only
+// numbers the movement model reads: how fast the hull swings about each axis,
+// and how hard it can push along each of its own axes. Changing one re-flies
+// every preview immediately, and because they are real ship state they are
+// serialised and hashed like anything else that affects the sim.
+const FLIGHT_TUNE = [
+  { key: "yawRate", label: "yaw rate", min: 0.5, max: 30, step: 0.5,
+    fmt: v => v.toFixed(1) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
+  { key: "pitchRate", label: "pitch rate", min: 0.5, max: 30, step: 0.5,
+    fmt: v => v.toFixed(1) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
+  { key: "accelFwd", label: "main drive", min: 0.1, max: 3, step: 0.05, fmt: v => v.toFixed(2) + " u/s2 fwd" },
+  { key: "accelRetro", label: "retros", min: 0.05, max: 2, step: 0.05, fmt: v => v.toFixed(2) + " u/s2 aft" },
+  { key: "accelLat", label: "RCS", min: 0.02, max: 1.5, step: 0.02, fmt: v => v.toFixed(2) + " u/s2 lateral" },
+  { key: "maxSpeed", label: "top speed", min: 1, max: 20, step: 0.5, fmt: v => v.toFixed(1) + " u/s" },
 ];
-function buildEstimatorUi() {
-  ui.estimators.innerHTML = "";
-  for (const [key, label] of [["sim", "Sim today"], ["boat", "Boat model"]]) {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.className = ESTIMATOR === key ? "on" : "";
-    b.onclick = () => { ESTIMATOR = key; buildEstimatorUi(); refresh(); };
-    ui.estimators.appendChild(b);
-  }
+function buildFlightUi() {
   ui.envTune.innerHTML = "";
-  if (ESTIMATOR !== "boat") return;
-  for (const t of ENV_TUNE) {
+  if (!sel || phase !== "planning") return;
+  for (const t of FLIGHT_TUNE) {
     const wrap = document.createElement("div");
     wrap.innerHTML = '<div class="sub"><span>' + t.label +
-      '</span><span style="color:var(--ink)" data-v>' + t.fmt(BOAT[t.key]) + '</span></div>';
+      '</span><span style="color:var(--ink)" data-v>' + t.fmt(sel.flight[t.key]) + '</span></div>';
     const r = document.createElement("input");
-    r.type = "range"; r.min = t.min; r.max = t.max; r.step = t.step; r.value = BOAT[t.key];
+    r.type = "range"; r.min = t.min; r.max = t.max; r.step = t.step; r.value = sel.flight[t.key];
     r.oninput = () => {
-      BOAT[t.key] = parseFloat(r.value);
-      wrap.querySelector("[data-v]").textContent = t.fmt(BOAT[t.key]);
+      sel.flight[t.key] = parseFloat(r.value);
+      wrap.querySelector("[data-v]").textContent = t.fmt(sel.flight[t.key]);
       refresh();
     };
     wrap.appendChild(r);
     ui.envTune.appendChild(wrap);
   }
 }
-buildEstimatorUi();
 
 ui.tShips.onclick = () => toggleSheet("ships");
 ui.tLog.onclick = () => toggleSheet("log");
@@ -1328,6 +1268,7 @@ function refresh() {
   }
   ui.pad.classList.toggle("hide", !(sel && phase === "planning"));
   renderTurnStrip();
+  buildFlightUi();
   draw();
   renderEnvelopeReadout();
 }
@@ -1337,10 +1278,6 @@ function refresh() {
 // working altitude, which for the current model is the spherical slice the
 // original game had. Both come from the sampler, so if the movement model
 // changes to something that couples heading to travel, these follow it.
-const EST_NOTE = {
-  sim: "Probing <b>sim.plannedTarget</b>, the call the turn resolver uses. This is what the code does today.",
-  boat: "The <b>boat-movement</b> controller: it flies the turn in ten segments with rate limited turning and clamped thrust, then asks whether the ship arrived. No formula, because a coupled model has none.",
-};
 const MODE_NOTE = {
   MOVE_AND_TURN: "coupled, heading follows travel",
   TURN_SLIDE: "decoupled, heading is yours to set",
@@ -1366,31 +1303,25 @@ function renderEnvelopeReadout() {
   ensureEnvelope();
   const st = envStats;
   if (!st) { ui.env.innerHTML = "No envelope: this ship has no move order yet."; return; }
-  let h = '<div style="margin:0 0 6px">' + EST_NOTE[ESTIMATOR] + "</div>";
-  h += row("mode", MODE_NOTE[st.mode] || st.mode);
+  let h = row("mode", MODE_NOTE[st.mode] || st.mode);
   if (st.committed) {
     h += row("envelope", "single point");
-    h += row("freedom", "0% of a free sphere");
-    h += row("distance", fmt(st.R, "u"));
+    h += row("freedom", "0%, no destination to choose");
+    h += row("travels", fmt(st.R, "u"));
     h += row("volume", "0 (" + st.note + ")");
     ui.env.innerHTML = h;
     return;
   }
-  h += row("integral", fmt(st.volume, "u3") + " over " + st.cells + " cells");
+  // No closed form exists for this model, so every figure here is sampled by
+  // flying the turn. That is the honest way to measure a coupled envelope.
+  h += row("volume", fmt(st.volume, "u3") + " over " + st.cells + " cells");
+  h += row("slice at alt", fmt(st.sliceArea, "u2") + " over " + st.sliceCells + " cells");
   h += row("working alt", (st.dy >= 0 ? "+" : "") + st.dy.toFixed(1) + " off hull");
-  if (st.analytic) {
-    const pct = st.R > 0 ? (100 * st.trueSliceArea / (Math.PI * st.R * st.R)).toFixed(0) : "0";
-    h += row("reach", fmt(st.R, "u") + " radius");
-    h += row("closed form", fmt(st.trueVolume, "u3"));
-    h += row("slice radius", fmt(st.sliceR, "u"));
-    h += row("slice area", fmt(st.trueSliceArea, "u2") + " (" + pct + "% of widest)");
-  } else {
-    // a coupled model has no closed form, so every figure here is sampled
-    h += row("slice area", fmt(st.sliceArea, "u2") + " over " + st.sliceCells + " cells");
-    h += row("freedom", (100 * st.freedom).toFixed(0) + "% of a free sphere");
-    h += row("can hold station",
-      boatReaches(sel, sel.pos.x, sel.pos.y, sel.pos.z, Math.max(2, st.step * 0.5)) ? "yes" : "NO, committed");
-  }
+  h += row("carrying", st.speed.toFixed(2) + " u/s (" + fmt(st.coastDist, "u") + " a turn)");
+  h += row("freedom", (100 * st.freedom).toFixed(0) + "% of a free sphere");
+  h += row("can hold station",
+    sim.canReach(sel, [sel.pos.x, sel.pos.y, sel.pos.z], st.mode, Math.max(1.5, st.step * 0.5))
+      ? "yes" : "NO, committed");
   ui.env.innerHTML = h;
 }
 

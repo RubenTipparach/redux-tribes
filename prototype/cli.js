@@ -87,6 +87,60 @@ function tests() {
   check("replaying a turn from its stored orders reproduces it exactly",
     live0.hash === replayed.hash, live0.hash + " vs " + replayed.hash);
 
+  console.log("\n== flight model: rotation stats, local axis limits, carried velocity ==");
+  {
+    const lone = (classKey, vel) => {
+      const st = sim.createSkirmish("flight", {
+        player: [{ classKey, pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) }],
+        enemy: [], enemyFaction: "karisen",
+      });
+      const sh = st.ships[0];
+      if (vel) sh.vel = vel;
+      return sh;
+    };
+    const reach = (sh, dir, mode, face) => {
+      const r = sim.previewPath(sh, [dir[0] * 400, dir[1] * 400, dir[2] * 400], mode || "MOVE_AND_TURN", 2);
+      return V.dist(sh.pos, r.target);
+    };
+
+    // 1. local axis limits: the main drive is astern, so forward is the cheap
+    //    direction and backing up costs a turnaround plus weak retros
+    const fwd = reach(lone("terran_frigate"), [0, 0, 1]);
+    const aft = reach(lone("terran_frigate"), [0, 0, -1]);
+    check("forward reach beats reversing (local axis thrust limits)",
+      fwd > aft * 1.5, "fwd " + fwd.toFixed(1) + " vs aft " + aft.toFixed(1));
+
+    // 2. rotation stats: pitch is slower than yaw on a frigate, so climbing
+    //    costs more of the turn than sidestepping does
+    const side = reach(lone("terran_frigate"), [1, 0, 0]);
+    const up = reach(lone("terran_frigate"), [0, 1, 0]);
+    check("slower pitch makes vertical reach worse than lateral (rotation stats)",
+      side > up * 1.3, "lateral " + side.toFixed(1) + " vs vertical " + up.toFixed(1));
+
+    // 3. a hull that turns and pushes harder simply gets further
+    const agile = reach(lone("rogue_frigate"), [1, 0, 0]);
+    const heavy = reach(lone("freighter"), [1, 0, 0]);
+    check("agile hull outreaches a sluggish one on the same order",
+      agile > heavy * 1.5, "rogue " + agile.toFixed(1) + " vs freighter " + heavy.toFixed(1));
+
+    // 4. carried velocity commits you: at rest a ship can sit still, under way
+    //    it cannot, and that is the whole point of the redesign
+    check("a ship at rest can hold station",
+      sim.canReach(lone("terran_frigate"), [0, 0, 0], "MOVE_AND_TURN", 2));
+    check("a ship carrying velocity CANNOT hold station (momentum commits)",
+      !sim.canReach(lone("terran_frigate", V.v3(0, 0, 6)), [0, 0, 0], "MOVE_AND_TURN", 2));
+
+    // 5. holding a heading gives the course over to the RCS, which is weak, so
+    //    the same sideways order lands far shorter than it does when the nose
+    //    is free to swing
+    const freeNose = reach(lone("terran_frigate"), [1, 0, 0], "MOVE_AND_TURN");
+    const lockedShip = lone("terran_frigate");
+    const locked = sim.previewPath(lockedShip, [400, 0, 0], "TURN_SLIDE", 2);
+    const lockedDist = V.dist(lockedShip.pos, locked.target);
+    check("holding a heading shortens a lateral move (nose locked, RCS only)",
+      freeNose > lockedDist * 1.5, "free " + freeNose.toFixed(1) + " vs slide " + lockedDist.toFixed(1));
+  }
+
   console.log("\n== slot endpoints (the Unity slot-10 bug, fixed by construction) ==");
   const s = scriptedSetup("seed-slots");
   const r = sim.resolveTurn(s, turn0Orders(), {});

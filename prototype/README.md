@@ -25,54 +25,68 @@ The harness renders in 3D (three.js, vendored, no network). The sim was always
 3D: every position is x/y/z and weapons have vertical arcs. The old top-down
 canvas flattened that, which hid the thing the prototype exists to judge.
 
+**The movement model.** Ships fly. There is no curve and no closed form:
+`flyTurn` integrates per tick under exactly three restrictions, which are the
+only inputs the model has.
+
+1. **Rotation stats.** `yawRate` and `pitchRate`, separate axes, cap how fast
+   the hull can be pointed. A heading you cannot reach in time is thrust you
+   cannot apply.
+2. **Local axis acceleration limits.** `accelFwd`, `accelRetro` and `accelLat`
+   are spent in the ship's OWN frame. Main drive strong astern, retros weak,
+   RCS weaker still.
+3. **Carried velocity.** Momentum survives the turn boundary, so every plan
+   starts from where the last one left you going.
+
+They live in `data.js` per class and are copied onto each ship, so they are
+real state: serialised, hashed, and editable live from the Flight Envelope
+sliders in the harness.
+
+What falls out, for a Terran frigate from rest:
+
+| ordered direction | reached |
+| --- | --- |
+| forward | 44.5 u |
+| starboard | 35.0 u |
+| astern | 20.9 u |
+| up | 21.3 u |
+
+Astern is half of forward because the ship must turn around and then push on
+weak retros. Vertical is worse than lateral because pitch is slower than yaw.
+Carrying 6 u/s it can no longer hold station at all.
+
 **The movement envelope.** Select a ship and the boundary of the volume it can
 reach this turn is drawn as a point cloud (the shell only: filling the interior
-just hid the fleet, and the surface is what carries the shape). The integral
-underneath still counts every cell, so the volume figure is unaffected.
+just hid the fleet, and the surface carries the shape). It comes out as a lobe
+off the nose displaced downrange by momentum, not a ball around the hull.
 
-Two estimators answer "can this ship end the turn there?", and you can switch
-between them live:
+Because the model has no closed form, the envelope is *probed*: every candidate
+cell is flown through `sim.canReach` and kept only if the ship arrives. Nothing
+in the renderer knows or assumes a shape, so the drawing cannot drift from the
+rules and follows any tuning for free. A probe integrates in 60 slices rather
+than 600 ticks (worst-case endpoint error about 0.75 u on a 44 u reach);
+execution always runs at full tick resolution.
 
-- **Sim today** probes `sim.plannedTarget`, the same call the turn resolver
-  uses, and keeps a cell only if the planner hands the point back unchanged.
-  It cannot drift from the rules. It answers with the hull centred sphere,
-  which is the flaw the redesign is about.
-- **Boat model** is the estimator from the `boat-movement` study, ported to 3D.
-  It asks no formula: it flies the turn in ten segments, turning toward the
-  target at a limited rate with thrust clamped each segment, then checks
-  whether the ship actually arrived. That is the only honest test for a coupled
-  model, because coupling has no closed form. Turn rate, top speed and thrust
-  are sliders.
-
-The contrast is the whole argument. On the same ship with the same carried
-velocity, at 6 deg/s of turn authority:
-
-| | reachable volume | freedom | can hold station |
-| --- | --- | --- | --- |
-| Sim today | 272.0k u3 over 2176 cells | 100% | yes |
-| Boat model | 16.5k u3 over 132 cells | 6% | NO, committed |
-
-Sweeping turn rate on the boat model: 1 deg/s gives 1% of a free sphere,
-30 deg/s gives 15% and station keeping returns, 90 deg/s (the study's own
-default) gives 16%.
+The readout is all sampled, since there is nothing exact to compare against:
+volume as an integral over accepted cells, the slice at the working altitude,
+carried speed, whether the ship can still hold station, and `freedom`, the
+share of an omnidirectional version of the same hull that it can actually use.
+A frigate under way sits around 13%.
 
 **The elevation slice.** The working altitude is one plane doing two jobs: a
 drag places the destination on it, and the envelope is sliced at it. `Q`/`E`
-raise and lower it, and the green disc is the spherical slice, radius
-`sqrt(R^2 - dy^2)`. Climbing 20 units off the hull on a 40 unit envelope leaves
-a 34.6 unit disc, which is 75% of the lateral room you had at hull level. The
-readout gives that as a closed form volume and as a numerical integral over the
-accepted cells, which agree to about 1%.
+raise and lower it, so elevation is a visible thing rather than a hidden
+number.
 
-**Per mode.** Under the sim estimator the envelope is not the same shape for
-every order, which is the whole point of probing rather than assuming:
+**Per mode.** The envelope differs by order, which is the point of probing
+rather than assuming:
 
 | mode | envelope |
 | --- | --- |
-| Move | sphere, radius 40; heading coupled to travel |
-| Slide | same sphere; heading decoupled, yours to set |
-| Boost | a single committed point, 80 units along carried momentum |
-| Stop | a single committed point at half carried momentum |
+| Move | nose points where thrust is needed: the largest envelope |
+| Slide | nose holds its heading, course left to the RCS: much tighter |
+| Boost | a single committed point, a straight burn along momentum |
+| Stop | a single committed point, retros against velocity |
 
 ### Controls
 

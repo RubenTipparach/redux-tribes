@@ -7,10 +7,9 @@
     TICKS_PER_SECOND: 60,
     TURN_SECONDS: 10,
     TICKS_PER_TURN: 600,        // tick indices 0..=600 inclusive (ADR-3)
-    INERTIA_DIVISOR: 2.5,       // bezier control point = pos + lastVel / 2.5
-    DRIFT_FACTOR: 0.25,         // engines-dead drift = last offset * 0.25
-    BOOST_MULT: 2.0,
-    FULLSTOP_MULT: 0.5,
+    BOOST_ACCEL_MULT: 1.6,      // burn: forward thrust and top speed while boosting
+    BOOST_SPEED_MULT: 1.5,
+    ARRIVE_EPS: 0.35,           // "reached it" tolerance, units
     // collision (new system - no interpenetration, impulse damage)
     COLLISION_DAMAGE_K: 25.0,   // dmg = K * relNormalSpeed(units/s) * reducedMass
     COLLISION_PAIR_COOLDOWN_TICKS: 60,
@@ -59,6 +58,36 @@
   // Subsystem layout: local offsets are deterministic hit-volume centers
   // (spatial damage model - the shot hits whatever volume it reaches first).
   // blockPct: share the subsystem absorbs; rest bleeds to hull.
+  // Flight envelope. The movement model reads nothing else: how fast the hull
+  // can be swung (per rotation axis) and how hard it can push along each of its
+  // OWN axes. A main drive astern is strong, retros are weak, and the RCS that
+  // shoves the hull sideways or vertically is weaker still, which is what makes
+  // a ship's reachable set a lobe along its nose rather than a ball around it.
+  //
+  // Sized so a frigate from rest covers roughly 40 units in a 10 s turn
+  // (0.5 * 0.9 * 100 = 45) and tops out near 8 u/s, keeping the scale the
+  // archive's thrusterRange established.
+  function flight(o) {
+    return Object.assign({
+      yawRate: 6,        // degrees per second about local up
+      pitchRate: 4,      // degrees per second about local right
+      accelFwd: 0.9,     // u/s^2 along +Z, the main drive
+      accelRetro: 0.35,  // u/s^2 along -Z, retros only
+      accelLat: 0.25,    // u/s^2 along local X and Y, the RCS
+      maxSpeed: 8,       // u/s
+    }, o || {});
+  }
+
+  // Roughly how far a ship covers in a turn from rest, accelerating then
+  // cruising. Not a movement rule (the integrator is), just a cheap scalar for
+  // the AI to pick engagement distances with, derived from the flight stats so
+  // it cannot drift away from what the ship can really do.
+  function nominalReach(fl) {
+    const T = CONST.TURN_SECONDS;
+    const tAccel = Math.min(T, fl.maxSpeed / fl.accelFwd);
+    return 0.5 * fl.accelFwd * tAccel * tAccel + fl.maxSpeed * (T - tAccel);
+  }
+
   function frigateSubsystems(armorBlock) {
     return [
       { id: "armor_l", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: -1.6, y: 0, z: 0.5 }, radius: 1.6 },
@@ -70,6 +99,7 @@
   const SHIP_CLASSES = {
     terran_frigate: {
       name: "Terran Frigate", hull: 300, radius: 3.5, mass: 1.0,
+      flight: flight({}),
       thrusterRange: 40, boardingRange: 20, marines: 15, marinesMax: 50, boardingCapacity: 8,
       subsystems: () => frigateSubsystems(80),
       weapons: [
@@ -80,6 +110,7 @@
     },
     karisen_frigate: {
       name: "Karisen Frigate", hull: 250, radius: 3.5, mass: 1.0,
+      flight: flight({ yawRate: 6.5, accelFwd: 0.95, maxSpeed: 8.5 }),
       thrusterRange: 40, boardingRange: 20, marines: 15, marinesMax: 50, boardingCapacity: 8,
       subsystems: () => frigateSubsystems(75),
       weapons: [
@@ -90,6 +121,7 @@
     rogue_frigate: {
       // the boarding specialist (Rogue_Ship_1.prefab: range 40, marines 40, capacity 12)
       name: "Rogue Frigate", hull: 180, radius: 3.2, mass: 0.9,
+      flight: flight({ yawRate: 9, pitchRate: 6, accelFwd: 1.1, accelRetro: 0.5, accelLat: 0.4, maxSpeed: 9.5 }),
       thrusterRange: 40, boardingRange: 40, marines: 40, marinesMax: 50, boardingCapacity: 12,
       subsystems: () => frigateSubsystems(90),
       weapons: [
@@ -99,6 +131,7 @@
     },
     benefactor_frigate: {
       name: "Benefactor Frigate", hull: 250, radius: 3.5, mass: 1.0,
+      flight: flight({ yawRate: 5, pitchRate: 3.5, accelFwd: 0.85, accelLat: 0.22 }),
       thrusterRange: 40, boardingRange: 20, marines: 15, marinesMax: 50, boardingCapacity: 8,
       subsystems: () => frigateSubsystems(80),
       weapons: [
@@ -109,6 +142,7 @@
     },
     freighter: {
       name: "Freighter", hull: 600, radius: 4.5, mass: 2.0,
+      flight: flight({ yawRate: 2.5, pitchRate: 1.5, accelFwd: 0.45, accelRetro: 0.18, accelLat: 0.10, maxSpeed: 5 }),
       thrusterRange: 30, boardingRange: 10, marines: 15, marinesMax: 50, boardingCapacity: 8,
       subsystems: () => [
         { id: "engines", type: "thruster", hp: 100, blockPct: 60, offset: { x: 0, y: 0, z: -3.4 }, radius: 1.6 },
@@ -117,7 +151,7 @@
     },
   };
 
-  const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency };
+  const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, nominalReach };
   global.FT = global.FT || {};
   global.FT.data = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
