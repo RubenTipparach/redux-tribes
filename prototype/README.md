@@ -19,6 +19,26 @@ node prototype/cli.js demo     # demo battle only
 Browser: open `prototype/harness.html` (or serve the folder - `npx serve prototype`).
 Rebuild the single-file bundle with `python3 prototype/tools/bundle.py out.html`.
 
+### Controls
+
+The harness runs on a phone as well as a desktop. Input goes through Pointer
+Events, so one code path serves mouse, pen and touch.
+
+| | desktop | touch |
+| --- | --- | --- |
+| place destination | drag in empty space | one finger drag |
+| rotate heading | drag the heading pip, or shift-drag | drag the heading pip (wider hit radius on a coarse pointer) |
+| select / target | click a ship | tap a ship, or a row in the Ships sheet |
+| zoom | wheel | pinch |
+| pan | right button drag | two finger drag |
+| elevation, 15 degree yaw, face target | `Q`/`E`, `A`/`D`, `F` | the round pad at the right edge |
+| frame the fleets | resets on a new match | `Fit view` in the tab bar |
+
+Below 900px the three pane console collapses: the side rails become bottom
+sheets on a tab bar, and the fire slot strip scrolls. Held sideways (under
+560px tall) the tab bar stands up as a left rail and the sheets slide in from
+the side, since a landscape phone has height to spare nowhere else.
+
 ## What's implemented
 
 - **Turn pipeline (ADR-3):** 10-second turns over tick indices 0..=600; second-slot

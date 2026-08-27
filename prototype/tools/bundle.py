@@ -7,9 +7,12 @@ import re, sys, pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
 html = (root / "harness.html").read_text()
 
-# keep head extras (title, font link, style), drop the document skeleton
+# keep head extras (title, font link, style), drop the document skeleton.
+# The viewport meta has to survive: without it a phone lays the page out at a
+# 980px virtual width and scales the result down, which defeats every
+# responsive rule below. charset and the rest come from the artifact wrapper.
 head = re.search(r"<head>(.*?)</head>", html, re.S).group(1)
-head = re.sub(r"<meta[^>]*>\s*", "", head)
+head = re.sub(r'<meta(?![^>]*name="(?:viewport|theme-color)")[^>]*>\s*', "", head)
 body = re.search(r"<body>(.*?)</body>", html, re.S).group(1)
 
 def inline(m):

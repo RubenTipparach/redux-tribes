@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
 <title>Fallen Tribes Sim Prototype</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Michroma&family=Exo+2:wght@400;600;700&family=Rajdhani:wght@600;700&display=swap">
@@ -11,16 +12,20 @@
 :root {
   --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
   --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
 }
 * { box-sizing:border-box; }
-body { margin:0; background:var(--ground); color:var(--ink); font-family:"Exo 2",system-ui,sans-serif; font-size:14px; overflow:hidden; }
-#app { display:grid; grid-template-columns: 250px 1fr 290px; grid-template-rows: 46px 1fr 78px; height:100vh; }
-header { grid-column:1/4; display:flex; align-items:center; gap:16px; padding:0 14px; background:var(--panel2); border-bottom:1px solid var(--line); }
+body { margin:0; background:var(--ground); color:var(--ink); font-family:"Exo 2",system-ui,sans-serif; font-size:14px; overflow:hidden;
+  overscroll-behavior:none; -webkit-text-size-adjust:100%; }
+#app { display:grid; grid-template-columns: 250px minmax(0,1fr) 290px; grid-template-rows: 46px minmax(0,1fr) 78px;
+  height:100vh; height:100dvh; min-width:0; }
+header { grid-column:1/4; display:flex; align-items:center; gap:16px; padding:0 14px; background:var(--panel2); border-bottom:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
 header h1 { font-family:Michroma; font-size:13px; font-weight:400; letter-spacing:.12em; margin:0; color:var(--cyan); white-space:nowrap; }
 .hgap { flex:1; }
-.stat { font-family:Rajdhani; font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.stat { font-family:Rajdhani; font-weight:600; font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); white-space:nowrap; }
 .stat b { color:var(--ink); }
-button { font-family:Rajdhani; font-weight:700; letter-spacing:.1em; text-transform:uppercase; font-size:12px;
+button { font-family:Rajdhani; font-weight:700; letter-spacing:.1em; text-transform:uppercase; font-size:12px; touch-action:manipulation;
   background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:6px 12px; cursor:pointer; }
 button:hover { border-color:var(--cyan); color:var(--cyan); }
 button:disabled { opacity:.35; cursor:default; }
@@ -32,8 +37,10 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 #right { border-right:0; border-left:1px solid var(--line); }
 .sect { font-family:Rajdhani; font-weight:700; font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:12px 0 6px; }
 .sect:first-child { margin-top:0; }
-#cv { grid-column:2; grid-row:2; display:block; background:var(--ground); cursor:crosshair; width:100%; height:100%; }
-footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--panel2); border-top:1px solid var(--line); }
+#cv { grid-column:2; grid-row:2; display:block; background:var(--ground); cursor:crosshair; width:100%; height:100%;
+  min-width:0; min-height:0; touch-action:none; -webkit-user-select:none; user-select:none; }
+footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--panel2); border-top:1px solid var(--line);
+  -webkit-user-select:none; user-select:none; }
 #slots { display:flex; gap:3px; }
 .slot { width:30px; height:30px; border:1px solid var(--line); border-radius:3px; display:flex; align-items:center; justify-content:center;
   font-family:Rajdhani; font-weight:700; font-size:11px; color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
@@ -61,20 +68,125 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 .modes { display:flex; flex-wrap:wrap; gap:4px; }
 textarea { width:100%; height:120px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:4px; font-size:10px; }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; padding:0 4px; font-size:11px; }
+#lPlay { margin-left:10px; }
+
+/* --------------------------------------------------------------- mobile --
+   Below 900px the three pane console collapses to a canvas first shell. The
+   side rails become bottom sheets on a tab bar, and the nudges that were
+   keyboard only (elevation, rotate, face target) get an on canvas pad, since
+   a phone has no Q/E/A/D/F to press. Desktop is untouched. */
+#tabbar, #pad { display:none; }
+
+@media (max-width: 900px) {
+  #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
+
+  header { grid-column:1; grid-row:1; height:46px; gap:9px; padding:0 10px; min-width:0; }
+  header h1 { font-size:11px; letter-spacing:.07em; flex:0 0 auto; }
+  header h1 .lng { display:none; }
+  .diag { display:none; }            /* hash + seed are desk diagnostics */
+
+  #cv { grid-column:1; grid-row:2; }
+
+  footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px; gap:8px 10px; min-width:0; }
+  #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
+  #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
+  #slots::-webkit-scrollbar { display:none; }
+  #scrub { min-width:130px; }
+
+  /* rails become sheets that slide up over the canvas, above the tab bar */
+  #left, #right {
+    position:fixed; left:0; right:0; top:auto;
+    bottom:calc(var(--tabh) + var(--safe));
+    height:min(56dvh, 440px); z-index:7;
+    border:0; border-top:1px solid var(--line);
+    box-shadow:0 -14px 34px #000a;
+    padding:12px 12px 24px;
+    transform:translateY(calc(100% + var(--tabh) + var(--safe)));
+    transition:transform .22s ease;
+  }
+  #left.open, #right.open { transform:none; }
+
+  #tabbar {
+    display:flex; grid-column:1; grid-row:4; z-index:8;
+    height:calc(var(--tabh) + var(--safe)); padding-bottom:var(--safe);
+    background:var(--panel2); border-top:1px solid var(--line);
+  }
+  #tabbar button {
+    flex:1; height:100%; padding:0; border:0; border-radius:0;
+    background:transparent; color:var(--muted); font-size:11px;
+  }
+  #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
+
+  /* on canvas nudge pad, right edge, clear of the footer */
+  #pad {
+    display:grid; gap:7px; position:fixed; right:9px; z-index:6;
+    bottom:calc(var(--tabh) + var(--safe) + 104px);
+  }
+  #pad.hide { display:none; }
+  #pad button {
+    width:46px; height:46px; padding:0; font-size:16px; border-radius:50%;
+    background:#111823e6; -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+  }
+
+  /* fingertip sized targets */
+  button { padding:10px 13px; }
+  .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
+  .shipRow { padding:9px 8px; margin-bottom:7px; }
+  .wrow { padding:8px 6px; }
+  .modes { gap:6px; }
+  input[type=range] { height:36px; }
+}
+
+/* Phone held sideways: only ~390px of height exists, and stacked chrome ate
+   most of it. Stand the tab bar up as a left rail, put the transport on one
+   row, and the sheets slide in from the side instead of the bottom. */
+@media (max-width: 900px) and (max-height: 560px) {
+  #app { grid-template-columns:54px minmax(0,1fr); grid-template-rows:40px minmax(0,1fr) auto; }
+
+  header { grid-column:1/3; grid-row:1; height:40px; }
+  #cv { grid-column:2; grid-row:2; }
+
+  #tabbar {
+    flex-direction:column; grid-column:1; grid-row:2/4;
+    width:54px; height:auto; padding-bottom:0;
+    border-top:0; border-right:1px solid var(--line);
+  }
+  #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
+  #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
+
+  footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
+  #lSlots, #lPlay { display:none; }   /* no room for labels, no row break needed */
+  .slot { width:32px; height:32px; }
+  input[type=range] { height:30px; }
+
+  #left, #right {
+    left:54px; right:auto; top:40px; bottom:0;
+    width:min(330px, 54vw); height:auto;
+    border-top:0; border-right:1px solid var(--line);
+    box-shadow:14px 0 34px #000a;
+    transform:translateX(-110%);
+  }
+  #left.open, #right.open { transform:none; }
+
+  #pad { grid-auto-flow:column; top:48px; right:9px; bottom:auto; gap:6px; }
+  #pad button { width:40px; height:40px; font-size:14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #left, #right { transition:none; }
+}
 </style>
 </head>
 <body>
 <div id="app">
   <header>
-    <h1>FALLEN TRIBES · SIM PROTOTYPE</h1>
+    <h1>FALLEN TRIBES<span class="lng"> · SIM PROTOTYPE</span></h1>
     <span class="stat">turn <b id="hTurn">0</b></span>
-    <span class="stat">hash <b id="hHash"> - </b></span>
-    <span class="stat">seed <b id="hSeed"> - </b></span>
+    <span class="stat diag">hash <b id="hHash"> - </b></span>
+    <span class="stat diag">seed <b id="hSeed"> - </b></span>
     <span class="hgap"></span>
     <span class="stat" id="hPhase">PLANNING</span>
     <button id="bEnd" class="primary">End Turn ⏎</button>
-    <button id="bRestart">Restart</button>
-    <button id="bReplay">Replay JSON</button>
   </header>
 
   <div id="left">
@@ -88,15 +200,24 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <div id="weps"></div>
     <div class="sect">Boarding</div>
     <button id="bBoard" disabled>Board Target</button>
+    <div class="sect">Session</div>
+    <div class="modes">
+      <button id="bRestart">Restart</button>
+      <button id="bReplay">Replay JSON</button>
+    </div>
+
     <div class="sect">Help</div>
     <div class="hint">
       <b>Drag in space</b> to place the destination - the Bézier updates live.<br>
       <b>Drag the heading pip</b> (ring at the destination), or <b>shift-drag</b>, to rotate.<br>
-      <b>Click</b> own ship: select · <b>click</b> enemy: target<br>
+      <b>Click or tap</b> own ship: select · same on an enemy: target<br>
       <kbd>Q</kbd>/<kbd>E</kbd> elevation ±5 · <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target<br>
       <kbd>wheel</kbd> zoom · RMB <kbd>drag</kbd> pan · <b>timeline slider</b> scrubs the
       <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
       Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) - real orders stay hidden until resolution, lockstep-style.
+      <br><br><b>On touch:</b> one finger drags the destination, two fingers pinch to zoom and pan,
+      and the round pad at the right edge covers the keys a phone does not have.
+      Tap a sheet's tab again to close it, or tap the map.
     </div>
   </div>
 
@@ -107,10 +228,24 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <div id="log"></div>
   </div>
 
+  <nav id="tabbar" aria-label="Panels">
+    <button id="tShips" aria-pressed="false">Ships</button>
+    <button id="tLog" aria-pressed="false">Events</button>
+    <button id="tFit">Fit view</button>
+  </nav>
+
+  <div id="pad" class="hide" aria-label="Heading and elevation nudges">
+    <button id="pUp" title="Elevation +5" aria-label="Elevation up 5">▲</button>
+    <button id="pDown" title="Elevation -5" aria-label="Elevation down 5">▼</button>
+    <button id="pCCW" title="Rotate 15° left" aria-label="Rotate 15 degrees left">↺</button>
+    <button id="pCW" title="Rotate 15° right" aria-label="Rotate 15 degrees right">↻</button>
+    <button id="pFace" title="Face target" aria-label="Face target">◎</button>
+  </div>
+
   <footer>
-    <span class="stat">fire slot</span>
+    <span class="stat" id="lSlots">fire slot</span>
     <div id="slots"></div>
-    <span class="stat" style="margin-left:10px">playback</span>
+    <span class="stat" id="lPlay">playback</span>
     <button id="bSpeed">1×</button>
     <input type="range" id="scrub" min="0" max="600" value="0">
     <span class="stat"><b id="hSec">0.0</b>s</span>
@@ -171,6 +306,7 @@ function newMatch(s) {
   phase = "planning"; orders = {}; sel = null; selWeapon = null; playback = null;
   replayFile = { seed, turns: [] };
   log("New match · seed “" + seed + "”", "good");
+  zoomToFit();
   ui.hSeed.textContent = seed;
   ui.hHash.textContent = " - ";
   refresh();
@@ -188,6 +324,9 @@ function ordFor(ship) {
 // ------------------------------------------------------------------- view --
 const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
 let cam = { x: 0, z: 0, scale: 4.5 };
+// Cap the backing store at 2x: phones report DPR 3, which triples the pixels
+// the 2D context fills for no visible gain on a flat vector scene.
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
 let planScrub = 0;              // planning-phase timeline position, 0..600 ticks
 let facingHandleHit = null;     // screen-space hit region of the rotation pip
 const FACING_HANDLE_R = 9;      // world units from the destination
@@ -201,21 +340,48 @@ function plannedFacing(ship, o, dest) {
   return V.len(off) > 1e-6 ? V.norm(off) : Q.forward(ship.quat);
 }
 function fit() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
   const r = cv.getBoundingClientRect();
-  cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio;
+  cv.width = Math.max(1, Math.round(r.width * DPR));
+  cv.height = Math.max(1, Math.round(r.height * DPR));
 }
-addEventListener("resize", () => { fit(); draw(); });
+function onResize() {
+  if (innerWidth > 900) closeSheets();
+  fit(); draw();
+}
+addEventListener("resize", onResize);
+// iOS fires orientationchange before the new metrics land, and retracting the
+// URL bar resizes the visual viewport without firing a window resize at all.
+addEventListener("orientationchange", () => setTimeout(onResize, 180));
+if (window.visualViewport) visualViewport.addEventListener("resize", onResize);
+
+// Frame every living ship. A phone has no wheel and no keyboard, so this is
+// the only reliable way back out of a lost camera.
+function zoomToFit() {
+  const live = state.ships.filter(sh => !sh.destroyed);
+  if (!live.length) return;
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const sh of live) {
+    minX = Math.min(minX, sh.pos.x); maxX = Math.max(maxX, sh.pos.x);
+    minZ = Math.min(minZ, sh.pos.z); maxZ = Math.max(maxZ, sh.pos.z);
+  }
+  const pad = 40;
+  cam.x = (minX + maxX) / 2; cam.z = (minZ + maxZ) / 2;
+  const w = (maxX - minX) + pad * 2, h = (maxZ - minZ) + pad * 2;
+  cam.scale = Math.max(1.2, Math.min(16, Math.min((cv.width / DPR) / w, (cv.height / DPR) / h)));
+  draw();
+}
 
 function w2s(p) {
   return {
-    x: cv.width / 2 + (p.x - cam.x) * cam.scale * devicePixelRatio,
-    y: cv.height / 2 + (p.z - cam.z) * cam.scale * devicePixelRatio,
+    x: cv.width / 2 + (p.x - cam.x) * cam.scale * DPR,
+    y: cv.height / 2 + (p.z - cam.z) * cam.scale * DPR,
   };
 }
 function s2w(sx, sy) {
   return {
-    x: cam.x + (sx * devicePixelRatio - cv.width / 2) / (cam.scale * devicePixelRatio),
-    z: cam.z + (sy * devicePixelRatio - cv.height / 2) / (cam.scale * devicePixelRatio),
+    x: cam.x + (sx * DPR - cv.width / 2) / (cam.scale * DPR),
+    z: cam.z + (sy * DPR - cv.height / 2) / (cam.scale * DPR),
   };
 }
 
@@ -229,10 +395,10 @@ function shipsAtPlaybackTick(tick) {
 function draw() {
   ctx.clearRect(0, 0, cv.width, cv.height);
   // dot-grid nav plane (the game's NavPlane, in 2D)
-  const grid = 20 * cam.scale * devicePixelRatio;
+  const grid = 20 * cam.scale * DPR;
   ctx.fillStyle = "#16202e";
-  const ox = (cv.width / 2 - cam.x * cam.scale * devicePixelRatio) % grid;
-  const oy = (cv.height / 2 - cam.z * cam.scale * devicePixelRatio) % grid;
+  const ox = (cv.width / 2 - cam.x * cam.scale * DPR) % grid;
+  const oy = (cv.height / 2 - cam.z * cam.scale * DPR) % grid;
   for (let x = ox; x < cv.width; x += grid)
     for (let y = oy; y < cv.height; y += grid) ctx.fillRect(x - 1, y - 1, 2, 2);
 
@@ -256,7 +422,7 @@ function draw() {
         strokePath(pts, col, ship === sel ? 2 : 1, false);
         // destination marker
         const e = w2s(path.target);
-        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(e.x, e.y, 3.5 * devicePixelRatio, 0, 7); ctx.fill();
+        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(e.x, e.y, 3.5 * DPR, 0, 7); ctx.fill();
         if (Math.abs(path.target.y - ship.pos.y) > 0.5) elevLabel(e, path.target.y);
         // over-range overflow: dashed stub from the clamped destination to the
         // raw cursor position (the original widget's "you asked for more than
@@ -266,8 +432,8 @@ function draw() {
           if (V.dist(raw, path.target) > 0.5) {
             strokePath([path.target, raw], col, 1, true);
             const rr = w2s(raw);
-            ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = devicePixelRatio;
-            ctx.beginPath(); ctx.arc(rr.x, rr.y, 3 * devicePixelRatio, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+            ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = DPR;
+            ctx.beginPath(); ctx.arc(rr.x, rr.y, 3 * DPR, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
           }
         }
       } else {
@@ -304,22 +470,22 @@ function draw() {
     for (const ev of playback.events) {
       if (ev.type === "ShotFired" && ev.kind === "beam" && playback.tick >= ev.tick && playback.tick < ev.tick + 30) {
         const a = w2s({ x: ev.from[0], z: ev.from[2] }), b = w2s({ x: ev.to[0], z: ev.to[2] });
-        ctx.strokeStyle = "#9BE8FF"; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.globalAlpha = 1 - (playback.tick - ev.tick) / 30;
+        ctx.strokeStyle = "#9BE8FF"; ctx.lineWidth = 1.5 * DPR; ctx.globalAlpha = 1 - (playback.tick - ev.tick) / 30;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.globalAlpha = 1;
       }
       if ((ev.type === "ShotHit" || ev.type === "Collision") && playback.tick >= ev.tick && playback.tick < ev.tick + 40 && ev.pos) {
         const p = w2s({ x: ev.pos[0], z: ev.pos[2] });
-        const r = ((playback.tick - ev.tick) / 40) * 10 * devicePixelRatio;
+        const r = ((playback.tick - ev.tick) / 40) * 10 * DPR;
         ctx.strokeStyle = ev.type === "Collision" ? "#FF4B4B" : "#FFC24B";
         ctx.globalAlpha = 1 - (playback.tick - ev.tick) / 40;
-        ctx.beginPath(); ctx.arc(p.x, p.y, 3 * devicePixelRatio + r, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 3 * DPR + r, 0, 7); ctx.stroke(); ctx.globalAlpha = 1;
       }
     }
     // projectiles
     for (const p of frame.projectiles) {
       const s = w2s(p);
       ctx.fillStyle = p.kind === "missile" ? "#FFD24B" : "#9BE8FF";
-      ctx.beginPath(); ctx.arc(s.x, s.y, 2 * devicePixelRatio, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(s.x, s.y, 2 * DPR, 0, 7); ctx.fill();
     }
   }
 
@@ -342,11 +508,11 @@ function draw() {
 function drawGhost(pos, tangent, color, dashed) {
   const s = w2s(pos);
   const a = Math.atan2(tangent.x, tangent.z);
-  const r = 7 * devicePixelRatio;
+  const r = 7 * DPR;
   ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(a);
   ctx.strokeStyle = color; ctx.globalAlpha = dashed ? 0.45 : 0.75;
-  ctx.lineWidth = 1.2 * devicePixelRatio;
-  ctx.setLineDash(dashed ? [3 * devicePixelRatio, 3 * devicePixelRatio] : []);
+  ctx.lineWidth = 1.2 * DPR;
+  ctx.setLineDash(dashed ? [3 * DPR, 3 * DPR] : []);
   ctx.beginPath();
   ctx.moveTo(0, -r); ctx.lineTo(r * 0.7, r * 0.8); ctx.lineTo(0, r * 0.4); ctx.lineTo(-r * 0.7, r * 0.8);
   ctx.closePath(); ctx.stroke();
@@ -356,35 +522,35 @@ function drawGhost(pos, tangent, color, dashed) {
 // Facing handle: a ring at the destination with a draggable heading pip.
 function drawFacingHandle(dest, faceDir, color) {
   const c = w2s(dest);
-  const rad = FACING_HANDLE_R * cam.scale * devicePixelRatio;
-  ctx.strokeStyle = color; ctx.globalAlpha = 0.35; ctx.lineWidth = devicePixelRatio;
-  ctx.setLineDash([2 * devicePixelRatio, 4 * devicePixelRatio]);
+  const rad = FACING_HANDLE_R * cam.scale * DPR;
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.35; ctx.lineWidth = DPR;
+  ctx.setLineDash([2 * DPR, 4 * DPR]);
   ctx.beginPath(); ctx.arc(c.x, c.y, rad, 0, 7); ctx.stroke();
   ctx.setLineDash([]); ctx.globalAlpha = 1;
   const a = Math.atan2(faceDir.x, faceDir.z);
   const px = c.x + Math.sin(a) * rad, py = c.y + Math.cos(a) * rad;
-  ctx.strokeStyle = color; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.globalAlpha = 0.7;
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5 * DPR; ctx.globalAlpha = 0.7;
   ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(px, py); ctx.stroke(); ctx.globalAlpha = 1;
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(px, py, 5 * devicePixelRatio, 0, 7); ctx.fill();
-  return { x: px, y: py, r: 8 * devicePixelRatio };
+  ctx.beginPath(); ctx.arc(px, py, 5 * DPR, 0, 7); ctx.fill();
+  return { x: px, y: py, r: 8 * DPR };
 }
 
 function strokePath(pts, color, width, dashed) {
-  ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio; ctx.globalAlpha = 0.6;
-  ctx.setLineDash(dashed ? [4 * devicePixelRatio, 5 * devicePixelRatio] : []);
+  ctx.strokeStyle = color; ctx.lineWidth = width * DPR; ctx.globalAlpha = 0.6;
+  ctx.setLineDash(dashed ? [4 * DPR, 5 * DPR] : []);
   ctx.beginPath();
   pts.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y); });
   ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
 }
 function ring(center, radius, color, width) {
   const c = w2s(center);
-  ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio;
-  ctx.beginPath(); ctx.arc(c.x, c.y, radius * cam.scale * devicePixelRatio, 0, 7); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = width * DPR;
+  ctx.beginPath(); ctx.arc(c.x, c.y, radius * cam.scale * DPR, 0, 7); ctx.stroke();
 }
 function elevLabel(s, y) {
-  ctx.fillStyle = "#FFD24B"; ctx.font = `${10 * devicePixelRatio}px Rajdhani`;
-  ctx.fillText("y " + y.toFixed(0), s.x + 6 * devicePixelRatio, s.y - 6 * devicePixelRatio);
+  ctx.fillStyle = "#FFD24B"; ctx.font = `${10 * DPR}px Rajdhani`;
+  ctx.fillText("y " + y.toFixed(0), s.x + 6 * DPR, s.y - 6 * DPR);
 }
 function drawShip(ship, pos, quat) {
   const s = w2s(pos);
@@ -392,10 +558,10 @@ function drawShip(ship, pos, quat) {
   const fwd = Q.forward(quat);
   const ang = Math.atan2(fwd.x, -(-fwd.z)); // screen: +z is down => angle in screen space
   const a = Math.atan2(fwd.x, fwd.z);
-  const r = Math.max(5, DATA.SHIP_CLASSES[ship.classKey].radius * cam.scale) * devicePixelRatio;
+  const r = Math.max(5, DATA.SHIP_CLASSES[ship.classKey].radius * cam.scale) * DPR;
   ctx.save(); ctx.translate(s.x, s.y); ctx.rotate(a);
   ctx.fillStyle = ship === sel ? "#fff" : col;
-  ctx.strokeStyle = col; ctx.lineWidth = 1.4 * devicePixelRatio;
+  ctx.strokeStyle = col; ctx.lineWidth = 1.4 * DPR;
   ctx.beginPath();
   ctx.moveTo(0, -r); ctx.lineTo(r * 0.7, r * 0.8); ctx.lineTo(0, r * 0.4); ctx.lineTo(-r * 0.7, r * 0.8);
   ctx.closePath();
@@ -404,20 +570,20 @@ function drawShip(ship, pos, quat) {
   // hull arc
   const frac = Math.max(0, ship.hull / ship.hullMax);
   ctx.strokeStyle = frac > 0.5 ? "#4CD97B" : frac > 0.25 ? "#FFD24B" : "#FF4B4B";
-  ctx.lineWidth = 2 * devicePixelRatio;
-  ctx.beginPath(); ctx.arc(s.x, s.y, r + 5 * devicePixelRatio, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI); ctx.stroke();
+  ctx.lineWidth = 2 * DPR;
+  ctx.beginPath(); ctx.arc(s.x, s.y, r + 5 * DPR, -Math.PI / 2, -Math.PI / 2 + frac * 2 * Math.PI); ctx.stroke();
   // elevation stalk
   if (Math.abs(pos.y) > 0.5) {
-    ctx.fillStyle = "#7C8B9D"; ctx.font = `${9 * devicePixelRatio}px Rajdhani`;
+    ctx.fillStyle = "#7C8B9D"; ctx.font = `${9 * DPR}px Rajdhani`;
     ctx.fillText((pos.y > 0 ? "+" : "") + pos.y.toFixed(0), s.x + r + 4, s.y + 3);
   }
   // id label
-  ctx.fillStyle = col; ctx.font = `700 ${10 * devicePixelRatio}px Rajdhani`;
-  ctx.fillText(ship.id, s.x - r, s.y - r - 6 * devicePixelRatio);
+  ctx.fillStyle = col; ctx.font = `700 ${10 * DPR}px Rajdhani`;
+  ctx.fillText(ship.id, s.x - r, s.y - r - 6 * DPR);
   // boarding marker
   if (ship.boardingParties.length) {
-    ctx.fillStyle = "#4CD97B"; ctx.font = `${12 * devicePixelRatio}px sans-serif`;
-    ctx.fillText("⚔", s.x - 5, s.y + r + 14 * devicePixelRatio);
+    ctx.fillStyle = "#4CD97B"; ctx.font = `${12 * DPR}px sans-serif`;
+    ctx.fillText("⚔", s.x - 5, s.y + r + 14 * DPR);
   }
 }
 
@@ -426,8 +592,36 @@ function drawShip(ship, pos, quat) {
 // DRAG - the destination follows the cursor live on the ship's plane (no need
 // to grab a marker), with the path preview updating every frame; release to
 // commit. Ships still select/target on press. RMB pans, wheel zooms.
-let panning = false, panStart = null, dragMove = false;
+//
+// These are Pointer Events, not mouse events, so one code path drives mouse,
+// pen and touch. Touch additionally gets two finger pinch-zoom and pan, and a
+// coarse pointer widens the rotation pip's hit radius, since a fingertip is
+// far blunter than a cursor.
+const COARSE = matchMedia("(pointer: coarse)").matches;
+const PIP_HIT = COARSE ? 3.2 : 1.8;
+let panning = false, panStart = null, dragMove = false, dragRotate = false;
+const pointers = new Map();   // live pointerId -> {x, y} in canvas space
+let pinch = null;             // {dist, scale, cx, cz, mx, my} while 2+ down
+let preDragTarget = null;     // destination before a drag, to undo on pinch
+
 cv.addEventListener("contextmenu", e => e.preventDefault());
+
+// offsetX/offsetY go unreliable once a second finger lands, so always derive
+// canvas-local coordinates from the bounding rect.
+function localXY(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function pointerCentroid() {
+  let x = 0, y = 0;
+  for (const q of pointers.values()) { x += q.x; y += q.y; }
+  return { x: x / pointers.size, y: y / pointers.size };
+}
+function pointerSpread() {
+  const it = pointers.values();
+  const a = it.next().value, b = it.next().value;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
 
 function pickShipAt(w) {
   let picked = null;
@@ -445,7 +639,6 @@ function setMoveTarget(w) {
   if (o.move.mode === "FULL_SPEED" || o.move.mode === "FULL_STOP") o.move.mode = "MOVE_AND_TURN";
 }
 
-let dragRotate = false;
 function setFacingFromCursor(w) {
   const o = ordFor(sel);
   const tgt = o.move.target
@@ -456,18 +649,38 @@ function setFacingFromCursor(w) {
   if (V.len(dir) > 0.3) { const n = V.norm(dir); o.move.face = [n.x, n.y, n.z]; }
 }
 
-cv.addEventListener("mousedown", e => {
-  if (e.button === 2) { panning = true; panStart = { x: e.offsetX, y: e.offsetY, cx: cam.x, cz: cam.z }; return; }
-  if (e.button !== 0 || phase !== "planning") return;
+cv.addEventListener("pointerdown", e => {
+  // with a sheet up, the exposed map is a "get me back" target: close and stop
+  if (openSheet) { closeSheets(); return; }
+
+  const p = localXY(e);
+  pointers.set(e.pointerId, p);
+
+  // second finger down: abandon the half-made drag (restoring the destination
+  // it was in the middle of moving) and switch to pinch-zoom + pan
+  if (pointers.size === 2) {
+    if (dragMove && sel) ordFor(sel).move.target = preDragTarget;
+    dragMove = false; dragRotate = false; panning = false;
+    const c = pointerCentroid();
+    pinch = { dist: pointerSpread(), scale: cam.scale, cx: cam.x, cz: cam.z, mx: c.x, my: c.y };
+    draw();
+    return;
+  }
+  if (pointers.size > 2) return;
+
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+
+  if (e.button === 2) { panning = true; panStart = { x: p.x, y: p.y, cx: cam.x, cz: cam.z }; return; }
+  if (e.button > 0 || phase !== "planning") return;
   // rotation pip takes priority - grab it to swing the planned heading
   if (sel && facingHandleHit) {
-    const dx = e.offsetX * devicePixelRatio - facingHandleHit.x;
-    const dy = e.offsetY * devicePixelRatio - facingHandleHit.y;
-    if (Math.hypot(dx, dy) <= facingHandleHit.r * 1.8) {
-      dragRotate = true; setFacingFromCursor(s2w(e.offsetX, e.offsetY)); draw(); return;
+    const dx = p.x * DPR - facingHandleHit.x;
+    const dy = p.y * DPR - facingHandleHit.y;
+    if (Math.hypot(dx, dy) <= facingHandleHit.r * PIP_HIT) {
+      dragRotate = true; setFacingFromCursor(s2w(p.x, p.y)); draw(); return;
     }
   }
-  const w = s2w(e.offsetX, e.offsetY);
+  const w = s2w(p.x, p.y);
   const picked = pickShipAt(w);
   if (picked && picked.isPlayer) { sel = picked; selWeapon = null; refresh(); return; }
   if (picked && !picked.isPlayer) {
@@ -476,30 +689,54 @@ cv.addEventListener("mousedown", e => {
   }
   // shift-drag anywhere also rotates (no need to hit the pip)
   if (sel && e.shiftKey) { dragRotate = true; setFacingFromCursor(w); draw(); return; }
-  if (sel) { dragMove = true; setMoveTarget(w); draw(); }
-});
-cv.addEventListener("mousemove", e => {
-  if (panning) {
-    cam.x = panStart.cx - (e.offsetX - panStart.x) / cam.scale;
-    cam.z = panStart.cz - (e.offsetY - panStart.y) / cam.scale;
-    draw();
-  } else if (dragRotate && sel && phase === "planning") {
-    setFacingFromCursor(s2w(e.offsetX, e.offsetY));
-    draw();
-  } else if (dragMove && sel && phase === "planning") {
-    setMoveTarget(s2w(e.offsetX, e.offsetY));
-    draw();                      // live path preview while dragging
-  } else if (phase === "planning" && sel && facingHandleHit) {
-    // hover affordance on the rotation pip
-    const dx = e.offsetX * devicePixelRatio - facingHandleHit.x;
-    const dy = e.offsetY * devicePixelRatio - facingHandleHit.y;
-    cv.style.cursor = Math.hypot(dx, dy) <= facingHandleHit.r * 1.8 ? "grab" : "crosshair";
+  if (sel) {
+    const o = ordFor(sel);
+    preDragTarget = o.move.target ? o.move.target.slice() : null;
+    dragMove = true; setMoveTarget(w); draw();
   }
 });
-addEventListener("mouseup", () => {
-  panning = false;
-  if (dragMove || dragRotate) { dragMove = false; dragRotate = false; refresh(); }
+
+cv.addEventListener("pointermove", e => {
+  const p = localXY(e);
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, p);
+
+  if (pinch && pointers.size >= 2) {
+    const d = pointerSpread(), c = pointerCentroid();
+    if (pinch.dist > 8) cam.scale = Math.max(1.2, Math.min(16, pinch.scale * (d / pinch.dist)));
+    cam.x = pinch.cx - (c.x - pinch.mx) / cam.scale;
+    cam.z = pinch.cz - (c.y - pinch.my) / cam.scale;
+    draw();
+    return;
+  }
+  if (panning) {
+    cam.x = panStart.cx - (p.x - panStart.x) / cam.scale;
+    cam.z = panStart.cz - (p.y - panStart.y) / cam.scale;
+    draw();
+  } else if (dragRotate && sel && phase === "planning") {
+    setFacingFromCursor(s2w(p.x, p.y));
+    draw();
+  } else if (dragMove && sel && phase === "planning") {
+    setMoveTarget(s2w(p.x, p.y));
+    draw();                      // live path preview while dragging
+  } else if (e.pointerType === "mouse" && phase === "planning" && sel && facingHandleHit) {
+    // hover affordance on the rotation pip (pointless without a cursor)
+    const dx = p.x * DPR - facingHandleHit.x;
+    const dy = p.y * DPR - facingHandleHit.y;
+    cv.style.cursor = Math.hypot(dx, dy) <= facingHandleHit.r * PIP_HIT ? "grab" : "crosshair";
+  }
 });
+
+function releasePointer(e) {
+  pointers.delete(e.pointerId);
+  try { cv.releasePointerCapture(e.pointerId); } catch (_) {}
+  if (pointers.size < 2) pinch = null;
+  if (pointers.size === 0) {
+    panning = false;
+    if (dragMove || dragRotate) { dragMove = false; dragRotate = false; refresh(); }
+  }
+}
+addEventListener("pointerup", releasePointer);
+addEventListener("pointercancel", releasePointer);
 cv.addEventListener("wheel", e => {
   e.preventDefault();
   cam.scale = Math.max(1.2, Math.min(16, cam.scale * (e.deltaY < 0 ? 1.15 : 0.87)));
@@ -548,10 +785,46 @@ function bump(o, dy) {
 
 // -------------------------------------------------------------------- ui --
 const ui = {};
-for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay"])
+for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay",
+                  "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace"])
   ui[id] = document.getElementById(id);
 
 const MODES = [["MOVE_AND_TURN","Move"],["TURN_SLIDE","Slide"],["FULL_SPEED","Boost"],["FULL_STOP","Stop"]];
+
+// ------------------------------------------------------- sheets and pad --
+// Mobile only in effect: the CSS keeps #tabbar and #pad display:none above
+// 900px, so these handlers simply never get a chance to fire on desktop.
+let openSheet = null;
+
+function closeSheets() {
+  openSheet = null;
+  ui.left.classList.remove("open"); ui.right.classList.remove("open");
+  for (const b of [ui.tShips, ui.tLog]) { b.classList.remove("on"); b.setAttribute("aria-pressed", "false"); }
+}
+function toggleSheet(key) {
+  const wasOpen = openSheet === key;
+  closeSheets();
+  if (wasOpen) return;                       // tapping the live tab closes it
+  openSheet = key;
+  const panel = key === "ships" ? ui.left : ui.right;
+  const tab = key === "ships" ? ui.tShips : ui.tLog;
+  panel.classList.add("open");
+  tab.classList.add("on"); tab.setAttribute("aria-pressed", "true");
+  if (key === "log") ui.log.scrollTop = ui.log.scrollHeight;
+}
+ui.tShips.onclick = () => toggleSheet("ships");
+ui.tLog.onclick = () => toggleSheet("log");
+ui.tFit.onclick = () => zoomToFit();
+
+// The pad stands in for Q/E/A/D/F, which a phone cannot send.
+function padAct(fn) {
+  return () => { if (sel && phase === "planning") fn(ordFor(sel)); };
+}
+ui.pUp.onclick = padAct(o => bump(o, 5));
+ui.pDown.onclick = padAct(o => bump(o, -5));
+ui.pCCW.onclick = padAct(o => rotateFacing(o, -15));
+ui.pCW.onclick = padAct(o => rotateFacing(o, 15));
+ui.pFace.onclick = padAct(o => faceTarget(o));
 
 function refresh() {
   ui.hTurn.textContent = state.turn;
@@ -665,6 +938,7 @@ function refresh() {
     }
     ui.slots.appendChild(d);
   }
+  ui.pad.classList.toggle("hide", !(sel && phase === "planning"));
   draw();
 }
 
@@ -780,6 +1054,7 @@ ui.bReplay.onclick = () => {
 // go
 fit();
 newMatch(seed);
+zoomToFit();
 })();
 </script>
 </body>
