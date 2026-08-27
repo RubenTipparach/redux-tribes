@@ -88,7 +88,19 @@ function publish(matchId: string, event: unknown): void {
 }
 
 // -------------------------------------------------------------------- routes --
-app.get('/healthz', (_req, res) => { res.json({ ok: true, now: nowMs() }); });
+// Fly sets these inside the machine. Reporting them makes "where is this
+// actually running" answerable from outside with a single request, rather
+// than by reading a deploy log or trusting fly.toml to describe reality:
+// primary_region only places NEW machines, so config and truth can drift.
+// Both are null off Fly, which is what local runs and the tests see.
+app.get('/healthz', (_req, res) => {
+  res.json({
+    ok: true,
+    now: nowMs(),
+    region: process.env.FLY_REGION ?? null,
+    machine: process.env.FLY_MACHINE_ID ?? null,
+  });
+});
 
 app.post('/v1/matches', (req, res) => {
   const body = req.body as { scenario?: unknown; seed?: unknown; name?: unknown };
