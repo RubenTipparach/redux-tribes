@@ -1,0 +1,52 @@
+# Fly.io config for the Fallen Tribes match API.
+#
+# Adapted from the high-frontier-fan-game deployment, which had already learned
+# most of these lessons the hard way. Bootstrap once with flyctl:
+#
+#   fly apps create fallen-tribes-api
+#   fly volumes create ft_data --size 1 --region ams
+#
+# No secrets to configure: the server is passwordless and per player tokens are
+# stored only as sha256 hashes. Deploys are automatic thereafter.
+
+app = "fallen-tribes-api"
+primary_region = "ams"
+
+[build]
+
+[env]
+  PORT = "8080"
+  DATABASE_PATH = "/data/ft.db"
+
+# sqlite is a single writer on a single file, so this app runs exactly ONE
+# machine on ONE volume. The deploy workflow reaps extras before every release.
+[[mounts]]
+  source = "ft_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Matches are async by design: a player can leave and come back days later,
+  # so the machine may sleep between turns and wake on the next request.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

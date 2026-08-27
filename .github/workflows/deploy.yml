@@ -1,0 +1,191 @@
+name: Build, test, and deploy
+
+# Adapted from the high-frontier-fan-game workflow, which paid for several of
+# these decisions with outages. The comments explaining WHY are carried over
+# deliberately: they are the part that is expensive to rediscover.
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# NO workflow level concurrency. A workflow level group with cancel-in-progress
+# cancels the WHOLE run, including the Fly job, when a newer commit lands, which
+# is what leaves a live API stale while Pages keeps deploying. Concurrency is
+# applied PER JOB instead.
+jobs:
+  # The simulation core is the one thing both clients share, so it is gated
+  # first and on its own: if the model is wrong, nothing downstream matters.
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust with the wasm target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+      - name: Test the core
+        working-directory: engine/sim_core
+        run: cargo test --release
+      - name: Build for wasm
+        working-directory: engine/sim_core
+        run: cargo build --release --target wasm32-unknown-unknown
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sim-wasm
+          path: engine/sim_core/target/wasm32-unknown-unknown/release/sim_core.wasm
+
+  # The JS prototype is still the design reference for mechanics the Rust core
+  # has not absorbed yet, so its suite stays a gate.
+  prototype:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: node prototype/cli.js test
+      - name: No dashes anywhere (GUIDELINES rule 1)
+        run: |
+          if grep -rlP '[\x{2013}\x{2014}]' --exclude-dir=.git --exclude-dir=vendor \
+               --exclude-dir=node_modules --exclude-dir=target --exclude-dir=archive-model .; then
+            echo "::error::em or en dash found in the files listed above"
+            exit 1
+          fi
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - working-directory: server
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm run build
+          npm test
+
+  web:
+    needs: sim
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages-build
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: actions/download-artifact@v4
+        with:
+          name: sim-wasm
+          path: web/public
+      - working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+          node build.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: web/dist }
+
+  deploy-pages:
+    needs: web
+    runs-on: ubuntu-latest
+    # Pages deploys must NOT cancel-in-progress. actions/deploy-pages creates a
+    # deployment then polls it; cancelling mid flight orphans it in_progress and
+    # every later deploy fails with "Deployment failed, try again later" until
+    # the orphan times out. Queue them instead: the newest lands last and wins.
+    concurrency:
+      group: pages-deploy
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  deploy-api:
+    needs: api
+    runs-on: ubuntu-latest
+    # Only on the canonical repo, so forks without Fly access fall through
+    # cleanly. Case insensitive so a clone under either casing works.
+    if: ${{ contains(fromJSON('["rubentipparach/redux-tribes", "RubenTipparach/redux-tribes"]'), github.repository) }}
+    concurrency:
+      group: fly-api
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # Pre-bootstrap is "skip, do not fail": a missing token, a rejected token,
+      # or an app that does not exist yet all mark the job not ready and the
+      # deploy steps skip. A genuine failure after bootstrap still fails the job.
+      - name: Check Fly readiness
+        id: fly_gate
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::notice::FLY_API_TOKEN not set; skipping API deploy."
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! flyctl auth whoami > /dev/null 2>&1; then
+            echo "::notice::FLY_API_TOKEN rejected by Fly; regenerate with 'fly tokens create deploy -a fallen-tribes-api'."
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! flyctl status -a fallen-tribes-api > /dev/null 2>&1; then
+            echo "::notice::App not found; bootstrap with 'fly apps create fallen-tribes-api' and 'fly volumes create ft_data --size 1 --region ams'."
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      # Single writer sqlite needs exactly one machine on one volume. Both
+      # steps are idempotent and no-op when already in the desired state.
+      - name: Ensure volume and a single machine
+        if: steps.fly_gate.outputs.ready == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP: fallen-tribes-api
+          REGION: ams
+        run: |
+          set -e
+          COUNT=$(flyctl volumes list -a "$APP" --json | jq '[.[] | select(.name=="ft_data" and .region=="'"$REGION"'")] | length')
+          if [ "${COUNT:-0}" -lt 1 ]; then
+            flyctl volumes create ft_data --size 1 --region "$REGION" --app "$APP" --yes
+          fi
+          flyctl machine list -a "$APP" --json > /tmp/machines.json
+          FIRST=""
+          for M in $(jq -r '.[] | select((.config.metadata.fly_process_group // "app") == "app") | .id' /tmp/machines.json); do
+            if [ -z "$FIRST" ]; then FIRST="$M"; echo "keeping $M"; continue; fi
+            echo "destroying extra machine $M"
+            flyctl machine stop "$M" --app "$APP" || true
+            flyctl machine destroy "$M" --app "$APP" --force || true
+          done
+
+      # Fly's remote builder can drop a connection transiently and fail within
+      # seconds, before any build output. Retry with backoff, the same doctrine
+      # this repo already follows for git push and fetch.
+      - name: Deploy API to Fly.io
+        if: steps.fly_gate.outputs.ready == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -e
+          for attempt in 1 2 3 4; do
+            echo "::group::flyctl deploy (attempt ${attempt}/4)"
+            if flyctl deploy --remote-only --config server/fly.toml --dockerfile server/Dockerfile server; then
+              echo "::endgroup::"; echo "deployed on attempt ${attempt}"; exit 0
+            fi
+            echo "::endgroup::"
+            if [ "${attempt}" -lt 4 ]; then
+              backoff=$((attempt * attempt * 10))
+              echo "::warning::deploy failed (attempt ${attempt}/4); retrying in ${backoff}s"
+              sleep "${backoff}"
+            fi
+          done
+          echo "::error::flyctl deploy failed after 4 attempts"; exit 1

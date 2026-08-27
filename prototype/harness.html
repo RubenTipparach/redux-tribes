@@ -1056,6 +1056,15 @@ function commandHeading(o, dir) {
   }
 }
 
+// Rotating hides the pointer: the cursor sits exactly on the pip and the
+// heading arrow under it, which is the thing you are trying to aim.
+function startRotateDrag(p) {
+  dragRotate = true;
+  cv.style.cursor = "none";
+  setFacingFromCursor(s2w(p));
+  draw();
+}
+
 function setFacingFromCursor(w) {
   if (!w) return;
   const o = ordFor(sel);
@@ -1096,7 +1105,7 @@ cv.addEventListener("pointerdown", e => {
   if (phase !== "planning") { startCamera(); return; }
 
   // rotation pip takes priority: grab it to swing the planned heading
-  if (sel && pipHit(p)) { dragRotate = true; setFacingFromCursor(s2w(p)); draw(); return; }
+  if (sel && pipHit(p)) { startRotateDrag(p); return; }
 
   const picked = pickShipAt(p);
   if (picked && picked.isPlayer) { sel = picked; selWeapon = null; refresh(); return; }
@@ -1105,7 +1114,7 @@ cv.addEventListener("pointerdown", e => {
     return;
   }
   // shift-drag anywhere also rotates (no need to hit the pip)
-  if (sel && e.shiftKey) { dragRotate = true; setFacingFromCursor(s2w(p)); draw(); return; }
+  if (sel && e.shiftKey) { startRotateDrag(p); return; }
 
   // Empty space belongs to the camera. Only a press that lands inside the
   // drawn movement plane is read as a destination, so looking around never
@@ -1145,7 +1154,7 @@ cv.addEventListener("pointermove", e => {
     setFacingFromCursor(s2w(p)); draw();
   } else if (dragMove && sel && phase === "planning") {
     setMoveTarget(s2w(p)); draw();            // live path preview while dragging
-  } else if (e.pointerType === "mouse" && phase === "planning" && sel) {
+  } else if (e.pointerType === "mouse" && phase === "planning" && sel && !dragRotate) {
     cv.style.cursor = pipHit(p) ? "grab" : "crosshair";
   }
 });
@@ -1156,7 +1165,10 @@ function releasePointer(e) {
   if (pointers.size < 2) pinch = null;
   if (pointers.size === 0) {
     orbiting = false; panning = false;
-    if (dragMove || dragRotate) { dragMove = false; dragRotate = false; refresh(); }
+    if (dragMove || dragRotate) {
+      if (dragRotate) cv.style.cursor = "crosshair";
+      dragMove = false; dragRotate = false; refresh();
+    }
   }
 }
 addEventListener("pointerup", releasePointer);

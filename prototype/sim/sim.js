@@ -169,7 +169,10 @@
   function rotateToward(quat, want, fl, dt) {
     const local = Q.rot(Q.inv(quat), want);          // desired forward, body frame
     const flat = Math.sqrt(local.x * local.x + local.z * local.z);
-    let yawErr = dmath.datan2(local.x, local.z);
+    // Straight up or straight down has no yaw: x and z are both ~0 there and
+    // atan2 of two near-zero numbers is noise, which the rotation then
+    // amplifies. Hold the current yaw and let pitch do the work instead.
+    let yawErr = flat < 1e-4 ? 0 : dmath.datan2(local.x, local.z);
     let pitchErr = dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
     const maxYaw = fl.yawRate * Math.PI / 180 * dt;
     const maxPitch = fl.pitchRate * Math.PI / 180 * dt;

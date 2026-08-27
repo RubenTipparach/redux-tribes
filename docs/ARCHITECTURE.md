@@ -336,6 +336,35 @@ Nothing else feeds it. `MaxThrusterRange` is gone as a movement rule; a derived 
 - **Flight stats are per ship, serialised, and hashed.** They are tunable at runtime in the prototype, which makes them state that affects the simulation, so two clients flying different envelopes must not silently agree.
 - **Determinism is unaffected.** The integrator uses only arithmetic plus the existing deterministic trig in `dmath`, on the same libm discipline ADR-4 requires.
 
+## ADR-15: TypeScript Client over a Rust Simulation Core, and Where Rapier Fits
+
+**Status:** decided and scaffolded. `engine/sim_core` builds native and to wasm32, `web/` drives it from TypeScript through three.js, and `server/` is the lockstep match API. Everything below was measured in this repository, not assumed.
+
+**Decision.** The simulation is a Rust crate. It compiles to `wasm32-unknown-unknown` for the TypeScript client today and links as an `rlib` into a native Rust client later. One crate, two consumers: swapping the renderer must not fork the simulation, which is the whole reason ADR-2 put the engine agnostic split there in the first place.
+
+**The boundary is a C ABI over one flat f32 buffer, not wasm-bindgen.** The simulation's entire interface is numeric (poses, orders and stats in; poses out), so there is nothing for object marshalling to do. Skipping the glue keeps the build to plain `cargo build --target wasm32-unknown-unknown` with no extra toolchain, and it keeps the boundary explicit: slot offsets are declared in `ffi.rs` and mirrored in `web/src/sim/wasm.ts`, and they move together or not at all. Cost: a 58 KB wasm module and one call to probe a whole envelope grid instead of several thousand.
+
+**Rapier: yes, and here are the conditions.** Rapier is not cross-platform deterministic by default, but it can be, via the `enhanced-determinism` feature. The requirements are:
+
+1. the target platforms comply strictly with IEEE 754-2008;
+2. floating point maths comes from nalgebra's `ComplexField` / `RealField` traits rather than the built in methods, so `ComplexField::sin()` and not `.sin()`;
+3. every structure is initialised identically and inserted into its set in the same order.
+
+The feature cannot be combined with `simd8`. Requirement 2 is exactly the libm discipline ADR-4 already mandates, and requirement 3 is exactly the sorted iteration ADR-4 already requires for contact pairs, so adopting Rapier would not introduce a new class of constraint, only more surface to keep honest.
+
+**Recommendation: not in the authoritative path yet.** What the game needs from contacts is small, and ADR-4's bespoke resolution already covers it deterministically with no dependency: a handful of ships, no interpenetration, impulse damage, cold start per turn. Rapier earns its place when contacts get rich enough that hand rolling stops being cheaper: debris, jointed structures, terrain collision. Because the sim is a crate behind a numeric boundary, adopting it later is a change inside `sim_core` that the renderer never sees. Rapier is also perfectly fine right now for **non-authoritative client side effects**, where divergence has no consequence because nothing reads it back.
+
+**Consequence: the JS prototype stops being a determinism oracle.** It computes in f64; the Rust core computes in f32, as ADR-4 requires. Measured across seven scenarios, the two agree to about 1e-5 on ordinary trajectories. On a stiff one (a vertical climb, integrated over 600 feedback steps) they part by 0.2 units and 1.25 degrees. Tracing that case shows divergence entering at 5e-8, which is f32 epsilon, holding at rounding level for 120 ticks and then growing smoothly: compounding precision, not a logic difference. This does not threaten lockstep, because lockstep needs two clients running the *same* f32 build to agree, and they do. It does mean the prototype's role changes from oracle to design reference, and the determinism oracle becomes "two Rust builds agree", enforced in CI.
+
+**Writing the second implementation found a real bug.** The yaw and pitch decomposition is singular when the desired heading is vertical: `flat = sqrt(x^2 + z^2)` collapses and `atan2` of two near zero numbers is noise that the rotation then amplifies. Guarded in both implementations by holding yaw when `flat` is tiny and letting pitch do the work. That is the value of porting rather than rewriting: the second implementation interrogates the first.
+
+**Consequences.**
+
+- **The server never simulates.** Lockstep makes the API small: it collects each player's orders for a turn, withholds them until everyone has committed (so no one can read an opponent's plan before writing their own), releases them together, and compares the state hashes clients report back. It cannot say which client is right, only that two disagree, which is precisely the thing a client cannot discover alone.
+- **Storage is `node:sqlite`,** built into Node 22, so the API image needs no native build toolchain at all. One file, one writer, one machine, which is what the deploy workflow enforces before every release.
+- **TypeScript is strict everywhere,** including `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. The point of the migration is a checked boundary; a loose config gives that up and keeps the churn.
+- **CI gates the core first.** If the model is wrong nothing downstream matters, so `sim` runs alone, then the prototype, API and web jobs, then the two deploys.
+
 ## Migration Roadmap
 
 **Phase 0 - Foundations (the bet-validating slice).** `sim_core` skeleton: ship state, the ADR-14 flight integrator, tick loop, orders; CI determinism hash test (3 platforms) from the *first week*. Bevy shell rendering sim state with interpolation; camera rig; minimal egui HUD (end turn, move order). *Exit: one ship flies a planned turn identically on native and wasm/WebGPU, hashes matching.*
