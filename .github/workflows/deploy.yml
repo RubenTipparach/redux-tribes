@@ -116,33 +116,65 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if ! flyctl status -a redux-tribes > /dev/null 2>&1; then
-            echo "::notice::App not found; bootstrap with 'fly apps create redux-tribes' and 'fly volumes create ft_data --size 1 --region ams'."
+            echo "::notice::App not found; bootstrap with 'fly apps create redux-tribes' and 'fly volumes create ft_data --size 1 --region ord'."
             echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           echo "ready=true" >> "$GITHUB_OUTPUT"
 
-      # Single writer sqlite needs exactly one machine on one volume. Both
-      # steps are idempotent and no-op when already in the desired state.
-      - name: Ensure volume and a single machine
+      # Single writer sqlite needs exactly one machine on one volume, and that
+      # one machine has to live in REGION. Keep REGION in step with
+      # primary_region in server/fly.toml: this step is what actually enforces
+      # it, because primary_region only decides where NEW machines are placed
+      # and a deploy updates an existing machine wherever it already is.
+      #
+      # Idempotent: a no-op once the app is already one machine in REGION.
+      - name: Ensure volume and a single machine in REGION
         if: steps.fly_gate.outputs.ready == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           APP: redux-tribes
-          REGION: ams
+          REGION: ord
         run: |
           set -e
           COUNT=$(flyctl volumes list -a "$APP" --json | jq '[.[] | select(.name=="ft_data" and .region=="'"$REGION"'")] | length')
           if [ "${COUNT:-0}" -lt 1 ]; then
             flyctl volumes create ft_data --size 1 --region "$REGION" --app "$APP" --yes
           fi
+
+          # Destroy every app machine outside REGION, and all but one inside it.
+          # sort_by puts false before true, so off-region machines are listed
+          # first and the survivor is always one already in REGION. They also
+          # have to go first for their own sake: a machine still holding an
+          # off-region volume blocks that volume from ever being released.
           flyctl machine list -a "$APP" --json > /tmp/machines.json
-          FIRST=""
-          for M in $(jq -r '.[] | select((.config.metadata.fly_process_group // "app") == "app") | .id' /tmp/machines.json); do
-            if [ -z "$FIRST" ]; then FIRST="$M"; echo "keeping $M"; continue; fi
-            echo "destroying extra machine $M"
+          jq -r --arg r "$REGION" '
+            [ .[] | select((.config.metadata.fly_process_group // "app") == "app") ]
+            | sort_by(.region == $r)
+            | .[] | "\(.id) \(.region) \(if .region == $r then "keep" else "move" end)"
+          ' /tmp/machines.json > /tmp/plan.txt
+          KEPT=""
+          while read -r M MR TAG; do
+            if [ "$TAG" = "keep" ] && [ -z "$KEPT" ]; then
+              KEPT="$M"; echo "keeping $M in $MR"; continue
+            fi
+            if [ "$TAG" = "move" ]; then
+              echo "destroying machine $M in $MR: outside $REGION"
+            else
+              echo "destroying extra machine $M in $MR"
+            fi
             flyctl machine stop "$M" --app "$APP" || true
             flyctl machine destroy "$M" --app "$APP" --force || true
-          done
+          done < /tmp/plan.txt
+
+          # Volumes are NOT reaped here: a volume is the sqlite database, and
+          # this workflow does not get to delete a database on its own. Say
+          # where the strays are and let a human decide.
+          STRAY=$(flyctl volumes list -a "$APP" --json | jq -r '.[] | select(.name=="ft_data" and .region!="'"$REGION"'") | .id')
+          if [ -n "$STRAY" ]; then
+            for V in $STRAY; do
+              echo "::warning::volume $V is outside $REGION and now unused; delete with 'fly volumes destroy $V -a $APP' once you are sure its data is expendable."
+            done
+          fi
 
       # Built from the repository ROOT: the image compiles the Rust core to
       # wasm, bundles the client against it, then serves both from the API

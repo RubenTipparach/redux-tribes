@@ -9,13 +9,13 @@
 # most of these lessons the hard way. Bootstrap once with flyctl:
 #
 #   fly apps create redux-tribes
-#   fly volumes create ft_data --size 1 --region ams
+#   fly volumes create ft_data --size 1 --region ord
 #
 # No secrets to configure: the server is passwordless and per player tokens are
 # stored only as sha256 hashes. Deploys are automatic thereafter.
 
 app = "redux-tribes"
-primary_region = "ams"
+primary_region = "ord"
 
 [build]
 
