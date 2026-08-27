@@ -70,6 +70,11 @@ jobs:
     concurrency:
       group: pages-build
       cancel-in-progress: true
+    outputs:
+      # Whether this repo can publish Pages at all, so the deploy job can skip
+      # rather than fail. Building and testing the client is a hard gate; being
+      # able to HOST it is a repository setting and a separate question.
+      pages: ${{ steps.pages_gate.outcome }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -88,14 +93,32 @@ jobs:
           npm run typecheck
           npm test
           node build.mjs
-      - uses: actions/configure-pages@v5
+      # Same pre-bootstrap doctrine as the Fly gate below: a repository that has
+      # not turned Pages on yet is "skip", not "fail", because nothing about the
+      # code is wrong. `enablement: true` turns it on by itself where the token
+      # is allowed to, so this self resolves on a repo the owner has permission
+      # over and stays quiet on one they do not.
+      - name: Check Pages readiness
+        id: pages_gate
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Note when Pages is not available
+        if: steps.pages_gate.outcome != 'success'
+        run: >-
+          echo "::notice::Pages is not enabled for this repository; skipping the
+          site deploy. Enable it under Settings, then Pages, with the source set
+          to GitHub Actions."
       - uses: actions/upload-pages-artifact@v3
+        if: steps.pages_gate.outcome == 'success'
         with:
           path: web/dist
           retention-days: 1
 
   deploy-pages:
     needs: web
+    if: needs.web.outputs.pages == 'success'
     runs-on: ubuntu-latest
     # Pages deploys must NOT cancel-in-progress. actions/deploy-pages creates a
     # deployment then polls it; cancelling mid flight orphans it in_progress and
