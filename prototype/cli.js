@@ -74,6 +74,19 @@ function tests() {
   const r1b = sim.resolveTurn(restored, {}, {});       // turn 1 from the snapshot
   check("turn re-simulated from boundary snapshot matches live run", r1a.hash === r1b.hash, r1a.hash + " vs " + r1b.hash);
 
+  // The test above lets the AI run on BOTH paths, so a planning-time side
+  // effect on ship state cancels out and stays invisible. The case that
+  // matters is replaying with the orders already decided, which is also the
+  // lockstep case: a client that RECEIVES orders never runs the planner. If
+  // planning mutates state, that client diverges from the one that planned.
+  const rep0 = scriptedSetup("seed-replay");
+  const repPre = snap.serialize(rep0);
+  const repOrders = turn0Orders();
+  const live0 = sim.resolveTurn(rep0, repOrders, {});   // resolveTurn fills in AI orders
+  const replayed = sim.resolveTurn(snap.restore(repPre), JSON.parse(JSON.stringify(repOrders)), {});
+  check("replaying a turn from its stored orders reproduces it exactly",
+    live0.hash === replayed.hash, live0.hash + " vs " + replayed.hash);
+
   console.log("\n== slot endpoints (the Unity slot-10 bug, fixed by construction) ==");
   const s = scriptedSetup("seed-slots");
   const r = sim.resolveTurn(s, turn0Orders(), {});

@@ -25,13 +25,36 @@ The harness renders in 3D (three.js, vendored, no network). The sim was always
 3D: every position is x/y/z and weapons have vertical arcs. The old top-down
 canvas flattened that, which hid the thing the prototype exists to judge.
 
-**The movement envelope.** Select a ship and the volume it can reach this turn
-is drawn as a point cloud, with the exact reachable set outlined by three great
-circles. That volume is *probed from the sim*, never drawn from a formula:
-every candidate cell is put through `sim.plannedTarget`, the same call the turn
-resolver uses, and kept only if the planner hands the point back unchanged. So
-the drawing cannot drift from the rules, and when the movement model changes
-the shape changes with it.
+**The movement envelope.** Select a ship and the boundary of the volume it can
+reach this turn is drawn as a point cloud (the shell only: filling the interior
+just hid the fleet, and the surface is what carries the shape). The integral
+underneath still counts every cell, so the volume figure is unaffected.
+
+Two estimators answer "can this ship end the turn there?", and you can switch
+between them live:
+
+- **Sim today** probes `sim.plannedTarget`, the same call the turn resolver
+  uses, and keeps a cell only if the planner hands the point back unchanged.
+  It cannot drift from the rules. It answers with the hull centred sphere,
+  which is the flaw the redesign is about.
+- **Boat model** is the estimator from the `boat-movement` study, ported to 3D.
+  It asks no formula: it flies the turn in ten segments, turning toward the
+  target at a limited rate with thrust clamped each segment, then checks
+  whether the ship actually arrived. That is the only honest test for a coupled
+  model, because coupling has no closed form. Turn rate, top speed and thrust
+  are sliders.
+
+The contrast is the whole argument. On the same ship with the same carried
+velocity, at 6 deg/s of turn authority:
+
+| | reachable volume | freedom | can hold station |
+| --- | --- | --- | --- |
+| Sim today | 272.0k u3 over 2176 cells | 100% | yes |
+| Boat model | 16.5k u3 over 132 cells | 6% | NO, committed |
+
+Sweeping turn rate on the boat model: 1 deg/s gives 1% of a free sphere,
+30 deg/s gives 15% and station keeping returns, 90 deg/s (the study's own
+default) gives 16%.
 
 **The elevation slice.** The working altitude is one plane doing two jobs: a
 drag places the destination on it, and the envelope is sliced at it. `Q`/`E`
@@ -41,8 +64,8 @@ a 34.6 unit disc, which is 75% of the lateral room you had at hull level. The
 readout gives that as a closed form volume and as a numerical integral over the
 accepted cells, which agree to about 1%.
 
-**Per mode.** The envelope is not the same shape for every order, which is the
-whole point of probing rather than assuming:
+**Per mode.** Under the sim estimator the envelope is not the same shape for
+every order, which is the whole point of probing rather than assuming:
 
 | mode | envelope |
 | --- | --- |
@@ -66,6 +89,18 @@ touch, and the harness runs on a phone as well as a desktop.
 | zoom | wheel | pinch |
 | 15 degree yaw, face target | `A`/`D`, `F` | the round pad at the right edge |
 | frame the fleet and its envelope | `Fit view` | `Fit view` in the tab bar |
+
+### Reviewing past turns
+
+Every resolved turn keeps the snapshot it *started* from, its orders, and the
+state hash it produced. The turn strip above the event log replays any of them:
+`reviewTurn` restores the pre state and re-runs `resolveTurn` with the same
+orders, so nothing needs stored frames and the sim reproduces the turn exactly.
+The stored hash is then a free self check, printed into the log on every
+review. `Live` returns to the current turn.
+
+This is ADR-5's replay format doing real work rather than being described, and
+it immediately earned its keep: see the AI planning bug below.
 
 Below 900px the three pane console collapses: the side rails become bottom
 sheets on a tab bar, and the fire slot strip scrolls. Held sideways (under

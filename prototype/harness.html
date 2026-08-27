@@ -197,6 +197,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <div class="sect">Selected - Move Mode</div>
     <div class="modes" id="modes"></div>
     <div class="sect">Movement Envelope</div>
+    <div class="modes" id="estimators"></div>
+    <div id="envTune"></div>
     <div id="env" class="hint"></div>
     <div class="sect">Weapons <span class="hint">(click weapon, then a timeline slot)</span></div>
     <div id="weps"></div>
@@ -236,6 +238,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
 
   <div id="right">
     <div class="sect">Events</div>
+    <div class="modes" id="turns"></div>
     <div id="log"></div>
   </div>
 
@@ -317,6 +320,7 @@ function newMatch(s) {
     sh.lastVel = V.scale(fwd, DATA.SHIP_CLASSES[sh.classKey].thrusterRange * 0.6);
   }
   phase = "planning"; orders = {}; sel = null; selWeapon = null; playback = null;
+  history.length = 0;
   replayFile = { seed, turns: [] };
   log("New match · seed “" + seed + "”", "good");
   zoomToFit();
@@ -525,12 +529,13 @@ function makeShipMesh(ship) {
 }
 
 function syncShipMeshes() {
-  const key = state.ships.map(s => s.id + ":" + s.faction + ":" + (s.destroyed ? "x" : "o")).join(",");
+  const ships = viewState().ships;
+  const key = ships.map(s => s.id + ":" + s.faction + ":" + (s.destroyed ? "x" : "o")).join(",");
   if (key === rosterKey) return;
   rosterKey = key;
   for (const [id, m] of shipMeshes) { gShips.remove(m); shipMeshes.delete(id); }
   disposeGroup(gShips);
-  for (const ship of state.ships) {
+  for (const ship of ships) {
     if (ship.destroyed) continue;
     const m = makeShipMesh(ship);
     shipMeshes.set(ship.id, m);
@@ -580,6 +585,61 @@ function placeShip(ship, pos, quat) {
 let envKey = "";
 let envStats = null;
 
+// Two ways to answer "can this ship end the turn there?".
+//
+//   sim   probe sim.plannedTarget, the same call the turn resolver uses. This
+//         is what the code does TODAY, and it answers with a hull centred
+//         sphere, which is the flaw the redesign is about.
+//
+//   boat  the estimator from the boat-movement study, ported to 3D. It asks no
+//         formula: it flies the turn, ten segments of rate limited turning
+//         toward the target with thrust clamped each segment, then checks
+//         whether the ship actually arrived. That is the only honest test for a
+//         coupled model, because coupling has no closed form.
+//
+// Scaled into Fallen Tribes units: the study ran 10 second windows at speed 20
+// and accel 2, which is five times our reach. At accel 0.8 a ship from rest
+// covers 0.5*a*t^2 = 40 units in a turn and tops out at 8 u/s, so these
+// defaults put the boat envelope on the same scale as the 40 unit sphere it is
+// being compared against. Decel keeps the study's 1.5x ratio over accel.
+let ESTIMATOR = "sim";
+const BOAT = { turnRate: 6, maxSpeed: 8, accel: 0.8, segments: 10 };
+
+function boatReaches(ship, tx, ty, tz, thresh) {
+  const SEG = BOAT.segments, segT = DATA.CONST.TURN_SECONDS / SEG;
+  const decel = BOAT.accel * 1.5;
+  let cx = ship.pos.x, cy = ship.pos.y, cz = ship.pos.z;
+  // lastVel is a per-turn displacement; the controller works per second
+  let v = V.scale(ship.lastVel, 1 / DATA.CONST.TURN_SECONDS);
+  let dir = Q.forward(ship.quat);
+  for (let seg = 1; seg <= SEG; seg++) {
+    const left = SEG - seg + 1;
+    const remaining = left * segT;
+    const to = V.v3(tx - cx, ty - cy, tz - cz);
+    const dist = V.len(to);
+    const want = dist > 1e-6 ? V.scale(to, 1 / dist) : dir;
+    // rate limited turn, eased over the segments left, as the study does
+    const d = Math.max(-1, Math.min(1, V.dot(dir, want)));
+    const ang = FT.dmath.dacos(d);
+    if (ang > 1e-6) {
+      const stepAng = Math.min(ang / left, BOAT.turnRate * Math.PI / 180 * segT);
+      let axis = V.cross(dir, want);
+      if (V.len2(axis) < 1e-12) axis = V.v3(0, 1, 0);   // exactly astern
+      dir = V.norm(Q.rot(Q.axisAngle(V.norm(axis), stepAng), dir));
+    }
+    const desired = V.scale(dir, Math.min(dist / remaining, BOAT.maxSpeed));
+    const dv = V.sub(desired, v);
+    const dvm = V.len(dv);
+    if (dvm > 1e-3) {
+      const maxDv = (V.len(desired) > V.len(v) ? BOAT.accel : decel) * segT;
+      v = dvm > maxDv ? V.add(v, V.scale(dv, maxDv / dvm)) : desired;
+    }
+    cx += v.x * segT; cy += v.y * segT; cz += v.z * segT;
+  }
+  const ex = tx - cx, ey = ty - cy, ez = tz - cz;
+  return Math.sqrt(ex * ex + ey * ey + ez * ez) <= thresh;
+}
+
 // Rebuild only when something the envelope depends on actually changed, and do
 // it on demand so the readout never reports the previous interaction's numbers.
 function ensureEnvelope() {
@@ -596,7 +656,9 @@ function envelopeKey() {
   return [sel.id, o.move.mode, planeY().toFixed(2),
     sel.pos.x.toFixed(2), sel.pos.y.toFixed(2), sel.pos.z.toFixed(2),
     sel.lastVel.x.toFixed(2), sel.lastVel.y.toFixed(2), sel.lastVel.z.toFixed(2),
-    m.hasBoosted ? 1 : 0, m.stopped ? 1 : 0, m.lastMode, sel.drift.active ? 1 : 0].join("|");
+    m.hasBoosted ? 1 : 0, m.stopped ? 1 : 0, m.lastMode, sel.drift.active ? 1 : 0,
+    ESTIMATOR, BOAT.turnRate, BOAT.maxSpeed, BOAT.accel,
+    sel.quat.x.toFixed(3), sel.quat.y.toFixed(3), sel.quat.z.toFixed(3), sel.quat.w.toFixed(3)].join("|");
 }
 
 function buildEnvelope() {
@@ -613,7 +675,7 @@ function buildEnvelope() {
   // Committed modes have no envelope at all: the order does not choose a
   // destination, so the reachable set is exactly one point. Saying so is more
   // useful than drawing an empty box.
-  if (plan.committed || sel.drift.active) {
+  if (ESTIMATOR === "sim" && (plan.committed || sel.drift.active)) {
     const t = plan.target;
     gEnv.add(lineFrom([sel.pos, t], 0xffd24b, 0.85, true));
     const dot = new THREE.Mesh(
@@ -634,22 +696,36 @@ function buildEnvelope() {
   const N = COARSE ? 12 : 16;                 // cells per axis
   const step = (2 * R) / N;
   const EPS = 1e-6;
-  const reaches = (x, y, z) => {
-    const got = sim.plannedTarget(sel, [x, y, z], mode).target;
-    return Math.abs(got.x - x) < EPS && Math.abs(got.y - y) < EPS && Math.abs(got.z - z) < EPS;
-  };
+  const thresh = Math.max(2.0, step * 0.5);
+  const reaches = ESTIMATOR === "boat"
+    ? (x, y, z) => boatReaches(sel, x, y, z, thresh)
+    : (x, y, z) => {
+      const got = sim.plannedTarget(sel, [x, y, z], mode).target;
+      return Math.abs(got.x - x) < EPS && Math.abs(got.y - y) < EPS && Math.abs(got.z - z) < EPS;
+    };
   const at = i => -R + (i + 0.5) * step;   // cell centre, not lattice corner
   const inside = [];
+  const occ = new Set();
   for (let i = 0; i < N; i++) {
     const x = sel.pos.x + at(i);
     for (let j = 0; j < N; j++) {
       const y = sel.pos.y + at(j);
       for (let k = 0; k < N; k++) {
         const z = sel.pos.z + at(k);
-        if (reaches(x, y, z)) inside.push([x, y, z]);
+        if (!reaches(x, y, z)) continue;
+        occ.add(i + "," + j + "," + k);
+        inside.push([x, y, z, i, j, k]);
       }
     }
   }
+  // Draw the boundary only. Filling the interior stacked thousands of points
+  // into a solid ball that hid both the fleet and the shape of the envelope;
+  // the surface is what carries the information. The integral below still
+  // counts every cell, so the volume figure is unaffected.
+  const shell = inside.filter(c =>
+    !occ.has((c[3] - 1) + "," + c[4] + "," + c[5]) || !occ.has((c[3] + 1) + "," + c[4] + "," + c[5]) ||
+    !occ.has(c[3] + "," + (c[4] - 1) + "," + c[5]) || !occ.has(c[3] + "," + (c[4] + 1) + "," + c[5]) ||
+    !occ.has(c[3] + "," + c[4] + "," + (c[5] - 1)) || !occ.has(c[3] + "," + c[4] + "," + (c[5] + 1)));
   // the slice gets its own pass on the real plane: the working altitude almost
   // never coincides with a lattice layer, so picking the nearest one would
   // report a disc from the wrong height
@@ -662,15 +738,15 @@ function buildEnvelope() {
     }
   }
 
-  // the volume, as an additive point cloud: density without occlusion
-  if (inside.length) {
-    const pos = new Float32Array(inside.length * 3);
-    inside.forEach((p, n) => { pos[n * 3] = p[0]; pos[n * 3 + 1] = p[1]; pos[n * 3 + 2] = p[2]; });
+  // the shell, as an additive point cloud
+  if (shell.length) {
+    const pos = new Float32Array(shell.length * 3);
+    shell.forEach((p, n) => { pos[n * 3] = p[0]; pos[n * 3 + 1] = p[1]; pos[n * 3 + 2] = p[2]; });
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     gEnv.add(new THREE.Points(g, new THREE.PointsMaterial({
-      color: 0x35c7ff, size: step * 0.30, sizeAttenuation: true,
-      transparent: true, opacity: 0.5, depthWrite: false,
+      color: 0x35c7ff, size: step * 0.42, sizeAttenuation: true,
+      transparent: true, opacity: 0.75, depthWrite: false,
       blending: THREE.AdditiveBlending,
     })));
   }
@@ -686,20 +762,25 @@ function buildEnvelope() {
     gEnv.add(im);
   }
 
-  // analytic outlines: the full sphere and the exact spherical slice at py
-  // three great circles, built origin-centred inside a group parked on the
-  // hull, so rotation cannot drag them off the sphere they are outlining
-  const cage = new THREE.Group();
-  cage.position.set(sel.pos.x, sel.pos.y, sel.pos.z);
-  for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
-    const c = lineFrom(circlePoints(0, 0, 0, R, 64), 0x35c7ff, 0.28);
-    c.rotation.set(rot[0], rot[1], rot[2]);
-    cage.add(c);
+  // The sphere outline and the sqrt(R^2 - dy^2) disc are properties of the
+  // model the sim implements today, not of reachability in general. Under the
+  // boat estimator the set is not a sphere, so drawing them there would lie.
+  const analytic = ESTIMATOR === "sim";
+  if (analytic) {
+    // three great circles, built origin-centred inside a group parked on the
+    // hull, so rotation cannot drag them off the sphere they are outlining
+    const cage = new THREE.Group();
+    cage.position.set(sel.pos.x, sel.pos.y, sel.pos.z);
+    for (const rot of [[0, 0, 0], [Math.PI / 2, 0, 0], [0, 0, Math.PI / 2]]) {
+      const c = lineFrom(circlePoints(0, 0, 0, R, 64), 0x35c7ff, 0.28);
+      c.rotation.set(rot[0], rot[1], rot[2]);
+      cage.add(c);
+    }
+    gEnv.add(cage);
   }
-  gEnv.add(cage);
   const dy = py - sel.pos.y;
-  const sliceR = Math.sqrt(Math.max(0, R * R - dy * dy));
-  if (sliceR > 0.2) {
+  const sliceR = analytic ? Math.sqrt(Math.max(0, R * R - dy * dy)) : 0;
+  if (analytic && sliceR > 0.2) {
     gEnv.add(lineFrom(circlePoints(sel.pos.x, py, sel.pos.z, sliceR, 64), 0x4cd97b, 0.95));
     const disc = new THREE.Mesh(
       new THREE.CircleGeometry(sliceR, 48),
@@ -714,12 +795,15 @@ function buildEnvelope() {
   }
 
   envStats = {
-    committed: false, mode, cells: inside.length,
+    committed: false, analytic, mode, cells: inside.length, shell: shell.length,
     volume: inside.length * step * step * step,
     sliceCells: sliceCells.length, sliceArea: sliceCells.length * step * step,
     sliceR, R, dy, step,
-    trueVolume: (4 / 3) * Math.PI * R * R * R,
-    trueSliceArea: Math.PI * sliceR * sliceR,
+    trueVolume: analytic ? (4 / 3) * Math.PI * R * R * R : 0,
+    trueSliceArea: analytic ? Math.PI * sliceR * sliceR : 0,
+    // the share of an unconstrained sphere the ship can actually use, which is
+    // the number that makes a committed model legible at a glance
+    freedom: inside.length * step * step * step / ((4 / 3) * Math.PI * R * R * R),
   };
 }
 
@@ -732,7 +816,7 @@ let pipMesh = null;
 
 function render() {
   syncShipMeshes();
-  const inPlayback = phase === "playback" && playback;
+  const inPlayback = (phase === "playback" || phase === "review") && playback;
   const frame = inPlayback ? shipsAtPlaybackTick(playback.tick | 0) : null;
 
   disposeGroup(gPaths);
@@ -795,7 +879,7 @@ function render() {
     if (envKey) { envKey = ""; disposeGroup(gEnv); envStats = null; }
     for (const s of frame.ships) {
       if (s.destroyed) continue;
-      const ship = state.ships.find(x => x.id === s.id);
+      const ship = viewState().ships.find(x => x.id === s.id);
       if (ship) placeShip(ship, { x: s.x, y: s.y, z: s.z }, { x: s.q[0], y: s.q[1], z: s.q[2], w: s.q[3] });
     }
     for (const p of frame.projectiles) {
@@ -1047,7 +1131,8 @@ function bump(o, dy) {
 // -------------------------------------------------------------------- ui --
 const ui = {};
 for (const id of ["hTurn","hHash","hSeed","hPhase","hSec","fleet","hostiles","modes","weps","slots","log","scrub","bEnd","bRestart","bSpeed","bBoard","bReplay",
-                  "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace","env"])
+                  "left","right","pad","tShips","tLog","tFit","pUp","pDown","pCCW","pCW","pFace",
+                  "env","estimators","envTune","turns"])
   ui[id] = document.getElementById(id);
 
 const MODES = [["MOVE_AND_TURN","Move"],["TURN_SLIDE","Slide"],["FULL_SPEED","Boost"],["FULL_STOP","Stop"]];
@@ -1073,6 +1158,44 @@ function toggleSheet(key) {
   tab.classList.add("on"); tab.setAttribute("aria-pressed", "true");
   if (key === "log") ui.log.scrollTop = ui.log.scrollHeight;
 }
+// The estimator picker. Switching it changes only the drawing, never the sim:
+// "sim" shows what the code does today, "boat" shows what the candidate
+// coupled model would give, on the same ship with the same carried velocity.
+const ENV_TUNE = [
+  { key: "turnRate", label: "turn rate", min: 1, max: 90, step: 1,
+    fmt: v => v.toFixed(0) + " deg/s (" + (v * DATA.CONST.TURN_SECONDS).toFixed(0) + " per turn)" },
+  { key: "maxSpeed", label: "max speed", min: 2, max: 20, step: 0.5, fmt: v => v.toFixed(1) + " u/s" },
+  { key: "accel", label: "thrust", min: 0.2, max: 3, step: 0.1,
+    fmt: v => v.toFixed(1) + " u/s2 (decel " + (v * 1.5).toFixed(1) + ")" },
+];
+function buildEstimatorUi() {
+  ui.estimators.innerHTML = "";
+  for (const [key, label] of [["sim", "Sim today"], ["boat", "Boat model"]]) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = ESTIMATOR === key ? "on" : "";
+    b.onclick = () => { ESTIMATOR = key; buildEstimatorUi(); refresh(); };
+    ui.estimators.appendChild(b);
+  }
+  ui.envTune.innerHTML = "";
+  if (ESTIMATOR !== "boat") return;
+  for (const t of ENV_TUNE) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = '<div class="sub"><span>' + t.label +
+      '</span><span style="color:var(--ink)" data-v>' + t.fmt(BOAT[t.key]) + '</span></div>';
+    const r = document.createElement("input");
+    r.type = "range"; r.min = t.min; r.max = t.max; r.step = t.step; r.value = BOAT[t.key];
+    r.oninput = () => {
+      BOAT[t.key] = parseFloat(r.value);
+      wrap.querySelector("[data-v]").textContent = t.fmt(BOAT[t.key]);
+      refresh();
+    };
+    wrap.appendChild(r);
+    ui.envTune.appendChild(wrap);
+  }
+}
+buildEstimatorUi();
+
 ui.tShips.onclick = () => toggleSheet("ships");
 ui.tLog.onclick = () => toggleSheet("log");
 ui.tFit.onclick = () => zoomToFit();
@@ -1089,12 +1212,15 @@ ui.pFace.onclick = padAct(o => faceTarget(o));
 
 function refresh() {
   ui.hTurn.textContent = state.turn;
-  ui.hPhase.textContent = phase.toUpperCase() + (state.gameOver ? " · " + state.gameOver.winner.toUpperCase() + " WINS" : "");
+  const reviewing = playback && playback.review !== undefined;
+  ui.hPhase.textContent = reviewing
+    ? "REVIEW · TURN " + history[playback.review].turn
+    : phase.toUpperCase() + (state.gameOver ? " · " + state.gameOver.winner.toUpperCase() + " WINS" : "");
   ui.bEnd.disabled = phase !== "planning" || !!state.gameOver;
 
   // rosters
   ui.fleet.innerHTML = ""; ui.hostiles.innerHTML = "";
-  for (const ship of state.ships) {
+  for (const ship of viewState().ships) {
     if (ship.destroyed) continue;
     const cls = DATA.SHIP_CLASSES[ship.classKey];
     const div = document.createElement("div");
@@ -1106,6 +1232,7 @@ function refresh() {
       <div class="bar"><i style="width:${(100 * ship.hull / ship.hullMax).toFixed(0)}%"></i></div>
       ${ship === sel || (!ship.isPlayer && sel && ordFor(sel)._targetShip === ship.id) ? subs + `<div class="sub"><span>marines</span><span>${ship.marines}</span></div>` : ""}`;
     div.onclick = () => {
+      if (phase !== "planning") { log("Return to Live to give orders", "warn"); return; }
       if (ship.isPlayer) { sel = ship; selWeapon = null; }
       else if (sel) { const o = ordFor(sel); o._targetShip = ship.id; syncWeaponTargets(o); }
       refresh();
@@ -1200,6 +1327,7 @@ function refresh() {
     ui.slots.appendChild(d);
   }
   ui.pad.classList.toggle("hide", !(sel && phase === "planning"));
+  renderTurnStrip();
   draw();
   renderEnvelopeReadout();
 }
@@ -1209,6 +1337,10 @@ function refresh() {
 // working altitude, which for the current model is the spherical slice the
 // original game had. Both come from the sampler, so if the movement model
 // changes to something that couples heading to travel, these follow it.
+const EST_NOTE = {
+  sim: "Probing <b>sim.plannedTarget</b>, the call the turn resolver uses. This is what the code does today.",
+  boat: "The <b>boat-movement</b> controller: it flies the turn in ten segments with rate limited turning and clamped thrust, then asks whether the ship arrived. No formula, because a coupled model has none.",
+};
 const MODE_NOTE = {
   MOVE_AND_TURN: "coupled, heading follows travel",
   TURN_SLIDE: "decoupled, heading is yours to set",
@@ -1234,22 +1366,31 @@ function renderEnvelopeReadout() {
   ensureEnvelope();
   const st = envStats;
   if (!st) { ui.env.innerHTML = "No envelope: this ship has no move order yet."; return; }
-  let h = row("mode", MODE_NOTE[st.mode] || st.mode);
+  let h = '<div style="margin:0 0 6px">' + EST_NOTE[ESTIMATOR] + "</div>";
+  h += row("mode", MODE_NOTE[st.mode] || st.mode);
   if (st.committed) {
     h += row("envelope", "single point");
+    h += row("freedom", "0% of a free sphere");
     h += row("distance", fmt(st.R, "u"));
     h += row("volume", "0 (" + st.note + ")");
     ui.env.innerHTML = h;
     return;
   }
-  const pctArea = st.trueSliceArea > 0 && st.R > 0
-    ? (100 * st.trueSliceArea / (Math.PI * st.R * st.R)).toFixed(0) : "0";
-  h += row("reach", fmt(st.R, "u") + " radius");
-  h += row("volume", fmt(st.trueVolume, "u3") + " closed form");
   h += row("integral", fmt(st.volume, "u3") + " over " + st.cells + " cells");
   h += row("working alt", (st.dy >= 0 ? "+" : "") + st.dy.toFixed(1) + " off hull");
-  h += row("slice radius", fmt(st.sliceR, "u"));
-  h += row("slice area", fmt(st.trueSliceArea, "u2") + " (" + pctArea + "% of widest)");
+  if (st.analytic) {
+    const pct = st.R > 0 ? (100 * st.trueSliceArea / (Math.PI * st.R * st.R)).toFixed(0) : "0";
+    h += row("reach", fmt(st.R, "u") + " radius");
+    h += row("closed form", fmt(st.trueVolume, "u3"));
+    h += row("slice radius", fmt(st.sliceR, "u"));
+    h += row("slice area", fmt(st.trueSliceArea, "u2") + " (" + pct + "% of widest)");
+  } else {
+    // a coupled model has no closed form, so every figure here is sampled
+    h += row("slice area", fmt(st.sliceArea, "u2") + " over " + st.sliceCells + " cells");
+    h += row("freedom", (100 * st.freedom).toFixed(0) + "% of a free sphere");
+    h += row("can hold station",
+      boatReaches(sel, sel.pos.x, sel.pos.y, sel.pos.z, Math.max(2, st.step * 0.5)) ? "yes" : "NO, committed");
+  }
   ui.env.innerHTML = h;
 }
 
@@ -1265,6 +1406,75 @@ function log(msg, cls) {
   while (ui.log.children.length > 120) ui.log.lastChild.remove();
 }
 
+// ---------------------------------------------------------- turn history --
+// Every resolved turn keeps the snapshot it STARTED from, its orders, and the
+// state hash it produced. Reviewing turn n therefore does not need stored
+// frames: restore the pre state, re-run resolveTurn with the same orders, and
+// the sim reproduces the turn exactly. The stored hash is then a free
+// self check, and a mismatch would be a determinism bug worth shouting about.
+// This is ADR-5's replay format doing real work rather than being described.
+const history = [];
+
+function reviewTurn(n) {
+  const h = history[n];
+  if (!h) return;
+  const st = snap.restore(h.pre);
+  const r = sim.resolveTurn(st, JSON.parse(JSON.stringify(h.orders)), { record: true });
+  const ok = r.hash === h.hash;
+  playback = {
+    tracks: r.tracks, events: r.events, tick: 0, speed: 1, playing: true,
+    logged: new Set(), state: st, review: n,
+  };
+  phase = "playback";
+  ui.log.innerHTML = "";
+  log("Reviewing turn " + h.turn + (ok
+    ? " · re-simulated, hash matches " + h.hash.slice(0, 8)
+    : " · HASH MISMATCH, expected " + h.hash.slice(0, 8) + " got " + r.hash.slice(0, 8)),
+    ok ? "good" : "bad");
+  ui.scrub.value = 0;
+  refresh();
+  requestAnimationFrame(stepPlayback);
+}
+
+function backToLive() {
+  playback = null;
+  phase = state.gameOver ? "gameover" : "planning";
+  ui.scrub.value = 0; planScrub = 0;
+  ui.log.innerHTML = "";
+  log("Back to live · turn " + state.turn, "good");
+  refresh();
+}
+
+// The state the view should draw: a review shows the turn being reviewed, so
+// hull bars and rosters match the moment on screen rather than the live match.
+function viewState() {
+  return (playback && playback.state) ? playback.state : state;
+}
+
+function renderTurnStrip() {
+  ui.turns.innerHTML = "";
+  const reviewing = playback && playback.review !== undefined;
+  const live = document.createElement("button");
+  live.textContent = "Live";
+  live.className = reviewing ? "" : "on";
+  live.onclick = backToLive;
+  ui.turns.appendChild(live);
+  for (let i = 0; i < history.length; i++) {
+    const b = document.createElement("button");
+    b.textContent = "T" + history[i].turn;
+    b.className = (reviewing && playback.review === i) ? "on" : "";
+    b.title = "Re-simulate turn " + history[i].turn + " (hash " + history[i].hash.slice(0, 8) + ")";
+    b.onclick = () => reviewTurn(i);
+    ui.turns.appendChild(b);
+  }
+  if (!history.length) {
+    const n = document.createElement("span");
+    n.className = "hint";
+    n.textContent = "Resolved turns appear here to replay.";
+    ui.turns.appendChild(n);
+  }
+}
+
 // -------------------------------------------------------------- turn flow --
 function endTurn() {
   if (phase !== "planning" || state.gameOver) return;
@@ -1275,8 +1485,11 @@ function endTurn() {
     const o = orders[id];
     clean[id] = { move: { mode: o.move.mode, target: o.move.target || undefined }, weapons: o.weapons, board: o.board };
   }
+  const pre = snap.serialize(state);
+  const turnIndex = state.turn;
   const r = sim.resolveTurn(state, clean, { record: true });
-  replayFile.turns.push({ turn: state.turn - 1, orders: clean, hash: r.hash, snapshot: r.snapshot });
+  replayFile.turns.push({ turn: turnIndex, orders: clean, hash: r.hash, snapshot: r.snapshot });
+  history.push({ turn: turnIndex, pre, post: r.snapshot, orders: clean, hash: r.hash });
   ui.hHash.textContent = r.hash.slice(0, 8);
   playback = { tracks: r.tracks, events: r.events, tick: 0, speed: 1, playing: true, logged: new Set() };
   ui.scrub.value = 0; planScrub = 0;
@@ -1304,7 +1517,10 @@ function stepPlayback(ts) {
   draw();
   if (playback.tick >= T && playback.playing) {
     playback.playing = false;
-    phase = state.gameOver ? "gameover" : "planning";
+    // a review holds at the end of the turn it replayed; only the live turn
+    // hands control back to planning
+    phase = playback.review !== undefined ? "review"
+      : (state.gameOver ? "gameover" : "planning");
     lastTs = 0;
     refresh();
     return;
@@ -1355,7 +1571,11 @@ ui.scrub.oninput = () => {
   draw();
 };
 ui.scrub.onchange = () => {
-  if (phase === "playback" && playback && playback.tick < T) { playback.playing = true; requestAnimationFrame(stepPlayback); }
+  if ((phase === "playback" || phase === "review") && playback && playback.tick < T) {
+    playback.playing = true;
+    if (phase === "review") phase = "playback";
+    requestAnimationFrame(stepPlayback);
+  }
 };
 ui.bReplay.onclick = () => {
   document.getElementById("replayText").value = JSON.stringify(replayFile);

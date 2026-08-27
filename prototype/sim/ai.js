@@ -14,9 +14,16 @@
     if (enemies.length === 0) return { move: { mode: "MOVE_AND_TURN" } };
 
     // target: keep retaliation target if alive, else FIRST live enemy
-    // (registration order - kill priority is emergent, like the original)
+    // (registration order - kill priority is emergent, like the original).
+    //
+    // The choice is REPORTED in the order rather than written onto the ship
+    // here. Planning must not mutate state: a client replaying a stored turn,
+    // or receiving these orders over the wire, never calls planShip, so a
+    // side effect written here would exist on one machine and not the other
+    // and the state hashes would diverge (ADR-6). resolveTurn applies
+    // order.aiTarget on every path instead.
     let target = ship.ai.targetId ? enemies.find(e => e.id === ship.ai.targetId) : null;
-    if (!target) { target = enemies[0]; ship.ai.targetId = target.id; }
+    if (!target) target = enemies[0];
 
     // chase boost: if target beyond range, AI gets extra reach (the AIBoost cheat)
     const dist = V.dist(ship.pos, target.pos);
@@ -53,6 +60,7 @@
       move: { mode: "MOVE_AND_TURN", target: [dest.x, dest.y, dest.z], face: [face.x, face.y, face.z] },
       weapons,
       board,
+      aiTarget: target.id,
     };
   }
 

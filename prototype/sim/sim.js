@@ -415,6 +415,14 @@
         orders[ship.id] = aiMod.planShip(state, ship, rngFor("ai:" + ship.id));
       }
     }
+    // Apply the planning-time target selection from the ORDER, not from having
+    // run the planner. Orders that arrive from a replay or from the wire carry
+    // aiTarget too, so this reproduces identically whether the AI was run here
+    // or the decision was made on another machine last turn.
+    for (const ship of state.ships) {
+      const o = orders[ship.id];
+      if (o && o.aiTarget) ship.ai.targetId = o.aiTarget;
+    }
 
     // movement planning
     for (const ship of state.ships) {
