@@ -75,7 +75,24 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
    side rails become bottom sheets on a tab bar, and the nudges that were
    keyboard only (elevation, rotate, face target) get an on canvas pad, since
    a phone has no Q/E/A/D/F to press. Desktop is untouched. */
-#tabbar, #toolbar { display:none; }
+#tabbar { display:none; }
+
+/* One control row, sharing the canvas grid cell and pinned to its bottom edge,
+   on every screen size. It cannot overlap the footer, the tab bar or the
+   sheets by construction rather than by arithmetic. */
+#toolbar {
+  display:flex; align-items:center; gap:6px;
+  grid-column:2; grid-row:2; align-self:end; justify-self:center;
+  z-index:6; margin-bottom:12px; pointer-events:none;
+}
+#toolbar button {
+  pointer-events:auto; flex:0 0 auto;
+  width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
+  background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
+}
+#toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+#toolbar button.off { opacity:.28; }
+.tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -117,22 +134,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
   }
   #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
 
-  /* One control row, sharing the canvas grid cell and pinned to its bottom
-     edge. Two floating clusters on opposite edges were fighting the map and
-     each other; this cannot overlap the footer or the sheets by construction. */
-  #toolbar {
-    display:flex; align-items:center; gap:6px;
-    grid-column:1; grid-row:2; align-self:end; justify-self:center;
-    z-index:6; margin-bottom:12px; pointer-events:none;
-  }
-  #toolbar button {
-    pointer-events:auto; flex:0 0 auto;
-    width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
-    background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px);
-  }
-  #toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
-  #toolbar button.off { opacity:.28; }
-  .tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+  #toolbar { grid-column:1; }
 
   /* fingertip sized targets */
   button { padding:10px 13px; }
@@ -223,7 +225,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
       also the plane the envelope is sliced at, so the two are one idea rather than a hidden
       number. <b>Drag anywhere outside it and the camera moves instead</b>, so looking around
       never costs you an order you did not mean to give.<br>
-      <kbd>Q</kbd>/<kbd>E</kbd> raise and lower that plane by 5. Watch the
+      <kbd>Q</kbd>/<kbd>E</kbd>, or <b>▼</b>/<b>▲</b> in the row under the map, raise and lower
+      that plane by 5. Watch the
       <span style="color:var(--green)">slice</span> shrink as you climb away from the hull:
       that is the spherical slice, and it is what the altitude costs you in lateral room.<br>
       <b>Drag the white pip</b> on the ring at the destination, or <b>shift-drag</b>, to swing the heading.<br>
@@ -232,11 +235,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
       <b>RMB drag</b> orbits · <b>middle drag</b> pans · <kbd>wheel</kbd> zooms · <b>timeline slider</b> scrubs the
       <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
       Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) - real orders stay hidden until resolution, lockstep-style.
+      <br><br><b>The row under the map</b> works everywhere: <b>⟳ / ✥</b> swaps what a drag
+      outside the ring does between swinging the camera and sliding it, <b>⊕</b> snaps the camera
+      onto the selected ship, and the five on the right mirror
+      <kbd>E</kbd>/<kbd>Q</kbd>/<kbd>A</kbd>/<kbd>D</kbd>/<kbd>F</kbd>. They grey out when no
+      ship is selected.
       <br><br><b>On touch:</b> one finger inside the ring drags the destination, one finger
       outside it flies the camera, and two fingers pinch to zoom and slide the view.
-      The row along the bottom of the map holds the rest: <b>⟳ / ✥</b> swaps what an outside
-      drag does between swinging the camera and sliding it, <b>⊕</b> snaps the camera onto the
-      selected ship, and the five on the right are the keys a phone does not have.
       Tap a sheet's tab again to close it, or tap the map.
       <br><br>The envelope is <b>probed from the sim</b>, not drawn from a formula: every cell
       goes through the same planner the turn resolver uses. Boost and Stop therefore show one
@@ -263,11 +268,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <button id="cMode" title="Drag on empty space orbits. Tap to pan instead.">⟳</button>
     <button id="cCentre" title="Centre the camera on the selected ship">⊕</button>
     <span class="tbsep"></span>
-    <button id="pUp" class="shipctl" title="Working altitude +5">▲</button>
-    <button id="pDown" class="shipctl" title="Working altitude -5">▼</button>
-    <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left">↺</button>
-    <button id="pCW" class="shipctl" title="Swing heading 15 degrees right">↻</button>
-    <button id="pFace" class="shipctl" title="Face the target">◎</button>
+    <button id="pUp" class="shipctl" title="Working altitude +5 (E)">▲</button>
+    <button id="pDown" class="shipctl" title="Working altitude -5 (Q)">▼</button>
+    <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left (A)">↺</button>
+    <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">↻</button>
+    <button id="pFace" class="shipctl" title="Face the target (F)">◎</button>
   </div>
 
   <footer>

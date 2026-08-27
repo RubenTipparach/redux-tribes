@@ -101,14 +101,14 @@ rather than guessed, and orbiting can never cost you an order by accident.
 | | desktop | touch |
 | --- | --- | --- |
 | place destination | drag inside the ring | one finger inside the ring |
-| working altitude, and so the slice | `Q` / `E` | the pad's up and down |
+| working altitude, and so the slice | `Q` / `E`, or ▼ / ▲ under the map | ▼ / ▲ under the map |
 | rotate heading | drag the white pip, or shift-drag | drag the pip (wider hit radius on a coarse pointer) |
 | select / target | click a ship | tap a ship, or a row in the Ships sheet |
 | orbit | drag outside the ring, or right button drag | one finger outside the ring |
 | pan | middle button drag, or ✥ then drag outside | ✥ then one finger outside, or two fingers |
 | zoom | wheel | pinch |
 | centre on selected ship | ⊕ | ⊕ |
-| 15 degree yaw, face target | `A`/`D`, `F` | the round pad at the right edge |
+| 15 degree yaw, face target | `A`/`D`, `F`, or the row under the map | the row under the map |
 | frame the fleet and its envelope | `Fit view` | `Fit view` in the tab bar |
 
 ### Reviewing past turns
