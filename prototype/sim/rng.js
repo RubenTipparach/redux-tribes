@@ -1,4 +1,4 @@
-// Deterministic seeded RNG — sfc32 seeded via splitmix32.
+// Deterministic seeded RNG - sfc32 seeded via splitmix32.
 // Per-turn, stream-split: rng = makeRng(matchSeed, turnIndex, streamId)
 // so replays can seek to any turn and one consumer never perturbs another.
 // (Prototype of ARCHITECTURE ADR-4's RNG policy.)
@@ -30,7 +30,7 @@
     };
   }
 
-  // FNV-1a 32-bit over a string — used to mix seeds and stream keys.
+  // FNV-1a 32-bit over a string - used to mix seeds and stream keys.
   function fnv1a(str) {
     let h = 0x811c9dc5;
     for (let i = 0; i < str.length; i++) {
@@ -69,7 +69,7 @@
         return V.v3(x * inv, y * inv, z);
       },
       // Uniform point inside the unit sphere by REJECTION SAMPLING.
-      // (The textbook form is dir * cbrt(u), but Math.cbrt — like sin/cos — has
+      // (The textbook form is dir * cbrt(u), but Math.cbrt - like sin/cos - has
       // implementation-defined precision in JS, so it can differ between
       // engines. Rejection uses only multiply/compare, which are IEEE-exact
       // everywhere. ~52% acceptance; the loop is deterministic given the

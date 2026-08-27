@@ -68,8 +68,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
   <header>
     <h1>FALLEN TRIBES · SIM PROTOTYPE</h1>
     <span class="stat">turn <b id="hTurn">0</b></span>
-    <span class="stat">hash <b id="hHash">—</b></span>
-    <span class="stat">seed <b id="hSeed">—</b></span>
+    <span class="stat">hash <b id="hHash"> - </b></span>
+    <span class="stat">seed <b id="hSeed"> - </b></span>
     <span class="hgap"></span>
     <span class="stat" id="hPhase">PLANNING</span>
     <button id="bEnd" class="primary">End Turn ⏎</button>
@@ -82,7 +82,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <div id="fleet"></div>
     <div class="sect">Hostiles</div>
     <div id="hostiles"></div>
-    <div class="sect">Selected — Move Mode</div>
+    <div class="sect">Selected - Move Mode</div>
     <div class="modes" id="modes"></div>
     <div class="sect">Weapons <span class="hint">(click weapon, then a timeline slot)</span></div>
     <div id="weps"></div>
@@ -90,13 +90,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
     <button id="bBoard" disabled>Board Target</button>
     <div class="sect">Help</div>
     <div class="hint">
-      <b>Drag in space</b> to place the destination — the Bézier updates live.<br>
+      <b>Drag in space</b> to place the destination - the Bézier updates live.<br>
       <b>Drag the heading pip</b> (ring at the destination), or <b>shift-drag</b>, to rotate.<br>
       <b>Click</b> own ship: select · <b>click</b> enemy: target<br>
       <kbd>Q</kbd>/<kbd>E</kbd> elevation ±5 · <kbd>A</kbd>/<kbd>D</kbd> rotate 15° · <kbd>F</kbd> face target<br>
       <kbd>wheel</kbd> zoom · RMB <kbd>drag</kbd> pan · <b>timeline slider</b> scrubs the
       <span style="color:var(--cyan)">ghost estimators</span> along every path.<br>
-      Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) — real orders stay hidden until resolution, lockstep-style.
+      Enemy paths are <span style="color:var(--orange)">estimates</span> (momentum) - real orders stay hidden until resolution, lockstep-style.
     </div>
   </div>
 
@@ -119,7 +119,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px; 
 
 <div id="replayModal" style="display:none; position:fixed; inset:0; background:#000a; z-index:9;">
   <div style="max-width:640px; margin:8vh auto; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:14px;">
-    <div class="sect">Replay file (orders + per-turn snapshots + hashes) — copy to save</div>
+    <div class="sect">Replay file (orders + per-turn snapshots + hashes) - copy to save</div>
     <textarea id="replayText" readonly></textarea>
     <div style="text-align:right; margin-top:8px;"><button onclick="document.getElementById('replayModal').style.display='none'">Close</button></div>
   </div>
@@ -172,7 +172,7 @@ function newMatch(s) {
   replayFile = { seed, turns: [] };
   log("New match · seed “" + seed + "”", "good");
   ui.hSeed.textContent = seed;
-  ui.hHash.textContent = "—";
+  ui.hHash.textContent = " - ";
   refresh();
 }
 
@@ -241,7 +241,7 @@ function draw() {
 
   // planned / estimated paths + the time-scrubbed ghost estimator
   // (the original's predictive scrubber: drag the timeline to see where every
-  // ship will be at second t — the same Bezier the sim will fly)
+  // ship will be at second t - the same Bezier the sim will fly)
   if (!inPlayback) {
     const tScrub = planScrub / T; // 0..1 through the upcoming turn
     for (const ship of state.ships) {
@@ -423,7 +423,7 @@ function drawShip(ship, pos, quat) {
 
 // ------------------------------------------------------------------ input --
 // Input model mirrors the original NavMove widget: press in empty space and
-// DRAG — the destination follows the cursor live on the ship's plane (no need
+// DRAG - the destination follows the cursor live on the ship's plane (no need
 // to grab a marker), with the path preview updating every frame; release to
 // commit. Ships still select/target on press. RMB pans, wheel zooms.
 let panning = false, panStart = null, dragMove = false;
@@ -459,7 +459,7 @@ function setFacingFromCursor(w) {
 cv.addEventListener("mousedown", e => {
   if (e.button === 2) { panning = true; panStart = { x: e.offsetX, y: e.offsetY, cx: cam.x, cz: cam.z }; return; }
   if (e.button !== 0 || phase !== "planning") return;
-  // rotation pip takes priority — grab it to swing the planned heading
+  // rotation pip takes priority - grab it to swing the planned heading
   if (sel && facingHandleHit) {
     const dx = e.offsetX * devicePixelRatio - facingHandleHit.x;
     const dy = e.offsetY * devicePixelRatio - facingHandleHit.y;
@@ -533,7 +533,7 @@ function faceTarget(o) {
   const tgt = state.ships.find(s2 => s2.id === o._targetShip);
   if (!tgt) return;
   const myDest = sim.previewPath(sel, o.move.target || [sel.pos.x + sel.lastVel.x, sel.pos.y, sel.pos.z + sel.lastVel.z], o.move.mode, 4).target;
-  // predict where the target ends up (momentum) — aim at the future, not the now
+  // predict where the target ends up (momentum) - aim at the future, not the now
   const tDest = sim.previewPath(tgt, [tgt.pos.x + tgt.lastVel.x, tgt.pos.y + tgt.lastVel.y, tgt.pos.z + tgt.lastVel.z], "MOVE_AND_TURN", 4).target;
   const dir = V.norm(V.sub(tDest, myDest));
   o.move.face = [dir.x, dir.y, dir.z];
@@ -730,7 +730,7 @@ function stepPlayback(ts) {
 function logEvent(ev) {
   const t = (ev.tick / 60).toFixed(1) + "s ";
   switch (ev.type) {
-    case "TurnStart": log("— turn " + ev.turn + " —"); break;
+    case "TurnStart": log(" - turn " + ev.turn + " - "); break;
     case "ShotFired": log(t + ev.ship + " fires " + ev.weapon, "hit"); break;
     case "ProjectileSpawned": log(t + ev.owner + " launches " + ev.kind, "hit"); break;
     case "ShotHit": log(t + "hit " + ev.ship + (ev.sub ? " [" + ev.sub + "]" : ""), "hit"); break;
@@ -741,7 +741,7 @@ function logEvent(ev) {
     case "ShipDestroyed": log(t + ev.ship + " DESTROYED", "bad"); break;
     case "BoardingStarted": log(t + ev.from + " boards " + ev.ship + " (" + ev.marines + " marines)", "warn"); break;
     case "ShipCaptured": log(t + ev.ship + " CAPTURED by " + ev.byFaction, "good"); break;
-    case "GameOver": log("GAME OVER — " + ev.winner + " wins", ev.winner === "player" ? "good" : "bad"); break;
+    case "GameOver": log("GAME OVER - " + ev.winner + " wins", ev.winner === "player" ? "good" : "bad"); break;
   }
 }
 

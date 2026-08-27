@@ -1,4 +1,4 @@
-// Fallen Tribes — headless deterministic WEGO simulation core (JS prototype).
+// Fallen Tribes - headless deterministic WEGO simulation core (JS prototype).
 //
 // Implements the mechanics documented in docs/DESIGN.md on the turn pipeline
 // of docs/ARCHITECTURE.md ADR-3/-4: a 10-second turn resolved over tick
@@ -8,7 +8,7 @@
 // per-second boarding dice, and a seeded per-turn RNG. Pure data in, pure
 // data out: resolveTurn(state, orders) -> { state', events, hash, tracks? }.
 //
-// No engine, no DOM, no Node APIs — runs identically headless and in-browser.
+// No engine, no DOM, no Node APIs - runs identically headless and in-browser.
 (function (global) {
   "use strict";
 
@@ -228,7 +228,7 @@
     if (w.lastFiredTurn >= 0 && gap < Math.max(1, wd.cooldownTurns)) return;
 
     const mountPos = mountWorldPos(ship, w);
-    // aim point: targeted subsystem volume, else target hull center (live position — original behavior)
+    // aim point: targeted subsystem volume, else target hull center (live position - original behavior)
     let aimPos = target.pos;
     const aimedSub = order.targetSub ? target.subsystems.find(s => s.id === order.targetSub && !s.dead) : null;
     if (aimedSub) aimPos = subWorldPos(target, aimedSub);
@@ -350,7 +350,7 @@
         const mA = SHIP_CLASSES[A.classKey].mass, mB = SHIP_CLASSES[B.classKey].mass;
         const wA = mB / (mA + mB), wB = mA / (mA + mB); // heavier moves less
 
-        // positional correction: separate fully this tick — never interpenetrate
+        // positional correction: separate fully this tick - never interpenetrate
         A.pos = V.sub(A.pos, V.scale(n, overlap * wA));
         B.pos = V.add(B.pos, V.scale(n, overlap * wB));
 
@@ -470,7 +470,7 @@
       stepProjectiles(state, tick, events, rngFor);
       // 3. collisions (no-clip separation + impulse damage)
       resolveCollisions(state, tick, events, pairCooldowns, prevPositions);
-      // 4. second-boundary events — including slot 10 at tick 600 (ADR-3)
+      // 4. second-boundary events - including slot 10 at tick 600 (ADR-3)
       if (tick % TPS === 0) {
         const second = tick / TPS;
         // boarding initiation at second 0
@@ -537,7 +537,7 @@
     return { events, snapshot, hash, tracks };
   }
 
-  // Planning preview: the same math the sim runs — preview equals execution.
+  // Planning preview: the same math the sim runs - preview equals execution.
   function previewPath(ship, targetArr, mode, samples) {
     const cls = SHIP_CLASSES[ship.classKey];
     const range = mode === "FULL_SPEED" ? cls.thrusterRange * 2 : mode === "FULL_STOP" ? cls.thrusterRange * 0.5 : cls.thrusterRange;

@@ -1,4 +1,4 @@
-// Game data — ported from the Unity archive's authored values
+// Game data - ported from the Unity archive's authored values
 // (docs/DESIGN.md + docs/reference/DATA_AUDIT.md). All tunables live here.
 (function (global) {
   "use strict";
@@ -11,7 +11,7 @@
     DRIFT_FACTOR: 0.25,         // engines-dead drift = last offset * 0.25
     BOOST_MULT: 2.0,
     FULLSTOP_MULT: 0.5,
-    // collision (new system — no interpenetration, impulse damage)
+    // collision (new system - no interpenetration, impulse damage)
     COLLISION_DAMAGE_K: 25.0,   // dmg = K * relNormalSpeed(units/s) * reducedMass
     COLLISION_PAIR_COOLDOWN_TICKS: 60,
     COLLISION_RESTITUTION: 0.3,
@@ -26,7 +26,7 @@
     MISSILE_LAUNCH_SCATTER: 5,
     MISSILE_HOP_SCATTER: 0.5,
     MISSILE_HOP_TICKS: 60,      // re-plan every 1 s
-    MISSILE_LIFE_TICKS: 1200,   // 20 s — missiles persist across turns
+    MISSILE_LIFE_TICKS: 1200,   // 20 s - missiles persist across turns
     BEAM_SCATTER: 0.5,          // insideUnitCircle * 0.5 at the aim point
     PROJECTILE_RADIUS: 0.5,
   };
@@ -57,7 +57,7 @@
   };
 
   // Subsystem layout: local offsets are deterministic hit-volume centers
-  // (spatial damage model — the shot hits whatever volume it reaches first).
+  // (spatial damage model - the shot hits whatever volume it reaches first).
   // blockPct: share the subsystem absorbs; rest bleeds to hull.
   function frigateSubsystems(armorBlock) {
     return [

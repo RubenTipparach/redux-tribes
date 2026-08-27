@@ -1,7 +1,7 @@
 // Turn-boundary snapshots + deterministic state hashing (ADR-5 prototype).
 // Serialization is plain JSON-able data; the hash walks a canonical flat
 // number/string stream (float bit patterns via Float64Array), so two states
-// hash equal iff they are bit-identical — the lockstep divergence detector.
+// hash equal iff they are bit-identical - the lockstep divergence detector.
 (function (global) {
   "use strict";
 

@@ -7,7 +7,7 @@
 // functions used by sim code live here as fixed polynomial approximations.
 // This mirrors the Rust plan's libm discipline (ADR-4).
 //
-// Accuracy: sin/cos ~1e-4 absolute, atan2 ~1e-3 rad — plenty for gameplay;
+// Accuracy: sin/cos ~1e-4 absolute, atan2 ~1e-3 rad - plenty for gameplay;
 // the same approximations run everywhere, which is what matters.
 (function (global) {
   "use strict";

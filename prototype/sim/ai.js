@@ -1,4 +1,4 @@
-// AI — a port of BaseAIController.DoAIStuff (docs/DESIGN.md §5):
+// AI - a port of BaseAIController.DoAIStuff (docs/DESIGN.md §5):
 // one decision procedure per turn issuing the same orders a player would.
 (function (global) {
   "use strict";
@@ -14,7 +14,7 @@
     if (enemies.length === 0) return { move: { mode: "MOVE_AND_TURN" } };
 
     // target: keep retaliation target if alive, else FIRST live enemy
-    // (registration order — kill priority is emergent, like the original)
+    // (registration order - kill priority is emergent, like the original)
     let target = ship.ai.targetId ? enemies.find(e => e.id === ship.ai.targetId) : null;
     if (!target) { target = enemies[0]; ship.ai.targetId = target.id; }
 

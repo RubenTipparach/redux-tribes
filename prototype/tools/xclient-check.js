@@ -55,6 +55,6 @@ function runNode() {
   console.log("node    :", nodeHashes.join(" "));
   console.log("browser :", browserHashes.join(" "));
   const same = nodeHashes.every((h, i) => h === browserHashes[i]);
-  console.log(same ? "\nMATCH — identical state on both clients from orders alone" : "\nDIVERGENCE");
+  console.log(same ? "\nMATCH - identical state on both clients from orders alone" : "\nDIVERGENCE");
   process.exit(same ? 0 : 1);
 })();

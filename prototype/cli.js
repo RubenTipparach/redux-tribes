@@ -122,7 +122,7 @@ function tests() {
   check("captured ship flipped faction", eShip.faction === "terran");
 
   console.log("\n== drift on engine death ==");
-  // shooter astern of the target: engines are a REAR volume — the spatial
+  // shooter astern of the target: engines are a REAR volume - the spatial
   // damage model means you cannot snipe them through the bow.
   const dState = sim.createSkirmish("seed-drift", {
     player: [{ classKey: "terran_frigate", pos: V.v3(0, 0, 90), facing: V.v3(0, 0, -1) }],
