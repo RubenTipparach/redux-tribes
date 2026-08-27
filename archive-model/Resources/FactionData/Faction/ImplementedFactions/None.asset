@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 40b8ac159a6a9974a8e2cc2ab34d0e5a, type: 3}
+  m_Name: None
+  m_EditorClassIdentifier: 
+  shipFaction: 0
+  factionName: None
+  factionDesignation: NONE
+  factionIcon: {fileID: -1854975601, guid: 1fe78c31c34bb8140bb228773ed01769, type: 3}
+  defaultShip: {fileID: 11400000, guid: ee3ec3e458c464b40bf7ed718218af3b, type: 2}
+  allShips:
+  - {fileID: 11400000, guid: ee3ec3e458c464b40bf7ed718218af3b, type: 2}
+  factionHologramMaterial: {fileID: 2100000, guid: 10d2c7ced2e94cf4a84fd3deb0699bbe,
+    type: 2}
+  primaryFactionColor: {r: 1, g: 1, b: 1, a: 1}
+  secondaryFactionColor: {r: 0.31132078, g: 0.31132078, b: 0.31132078, a: 1}

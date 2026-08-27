@@ -1,0 +1,78 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: moon_planet
+  m_Shader: {fileID: -6465566751694194690, guid: fb866840932f38c4d80f696fb0368458,
+    type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _LAND_COLOR_TYPE_MOONLAND
+  m_InvalidKeywords: []
+  m_LightmapFlags: 2
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - unity_Lightmaps:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_LightmapsInd:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_ShadowMasks:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _LAND_COLOR_TYPE: 3
+    - _QueueControl: 0
+    - _QueueOffset: 0
+    - _cloud_cover: -2.19
+    - _cloud_opacity: 0
+    - _clouds_speed: 0.01
+    - _fr_power: 0.92
+    - _land_amount: 2.2
+    - _land_color_variation: 0.32
+    - _land_offset: -1.8
+    - _normal_str: 0.002
+    - _north_pole: -1.41
+    - _smoothness: 0.84
+    - _south_pole: 2
+    - _water_amount: -0.5
+    - _water_blend: 12.28
+    m_Colors:
+    - _fr_color: {r: 0, g: 0.08311942, b: 0.3962264, a: 1}
+    - _land: {r: 0, g: 0, b: 0, a: 0}
+    - _planet_shape_high_frq: {r: 105.6, g: 30.9, b: 2.81, a: 0}
+    - _planet_shape_low_frq: {r: 12.72, g: 10, b: 5, a: 0}
+    - _water: {r: 0.111294046, g: 0.3941523, b: 0.5754717, a: 0}
+    - _water_shallow: {r: 0.025231387, g: 0.49607638, b: 0.5943396, a: 0}
+  m_BuildTextureStacks: []
+--- !u!114 &4942957095519337627
+MonoBehaviour:
+  m_ObjectHideFlags: 11
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0353a89b1f911e48b9e16bdc9f2e058, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  version: 7

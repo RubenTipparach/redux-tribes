@@ -1,0 +1,225 @@
+Opening Storybook Scene (This scene is a set of illustrations that tell the story and transformation of a cat-rabbit-like creature turning into a monster.):
+
+pg 1. There once was a creature that lived in the deep, dark woods.
+pg 2. It was surrounded by a warm and loving family. They took care of and gathered food for each other.
+pg 3. One day, a pack of terrifying, monstrous wolves attacked the den.
+pg 4. All the animals ran off and scattered into the dark forest.
+pg 5. The creature wandered for days and nights as the air grew colder and the snow began to fall.
+pg 6. It continued wandering for what seemed like eons, starving but never dying. It became desperate for food, willing to eat anything—even one of its own.
+pg 7. "Just once," it thought. "Just so I can get through this winter." And it did just that, over and over again, transforming into a hybrid creature resembling the wolves that had attacked.
+pg 8. As winter drew on, food became more scarce, and the creature, in its weakened state, fell to the ground, eventually being captured by strange two-legged beings.
+pg 9. The strangers fed the creature, nursing it back to health, and transported it across land and sea to their home.
+pg 10. They taught the creature how to obey commands and be kind to other animals. In exchange, they fed it and gave it a new home in a large palace.
+pg 11. No matter how much the creature ate, it was never satisfied. Its hunger turned toward the strangers, and it wanted to eat them and escape.
+pg 12. The creature knew it would not stand a chance against the strangers until it regained all of its strength. So, it waited and plotted its escape.
+
+INTRO (this section is more for the reader; maybe I'll put this in as black screen text to briefly explain the setting)
+In the distant future, humans abandoned Earth in a great exile after the ecosystem collapsed. Without realizing it, they had committed a grave galactic offense—breaking one of the three laws imposed by the Galactic Council upon every sentient race.
+
+Law 1: A sentient race or group of people shall not eradicate another.
+Law 2: The tenure of a sentient race or group shall not cause the destruction or collapse of a planet's biosphere.
+Law 3: No method of travel shall meet or exceed the speed of light relative to an observer.
+
+The violation of any of these laws will result in destruction of that race or group of sentient beings.
+
+Setting:
+The bridge of the flagship ETS Orion. Two shadowy figures stand by the main bridge window, their silhouettes lit by starlight.
+
+:: Start (this is the first cutscene in the game)
+Ambassador: That summit was not how I anticipated it going.
+Admiral: That's unfortunate. The Emperor won't be happy.
+Ambassador: I couldn't care less about that. Your people only have a few years' worth of resources and food before your burgeoning population begins to starve.
+Admiral: I suppose you actually care...
+Ambassador: My people suffered the same fate. The void is not forgiving to the bold.
+-> Briefing
+
+:: Briefing
+Admiral: Captain Geril, I'm assigning you a top-secret mission. To others in the Navy, it may be construed as treason, but it is of the highest importance. Are you prepared to accept?
+Geril: I'm prepared, sir. I have a good guess as to what you might be asking.
+Admiral: Yes, as we've discussed before. I'll make this brief. You are to meet with a contact halfway to the Karisen homeworld. Your contact will fill you in from there.
+Geril: That's all?
+Admiral: You are not to disclose the details of this mission, or what your contact divulges, to anyone. I hand-picked you for a reason.
+Geril: Understood, sir. I serve the Emperor.
+Admiral: As do I. Good hunting, Captain.
+-> Discussion
+
+:: Discussion
+Geril: Behind enemy lines, minimal to no support. What else is new?
+Konarm: The Admiral made it sound like this mission might not go down smoothly with the Emperor.
+Geril: Of course. I know Jom—I know what he's asking. If it comes down to it, we'll have to stop the Emperor. It's the only way our race survives.
+Konarm: The council will hunt our entire race until we're all dead if we don't succeed.
+Geril: And if we do succeed, we'll be hunted for the rest of our lives by our own.
+Konarm: Gotta love suicide missions.
+Geril: Part of the service. Only way out of the Navy is death.
+-> End
+
+
+MISSION 01
+=======================
+
+INTRO
+Shuran: Captain, we've detected some anomalies with the ship's engines.
+Engineering is reporting that the prototype modules installed are giving off strange readings.
+They recommend we "pull over" to run a complete diagnostic.
+Geril: Akcnowledged, ops. We're far enough, so I'll broadcast this to the entire ship, everyone needs to know what we're getting into. Comms...
+Attention. all Personel. Our mission is to arrive at the halfway point to Halisan to test a experimental jump module. It's intent is to allow us to accelerate rapidly to within 99.9% the speed of light.
+While this gives us incredible speed, it also makes us impossible to detect due to dopler shifts. However, this is not its primary use.
+
+We are as of this moment, the Empire of Terra's most powerful unstoppable bullet. By the orders of the high council, they've entrusted us with the most sophiscticated piece of technology mankind has ever invented, to do one job.
+Stop the Emperor from destroying Halisan the Karisen home world. Some of you may disagree, but as we approach our rendeovous point, we'll begin running tests and ensure that the ship is in working order before carrying out this mission.
+As the Emperor's forces regroup and prepare a full on assault, they'll arrive in about 3 months of time. In which we will be preparing with our Karisen allied operatives to prepare this ship for combat. If anyone has any objections, we'll send you off with the naval trasnport ETS Valeria. Otherwise, I expect you to do your job.
+We might be mankind's only hope against breaking one of the galactic council's most sacred law of all - the destruction of planet or people of which will result in our extermination.
+Geril out.
+
+TUTORIAL 01 Engines and Navigation
+-----------------------
+Shuran: Sir, I had no idea...
+Geril: I understand, Shuran. I'm glad you decided to remain on board, you're the best helmsman a captain could ask for.
+Shuran: Yes, I'm more than happy to carry out my duties. We're still waiting on the Karisen operatives to arrive and provide us with the ignition keys for the module.
+I've prepped the engines and navigations diagnostics. Ready to begin tests on your command, sir.
+Geril: Excellent. All stations, prepare for operations. Yellow Alert.
+
+* Yellow Alert *
+
+OBJECTIVE 01
+Shuran: Our first trial, will be to test navigation and movement. Captain, go ahead and plot a course directly ahead.
+
+OBJECTIVE 02
+Shuran: Systems appear green. Let's try moving the ship in a 90 degree heading to the right.
+
+OBJECTIVE 03
+Shuran: Rotational thrusters look good. You can always tweak the rotation of the ship at its destination by interacting with the widgets around the ship.
+Shuran: Next up, I'm going to disable rotational thrusters. You can translate the ship in any direction, so go head and move us to the right.
+
+OBJECTIVE 04
+Shuran: Translational thrusters look good. Now lets try the ship's Boost mode. This will allow us to cover double the maximum distance,
+but it will draw power from many systems across the ships, thus we'll only be moving in one direction.
+
+objectives 05
+Shuran: Great, lets bring the ship to a complete stop, and that should conclude engines and navigational diagnostics.
+
+
+TUTORIAL 02 Weapons and Tactics
+-----------------------
+Kornam: Since I'm first officer, and my specialty is tactics, I'll be running operations for this next section.
+I've prepared a set of tests for weapons targeting and firing. We'll need this ship and its crew at peak combat readiness to carry out our mission.
+
+OBJETCIVE 01
+Kornam: Our first task before any weapons can be fired is to target an object. Go ahead and select an object for targetting.
+
+(in the future we'll modify this to allow decoupled targetting - multi targetting system)
+
+OBJECTIVE 02
+Kornam: Targetting computer is working great I'm seeing sensors data related to our selected target.
+Next up, lets schedule a time to fire the weapon. This will appear on the events timeline when you've selected a time to schedule the firing event.
+Then click on a weapon button to fire it for that instant. You can queue up one or many weapons.
+Only weapons that have a valid line of sight on their target can fire. Usually to obtain a line of sight, is to rotate the ship so that the target is within its firing arc.
+For now, just shoot the big lasers.
+
+Objective 03
+Kornam: Ok that was good, hits are registering. The target has taken damage. Next we'll target something that isn't within our line of sight.
+I'll enable movement so we can repositions ourselves to hit the target. Note that objects also block targets from being hit.
+
+Objective 04
+Kornam: Awesome, also keep in mind that since the ship is a large object, the focal point for multiple weapons can change for  target. 
+Moving the ship farther away might allow more weapons to hit, but with energy weapons, damage is less since the farther away something is the less damage energy weapons will have.
+Kinetics don't have this issue, but suffer from accuracy as a trade off.
+
+Now we'll begin targetting subsystems. Select the engines on that ship and fire at it. Don't worry about destroying it, we gave it plenty of hit points.
+
+OBJECTIVE 05
+Kornam: Notice the engines are now offline, you'll see gas and debris flying off to indicate that it has sustained significant damage.
+Damaging subsystems are a great way to slow an enemy or prevent them from doing harm to you. You might as well be dead if you can't manuever in battle.
+
+This concludes weapons and tactics diagnostics. Looks like everything is working great.
+
+
+TUTORIAL 03 Security and Engineering
+-----------------------
+Fozzine: Greetings Capatain, as you already know, I'm in charge of ship security and marine operations. Our marines are the finest in the service,
+and I hope to impress you with our little demonstrations today.
+
+OBJECTIVE 01
+Fozzine: The ship in front of us is disabled. Let's try to board it. Go ahead and target it, but becareful not to fire any more weapons at it.
+Usually the more damaged a ship is, the easier it will be to capture, as the crew will have been weakened and exposed to the elements.
+Move within 20 units of range, and when the timeline expires, the boarding button should be lit. Order your marines to board the ship and they will automatically go about their business in taking it over.
+Also, do watch the paint job sir, our ship is very expensive. Wouldn't want Ludwegg to have a fit now...
+
+OBJECTIVE 02
+Fozzine: Wonderful! We've boarded some marines. However, the enemies presence was too great, and they couldn't capture it yet.
+You can board a few more marines, and continue for a few turns until it is captured. Be sure to maintain the proper distance, sir.
+
+OBJECTIVE 03
+Fozzine: And that's all there is to it sir. It's been a pleasure working with you. I'll let Ludwegg take over this next section.
+
+Ludwegg: Greetings captain, as the head of engineering, I'll be walking you through some vital parts of ship maintenance. 
+As you may recall ships comprise of many crucial subsystems that can be damaged during combat. In between turns. you'll have the option to queue up damaged subsystems for repairs.
+
+The ship is limited in parts it can use to repair. We can't fix the ship on aether alone, unfortunately. Go ahead and repair our engines so that we can leave.
+
+OBJECTIVE 04
+Ludwegg: Excellent work, captain. Our repair teams will be happy. As you mgiht've already guessed, any system damaged to a certain extent will stop functioning.
+The majority of our crew is dedication to repairing subsystems, so we won't run out of people any time soon, but rather parts are limited. So choose wisely.
+
+
+[Additional tutorials - Tractoring, Communications, Science, Planetary ops, Mines]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-------------------------Notes
+
+
+Thanks for reading so far! Yes, I'm looking for general improvements on how to be a better Sci-Fi writer. Its a skill I've neglected for a while. So I'll give you a high level view of where I want this story to go.
+
+**Tutorial Section** (currently this is what the opening dialog is for, I came up with a script annotation with the AI to parse these lines into the game, hence the :: and ->)
+- This section introduces the main character, crews, various leaders and key figures in the conflict.
+- Sets the general tone for the story, this is closer to hard sci-fi with some grander elements to discuss the various Kardashev scale of civilizations, why they do what they do, and the goals to expand. We also live in a dark forest universe (I'm taking lots of inspiration from 3 body problem universe, but not as bleak), meaning aliens are like animals or tribes in a dark forest. They attack one another for fear of being attacked themselves.
+- It's clear that the human colonies aren't surviving very well without a decent planet to settle on that can sustain mass farming and resources required for energy production. Their desperation leads to the current setting of the plot where tensions with a neighboring faction has grown to its boiling point, and that the Terran Empire, lead by a mad emperor is on the verge of a large scale invasion of the Karisen home world. Clearly, the Karisens in order to protect themselves, have made plans to frame the Terrans by causing their home world to be destroyed in the invasion, and thus a conspiracy within the Terran Naval Intelligence and Karisens who are against the idea has appointed Captain Geril as the lead role in stopping the emperor.
+
+- The tutorial missions, as a fun idea I'm currently working on various writing for introduces each key officer on the bridge as they walk you through the various ship systems. Still cleaning up some dialog there, will probably be implementing that as a goal for the 2D con showcase.
+
+- Tutorial missions
+  - tutorial 1 flight controls
+  - tutorial 2 targeting and weapons
+  - tutorial 3 capturing ships and repairs
+  - mission 1 - rendezvous and combat practice
+  - mission 2 - main battle part 1
+  - mission 3 - main battle part 2
+
+- Tutorial ends as the emperor makes landfall, your ship is equipped with a mass collimator, increases mass of the ship causing fuels to become heavy but still travel out at the same speed, accelerating the ship to close of light speed. This turns the ship into a massive bullet, capable of their assassination mission. The ship as a result takes heavy damage, and due to its speed it jumps to a random part of the nebula where they come across a planet hidden deep within the denser parts of the nebula's planetary dust clouds. The council arrives and warns them of mass destruction weapons, the council attacks both sides of the war critically neutralizing weapons and ship bases and infrastructure. The terrans are allowed to settle on the new world(Unnamed?).
+
+**The mid Section**
+The New World becomes a front to explore the rest of the nebula. It turns out the humand and the Karisens are not the only ones inhabbiting it. There are many other factions, some that live there to tread with other factions that lie deeper and have more exotic technologies. Cultists, and galactic council rebels also inhabit the nebula, as well as a faction that manufactures advanced weapons that they believe can be used against the council. All of these factions operate in a kind of grey area, they don't quite trust one another and might be hostile.
+
+**The End Game**
+- The Galactic Council represents a group of aliens who have become so far technologically advanced, that they believe that the dark forest hypothesis can become something of a zoo. They can tame the lesser alien factions to "behave" with one another and ascend to become the next generation of the council. The council is working on constant research to ascend to a higher dimension and leave this universe, it is unclear if this goal is attainable before the heat death.
+- In their persuit, and their massive economic structures that lie within the core regions of the galaxy, they've needed to dip into various worlds to take resources that they require. In doing so they exploited many worlds and lesser cultures under the veil of  "humane" migrations. This also included the attack on Earth carried out by a proxy race to cause humans to abandone the planet and solar system. Many within the nebula who are in hiding, know of the various atrocities commited by the council and seek top bring it down and cause a revolution for a different kind of galactic rule.

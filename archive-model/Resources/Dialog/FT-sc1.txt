@@ -1,0 +1,28 @@
+:: Start
+Ambassador: That summit was not how I anticipated it going.
+Admiral: That's unfortunate, the emperor won't be happy.
+Ambassador: I could care less about that. Your people only have a few years worth of resources and food before your burgeoning population begins to starve.
+Admiral: I suppose you actually care....
+Ambassador: My people suffered the same fate, the void is not forgiving to the bold.
+-> Briefing
+
+:: Briefing
+Admiral: Captain Geril, I'm hereby assigning you a top secret mission. It may to others in the navy be construed as treason, but it is of the highest importance. Are you prepared to accept?
+Geril: I'm prepared sir, I have a good guess as to what you might be asking.
+Admiral: Yes, as we've discussed before. I'll make this brief. You are to meet with a contact half way to Karisen Homeworld. Your contact will fill you in from there.
+Geril: That's all?
+Admiral: You are to disclose the details of this mission, or what your contact divulges to anyone. I hand picked you for a reason.
+Geril: Understood, sir. I serve the Emperor.
+Admiral: As do I. Good hunting, Captain.
+-> Discussion
+
+:: Discussion
+Geril: Behind enemy lines, minimal to no support. What else is new?
+Konarm: The admiral made it sounds like this mission might not go down smoothly with the Emperor.
+Geril: Of course, I know Jom, I know what he's asking. If it comes down to it. We'll have to stop the emperor. It's the only way our race survives.
+Konarm: The council will hunt our entire race until we're all dead if we don't succeed.
+Geril: If we do, we'll be hunted for the rest of our lives by our own.
+Konarm: Gotta love suicide missions.
+Geril: Part of the service. Only way out of the Navy is death.
+-> End
+

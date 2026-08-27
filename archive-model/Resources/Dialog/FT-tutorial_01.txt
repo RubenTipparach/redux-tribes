@@ -1,0 +1,37 @@
+:: Start
+Shuran: Sir, I had no idea...
+Geril: I understand, Shuran. I'm glad you decided to remain on board, you're the best helmsman a captain could ask for.
+Shuran: Yes, I'm more than happy to carry out my duties. We're still waiting on the Karisen operatives to arrive and provide us with the ignition keys for the module.
+I've prepped the engines and navigations diagnostics. Ready to begin tests on your command, sir.
+Geril: Excellent. All stations, prepare for operations. Yellow Alert.
+
+-> OBJECTIVE_01
+
+
+
+:: OBJECTIVE_01
+Shuran: Let's begin with an overview of the battlefield. 
+Shuran: You can pan the camera using WASD keys for translation along the horizontal axis, and R,F for the vertical axis. You can also rotate the camera by holding down the right mouse button. Go ahead and give the camera controls some practice, and we'll continue.
+-> OBJECTIVE_02
+
+:: OBJECTIVE_02
+Shuran: Next, will be to test navigation and movement. Captain, go ahead and plot a course directly ahead.
+-> OBJECTIVE_03
+
+:: OBJECTIVE_03
+Shuran: Systems appear green. Let's try moving the ship in a 90 degree heading to the right.
+-> OBJECTIVE_04
+
+:: OBJECTIVE_04
+Shuran: Rotational thrusters look good. You can always tweak the rotation of the ship at its destination by interacting with the widgets around the ship.
+Shuran: Next up, I'm going to disable rotational thrusters. You can translate the ship in any direction, so go head and move us to the right.
+-> OBJECTIVE_05
+
+:: OBJECTIVE_05
+Shuran: Translational thrusters look good. Now lets try the ship's Boost mode. This will allow us to cover double the maximum distance,
+but it will draw power from many systems across the ships, thus we'll only be moving in one direction.
+-> OBJECTIVE_06
+
+:: OBJECTIVE_06
+Shuran: Great, lets bring the ship to a complete stop, and that should conclude engines and navigational diagnostics.
+-> End

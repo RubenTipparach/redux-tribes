@@ -1,0 +1,79 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: Shader Graphs_Asteroid_gen
+  m_Shader: {fileID: -6465566751694194690, guid: 83d35ccc476aa88469caa67445e48ee1,
+    type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _LAND_COLOR_TYPE_MOONLAND
+  m_InvalidKeywords: []
+  m_LightmapFlags: 2
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: -1
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - unity_Lightmaps:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_LightmapsInd:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_ShadowMasks:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _LAND_COLOR_TYPE: 3
+    - _QueueControl: 0
+    - _QueueOffset: 0
+    - _cloud_cover: -0.9
+    - _cloud_opacity: 0.5
+    - _clouds_speed: 0.01
+    - _crater_offset: 38.34
+    - _crater_size: 1.33
+    - _fr_power: 6.1
+    - _land_amount: 2
+    - _land_color_variation: 0.39
+    - _land_offset: -0.01
+    - _normal_str: 0.05
+    - _north_pole: -2
+    - _smoothness: 1.4
+    - _south_pole: 2
+    - _water_amount: 0
+    - _water_blend: 2.15
+    m_Colors:
+    - _fr_color: {r: 0.24390353, g: 0.2478634, b: 0.254717, a: 0}
+    - _planet_shape_high_frq: {r: 17.39, g: 2.41, b: 0, a: 0}
+    - _planet_shape_low_frq: {r: 1.02, g: 5.97, b: 1.85, a: 0}
+    - _water: {r: 0.04939477, g: 0.16460666, b: 0.28301886, a: 0}
+    - _water_shallow: {r: 0.18640977, g: 0.47554708, b: 0.6698113, a: 0}
+  m_BuildTextureStacks: []
+--- !u!114 &2088032682286829847
+MonoBehaviour:
+  m_ObjectHideFlags: 11
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0353a89b1f911e48b9e16bdc9f2e058, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  version: 7

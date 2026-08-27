@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d8d16c7250587bc41b94d4374d478cca, type: 3}
+  m_Name: WarningPanelMessages
+  m_EditorClassIdentifier: 
+  ENEMY_SHIP_CAPTURED:
+    warningType: 101
+    warning: Enemy ship was captured.
+  PLAYER_SHIP_DESTROYED:
+    warningType: 102
+    warning: One of your ships was destroyed.
+  ESCORT_SHIP_DESTROYED:
+    warningType: 103
+    warning: A ship you are escorting has been destroyed.
+  ESCAPE_TO_WAYPOINT:
+    warningType: 104
+    warning: Escape to the designated waypoint.
+  BLOCKADE_PREVENTING_TRANSIT:
+    warningType: 105
+    warning: Enemy blockade preventing transit. You must initiate combat.
+  ENEMY_HAS_ENTERED_FRIENDLY_SYSTEM:
+    warningType: 106
+    warning: Alert! Enemy ships have entered a friendly sysytem.
+  FRIENDLY_SYSTEM_WAS_LOST:
+    warningType: 107
+    warning: Allied ship was destroyed.

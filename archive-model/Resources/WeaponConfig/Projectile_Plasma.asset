@@ -1,0 +1,22 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bb49ad03042ea234eb7c2a0c75d34b31, type: 3}
+  m_Name: Projectile_Plasma
+  m_EditorClassIdentifier: 
+  damage: 5
+  range: 200
+  cooldown: 1
+  weaponHealth: 10
+  weaponFx: {fileID: 1649841572795071503, guid: 1dd1420e8adb0294eb082c60fda8daa5,
+    type: 3}
+  shotCountPerRound: 1
+  id: 52cebe03-9693-4518-bf69-22c8099a30bc

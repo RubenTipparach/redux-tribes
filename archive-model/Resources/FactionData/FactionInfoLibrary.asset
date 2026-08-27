@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0dab847ecd8d5a34183e0d6aff5fca2f, type: 3}
+  m_Name: FactionInfoLibrary
+  m_EditorClassIdentifier: 
+  factionInfo:
+  - {fileID: 11400000, guid: 7c15daa203f0634439b9b06dbedd0d99, type: 2}
+  - {fileID: 11400000, guid: 2151417a5773b2b439e678bbc167c371, type: 2}
+  - {fileID: 11400000, guid: 96206a429f6956246a4bc78d6f50d814, type: 2}
+  - {fileID: 11400000, guid: 52f1c41f44a60214495f923e3decacdd, type: 2}
+  - {fileID: 11400000, guid: b9914436c44289f459dacae724ecffee, type: 2}
+  - {fileID: 11400000, guid: aee46f67affd5e64d9e1a4410962792c, type: 2}
+  - {fileID: 11400000, guid: 44e932d0077f3a34692e88915dca09f5, type: 2}
+  - {fileID: 11400000, guid: afa864dbf632f7d49adc0313d786d1a6, type: 2}
+  - {fileID: 11400000, guid: c2eae8a8ee676b54186f99b701a9e7f7, type: 2}
+  weaponIcons:
+  - {fileID: 11400000, guid: c3f45fca2126c1a47baebc28791c3fad, type: 2}
+  - {fileID: 11400000, guid: f664395c91e10c44da31f9438c8483fc, type: 2}
+  - {fileID: 11400000, guid: bd412c713b05b7242806a62c9ba8e499, type: 2}
+  - {fileID: 11400000, guid: b141a6edef167d44ab100cbc1ab9356c, type: 2}

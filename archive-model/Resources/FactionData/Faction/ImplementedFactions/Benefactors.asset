@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 40b8ac159a6a9974a8e2cc2ab34d0e5a, type: 3}
+  m_Name: Benefactors
+  m_EditorClassIdentifier: 
+  shipFaction: 4
+  factionName: Benefactors
+  factionDesignation: BNS
+  factionIcon: {fileID: 21300000, guid: 535da12b200a69d43be44dcf9a91d7c5, type: 3}
+  defaultShip: {fileID: 11400000, guid: ac4914d96a2cf814ead09c1f438f658e, type: 2}
+  allShips:
+  - {fileID: 11400000, guid: ac4914d96a2cf814ead09c1f438f658e, type: 2}
+  factionHologramMaterial: {fileID: 2100000, guid: f5acb5e9b4f22324fbeaa0606203a377,
+    type: 2}
+  primaryFactionColor: {r: 0.28627452, g: 0.25490198, b: 0.50980395, a: 1}
+  secondaryFactionColor: {r: 0.09411766, g: 0.078431375, b: 0.14509805, a: 1}

@@ -1,0 +1,30 @@
+:: Start
+Ambassador: That summit was not how I anticipated it going.
+Admiral: That's unfortunate, the emperor won't be happy.
+Ambassador: I could care less about that. Your people only have a few years worth of resources and food before your burgeoning population begins to starve.
+Admiral: I suppose you actually care....
+Ambassador: My people suffered the same fate, the void is not forgiving to the bold.
+-> Briefing
+
+:: Briefing
+You have two objectives:
+[[Tell me the mission|MissionDetails]]
+[[Can I back out?|BackOut]]
+
+:: MissionDetails
+@Commander: Your mission is to scout the Orion sector and report any alien activity.
+@Pilot: Understood.
+-> Departure
+
+:: BackOut
+@Commander: This isn't optional, pilot. Dismissed.
+-> End
+
+:: Departure
+@Pilot: Preparing for launch.
+@Engineer: Systems green. Ready when you are.
+@Commander: Good luck out there. We’re counting on you.
+-> End
+
+:: End
+Narrator: The hangar doors open, and the stars beckon.

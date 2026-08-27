@@ -1,0 +1,12 @@
+:: Start
+Captain: Behind enemy lines, minimal to no support. What else is new?
+First Officer: The admiral made it sounds like this mission might not go down smoothly with the Emperor.
+Captain: Of course, I know Jim, I know what he's asking. If it comes down to it. We'll have to stop the emperor from doing something he'll regret.
+First Officer: The council will hunt our entire race until we're all dead if we don't succeed.
+Captain: If we do, we'll be hunted for the rest of our lives by our own.
+First Officer: Gotta love suicide missions.
+Captain: Part of the service, rookie. Let's head out.
+
+
+-> End
+
