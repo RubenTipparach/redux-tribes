@@ -56,6 +56,14 @@ Rebuild the single-file bundle with `python3 prototype/tools/bundle.py out.html`
   to identical hashes (tested). Orders in → identical state out, on any machine:
   the lockstep contract.
 
+  **Verified cross-client:** `prototype/tools/xclient-check.js` resolves an identical
+  order sequence (collision-heavy, with boarding and a boost) in **Node and in
+  Chromium** — separate processes, separate runtime instances — and compares
+  per-turn hashes. They match. The rule the sim obeys: only IEEE-exact operations
+  (`+ - * /`, `sqrt`, comparisons, `Math.abs/floor/min/max/imul`) touch simulation
+  state; everything transcendental goes through `dmath.js` polynomials, and even
+  `Math.cbrt` is banned (rejection sampling replaces it in `insideUnitSphere`).
+
 ## What's deliberately out of scope
 
 Campaign layer, stealth/vision cones, mission goal trees beyond destroy-all,

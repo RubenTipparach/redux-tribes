@@ -68,10 +68,19 @@
         const inv = Math.sqrt((1 - z * z) / l);
         return V.v3(x * inv, y * inv, z);
       },
+      // Uniform point inside the unit sphere by REJECTION SAMPLING.
+      // (The textbook form is dir * cbrt(u), but Math.cbrt — like sin/cos — has
+      // implementation-defined precision in JS, so it can differ between
+      // engines. Rejection uses only multiply/compare, which are IEEE-exact
+      // everywhere. ~52% acceptance; the loop is deterministic given the
+      // stream. Same reasoning applies to the Rust port: no libm call here.)
       insideUnitSphere(V) {
-        const dir = this.onUnitSphere(V);
-        const r = Math.cbrt(this.float());
-        return V.scale(dir, r);
+        let x = 0, y = 0, z = 0, l = 0;
+        do {
+          x = this.range(-1, 1); y = this.range(-1, 1); z = this.range(-1, 1);
+          l = x * x + y * y + z * z;
+        } while (l > 1 || l < 1e-12);
+        return V.v3(x, y, z);
       },
       insideUnitCircleXY(V) {
         let x = 0, y = 0, l = 0;
