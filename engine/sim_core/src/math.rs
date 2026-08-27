@@ -119,6 +119,13 @@ impl V3 {
             Self::new(0.0, 0.0, 1.0)
         }
     }
+    pub fn lerp(self, o: Self, t: f32) -> Self {
+        Self::new(
+            self.x + (o.x - self.x) * t,
+            self.y + (o.y - self.y) * t,
+            self.z + (o.z - self.z) * t,
+        )
+    }
     /// Clamp magnitude, leaving direction alone.
     pub fn clamp_len(self, max: f32) -> Self {
         let l = self.len();
@@ -177,4 +184,71 @@ impl Quat {
     pub fn forward(self) -> V3 {
         self.rot(V3::new(0.0, 0.0, 1.0))
     }
+
+    /// Look rotation: forward +Z, up +Y. Built from the rotation matrix by the
+    /// usual trace split, which is branchy but exact: every branch is
+    /// arithmetic and one sqrt, so it is portable.
+    pub fn look(forward: V3, up: Option<V3>) -> Self {
+        let f = forward.norm();
+        let up = up.unwrap_or(V3::new(0.0, 1.0, 0.0));
+        let mut r = up.cross(f);
+        // forward parallel to up leaves no right vector to speak of; pick any
+        // axis not parallel to f so the frame stays well defined.
+        if r.len2() < 1e-10 {
+            r = V3::new(1.0, 0.0, 0.0).cross(f);
+        }
+        let r = r.norm();
+        let u = f.cross(r);
+        let (m00, m01, m02) = (r.x, u.x, f.x);
+        let (m10, m11, m12) = (r.y, u.y, f.y);
+        let (m20, m21, m22) = (r.z, u.z, f.z);
+        let tr = m00 + m11 + m22;
+        let q = if tr > 0.0 {
+            let s = (tr + 1.0).sqrt() * 2.0;
+            Self { w: s / 4.0, x: (m21 - m12) / s, y: (m02 - m20) / s, z: (m10 - m01) / s }
+        } else if m00 > m11 && m00 > m22 {
+            let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
+            Self { w: (m21 - m12) / s, x: s / 4.0, y: (m01 + m10) / s, z: (m02 + m20) / s }
+        } else if m11 > m22 {
+            let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
+            Self { w: (m02 - m20) / s, x: (m01 + m10) / s, y: s / 4.0, z: (m12 + m21) / s }
+        } else {
+            let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
+            Self { w: (m10 - m01) / s, x: (m02 + m20) / s, y: (m12 + m21) / s, z: s / 4.0 }
+        };
+        q.norm()
+    }
+}
+
+/// Quadratic bezier by nested lerps, which is the construction the archive
+/// used. Missile legs still fly these; only ship movement stopped (ADR-14).
+pub fn bezier2(a: V3, b: V3, c: V3, t: f32) -> V3 {
+    a.lerp(b, t).lerp(b.lerp(c, t), t)
+}
+
+/// Firing arc gate: is `target` inside the mount's horizontal and vertical
+/// arcs? Measured from +Z in the mount's own frame, per axis independently,
+/// which is what the archive's dot-product-vs-bisector test amounted to.
+pub fn arc_test_3d(
+    turret_pos: V3,
+    turret_rot: Quat,
+    target_pos: V3,
+    h_min_deg: f32,
+    h_max_deg: f32,
+    v_min_deg: f32,
+    v_max_deg: f32,
+) -> bool {
+    let dir = target_pos.sub(turret_pos).norm();
+    let local = turret_rot.inv().rot(dir);
+    fn axis_pass(a1: f32, a2: f32, u: f32, v: f32) -> bool {
+        if (a2 - a1).abs() >= 360.0 {
+            return true;
+        }
+        let ang = datan2(u, v) * (180.0 / PI);
+        let lo = if a1 < a2 { a1 } else { a2 };
+        let hi = if a1 < a2 { a2 } else { a1 };
+        ang >= lo && ang <= hi
+    }
+    axis_pass(h_min_deg, h_max_deg, local.x, local.z)
+        && axis_pass(v_min_deg, v_max_deg, local.y, local.z)
 }
