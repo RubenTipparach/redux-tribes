@@ -708,6 +708,7 @@ impl Sim {
     /// for here.
     pub fn resolve_turn(&mut self, orders: &mut [Option<Order>]) -> TurnResult {
         let mut events = vec![Event::new(EventKind::TurnStart, 0)];
+        self.tracks.clear();
 
         // AI plans first, and commits its decisions into the order rather than
         // onto the ship. See Order::ai_target.
@@ -794,6 +795,13 @@ impl Sim {
                 if second > 0 {
                     self.boarding_second(tick, &mut events);
                 }
+            }
+            // 5. record the frame for playback
+            if self.record {
+                self.tracks.push(crate::state::TrackFrame {
+                    ships: self.ships.iter().map(|s| (s.pos, s.quat, s.destroyed)).collect(),
+                    projectiles: self.projectiles.iter().map(|p| (p.id, p.kind, p.pos)).collect(),
+                });
             }
         }
 

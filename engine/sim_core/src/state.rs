@@ -278,6 +278,16 @@ pub struct Hit {
     pub pos: V3,
 }
 
+/// One tick of recorded playback: where everything was, and nothing about why.
+/// The renderer scrubs these; it never re-simulates to draw a frame, which is
+/// what keeps a replay showing what actually happened rather than what would
+/// happen if it ran again.
+#[derive(Clone, Debug)]
+pub struct TrackFrame {
+    pub ships: Vec<(V3, Quat, bool)>,
+    pub projectiles: Vec<(u32, ProjKind, V3)>,
+}
+
 pub struct Sim {
     pub seed: String,
     pub turn: i32,
@@ -285,6 +295,10 @@ pub struct Sim {
     pub projectiles: Vec<Projectile>,
     pub next_proj_id: u32,
     pub game_over: Option<Winner>,
+    /// Whether to record per tick tracks while resolving. The headless server
+    /// never needs them; a client playing the turn back always does.
+    pub record: bool,
+    pub tracks: Vec<TrackFrame>,
 }
 
 /// One ship in a scenario request.
@@ -317,6 +331,8 @@ impl Sim {
             projectiles: Vec::new(),
             next_proj_id: 1,
             game_over: None,
+            record: false,
+            tracks: Vec::new(),
         }
     }
 
