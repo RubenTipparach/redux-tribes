@@ -290,6 +290,10 @@ pub struct TrackFrame {
 
 pub struct Sim {
     pub seed: String,
+    /// The seed, hashed once. Every draw mixes this rather than re-hashing the
+    /// string, which is the difference between hashing 16 bytes at match start
+    /// and hashing them again for every random number in the match.
+    pub seed_hash: u32,
     pub turn: i32,
     pub ships: Vec<Ship>,
     pub projectiles: Vec<Projectile>,
@@ -326,6 +330,7 @@ impl Sim {
         }
         Self {
             seed: seed.to_string(),
+            seed_hash: crate::rng::fnv1a(seed),
             turn: 0,
             ships,
             projectiles: Vec::new(),

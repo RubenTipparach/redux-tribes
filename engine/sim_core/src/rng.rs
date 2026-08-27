@@ -41,6 +41,44 @@ pub fn fnv1a(s: &str) -> u32 {
     h
 }
 
+/// Which consumer is drawing, as numbers rather than a formatted string.
+///
+/// A stream key is only ever hashed, so building a string for one is pure
+/// waste: it costs an allocation per draw and, in wasm, drags in the whole of
+/// Rust's formatting machinery for output nobody ever reads. The components
+/// are hashed with the same FNV-1a arithmetic a string would have gone
+/// through, so streams stay as well separated as before.
+#[derive(Clone, Copy, Debug)]
+pub struct Stream {
+    pub tag: u32,
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+}
+
+impl Stream {
+    pub const AI: u32 = 1;
+    pub const WEAPON: u32 = 2;
+    pub const MISSILE_SPAWN: u32 = 3;
+    pub const MISSILE_HOP: u32 = 4;
+    pub const BOARDING: u32 = 5;
+
+    pub const fn new(tag: u32, a: u32, b: u32, c: u32) -> Self {
+        Self { tag, a, b, c }
+    }
+
+    fn hash(self) -> u32 {
+        let mut h: u32 = 0x811c_9dc5;
+        for word in [self.tag, self.a, self.b, self.c] {
+            for byte in word.to_le_bytes() {
+                h ^= byte as u32;
+                h = h.wrapping_mul(0x0100_0193);
+            }
+        }
+        h
+    }
+}
+
 pub struct Rng {
     a: u32,
     b: u32,
@@ -49,9 +87,19 @@ pub struct Rng {
 }
 
 impl Rng {
+    /// Seed a stream from an already hashed match seed. `Sim` hashes its seed
+    /// once at construction rather than on every draw.
+    pub fn stream(seed_hash: u32, turn: i32, key: Stream) -> Self {
+        Self::from_base(seed_hash ^ (turn as u32).wrapping_mul(0x9e37_79b1) ^ key.hash())
+    }
+
     pub fn new(match_seed: &str, turn: i32, stream_key: &str) -> Self {
-        let mut base =
-            fnv1a(match_seed) ^ (turn as u32).wrapping_mul(0x9e37_79b1) ^ fnv1a(stream_key);
+        Self::from_base(
+            fnv1a(match_seed) ^ (turn as u32).wrapping_mul(0x9e37_79b1) ^ fnv1a(stream_key),
+        )
+    }
+
+    fn from_base(mut base: u32) -> Self {
         let a = splitmix32(&mut base);
         let b = splitmix32(&mut base);
         let c = splitmix32(&mut base);

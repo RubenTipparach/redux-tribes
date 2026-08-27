@@ -13,7 +13,7 @@
 use crate::data::{self, SubKind, WeaponKind};
 use crate::flight::{fly_span, Mode, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS};
 use crate::math::{arc_test_3d, bezier2, V3};
-use crate::rng::Rng;
+use crate::rng::{Rng, Stream};
 use crate::state::{
     BoardingParty, ProjKind, Projectile, ShipId, Sim, Winner,
 };
@@ -108,8 +108,8 @@ pub struct TurnResult {
 // ------------------------------------------------------------------ damage --
 
 impl Sim {
-    fn stream(&self, key: &str) -> Rng {
-        Rng::new(&self.seed, self.turn, key)
+    fn stream(&self, key: Stream) -> Rng {
+        Rng::stream(self.seed_hash, self.turn, key)
     }
 
     /// Apply damage to a ship, optionally through one of its subsystem
@@ -349,11 +349,11 @@ impl Sim {
 
         match wd.kind {
             WeaponKind::Beam => {
-                let mut rng = self.stream(&format!(
-                    "wep:{}:{}:{}",
-                    si,
-                    data::weapon_key_name(key),
-                    tick
+                let mut rng = self.stream(Stream::new(
+                    Stream::WEAPON,
+                    si as u32,
+                    key as u32,
+                    tick as u32,
                 ));
                 let scatter = rng.inside_unit_sphere().scale(data::BEAM_SCATTER);
                 let dir = aim_pos.add(scatter).sub(mount_pos).norm();
@@ -414,7 +414,8 @@ impl Sim {
             WeaponKind::Missile => {
                 let fwd = quat.forward();
                 for b in 0..wd.batch {
-                    let mut rng = self.stream(&format!("mis:spawn:{}:{}:{}", si, tick, b));
+                    let mut rng =
+                        self.stream(Stream::new(Stream::MISSILE_SPAWN, si as u32, tick as u32, b as u32));
                     let rally = mount_pos
                         .add(fwd.scale(data::MISSILE_LAUNCH_SPEED))
                         .add(rng.inside_unit_sphere().scale(data::MISSILE_LAUNCH_SCATTER));
@@ -461,7 +462,7 @@ impl Sim {
                 if self.projectiles[pi].seg_tick >= data::MISSILE_HOP_TICKS {
                     self.projectiles[pi].seg_tick = 0;
                     let p = self.projectiles[pi].clone();
-                    let mut rng = self.stream(&format!("mis:hop:{}:{}", p.id, tick));
+                    let mut rng = self.stream(Stream::new(Stream::MISSILE_HOP, p.id, tick as u32, 0));
                     let target_alive = p
                         .target_ship
                         .and_then(|t| self.ships.get(t as usize))
@@ -623,7 +624,7 @@ impl Sim {
             if self.ships[si].destroyed || self.ships[si].boarding_parties.is_empty() {
                 continue;
             }
-            let mut rng = self.stream(&format!("board:{}", si));
+            let mut rng = self.stream(Stream::new(Stream::BOARDING, si as u32, 0, 0));
             let eff = data::marine_efficiency(self.ships[si].hull / self.ships[si].hull_max);
 
             for pi in 0..self.ships[si].boarding_parties.len() {
@@ -901,7 +902,7 @@ impl Sim {
             }
         };
 
-        for b in self.seed.bytes() {
+        for b in self.seed_hash.to_le_bytes() {
             byte(b);
         }
         int(self.turn, &mut byte);

@@ -28,7 +28,11 @@ pub fn plan_ship(sim: &Sim, si: usize) -> Order {
         return Order { mode: Some(Mode::MoveAndTurn), ..Default::default() };
     }
 
-    let mut rng = crate::rng::Rng::new(&sim.seed, sim.turn, &format!("ai:{}", si));
+    let mut rng = crate::rng::Rng::stream(
+        sim.seed_hash,
+        sim.turn,
+        crate::rng::Stream::new(crate::rng::Stream::AI, si as u32, 0, 0),
+    );
 
     // Keep the retaliation target while it lives, else take the first live
     // enemy by index. Kill priority is emergent from registration order, the

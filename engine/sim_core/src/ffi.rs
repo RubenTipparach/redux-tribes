@@ -224,11 +224,21 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
 /// Returns the number of ships.
 #[no_mangle]
 pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32) -> u32 {
-    let seed = format!("{:08x}{:08x}", seed_hi, seed_lo);
+    // Written out by hand rather than with format!, which would drag Rust's
+    // whole formatting machinery into the module for sixteen characters. The
+    // result is byte identical to the server's lowercase hex seed, so a match
+    // started here and one started from that string are the same match.
+    let mut hex = [0u8; 16];
+    for (i, byte) in hex.iter_mut().enumerate() {
+        let word = if i < 8 { seed_hi } else { seed_lo };
+        let nibble = (word >> (28 - 4 * (i % 8))) & 0xf;
+        *byte = if nibble < 10 { b'0' + nibble as u8 } else { b'a' + (nibble as u8 - 10) };
+    }
+    let seed = core::str::from_utf8(&hex).unwrap_or("0000000000000000");
     let sim = match scenario {
-        1 => scenario_duel(&seed),
-        2 => scenario_convoy(&seed),
-        _ => scenario_skirmish(&seed),
+        1 => scenario_duel(seed),
+        2 => scenario_convoy(seed),
+        _ => scenario_skirmish(seed),
     };
     let n = sim.ships.len();
     unsafe {
