@@ -80,6 +80,8 @@ The owner has shipped Bevy work before and disliked two things: **cold/increment
 2. **Bevy is adopted for the real renderer with the full mitigation stack from day one**, and judged on the Phase 1 slice: if the mitigated loop still grates, fall back — **Godot+gdext** if the web build may be WebGL2-class, **sokol as the custom-engine core** if WebGPU-on-web stays non-negotiable and the tooling bill is accepted.
 3. Either way `sim_core`, the replay format, the content data, and the server move unchanged — the engine choice stops being a years-long bet and becomes a revisitable frontend decision.
 
+*Addendum sources:* [sokol](https://github.com/floooh/sokol) · [sokol WebGPU backend write-up](https://floooh.github.io/2023/10/16/sokol-webgpu.html) · [sokol-rust bindings](https://docs.rs/sokol/latest/sokol/gfx/) · [raylib-rs](https://github.com/raylib-rs/raylib-rs) · [sola-raylib (raylib 6 fork)](https://github.com/brettchalupa/sola-raylib) · [raylib→wgpu discussion](https://github.com/raysan5/raylib/discussions/4505) · [bevy_hotpatching_experiments](https://github.com/TheBevyFlock/bevy_hotpatching_experiments) · [bevy#22654](https://github.com/bevyengine/bevy/issues/22654) · [bevy#19916](https://github.com/bevyengine/bevy/issues/19916) · [Rust engines 2026 comparison](https://aarambhdevhub.medium.com/rust-game-engines-in-2026-bevy-vs-macroquad-vs-ggez-vs-fyrox-which-one-should-you-actually-use-9bf93669e83f)
+
 ---
 
 ## ADR-2: The Load-Bearing Split — Headless Deterministic `sim_core`
