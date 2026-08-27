@@ -111,7 +111,7 @@ kbd{font-family:var(--mono);font-size:10px;background:var(--panel);border:1px so
     </div>
     <div class="note">
       <b>Fallen Tribes today:</b> the envelope is a circle centred on the ship
-      and heading is free — 360° per turn, momentum only bends the path
+      and heading is free - 360° per turn, momentum only bends the path
       cosmetically. Nothing you did last turn constrains this one.
     </div>
     <h2>Controls</h2>
@@ -126,8 +126,8 @@ kbd{font-family:var(--mono);font-size:10px;background:var(--panel);border:1px so
 "use strict";
 // ---------------------------------------------------------------- constants
 // Numbers carried from the real project so the mockup answers the real question:
-//   prototype/sim/data.js  — TURN_SECONDS 10, TICKS_PER_SECOND 60, thrusterRange 40
-//   heavyphoton boat-movement.html — 10 solver segments per manoeuvre, local-frame
+//   prototype/sim/data.js - TURN_SECONDS 10, TICKS_PER_SECOND 60, thrusterRange 40
+//   heavyphoton boat-movement.html - 10 solver segments per manoeuvre, local-frame
 //   thrust (fwd/back/lateral asymmetric), rotation rate in deg/s, max-speed clamp.
 const TURN_SECONDS = 10;
 const SEGMENTS = 10;                 // matches both the boat demo and FT's second slots
@@ -140,13 +140,13 @@ const MODES = [
     note: "<b>The baseline, and the flaw.</b> Every position within 40 units is equally available every turn, and the ship can face any direction on arrival. Velocity is decorative: it bends the Bézier but never limits where you may end up. Two ships at rest and at full burn have identical options." },
   { key: "newtonian", name: "2 · Full Newtonian",
     blurb: "Heading independent of travel. Thrust in local frame. Nothing damps.",
-    note: "<b>Everything carries.</b> Velocity persists in full; the envelope is a disc around where momentum is already taking you, sized by what thrust can add in 10 s. You can fly backwards, drift sideways while facing the enemy — real broadside work. Cost: recovering from a bad burn takes several turns, and new players will fly into things." },
+    note: "<b>Everything carries.</b> Velocity persists in full; the envelope is a disc around where momentum is already taking you, sized by what thrust can add in 10 s. You can fly backwards, drift sideways while facing the enemy - real broadside work. Cost: recovering from a bad burn takes several turns, and new players will fly into things." },
   { key: "assisted", name: "3 · Assisted Newtonian",
     blurb: "Newtonian, plus lateral drift bleeds off each segment.",
     note: "<b>The recommended middle.</b> Momentum along the hull's axis carries fully, but sideways drift decays (35%/segment). You still commit to a vector and still cannot stop on a coin, yet the ship answers its helm and the envelope stays legible. Slide manoeuvres remain possible, they just cost thrust to hold." },
   { key: "coupled", name: "4 · Coupled (boat)",
     blurb: "Velocity always along heading. Turn rate limited. No drift.",
-    note: "<b>Arcade end.</b> The ship goes where it points, turning is rate-limited, so the envelope is an arc swept by the turn circle. Very readable and very easy to fly — but it removes the drift/slide vocabulary the original had, and space stops feeling like space." },
+    note: "<b>Arcade end.</b> The ship goes where it points, turning is rate-limited, so the envelope is an arc swept by the turn circle. Very readable and very easy to fly - but it removes the drift/slide vocabulary the original had, and space stops feeling like space." },
 ];
 
 // ------------------------------------------------------------------- state
@@ -462,7 +462,7 @@ function stats() {
   const canHold = solve(S.pos.x, S.pos.y, S.mode).reached;
   const rows = [
     ["carried this turn", carry.toFixed(0) + " u"],
-    ["can hold station", canHold ? "yes" : "NO — committed"],
+    ["can hold station", canHold ? "yes" : "NO - committed"],
     ["envelope area", Math.round(area) + " u²"],
     ["vs FT circle", (area / ftArea * 100).toFixed(0) + "%"],
     ["turn authority", S.mode === "ft" ? "free (any facing)" : (S.rot * TURN_SECONDS).toFixed(0) + "°/turn"],
@@ -478,8 +478,8 @@ function stats() {
   if (!S.path) { v.innerHTML = ""; return; }
   v.className = "verdict " + (S.path.reached ? "good" : "bad");
   v.textContent = S.path.reached
-    ? "Reachable — the ship can hold that position at end of turn."
-    : "Out of envelope — misses by " + S.path.finalDistance.toFixed(1) + " u. Bleed speed or turn earlier.";
+    ? "Reachable - the ship can hold that position at end of turn."
+    : "Out of envelope - misses by " + S.path.finalDistance.toFixed(1) + " u. Bleed speed or turn earlier.";
 }
 
 function recompute() {

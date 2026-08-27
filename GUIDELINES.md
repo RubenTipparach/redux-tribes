@@ -4,7 +4,7 @@ Adopted from `RubenTipparach/adventure-2dcon-26`'s `CLAUDE.md` and adapted to th
 project. That repo's rules were written against an N64 target; the rules kept here are
 the ones that hold regardless of platform. Where the original is stricter for hardware
 reasons (TMEM budgets, the eleven-actor limit, libdragon toolchain specifics), it stays
-in that repo — go read it there before touching anything N64-shaped.
+in that repo - go read it there before touching anything N64-shaped.
 
 ---
 
