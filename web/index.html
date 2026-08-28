@@ -85,6 +85,11 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 .shipRow:hover { border-color:var(--cyan); }
 .shipRow.sel { border-color:var(--cyan); background:#0d2231; }
 .shipRow.gone { opacity:.4; }
+/* The hostile under the guns. Distinct from .sel on purpose: one marks the
+   hull you are flying, the other the hull you are shooting at, and a phone
+   shows both lists at once. */
+.shipRow.tg { border-color:var(--orange); background:#2a1607; }
+.shipRow.tg .nm { color:var(--orange); }
 .shipRow .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
   letter-spacing:.06em; }
 .bar { height:4px; background:#1a2634; border-radius:2px; margin-top:3px; overflow:hidden; }
@@ -137,8 +142,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   header h1 .lng { display:none; }
   .diag { display:none; }            /* hash and seed are desk diagnostics */
   #cv { grid-column:1; grid-row:2; }
+  /* Above the sheets, not under them. Arming a weapon happens in the Ships
+     sheet and firing it happens here, so a sheet that covers the fire slots
+     makes the second half of the gesture unreachable: the slots were behind
+     the sheet, which is why queueing a shot looked impossible on a phone. */
   footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px;
-    gap:8px 10px; min-width:0; }
+    gap:8px 10px; min-width:0; position:relative; z-index:9; }
   #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
   #slots::-webkit-scrollbar { display:none; }
   #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
@@ -147,7 +156,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #left, #right { position:fixed; left:0; right:0; top:auto;
     bottom:calc(var(--tabh) + var(--safe));
     height:min(56dvh, 440px); z-index:7; border:0; border-top:1px solid var(--line);
-    box-shadow:0 -14px 34px #000a; padding:12px 12px 24px;
+    box-shadow:0 -14px 34px #000a;
+    /* Clears the tallest the footer wraps to, so no sheet content is trapped
+       underneath the row that now sits on top of it. */
+    padding:12px 12px 132px;
     transform:translateY(calc(100% + var(--tabh) + var(--safe)));
     transition:transform .22s ease; }
   #left.open, #right.open { transform:none; }

@@ -52,6 +52,13 @@ const view = new View(canvas, match, sim);
 let seed = randomSeed();
 let ships: ShipState[] = [];
 let selected = -1;
+/**
+ * The hostile that weapons, boarding and Face Target all aim at.
+ *
+ * -1 means "whichever enemy is still alive", which is what the whole client
+ * used to do in three separate places. Now it is chosen, and chosen once.
+ */
+let target = -1;
 /** Which weapon is armed for the next fire slot click, or -1. */
 let armedWeapon = -1;
 /** null while planning; a tick while a resolved turn is being played back. */
@@ -80,6 +87,7 @@ function start(): void {
   flightOverride = new Map();
   ships = match.ships();
   selected = ships.find(mine)?.id ?? -1;
+  target = -1;
   armedWeapon = -1;
   playTick = null;
   playing = false;
@@ -94,6 +102,20 @@ function start(): void {
 // ------------------------------------------------------------ helpers --
 
 const selectedShip = (): ShipState | undefined => ships.find(s => s.id === selected);
+
+/**
+ * The hostile under the guns.
+ *
+ * The player's pick while it is alive, otherwise the first surviving enemy, so
+ * a target that blows up does not silently leave every weapon aimed at a
+ * wreck. Weapons, boarding and Face Target all come here: three copies of this
+ * search had grown, which is exactly the divergent path GUIDELINES 5.1 calls a
+ * defect.
+ */
+function targetShip(): ShipState | undefined {
+  const picked = ships.find(t => t.id === target && !mine(t) && !t.destroyed);
+  return picked ?? ships.find(t => !mine(t) && !t.destroyed);
+}
 
 function flightOf(id: number): Flight {
   const cached = flightOverride.get(id);
@@ -116,22 +138,39 @@ const canPlan = (): boolean => {
 // ------------------------------------------------------------- panels --
 
 function renderFleet(): void {
+  const aimed = targetShip();
   const rows = (list: ShipState[], host: HTMLElement, enemy: boolean) => {
     host.innerHTML = '';
     for (const s of list) {
       const div = document.createElement('div');
-      div.className = `shipRow${enemy ? ' enemy' : ''}${s.id === selected ? ' sel' : ''}${s.destroyed ? ' gone' : ''}`;
+      // A hostile row is the target picker, so it marks the ship under the
+      // guns rather than the ship being flown. Selecting an enemy as though it
+      // were yours only ever made the whole rail inert, because planning needs
+      // one of your own hulls.
+      const isAimed = enemy && !!aimed && s.id === aimed.id;
+      div.className = `shipRow${enemy ? ' enemy' : ''}`
+        + `${!enemy && s.id === selected ? ' sel' : ''}${isAimed ? ' tg' : ''}`
+        + `${s.destroyed ? ' gone' : ''}`;
       const hullPct = Math.max(0, (100 * s.hull) / s.hullMax);
       const subs = s.subs
         .map((x, i) => `<div class="sub${x.dead ? ' dead' : ''}"><span>sub ${i}</span><span>${x.hp.toFixed(0)}</span></div>`)
         .join('');
       div.innerHTML =
-        `<div class="nm">${shipName(s)}${s.destroyed ? ' &middot; LOST' : s.drifting ? ' &middot; ADRIFT' : ''}</div>`
+        `<div class="nm">${shipName(s)}${isAimed ? ' &middot; TARGET' : ''}`
+        + `${s.destroyed ? ' &middot; LOST' : s.drifting ? ' &middot; ADRIFT' : ''}</div>`
         + `<div class="bar"><i style="width:${hullPct.toFixed(0)}%"></i></div>`
         + `<div class="sub"><span>hull ${s.hull.toFixed(0)}</span><span>${FACTION_NAMES[s.faction] ?? '?'}</span></div>`
         + `<div class="sub"><span>marines ${s.marines}</span><span>${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s</span></div>`
         + subs;
-      div.onclick = () => { select(s.id); };
+      div.onclick = () => {
+        if (enemy) {
+          if (s.destroyed) return;
+          target = s.id;
+          refreshAll();
+        } else {
+          select(s.id);
+        }
+      };
       host.appendChild(div);
     }
   };
@@ -221,6 +260,13 @@ function renderWeapons(): void {
     host.appendChild(div);
   }
   if (!info.mountCount) host.innerHTML = '<div class="hint">no mounts</div>';
+  const aimed = targetShip();
+  const note = document.createElement('div');
+  note.className = 'hint';
+  note.textContent = !aimed ? 'No hostiles left.'
+    : armedWeapon >= 0 ? `Armed. Now tap a fire slot below to shoot ${shipName(aimed)}.`
+    : `Firing at ${shipName(aimed)}. Tap a hostile to switch.`;
+  host.appendChild(note);
 }
 
 function renderSlots(): void {
@@ -246,10 +292,10 @@ function renderSlots(): void {
         refreshAll();
         return;
       }
-      const target = ships.find(t => !mine(t) && !t.destroyed);
-      if (!target) return;
+      const t = targetShip();
+      if (!t) return;
       o.weapons = o.weapons.filter(w => w.weaponIndex !== armedWeapon);
-      o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: target.id, targetSub: -1 });
+      o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: t.id, targetSub: -1 });
       armedWeapon = -1;
       refreshAll();
     };
@@ -261,23 +307,23 @@ function renderBoard(): void {
   const b = $<HTMLButtonElement>('bBoard');
   const s = selectedShip();
   if (!s || !canPlan()) { b.disabled = true; b.textContent = 'Board Target'; return; }
-  const target = ships.find(t => !mine(t) && !t.destroyed);
+  const t = targetShip();
   // The same rule the resolver applies at second zero, asked rather than copied.
-  const canBoard = !!target && match.canBoard(s.id, target.id);
-  const dist = target
-    ? Math.hypot(s.pos.x - target.pos.x, s.pos.y - target.pos.y, s.pos.z - target.pos.z)
+  const canBoard = !!t && match.canBoard(s.id, t.id);
+  const dist = t
+    ? Math.hypot(s.pos.x - t.pos.x, s.pos.y - t.pos.y, s.pos.z - t.pos.z)
     : Infinity;
   const order = match.order(s.id);
   b.disabled = !canBoard;
   b.classList.toggle('on', order.board !== undefined);
-  b.textContent = !target ? 'No target'
+  b.textContent = !t ? 'No target'
     : !canBoard ? `Out of range (${dist.toFixed(0)} > ${s.boardingRange.toFixed(0)})`
     : order.board !== undefined ? 'Boarding ordered'
-    : 'Board Target';
+    : `Board ${shipName(t)}`;
   b.onclick = () => {
-    if (!canPlan() || !target) return;
+    if (!canPlan() || !t) return;
     const o = match.order(s.id);
-    if (o.board === undefined) o.board = target.id; else delete o.board;
+    if (o.board === undefined) o.board = t.id; else delete o.board;
     refreshAll();
   };
 }
@@ -369,6 +415,9 @@ function renderHeader(): void {
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
   $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
+  // Nothing to scrub until a turn has been resolved, and an enabled control
+  // that traps the app is worse than one that is plainly unavailable.
+  $<HTMLInputElement>('scrub').disabled = playTick === null;
 }
 
 function renderHelp(): void {
@@ -379,6 +428,9 @@ function renderHelp(): void {
     + 'Hold <kbd>Shift</kbd> and drag inside the outline to swing the heading instead.<br><br>'
     + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
     + '<kbd>F</kbd> face the target.<br><br>'
+    + '<b>To shoot:</b> tap a hostile to make it the target, tap a weapon to arm it, '
+    + 'then tap a <b>fire slot</b> (0 to 9, the second of the turn to fire at). '
+    + 'Tap a slot with nothing armed to take the shot back.<br><br>'
     + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
     + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
     + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
@@ -592,7 +644,7 @@ addEventListener('keydown', ev => {
     case 'a': nudgeHeading(-15); break;
     case 'd': nudgeHeading(15); break;
     case 'f': {
-      const t = ships.find(x => !mine(x) && !x.destroyed);
+      const t = targetShip();
       if (!t || !canPlan()) break;
       const o = match.order(s.id);
       const d = { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z };
@@ -731,10 +783,21 @@ $('bSpeed').onclick = () => {
 };
 
 const scrub = $<HTMLInputElement>('scrub');
+// Scrubbing pauses so the preview holds still under the finger, and RELEASING
+// resumes. Without that release, `playing = false` with a tick set was a state
+// nothing could leave: the frame loop only advances while playing, so playback
+// never finished, never returned to planning, and End Turn stayed disabled
+// forever. The scrubber is also inert outside playback, so a stray thumb on a
+// phone cannot enter that state from the planning phase at all.
 scrub.oninput = () => {
+  if (playTick === null) return;
   playing = false;
   playTick = Number(scrub.value);
   showTick(playTick);
+};
+scrub.onchange = () => {
+  if (playTick === null) return;
+  playing = true;
 };
 
 // Mobile sheets. Only one is open at a time: two sheets over a phone screen
@@ -811,6 +874,8 @@ Object.defineProperty(window, 'ftDebug', {
   value: {
     order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
     selected: () => selected,
+    target: () => targetShip()?.id ?? -1,
+    playing: () => playTick,
     side: () => launch.side,
     kind: () => launch.kind,
     canPlan,

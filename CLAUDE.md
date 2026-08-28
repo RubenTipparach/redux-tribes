@@ -83,6 +83,28 @@ npm --prefix server test                    # 9, the lobby and the lockstep API
 against `dist/`, so a change to the server could pass a suite that had never
 seen it.
 
+### And one that plays the game
+
+The four above prove the model. None of them can tell you the GAME is playable,
+because "can a person reach a victory" is a question about buttons, sheets and
+gestures. Two defects shipped that every suite above was blind to: a scrubber
+that trapped the console in playback with no way back to planning, and a bottom
+sheet that covered the fire slots so a shot could not be queued on a phone.
+
+```sh
+npm --prefix web run build
+node server/dist/index.js   # PORT=8123 DATABASE_PATH=":memory:" CLIENT_DIR=web/dist
+node web/tests/playthrough.mjs            # desktop
+node web/tests/playthrough.mjs --mobile   # 390x844, touch
+```
+
+It drives the real console (target a hostile, arm a mount, drop it in a fire
+slot, end the turn, watch the playback out) until the header says VICTORY, and
+exits non zero if it cannot get there. It needs a browser, so it is not in CI;
+run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
+and never to make progress, because a harness that can write state stops
+testing the app and starts testing itself.
+
 ## The boundary: the core simulates, the client draws
 
 `engine/sim_core` is the whole game. `web/` draws it and collects input. That is
