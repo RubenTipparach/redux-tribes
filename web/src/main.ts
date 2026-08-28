@@ -585,12 +585,15 @@ canvas.addEventListener('pointermove', ev => {
   if (!p || !s) return;
   const o = match.order(s.id);
   if (drag.kind === 'plan') {
-    // Keep the destination inside what the ship can reach. Dragging past the
-    // boundary leaves the marker at the last point that was real rather than
-    // parking it where the turn cannot end, so the plan on screen is always a
-    // plan the ship could fly.
-    if (!view.canReachPoint(s, flightOf(s.id), o, p)) return;
-    o.target = p;
+    // Keep the destination inside what the ship can reach, by SLIDING it onto
+    // the boundary rather than refusing it. Refusing left the marker stopped
+    // dead while the hand kept going, which reads as the plan having come
+    // unstuck; walking in from a reachable point keeps it under the finger and
+    // lands it exactly on the edge. Either way the plan on screen is always a
+    // plan the ship could fly, because the point comes from the core.
+    const q = view.clampToReach(s, flightOf(s.id), o, p);
+    if (!q) return;
+    o.target = q;
     // A commanded destination with a held heading is a slide; asking for both
     // through Move would silently drop the heading, so the mode follows the
     // gesture rather than the gesture failing quietly.

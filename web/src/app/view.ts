@@ -34,6 +34,14 @@ const GRID_N = 14;
  * for the midpoint it replaces.
  */
 const BISECT_STEPS = 4;
+/**
+ * Bisection steps for sliding the picker onto the boundary. Seven halvings of
+ * the drag length, which is finer than a pixel at any sane zoom and costs
+ * seven flights, against the roughly 2500 a whole envelope probe costs.
+ */
+const SLIDE_STEPS = 7;
+/** Horizontal slices the shell is read out as. */
+const SLICES = 9;
 /** Cube corners, then six tetrahedra sharing the main diagonal 0 to 6. */
 const CUBE: ReadonlyArray<readonly [number, number, number]> = [
   [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
@@ -166,7 +174,7 @@ export class View {
     this.#shell = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.07, side: THREE.DoubleSide,
+        color: GREEN, transparent: true, opacity: 0.045, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
@@ -179,7 +187,7 @@ export class View {
     this.#shellLines = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.5,
+        color: GREEN, transparent: true, opacity: 0.42,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
@@ -577,6 +585,40 @@ export class View {
     this.#shell.geometry = geo;
     this.#shell.visible = tri.length > 0;
 
+    // Read the surface out as level lines rather than as a skin. Every segment
+    // comes from intersecting a triangle this build already produced with a
+    // horizontal plane, so the contours cost no extra probes and cannot
+    // disagree with the surface they are cut from. Slicing the mesh also keeps
+    // whatever topology it found: where a moving hull leaves a pocket, the
+    // rings simply open around it.
+    let ylo = Infinity;
+    let yhi = -Infinity;
+    for (let n = 1; n < tri.length; n += 3) {
+      if (tri[n]! < ylo) ylo = tri[n]!;
+      if (tri[n]! > yhi) yhi = tri[n]!;
+    }
+    if (tri.length) {
+      for (let sI = 0; sI < SLICES; sI++) {
+        const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
+        for (let t = 0; t < tri.length; t += 9) {
+          const vx = [tri[t]!, tri[t + 3]!, tri[t + 6]!];
+          const vy = [tri[t + 1]!, tri[t + 4]!, tri[t + 7]!];
+          const vz = [tri[t + 2]!, tri[t + 5]!, tri[t + 8]!];
+          const cut: number[] = [];
+          for (let e = 0; e < 3; e++) {
+            const f = (e + 1) % 3;
+            const a = vy[e]!;
+            const b = vy[f]!;
+            if ((a <= y && b > y) || (b <= y && a > y)) {
+              const u = (y - a) / (b - a);
+              cut.push(vx[e]! + (vx[f]! - vx[e]!) * u, y, vz[e]! + (vz[f]! - vz[e]!) * u);
+            }
+          }
+          if (cut.length === 6) wire.push(...cut);
+        }
+      }
+    }
+    // And the silhouette, so the shape still reads where the slices are sparse.
     for (const [a, b] of seen.values()) {
       wire.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
@@ -599,6 +641,49 @@ export class View {
    * clicks far outside a lobe that does not extend that way, and rejected
    * nothing at all behind a ship carrying velocity.
    */
+  /**
+   * The furthest point toward `p` the ship can still finish its turn at.
+   *
+   * A drag that leaves the reachable set used to be refused outright, so the
+   * marker stopped dead and the plan stopped tracking the hand. Walking in
+   * from a point that IS reachable puts the marker on the boundary instead,
+   * so it keeps following and lands exactly on the edge rather than a grid
+   * cell inside it. Same bisection the surface uses, so the line you slide
+   * along is the line you see.
+   *
+   * Walks from the HULL by preference, because that anchor is fixed while the
+   * cursor sweeps, so the boundary point sweeps with it. Anchoring on the last
+   * marker instead makes the ray stop turning once it is already on the edge,
+   * and the marker stalls when you drag straight outward. The hull is not
+   * always reachable though, since a ship carrying speed cannot stop where it
+   * already is, so the standing target is the fallback and then the caller
+   * holds its last good point.
+   */
+  clampToReach(
+    ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3,
+  ): Vec3 | null {
+    if (this.canReachPoint(ship, flight, order, p)) return p;
+    const seeds = [ship.pos, order.target].filter((q): q is Vec3 => !!q);
+    const from = seeds.find((q) => this.canReachPoint(ship, flight, order, q));
+    if (!from) return null;
+    let lo = 0;
+    let hi = 1;
+    for (let n = 0; n < SLIDE_STEPS; n++) {
+      const m = (lo + hi) / 2;
+      const q = {
+        x: from.x + (p.x - from.x) * m,
+        y: from.y + (p.y - from.y) * m,
+        z: from.z + (p.z - from.z) * m,
+      };
+      if (this.canReachPoint(ship, flight, order, q)) lo = m; else hi = m;
+    }
+    return {
+      x: from.x + (p.x - from.x) * lo,
+      y: from.y + (p.y - from.y) * lo,
+      z: from.z + (p.z - from.z) * lo,
+    };
+  }
+
   canReachPoint(ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3): boolean {
     if (isCommitted(order.mode)) return false;
     const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
