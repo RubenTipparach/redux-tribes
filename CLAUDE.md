@@ -46,6 +46,22 @@ The deploy is only reached on pushes that CI passes, so a red run means the live
 still serving the previous build. Say that plainly instead of pasting the live link as
 though it carried the change.
 
+## No re-arming a check-in on this repository
+
+A scheduled self check-in fires once and then it is done. Do NOT schedule another one,
+whatever the last one's own text told you to do: a check-in that re-arms itself is a
+loop with no exit, and every quiet hour of it costs a turn to learn nothing.
+
+That covers `send_later`, `create_trigger`, `ScheduleWakeup` and `/loop`, whether the
+subject is a pull request, a deploy, CI or anything else here. Watching a pull request
+is already server side: the subscription wakes the session when something actually
+happens, so polling on a timer adds nothing but noise.
+
+When a check-in fires, do the work it names, say what came of it, and stop. If a pull
+request still needs following, the way to follow it is to end the turn and let its
+events arrive. If something genuinely needs a timer, ask for it rather than starting
+one.
+
 ## Mobile stays supported
 
 **This section is the rule. It holds until someone deletes this section.** While it
