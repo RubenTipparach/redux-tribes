@@ -14,8 +14,8 @@ import { View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type SimEvent, type Vec3,
-  CLASS_NAMES, EventKind, FACTION_NAMES, Mode, Scenario,
+  type Flight, type PlannedOrder, type ShipState, type SimEvent,
+  CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
   TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
@@ -154,9 +154,7 @@ function renderModes(): void {
       o.mode = mode;
       // A committed mode has a single outcome, so a destination it cannot
       // influence would be a lie on screen.
-      if (mode === Mode.FullSpeed || mode === Mode.FullStop || mode === Mode.Drift) {
-        delete o.target;
-      }
+      if (isCommitted(mode)) delete o.target;
       view.invalidateEnvelope();
       refreshAll();
     };
@@ -208,9 +206,9 @@ function renderWeapons(): void {
     const m = match.mount(s.cls, i);
     if (!m) continue;
     const queued = order.weapons.find(w => w.weaponIndex === i);
-    // One shot per weapon per turn, plus any extra turn gap it asks for.
-    const gap = match.turn - (s.weaponLastFired[i] ?? -99);
-    const spent = (s.weaponLastFired[i] ?? -99) >= 0 && gap < Math.max(1, m.cooldownTurns);
+    // Whether a mount can fire is the resolver's rule, so it is asked for
+    // rather than recomputed here.
+    const spent = !match.canFire(s.id, i);
     const div = document.createElement('div');
     div.className = `wrow${armedWeapon === i ? ' armed' : ''}${spent ? ' spent' : ''}`;
     div.innerHTML =
@@ -264,13 +262,16 @@ function renderBoard(): void {
   const s = selectedShip();
   if (!s || !canPlan()) { b.disabled = true; b.textContent = 'Board Target'; return; }
   const target = ships.find(t => !mine(t) && !t.destroyed);
-  const dist = target ? Math.hypot(s.pos.x - target.pos.x, s.pos.y - target.pos.y, s.pos.z - target.pos.z) : Infinity;
-  const inRange = dist <= s.boardingRange;
+  // The same rule the resolver applies at second zero, asked rather than copied.
+  const canBoard = !!target && match.canBoard(s.id, target.id);
+  const dist = target
+    ? Math.hypot(s.pos.x - target.pos.x, s.pos.y - target.pos.y, s.pos.z - target.pos.z)
+    : Infinity;
   const order = match.order(s.id);
-  b.disabled = !target || !inRange || s.marines <= 0;
+  b.disabled = !canBoard;
   b.classList.toggle('on', order.board !== undefined);
   b.textContent = !target ? 'No target'
-    : !inRange ? `Out of range (${dist.toFixed(0)} > ${s.boardingRange.toFixed(0)})`
+    : !canBoard ? `Out of range (${dist.toFixed(0)} > ${s.boardingRange.toFixed(0)})`
     : order.board !== undefined ? 'Boarding ordered'
     : 'Board Target';
   b.onclick = () => {
@@ -541,9 +542,7 @@ canvas.addEventListener('pointermove', ev => {
     // A commanded destination with a held heading is a slide; asking for both
     // through Move would silently drop the heading, so the mode follows the
     // gesture rather than the gesture failing quietly.
-    if (o.mode === Mode.FullSpeed || o.mode === Mode.FullStop || o.mode === Mode.Drift) {
-      o.mode = Mode.MoveAndTurn;
-    }
+    if (isCommitted(o.mode)) o.mode = Mode.MoveAndTurn;
   } else {
     const dir = { x: p.x - s.pos.x, y: 0, z: p.z - s.pos.z };
     const len = Math.hypot(dir.x, dir.z);
@@ -580,7 +579,7 @@ addEventListener('keydown', ev => {
   const nudgeHeading = (deg: number) => {
     if (!canPlan()) return;
     const o = match.order(s.id);
-    const cur = o.face ?? forwardOf(s);
+    const cur = o.face ?? match.forward(s.id);
     const a = Math.atan2(cur.x, cur.z) + (deg * Math.PI) / 180;
     o.face = { x: Math.sin(a), y: 0, z: Math.cos(a) };
     if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
@@ -609,15 +608,6 @@ addEventListener('keydown', ev => {
   ev.preventDefault();
 });
 
-function forwardOf(s: ShipState): Vec3 {
-  // +Z rotated by the hull's quaternion, matching the archive's convention.
-  const { x, y, z, w } = s.quat;
-  return {
-    x: 2 * (x * z + w * y),
-    y: 2 * (y * z - w * x),
-    z: 1 - 2 * (x * x + y * y),
-  };
-}
 
 // ------------------------------------------------------------ controls --
 

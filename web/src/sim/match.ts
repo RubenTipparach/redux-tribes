@@ -60,6 +60,9 @@ export interface MatchExports {
   ft_read_class(index: number): number;
   ft_read_mount(classIdx: number, mount: number): number;
   ft_nominal_reach(ship: number): number;
+  ft_can_fire(ship: number, weapon: number): number;
+  ft_can_board(ship: number, target: number): number;
+  ft_ship_forward(ship: number): number;
 }
 
 function v3(s: Float32Array, b: number): Vec3 {
@@ -216,6 +219,27 @@ export class Match {
    */
   nominalReach(ship: number): number {
     return this.#ex.ft_nominal_reach(ship);
+  }
+
+  /**
+   * May this weapon fire this turn, and may this ship board that one?
+   *
+   * Asked rather than recomputed. The UI used to hold its own copy of both
+   * rules, which meant the greyed out mount and the resolver could disagree
+   * the moment either changed, and nothing would have said so.
+   */
+  canFire(ship: number, weapon: number): boolean {
+    return this.#ex.ft_can_fire(ship, weapon) !== 0;
+  }
+
+  canBoard(ship: number, target: number): boolean {
+    return this.#ex.ft_can_board(ship, target) !== 0;
+  }
+
+  /** The ship's nose direction. Which axis is forward is the core's call. */
+  forward(ship: number): Vec3 {
+    if (this.#ex.ft_ship_forward(ship) === 0) return { x: 0, y: 0, z: 1 };
+    return v3(this.#s, 32);
   }
 
   setFlight(ship: number, f: ClassInfo['flight']): void {

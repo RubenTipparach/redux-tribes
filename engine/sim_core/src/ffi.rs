@@ -745,3 +745,34 @@ pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
         .map(|sh| sh.flight.nominal_reach())
         .unwrap_or(0.0)
 }
+
+/// May this weapon fire this turn? The client greys out a mount with this, so
+/// the answer must be the resolver's own, not a second copy of the rule.
+#[no_mangle]
+pub extern "C" fn ft_can_fire(ship: u32, weapon: u32) -> u32 {
+    sim_opt().map(|s| s.can_fire(ship as usize, weapon as usize) as u32).unwrap_or(0)
+}
+
+/// May this ship board that one right now? Same reason as above: the button
+/// and the resolver have to agree, and the way to guarantee that is for the
+/// button to ask.
+#[no_mangle]
+pub extern "C" fn ft_can_board(ship: u32, target: u32) -> u32 {
+    sim_opt().map(|s| s.can_board(ship as usize, target as usize) as u32).unwrap_or(0)
+}
+
+/// A ship's nose direction, written to the output slots.
+///
+/// Forward is +Z rotated by the hull's quaternion, and which axis counts as
+/// forward is a convention the renderer must not hold a second opinion about.
+#[no_mangle]
+pub extern "C" fn ft_ship_forward(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    let f = sh.quat.forward();
+    let s = scratch();
+    s[32] = f.x;
+    s[33] = f.y;
+    s[34] = f.z;
+    1
+}
