@@ -63,6 +63,9 @@ export interface MatchExports {
   ft_can_fire(ship: number, weapon: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
+  ft_snapshot_len(): number;
+  ft_snapshot(): number;
+  ft_restore(count: number): number;
 }
 
 function v3(s: Float32Array, b: number): Vec3 {
@@ -74,8 +77,21 @@ export class Match {
   #view: Float32Array;
   /** Plans the player has made but not submitted, keyed by ship id. */
   readonly orders = new Map<number, PlannedOrder>();
-  /** Every turn's events and hash, so any past turn can be reviewed. */
-  readonly history: Array<{ turn: number; events: SimEvent[]; hash: string }> = [];
+  /**
+   * Every turn, recorded well enough to be re-run.
+   *
+   * `before` is the exact state going in, `orders` is what everyone did, and
+   * `hash` is what came out. A hash alone says two clients parted; these three
+   * say WHERE, because either machine can restore the world and run the turn
+   * again in isolation.
+   */
+  readonly history: Array<{
+    turn: number;
+    events: SimEvent[];
+    hash: string;
+    before: Float32Array;
+    orders: Map<number, PlannedOrder>;
+  }> = [];
 
   constructor(ex: MatchExports) {
     this.#ex = ex;
@@ -295,21 +311,9 @@ export class Match {
    * orders in a different sequence still stage them identically.
    */
   resolveWith(all: ReadonlyMap<number, PlannedOrder>): SimEvent[] {
-    this.#ex.ft_orders_clear();
-    for (const ship of [...all.keys()].sort((a, b) => a - b)) {
-      const o = all.get(ship)!;
-      const t = o.target;
-      const f = o.face;
-      this.#ex.ft_set_move(
-        ship, o.mode, t ? 1 : 0, t?.x ?? 0, t?.y ?? 0, t?.z ?? 0,
-        f ? 1 : 0, f?.x ?? 0, f?.y ?? 0, f?.z ?? 0,
-      );
-      this.#ex.ft_clear_fire(ship);
-      for (const w of o.weapons) {
-        this.#ex.ft_add_fire(ship, w.weaponIndex, w.second, w.targetShip, w.targetSub);
-      }
-      this.#ex.ft_set_board(ship, o.board ?? -1);
-    }
+    const before = this.snapshot() ?? new Float32Array(0);
+    const staged = new Map(all);
+    this.#stage(all);
     const turnIndex = this.turn;
     const total = this.#ex.ft_resolve_turn();
 
@@ -331,11 +335,83 @@ export class Match {
         });
       }
     }
-    this.history.push({ turn: turnIndex, events, hash: this.hash });
+    this.history.push({ turn: turnIndex, events, hash: this.hash, before, orders: staged });
     // Orders are spent. Keeping them would silently repeat a plan the player
     // has already watched play out.
     this.orders.clear();
     return events;
+  }
+
+  /**
+   * Push an order set into the core, in ship id order.
+   *
+   * The order matters: two clients that received the same orders in a
+   * different sequence must stage them identically or they resolve different
+   * turns from identical inputs.
+   */
+  #stage(all: ReadonlyMap<number, PlannedOrder>): void {
+    this.#ex.ft_orders_clear();
+    for (const ship of [...all.keys()].sort((a, b) => a - b)) {
+      const o = all.get(ship)!;
+      const t = o.target;
+      const f = o.face;
+      this.#ex.ft_set_move(
+        ship, o.mode, t ? 1 : 0, t?.x ?? 0, t?.y ?? 0, t?.z ?? 0,
+        f ? 1 : 0, f?.x ?? 0, f?.y ?? 0, f?.z ?? 0,
+      );
+      this.#ex.ft_clear_fire(ship);
+      for (const w of o.weapons) {
+        this.#ex.ft_add_fire(ship, w.weaponIndex, w.second, w.targetShip, w.targetSub);
+      }
+      this.#ex.ft_set_board(ship, o.board ?? -1);
+    }
+  }
+
+  /**
+   * The exact turn boundary state, copied out of the core.
+   *
+   * A copy rather than a view: the scratch buffer is reused by the very next
+   * call, so a retained view would silently become whatever was written after
+   * it, which is a bug that only shows up when something else happens to run.
+   */
+  snapshot(): Float32Array | null {
+    const n = this.#ex.ft_snapshot();
+    if (n === 0) return null;
+    return this.#s.slice(OUT, OUT + n);
+  }
+
+  /** Put the world back. False if the snapshot is foreign or the wrong version. */
+  restore(snap: Float32Array): boolean {
+    const s = this.#s;
+    if (OUT + snap.length > s.length) return false;
+    s.set(snap, OUT);
+    return this.#ex.ft_restore(snap.length) !== 0;
+  }
+
+  /**
+   * Re-run a recorded turn and report whether it lands where it did before.
+   *
+   * The client's own divergence check, and the reason snapshots are kept
+   * rather than only hashed: this can say which turn parted, from inside one
+   * client, with no server involved.
+   */
+  replay(index: number): { ok: boolean; expected: string; got: string } | null {
+    const rec = this.history[index];
+    if (!rec) return null;
+    const now = this.snapshot();
+    if (!now || !this.restore(rec.before)) return null;
+    this.resolveInPlace(rec.orders);
+    const got = this.hash;
+    // Put the live match back exactly as it was: a self check that moved the
+    // world would be worse than no self check.
+    this.restore(now);
+    return { ok: got === rec.hash, expected: rec.hash, got };
+  }
+
+  /** Resolve without recording, for replays that must not grow the history. */
+  resolveInPlace(all: ReadonlyMap<number, PlannedOrder>): void {
+    this.#stage(all);
+    this.#ex.ft_resolve_turn();
   }
 
   /** Resolve from this client's own plan alone: offline, or a solo game. */

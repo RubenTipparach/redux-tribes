@@ -359,3 +359,57 @@ test('forward is the core convention, not a second opinion', () => {
     assert.ok(dot > 0.9, `ship ${s.id} should be facing its opponent, dot ${dot.toFixed(3)}`);
   }
 });
+
+test('a recorded turn replays to the hash it produced', () => {
+  // The client's own divergence check. A hash says two clients parted; a
+  // snapshot plus that turn's orders says WHICH turn, from inside one client
+  // with no server involved.
+  const m = sim.match();
+  m.start('00000000dec0ded1', 0, 0b01);
+  for (let t = 0; t < 3; t++) {
+    const o = m.order(0);
+    o.mode = Mode.MoveAndTurn;
+    o.target = { x: -5 + t, y: 0, z: 0 };
+    m.resolveWith(m.orders);
+  }
+  assert.equal(m.history.length, 3);
+
+  const live = m.hash;
+  for (let i = 0; i < m.history.length; i++) {
+    const r = m.replay(i);
+    assert.ok(r, `turn ${i} is replayable`);
+    assert.equal(r.ok, true, `turn ${i}: expected ${r.expected}, replayed ${r.got}`);
+  }
+  // A self check that moved the world would be worse than no self check.
+  assert.equal(m.hash, live, 'replaying leaves the live match exactly where it was');
+});
+
+test('a snapshot is a copy, not a window onto the scratch buffer', () => {
+  // The scratch is reused by the very next call, so a retained view would
+  // become whatever was written after it. That bug only appears when
+  // something else happens to run in between, which is the worst kind.
+  const m = sim.match();
+  m.start('00000000c0ffee11', 1, 0b01);
+  const before = m.snapshot();
+  assert.ok(before && before.length > 0);
+  const copy = Float32Array.from(before);
+
+  // Do a pile of unrelated work that writes all over the scratch.
+  m.ships();
+  m.classInfo(0);
+  m.preview(0, { mode: Mode.MoveAndTurn, target: { x: 20, y: 5, z: 5 }, weapons: [] }, 48);
+  m.resolveWith(new Map([[0, { mode: Mode.MoveAndTurn, target: { x: 0, y: 0, z: 0 }, weapons: [] }]]));
+
+  assert.deepEqual(Array.from(before), Array.from(copy), 'the snapshot survived the traffic');
+  assert.equal(m.restore(before), true, 'and still restores');
+});
+
+test('a snapshot from another match is refused', () => {
+  const a = sim.match();
+  a.start('00000000aaaaaaa1', 1, 0b01);
+  const snap = a.snapshot();
+
+  const b = sim.match();
+  b.start('00000000bbbbbbb2', 1, 0b01);
+  assert.equal(b.restore(snap), false, 'restoring the wrong match is refused, not silently wrong');
+});

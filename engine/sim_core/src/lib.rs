@@ -11,6 +11,7 @@ pub mod ffi;
 pub mod flight;
 pub mod math;
 pub mod rng;
+pub mod snapshot;
 pub mod state;
 pub mod turn;
 

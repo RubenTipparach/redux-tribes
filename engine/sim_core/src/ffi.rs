@@ -776,3 +776,42 @@ pub extern "C" fn ft_ship_forward(ship: u32) -> u32 {
     s[34] = f.z;
     1
 }
+
+// ------------------------------------------------------------- snapshots --
+
+/// How many f32 slots the current turn boundary state needs.
+#[no_mangle]
+pub extern "C" fn ft_snapshot_len() -> u32 {
+    sim_opt().map(|s| s.snapshot_len() as u32).unwrap_or(0)
+}
+
+/// Write the turn boundary state from slot 64. Returns the slots written, or
+/// 0 if it would not fit: a truncated snapshot is not a snapshot, and half of
+/// one restores cleanly into a world that is quietly wrong.
+#[no_mangle]
+pub extern "C" fn ft_snapshot() -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let need = sim.snapshot_len();
+    if OUT + need > SCRATCH_LEN {
+        return 0;
+    }
+    let s = scratch();
+    sim.write_snapshot(&mut s[OUT..OUT + need]).map(|n| n as u32).unwrap_or(0)
+}
+
+/// Restore a snapshot the caller has written from slot 64.
+///
+/// Returns 1 on success, 0 if refused. Refusal means the snapshot came from a
+/// different match or a different layout version, both of which would restore
+/// into something plausible and wrong.
+#[no_mangle]
+pub extern "C" fn ft_restore(count: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let n = count as usize;
+    if OUT + n > SCRATCH_LEN {
+        return 0;
+    }
+    // The borrow has to end before restore_snapshot takes &mut Sim.
+    let copy: Vec<f32> = scratch()[OUT..OUT + n].to_vec();
+    sim.restore_snapshot(&copy).is_ok() as u32
+}
