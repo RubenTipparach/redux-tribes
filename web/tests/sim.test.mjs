@@ -308,3 +308,108 @@ test('who flies a side is a property of the match, not the viewer', () => {
   };
   assert.notEqual(run(0b01), run(0b11), 'an AI side and an idle side are different matches');
 });
+
+test('the client asks the core for rules instead of holding copies', () => {
+  // The UI used to recompute the weapon cooldown and the boarding range. Two
+  // implementations of one rule is a rule that will be changed in one of them,
+  // and the failure is silent: a mount greyed out that could have fired, or a
+  // boarding button offered for an action the resolver then drops.
+  //
+  // With the authored data every weapon fires every turn (cooldown 0 and 1
+  // both floor to 1, and a turn always advances by 1), so the gate only stops
+  // a SECOND shot inside one turn, which a planner cannot reach. That state is
+  // constructed and asserted in the Rust suite, where it can be. What matters
+  // here is that the query is wired to the resolver at all.
+  const m = sim.match();
+  m.start('000000000000beef', 1, 0b01);
+
+  assert.equal(m.canFire(0, 0), true, 'a live mount is available');
+  assert.equal(m.canFire(0, 99), false, 'a mount that does not exist is not');
+  assert.equal(m.canFire(99, 0), false, 'nor is one on a ship that does not exist');
+
+  // Boarding is refused at range, by the same rule the resolver runs at
+  // second zero rather than by a second copy of it.
+  const ships = m.ships();
+  const gap = Math.hypot(
+    ships[0].pos.x - ships[1].pos.x,
+    ships[0].pos.y - ships[1].pos.y,
+    ships[0].pos.z - ships[1].pos.z);
+  assert.ok(gap > ships[0].boardingRange, `the duel starts ${gap.toFixed(0)} apart`);
+  assert.equal(m.canBoard(0, 1), false, 'no boarding across open space');
+  assert.equal(m.canBoard(0, 0), false, 'and never onto yourself');
+});
+
+test('forward is the core convention, not a second opinion', () => {
+  // Which axis counts as forward is a convention. The renderer holding its own
+  // copy is how a heading arrow ends up pointing out of the wrong end.
+  const m = sim.match();
+  m.start('000000000000f00d', 1, 0b01);
+  const ships = m.ships();
+  for (const s of ships) {
+    const f = m.forward(s.id);
+    assert.ok(Math.abs(Math.hypot(f.x, f.y, f.z) - 1) < 1e-4, 'forward is a unit vector');
+    // The duel faces the two hulls at each other along x, so each nose should
+    // point roughly at the other ship.
+    const other = ships.find(o => o.id !== s.id);
+    const toward = {
+      x: other.pos.x - s.pos.x, y: other.pos.y - s.pos.y, z: other.pos.z - s.pos.z,
+    };
+    const len = Math.hypot(toward.x, toward.y, toward.z);
+    const dot = (f.x * toward.x + f.y * toward.y + f.z * toward.z) / len;
+    assert.ok(dot > 0.9, `ship ${s.id} should be facing its opponent, dot ${dot.toFixed(3)}`);
+  }
+});
+
+test('a recorded turn replays to the hash it produced', () => {
+  // The client's own divergence check. A hash says two clients parted; a
+  // snapshot plus that turn's orders says WHICH turn, from inside one client
+  // with no server involved.
+  const m = sim.match();
+  m.start('00000000dec0ded1', 0, 0b01);
+  for (let t = 0; t < 3; t++) {
+    const o = m.order(0);
+    o.mode = Mode.MoveAndTurn;
+    o.target = { x: -5 + t, y: 0, z: 0 };
+    m.resolveWith(m.orders);
+  }
+  assert.equal(m.history.length, 3);
+
+  const live = m.hash;
+  for (let i = 0; i < m.history.length; i++) {
+    const r = m.replay(i);
+    assert.ok(r, `turn ${i} is replayable`);
+    assert.equal(r.ok, true, `turn ${i}: expected ${r.expected}, replayed ${r.got}`);
+  }
+  // A self check that moved the world would be worse than no self check.
+  assert.equal(m.hash, live, 'replaying leaves the live match exactly where it was');
+});
+
+test('a snapshot is a copy, not a window onto the scratch buffer', () => {
+  // The scratch is reused by the very next call, so a retained view would
+  // become whatever was written after it. That bug only appears when
+  // something else happens to run in between, which is the worst kind.
+  const m = sim.match();
+  m.start('00000000c0ffee11', 1, 0b01);
+  const before = m.snapshot();
+  assert.ok(before && before.length > 0);
+  const copy = Float32Array.from(before);
+
+  // Do a pile of unrelated work that writes all over the scratch.
+  m.ships();
+  m.classInfo(0);
+  m.preview(0, { mode: Mode.MoveAndTurn, target: { x: 20, y: 5, z: 5 }, weapons: [] }, 48);
+  m.resolveWith(new Map([[0, { mode: Mode.MoveAndTurn, target: { x: 0, y: 0, z: 0 }, weapons: [] }]]));
+
+  assert.deepEqual(Array.from(before), Array.from(copy), 'the snapshot survived the traffic');
+  assert.equal(m.restore(before), true, 'and still restores');
+});
+
+test('a snapshot from another match is refused', () => {
+  const a = sim.match();
+  a.start('00000000aaaaaaa1', 1, 0b01);
+  const snap = a.snapshot();
+
+  const b = sim.match();
+  b.start('00000000bbbbbbb2', 1, 0b01);
+  assert.equal(b.restore(snap), false, 'restoring the wrong match is refused, not silently wrong');
+});

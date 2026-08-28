@@ -44,7 +44,9 @@
 //!   proj    5 slots: id, kind, pos(3)
 
 use crate::data::{class_index, class_from_index, ship_class};
-use crate::flight::{can_reach, fly_span, fly_turn, Body, Flight, Mode, TICKS_PER_SECOND, TICKS_PER_TURN};
+use crate::flight::{
+    can_reach, fly_span, fly_turn, Body, Flight, Mode, Well, TICKS_PER_SECOND, TICKS_PER_TURN,
+};
 use crate::math::{Quat, V3};
 use crate::state::{Faction, ProjKind, Sim, SpawnSpec, Winner};
 use crate::turn::{Event, FireOrder, Order};
@@ -64,12 +66,82 @@ pub const PROJ_STRIDE: usize = 5;
 /// one thread, and a second match would need a handle in every call for no
 /// gain the client cannot get by instantiating the module twice.
 static mut MATCH: Option<Sim> = None;
+
+/// The gravity field.
+///
+/// A live match owns its own, because the state hash covers it and both seats
+/// must hold the same one. This static is what a NEW match starts from, and
+/// what a standalone probe flies through when there is no match at all, which
+/// is exactly what the envelope mockups do.
+static mut WELLS: Vec<Well> = Vec::new();
 static mut ORDERS: Vec<Option<Order>> = Vec::new();
 static mut EVENTS: Vec<Event> = Vec::new();
 
 #[allow(static_mut_refs)]
 fn sim_opt() -> Option<&'static mut Sim> {
     unsafe { MATCH.as_mut() }
+}
+
+/// The field to fly through. A live match is the authority: its wells are the
+/// ones the hash covers and resolution uses. The static only stands in before
+/// a match exists.
+#[allow(static_mut_refs)]
+fn wells() -> &'static [Well] {
+    unsafe {
+        match MATCH.as_ref() {
+            Some(sim) => &sim.wells,
+            None => &WELLS,
+        }
+    }
+}
+
+/// Empty the field. Returns the new count, which is always 0.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn ft_wells_clear() -> u32 {
+    unsafe {
+        WELLS.clear();
+        if let Some(sim) = MATCH.as_mut() {
+            sim.wells.clear();
+        }
+    }
+    0
+}
+
+/// Add a point source and return the new count.
+///
+/// Order is part of the simulation, because the accelerations are summed in
+/// it, so both seats must add the same wells in the same sequence.
+#[no_mangle]
+#[allow(static_mut_refs)]
+pub extern "C" fn ft_well_add(x: f32, y: f32, z: f32, mu: f32, soft: f32) -> u32 {
+    let w = Well::new(V3::new(x, y, z), mu, soft.max(1e-3));
+    unsafe {
+        WELLS.push(w);
+        if let Some(sim) = MATCH.as_mut() {
+            sim.wells.push(w);
+            return sim.wells.len() as u32;
+        }
+        WELLS.len() as u32
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ft_well_count() -> u32 {
+    wells().len() as u32
+}
+
+/// The field's acceleration at a point, in u/s^2, written to slots 32..35.
+/// The client draws streamlines from this rather than growing a second
+/// gravity model of its own.
+#[no_mangle]
+pub extern "C" fn ft_gravity_at(x: f32, y: f32, z: f32) -> u32 {
+    let a = crate::flight::gravity_at(V3::new(x, y, z), wells());
+    let s = scratch();
+    s[32] = a.x;
+    s[33] = a.y;
+    s[34] = a.z;
+    1
 }
 
 #[allow(static_mut_refs)]
@@ -80,6 +152,19 @@ fn orders() -> &'static mut Vec<Option<Order>> {
 #[allow(static_mut_refs)]
 fn events() -> &'static mut Vec<Event> {
     unsafe { &mut EVENTS }
+}
+
+/// The scratch buffer as a slice. The wasm caller maps a Float32Array over
+/// `ft_scratch_ptr` instead; this is the same memory for a native test.
+#[allow(static_mut_refs)]
+pub fn ft_scratch_slice() -> &'static mut [f32] {
+    unsafe { &mut *(&raw mut SCRATCH) }
+}
+
+/// The octree output buffer as a slice, for the same reason.
+#[allow(static_mut_refs)]
+pub fn ft_octree_slice() -> &'static [u32] {
+    unsafe { &*(&raw const OCT) }
 }
 
 fn scratch() -> &'static mut [f32] {
@@ -128,7 +213,7 @@ pub extern "C" fn ft_fly_turn(mode: u32, steps: u32, sample_stride: u32) -> u32 
     let mode = Mode::from_u32(mode);
     let target = if mode.committed() { None } else { target };
 
-    let flown = fly_turn(body, target, mode, &fl, face, steps);
+    let flown = fly_turn(body, target, mode, &fl, face, steps, wells());
 
     s[32] = flown.end_pos.x;
     s[33] = flown.end_pos.y;
@@ -171,7 +256,7 @@ pub extern "C" fn ft_can_reach(mode: u32, eps: f32, steps: u32) -> u32 {
     let s: &[f32] = unsafe { &*(&raw const SCRATCH) };
     let (body, _t, face, fl) = read_inputs(s);
     let target = V3::new(s[10], s[11], s[12]);
-    can_reach(body, target, Mode::from_u32(mode), &fl, face, eps, steps) as u32
+    can_reach(body, target, Mode::from_u32(mode), &fl, face, eps, steps, wells()) as u32
 }
 
 /// Sweep a whole grid of candidate cells in one call, so probing an envelope
@@ -199,7 +284,7 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
             let y = cy - half + (j as f32 + 0.5) * step;
             for k in 0..n {
                 let z = cz - half + (k as f32 + 0.5) * step;
-                if can_reach(body, V3::new(x, y, z), mode, &fl, face, eps, steps) {
+                if can_reach(body, V3::new(x, y, z), mode, &fl, face, eps, steps, wells()) {
                     mask[idx / 32] |= 1 << (idx % 32);
                     hits += 1;
                 }
@@ -213,6 +298,310 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
         }
     }
     hits
+}
+
+// ---------------------------------------------------------------- envelope --
+// Two ways to find the boundary of the reachable set without paying for the
+// volume behind it. Both are SAMPLING strategies rather than rules: they decide
+// where to ask, never what the answer is. They live here because the answer
+// costs a 60 step flight and batching a whole traversal into one call is worth
+// tens of thousands of boundary crossings.
+
+/// Straddling leaves from `ft_reach_octree`, two words each.
+///
+/// Its own buffer because the scratch cannot hold it: a 64 cell traversal finds
+/// about 14,600 leaves. Zero initialised, so it lands in .bss and costs the
+/// module nothing.
+const OCT_LEN: usize = 65536;
+static mut OCT: [u32; OCT_LEN] = [0; OCT_LEN];
+
+#[no_mangle]
+pub extern "C" fn ft_octree_ptr() -> *mut u32 {
+    &raw mut OCT as *mut u32
+}
+
+#[no_mangle]
+pub extern "C" fn ft_octree_len() -> u32 {
+    OCT_LEN as u32
+}
+
+/// Find the boundary by descending only where the answer changes.
+///
+/// A grid probe costs the CUBE of the resolution while what it wants is a
+/// SURFACE, and nearly every cell it pays for is deep inside the set, where the
+/// answer is always yes, or far outside it, where it is always no. This tests a
+/// cell's eight corners first and descends only if they disagree, so a uniform
+/// interior and a uniform exterior are each settled once and never looked at
+/// again. Cost then tracks area rather than volume: measured against a dense
+/// probe at the same cell it is 1.7 times cheaper at 16, 3.0 at 32, 5.7 at 64
+/// and 11.1 at 128.
+///
+/// Every level is a complete answer at its own resolution, so a client can draw
+/// coarse at once and sharpen over the following frames rather than blocking on
+/// the fine one.
+///
+/// The box is positioned and oriented like `ft_reach_grid_at`: `f` is the
+/// forward axis and `hr`/`hu`/`hf` the half extents across it.
+///
+/// Writes two words per leaf from `ft_octree_ptr`:
+///   word 0  i | j<<8 | k<<16 | level<<24, in cells of the FINEST grid
+///   word 1  the eight corner bits, in the corner order below
+/// so a caller has everything it needs to march without probing again.
+/// Returns the leaf count, or 0 if `n` is not a power of two at least `base`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_reach_octree(
+    mode: u32, eps: f32, steps: u32, base: u32, n: u32,
+    cx: f32, cy: f32, cz: f32,
+    fx: f32, fy: f32, fz: f32,
+    hr: f32, hu: f32, hf: f32,
+) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let (body, _t, face, fl) = read_inputs(s);
+    let mode = Mode::from_u32(mode);
+    let n = n.clamp(2, 128) as usize;
+    if !n.is_power_of_two() {
+        return 0;
+    }
+    let base = (base.max(1) as usize).min(n);
+    if !base.is_power_of_two() {
+        return 0;
+    }
+
+    let fwd = V3::new(fx, fy, fz);
+    let q = if fwd.len2() > 1e-12 { Quat::look(fwd, None) } else { Quat::IDENTITY };
+    let centre = V3::new(cx, cy, cz);
+    let half = [hr, hu, hf];
+    let at = |i: usize, j: usize, k: usize| -> V3 {
+        let l = V3::new(
+            -half[0] + 2.0 * half[0] * (i as f32 / n as f32),
+            -half[1] + 2.0 * half[1] * (j as f32 / n as f32),
+            -half[2] + 2.0 * half[2] * (k as f32 / n as f32),
+        );
+        centre.add(q.rot(l))
+    };
+
+    // One corner costs a flight, and a corner is shared by up to eight cells
+    // and by every level above them, so it is solved once and remembered.
+    // A Vec of bytes, not a HashMap: iteration order never enters the answer,
+    // but a map in the simulation path is a desync waiting for another machine.
+    let side = n + 1;
+    let mut seen = vec![0u8; side * side * side];
+    let mut corner = |i: usize, j: usize, k: usize| -> bool {
+        let idx = (i * side + j) * side + k;
+        if seen[idx] == 0 {
+            let hit = can_reach(body, at(i, j, k), mode, &fl, face, eps, steps, wells());
+            seen[idx] = if hit { 2 } else { 1 };
+        }
+        seen[idx] == 2
+    };
+
+    const CORNERS: [(usize, usize, usize); 8] = [
+        (0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0),
+        (0, 0, 1), (1, 0, 1), (0, 1, 1), (1, 1, 1),
+    ];
+    let out: &mut [u32] = unsafe { &mut *(&raw mut OCT) };
+    let mut count = 0usize;
+
+    // An explicit stack, because a wasm recursion this deep is a stack the
+    // caller cannot see the bottom of.
+    let root = n / base;
+    let mut stack: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for i in 0..base {
+        for j in 0..base {
+            for k in 0..base {
+                stack.push((i * root, j * root, k * root, root));
+            }
+        }
+    }
+    while let Some((i, j, k, size)) = stack.pop() {
+        let mut bits = 0u32;
+        let mut all_same = true;
+        let mut first = None;
+        for (c, (a, b, d)) in CORNERS.iter().enumerate() {
+            let v = corner(i + a * size, j + b * size, k + d * size);
+            if v {
+                bits |= 1 << c;
+            }
+            match first {
+                None => first = Some(v),
+                Some(f) if f != v => all_same = false,
+                _ => {}
+            }
+        }
+        if size == 1 {
+            if !all_same && count * 2 + 1 < OCT_LEN {
+                let level = size.trailing_zeros();
+                out[count * 2] = (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (level << 24);
+                out[count * 2 + 1] = bits;
+                count += 1;
+            }
+            continue;
+        }
+        if all_same {
+            continue; // the interior and the exterior, each settled in one test
+        }
+        let h = size / 2;
+        for (a, b, d) in CORNERS.iter() {
+            stack.push((i + a * h, j + b * h, k + d * h, h));
+        }
+    }
+    count as u32
+}
+
+/// The boundary as a radius field, for a caller fitting a smooth surface to it.
+///
+/// Measured over 400 rays, 398 leave the set once and never come back, so the
+/// edge is single valued in direction almost everywhere and a tensor product
+/// surface can describe it. Writes `nu * nv` radii from slot 64, theta major,
+/// each found by bisecting along its own ray from `(cx, cy, cz)`.
+///
+/// The poles sit on world Y, which is not arbitrary: X and Z were measured
+/// against it and lose. The chart crowds badly there, and that was measured
+/// too. An equal area chart and a six face cube map are both far more even and
+/// both fit WORSE at the same ray budget, because the crowding is what pays for
+/// the resolution at the equator, where the shape actually varies.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_reach_radii(
+    mode: u32, eps: f32, steps: u32, nu: u32, nv: u32, iters: u32,
+    cx: f32, cy: f32, cz: f32, far: f32,
+) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let (body, _t, face, fl) = read_inputs(s);
+    let mode = Mode::from_u32(mode);
+    let nu = nu.clamp(4, 256) as usize;
+    let nv = nv.clamp(3, 256) as usize;
+    if 64 + nu * nv > SCRATCH_LEN {
+        return 0;
+    }
+    let iters = iters.clamp(4, 30);
+    let anchor = V3::new(cx, cy, cz);
+    let far = if far > 0.0 { far } else { 200.0 };
+
+    for u in 0..nu {
+        let th = (u as f32 / nu as f32) * 2.0 * crate::math::PI;
+        let (st, ct) = (crate::math::dsin(th), crate::math::dcos(th));
+        for v in 0..nv {
+            let ph = (v as f32 / (nv - 1) as f32) * crate::math::PI;
+            let (sp, cp) = (crate::math::dsin(ph), crate::math::dcos(ph));
+            let d = V3::new(sp * ct, cp, sp * st);
+            let mut lo = 0.0f32;
+            let mut hi = far;
+            if can_reach(body, anchor.add(d.scale(hi)), mode, &fl, face, eps, steps, wells()) {
+                s[64 + u * nv + v] = hi;
+                continue;
+            }
+            for _ in 0..iters {
+                let m = 0.5 * (lo + hi);
+                if can_reach(body, anchor.add(d.scale(m)), mode, &fl, face, eps, steps, wells()) {
+                    lo = m;
+                } else {
+                    hi = m;
+                }
+            }
+            s[64 + u * nv + v] = 0.5 * (lo + hi);
+        }
+    }
+    // Every theta at a pole is the same direction, so the samples there have to
+    // agree exactly or a fit puts a dimple in the surface.
+    for v in [0usize, nv - 1] {
+        let mut m = 0.0f32;
+        for u in 0..nu {
+            m += s[64 + u * nv + v];
+        }
+        m /= nu as f32;
+        for u in 0..nu {
+            s[64 + u * nv + v] = m;
+        }
+    }
+    (nu * nv) as u32
+}
+
+/// Probe a box that is POSITIONED and ORIENTED, rather than an axis aligned
+/// cube centred on the hull.
+///
+/// The reachable set is a lobe that leans along the velocity, and at speed it
+/// leaves the hull behind entirely: a ship carrying 8 units per second ends
+/// its turn about 80 units away whatever it does, so a cube centred on the
+/// hull spends almost all of itself on space the ship cannot use. Measured,
+/// the cell it can afford grows from 7.9 units at rest to 13.7 at speed, which
+/// is backwards: the envelope gets coarsest exactly when it matters most.
+///
+/// Centring on where the turn actually lands and turning the box to follow the
+/// velocity puts the cells where the answer is. Same probe count, cells of 3.8
+/// units at rest and 2.8 at speed.
+///
+/// The frame is built here with `Quat::look` rather than in the client, so
+/// there is one definition of which way the box faces and the caller cannot
+/// place its vertices somewhere the probe did not look.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_reach_grid_at(
+    mode: u32, eps: f32, steps: u32, n: u32,
+    cx: f32, cy: f32, cz: f32,
+    fx: f32, fy: f32, fz: f32,
+    hr: f32, hu: f32, hf: f32,
+) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let (body, _t, face, fl) = read_inputs(s);
+    let mode = Mode::from_u32(mode);
+    let n = n.max(1).min(32) as usize;
+    let fwd = V3::new(fx, fy, fz);
+    let q = if fwd.len2() > 1e-12 { Quat::look(fwd, None) } else { Quat::IDENTITY };
+    let centre = V3::new(cx, cy, cz);
+    let mut hits = 0u32;
+    let mut idx = 0usize;
+    let words = (n * n * n).div_ceil(32);
+    for w in 0..words {
+        if 64 + w < SCRATCH_LEN {
+            s[64 + w] = 0.0;
+        }
+    }
+    let mut mask = vec![0u32; words];
+    let at = |i: usize, half: f32| -> f32 {
+        -half + (i as f32 + 0.5) * (2.0 * half / n as f32)
+    };
+    for i in 0..n {
+        let lx = at(i, hr);
+        for j in 0..n {
+            let ly = at(j, hu);
+            for k in 0..n {
+                let lz = at(k, hf);
+                let p = centre.add(q.rot(V3::new(lx, ly, lz)));
+                if can_reach(body, p, mode, &fl, face, eps, steps, wells()) {
+                    mask[idx / 32] |= 1 << (idx % 32);
+                    hits += 1;
+                }
+                idx += 1;
+            }
+        }
+    }
+    for (w, word) in mask.iter().enumerate() {
+        if 64 + w < SCRATCH_LEN {
+            s[64 + w] = f32::from_bits(*word);
+        }
+    }
+    hits
+}
+
+/// The basis `ft_reach_grid_at` samples in, so a caller can place the cells it
+/// was told about without rebuilding the convention. Right, up and forward go
+/// to slots 44 to 52.
+#[no_mangle]
+pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let fwd = V3::new(fx, fy, fz);
+    let q = if fwd.len2() > 1e-12 { Quat::look(fwd, None) } else { Quat::IDENTITY };
+    let r = q.rot(V3::new(1.0, 0.0, 0.0));
+    let u = q.rot(V3::new(0.0, 1.0, 0.0));
+    let f = q.rot(V3::new(0.0, 0.0, 1.0));
+    for (o, v) in [(44, r), (47, u), (50, f)] {
+        s[o] = v.x;
+        s[o + 1] = v.y;
+        s[o + 2] = v.z;
+    }
+    1
 }
 
 // ------------------------------------------------------------- the match --
@@ -674,6 +1063,7 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
         sh.plan_face,
         steps,
         1.0 / TICKS_PER_SECOND as f32,
+        wells(),
     );
     let s = scratch();
     s[32] = flown.end_pos.x;
@@ -744,4 +1134,74 @@ pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
         .and_then(|s| s.ships.get(ship as usize))
         .map(|sh| sh.flight.nominal_reach())
         .unwrap_or(0.0)
+}
+
+/// May this weapon fire this turn? The client greys out a mount with this, so
+/// the answer must be the resolver's own, not a second copy of the rule.
+#[no_mangle]
+pub extern "C" fn ft_can_fire(ship: u32, weapon: u32) -> u32 {
+    sim_opt().map(|s| s.can_fire(ship as usize, weapon as usize) as u32).unwrap_or(0)
+}
+
+/// May this ship board that one right now? Same reason as above: the button
+/// and the resolver have to agree, and the way to guarantee that is for the
+/// button to ask.
+#[no_mangle]
+pub extern "C" fn ft_can_board(ship: u32, target: u32) -> u32 {
+    sim_opt().map(|s| s.can_board(ship as usize, target as usize) as u32).unwrap_or(0)
+}
+
+/// A ship's nose direction, written to the output slots.
+///
+/// Forward is +Z rotated by the hull's quaternion, and which axis counts as
+/// forward is a convention the renderer must not hold a second opinion about.
+#[no_mangle]
+pub extern "C" fn ft_ship_forward(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    let f = sh.quat.forward();
+    let s = scratch();
+    s[32] = f.x;
+    s[33] = f.y;
+    s[34] = f.z;
+    1
+}
+
+// ------------------------------------------------------------- snapshots --
+
+/// How many f32 slots the current turn boundary state needs.
+#[no_mangle]
+pub extern "C" fn ft_snapshot_len() -> u32 {
+    sim_opt().map(|s| s.snapshot_len() as u32).unwrap_or(0)
+}
+
+/// Write the turn boundary state from slot 64. Returns the slots written, or
+/// 0 if it would not fit: a truncated snapshot is not a snapshot, and half of
+/// one restores cleanly into a world that is quietly wrong.
+#[no_mangle]
+pub extern "C" fn ft_snapshot() -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let need = sim.snapshot_len();
+    if OUT + need > SCRATCH_LEN {
+        return 0;
+    }
+    let s = scratch();
+    sim.write_snapshot(&mut s[OUT..OUT + need]).map(|n| n as u32).unwrap_or(0)
+}
+
+/// Restore a snapshot the caller has written from slot 64.
+///
+/// Returns 1 on success, 0 if refused. Refusal means the snapshot came from a
+/// different match or a different layout version, both of which would restore
+/// into something plausible and wrong.
+#[no_mangle]
+pub extern "C" fn ft_restore(count: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let n = count as usize;
+    if OUT + n > SCRATCH_LEN {
+        return 0;
+    }
+    // The borrow has to end before restore_snapshot takes &mut Sim.
+    let copy: Vec<f32> = scratch()[OUT..OUT + n].to_vec();
+    sim.restore_snapshot(&copy).is_ok() as u32
 }

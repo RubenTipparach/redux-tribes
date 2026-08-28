@@ -415,3 +415,46 @@ fn a_human_side_is_never_planned_for_by_the_ai() {
     assert!(!solo.ships[0].ai_enabled, "the person flies side 0");
     assert!(solo.ships[1].ai_enabled, "the AI flies side 1");
 }
+
+#[test]
+fn a_weapon_fires_once_per_turn_at_most() {
+    // The rule the client used to hold a second copy of. It is asserted here
+    // rather than across the boundary because the state that exercises it,
+    // a weapon already fired THIS turn, is one the planner cannot reach: it
+    // only exists mid resolution.
+    //
+    // With the authored data cooldown 0 and 1 both floor to 1, so every
+    // weapon fires every turn and the gate never bites between turns. That is
+    // the archive's own arithmetic, preserved rather than tidied, and the
+    // reason the client's copy of it was quietly doing nothing.
+    let mut sim = duel("seed-cooldown", 60.0);
+    assert!(sim.can_fire(0, 0), "an unused mount is available");
+
+    sim.ships[0].weapons[0].last_fired_turn = sim.turn;
+    assert!(!sim.can_fire(0, 0), "a mount that already fired this turn is spent");
+    assert!(sim.can_fire(0, 1), "and its neighbour is not");
+
+    sim.turn += 1;
+    assert!(sim.can_fire(0, 0), "next turn it is available again");
+
+    assert!(!sim.can_fire(0, 99), "a mount that does not exist cannot fire");
+    assert!(!sim.can_fire(99, 0), "nor can one on a ship that does not exist");
+}
+
+#[test]
+fn boarding_needs_range_an_enemy_and_marines() {
+    let mut sim = duel("seed-board-rule", 12.0);
+    assert!(sim.can_board(0, 1), "alongside an enemy with marines aboard");
+    assert!(!sim.can_board(0, 0), "never onto yourself, whatever the range");
+
+    sim.ships[0].marines = 0;
+    assert!(!sim.can_board(0, 1), "an empty hold cannot board");
+    sim.ships[0].marines = 10;
+
+    sim.ships[1].faction = sim.ships[0].faction;
+    assert!(!sim.can_board(0, 1), "and you do not board your own side");
+    sim.ships[1].faction = Faction::Karisen;
+
+    let far = duel("seed-board-far", 400.0);
+    assert!(!far.can_board(0, 1), "nor across open space");
+}

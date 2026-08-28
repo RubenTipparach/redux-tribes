@@ -13,7 +13,7 @@ fn ship(vel: V3) -> Body {
 
 fn reach(dir: V3, mode: Mode, fl: &Flight, face: Option<V3>) -> f32 {
     let b = ship(V3::ZERO);
-    let flown = fly_turn(b, Some(dir.norm().scale(400.0)), mode, fl, face, RESOLUTION_STEPS);
+    let flown = fly_turn(b, Some(dir.norm().scale(400.0)), mode, fl, face, RESOLUTION_STEPS, &[]);
     flown.end_pos.dist(b.pos)
 }
 
@@ -46,11 +46,11 @@ fn an_agile_hull_outreaches_a_sluggish_one() {
 fn momentum_commits_you() {
     let fl = Flight::default();
     assert!(
-        can_reach(ship(V3::ZERO), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS),
+        can_reach(ship(V3::ZERO), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS, &[]),
         "a ship at rest can hold station"
     );
     assert!(
-        !can_reach(ship(V3::new(0.0, 0.0, 6.0)), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS),
+        !can_reach(ship(V3::new(0.0, 0.0, 6.0)), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS, &[]),
         "a ship carrying velocity cannot hold station"
     );
 }
@@ -73,7 +73,7 @@ fn rotation_is_rate_limited() {
     };
     let at = |yaw: f32| {
         let fl = Flight { yaw_rate: yaw, ..Flight::default() };
-        let f = fly_turn(ship(V3::ZERO), None, Mode::TurnSlide, &fl, Some(want), RESOLUTION_STEPS);
+        let f = fly_turn(ship(V3::ZERO), None, Mode::TurnSlide, &fl, Some(want), RESOLUTION_STEPS, &[]);
         bearing(f.end_quat)
     };
     let slow = at(6.0);
@@ -88,8 +88,8 @@ fn rotation_is_rate_limited() {
 fn committed_modes_ignore_the_destination() {
     let fl = Flight::default();
     let b = ship(V3::new(0.0, 0.0, 5.0));
-    let a = fly_turn(b, Some(V3::new(200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS);
-    let c = fly_turn(b, Some(V3::new(-200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS);
+    let a = fly_turn(b, Some(V3::new(200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS, &[]);
+    let c = fly_turn(b, Some(V3::new(-200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS, &[]);
     // fly_turn honours what it is handed; the caller drops the target for a
     // committed mode. Assert the mode reports itself as committed so that
     // contract is pinned somewhere.
@@ -107,7 +107,7 @@ fn committed_modes_ignore_the_destination() {
 fn drift_is_an_unpowered_coast() {
     let fl = Flight::default();
     let b = ship(V3::new(0.0, 0.0, 4.0));
-    let f = fly_turn(b, None, Mode::Drift, &fl, None, RESOLUTION_STEPS);
+    let f = fly_turn(b, None, Mode::Drift, &fl, None, RESOLUTION_STEPS, &[]);
     // ten seconds at 4 u/s, with no thrust and no attitude change
     assert!((f.end_pos.z - 40.0).abs() < 0.01, "coasted to {}", f.end_pos.z);
     assert_eq!(f.end_vel.z, 4.0);
@@ -127,8 +127,8 @@ fn a_probe_tracks_the_executed_flight() {
     ] {
         for vel in [V3::ZERO, V3::new(0.0, 0.0, 5.0)] {
             let b = ship(vel);
-            let exact = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, RESOLUTION_STEPS);
-            let probe = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, 60);
+            let exact = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, RESOLUTION_STEPS, &[]);
+            let probe = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, 60, &[]);
             worst = worst.max(exact.end_pos.dist(probe.end_pos));
         }
     }

@@ -234,9 +234,11 @@ impl Sim {
         let flown = if dead {
             // No thrust and no attitude authority: coast, and let fly_span
             // handle it through Drift rather than special casing it here.
-            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN, 1.0 / TICKS_PER_SECOND as f32)
+            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN,
+                     1.0 / TICKS_PER_SECOND as f32, &self.wells)
         } else {
-            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN, 1.0 / TICKS_PER_SECOND as f32)
+            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN,
+                     1.0 / TICKS_PER_SECOND as f32, &self.wells)
         };
 
         let ship = &mut self.ships[si];
@@ -277,12 +279,46 @@ impl Sim {
             ship.plan_face,
             steps,
             1.0 / TICKS_PER_SECOND as f32,
+            &self.wells,
         );
         let ship = &mut self.ships[si];
         ship.plan = flown.path;
         ship.plan_end_vel = flown.end_vel;
         ship.plan_end_quat = flown.end_quat;
         ship.plan_from_tick = tick;
+    }
+
+    // ----------------------------------------------------------------- rules --
+    // Questions the client also needs to ask, so they live here and are asked
+    // rather than reimplemented. A rule with two implementations is a rule
+    // that will be changed in one of them: the UI would grey out the wrong
+    // weapon, or offer a boarding action the resolver then silently drops,
+    // and neither failure says anything about itself.
+
+    /// May this weapon fire this turn?
+    ///
+    /// One shot per weapon per turn at most, plus any extra turn gap the
+    /// weapon asks for. The archive's arithmetic made cooldown 0 and 1 both
+    /// fire every turn, and that is preserved rather than tidied.
+    pub fn can_fire(&self, si: usize, weapon_index: usize) -> bool {
+        let Some(ship) = self.ships.get(si) else { return false };
+        let Some(w) = ship.weapons.get(weapon_index) else { return false };
+        if w.last_fired_turn < 0 {
+            return true;
+        }
+        self.turn - w.last_fired_turn >= data::weapon(w.key).cooldown_turns.max(1)
+    }
+
+    /// May this ship send marines to that one right now?
+    pub fn can_board(&self, si: usize, ti: usize) -> bool {
+        let (Some(from), Some(to)) = (self.ships.get(si), self.ships.get(ti)) else {
+            return false;
+        };
+        !from.destroyed
+            && !to.destroyed
+            && to.faction != from.faction
+            && from.marines > 0
+            && from.pos.dist(to.pos) <= from.class_def().boarding_range
     }
 
     // --------------------------------------------------------------- weapons --
@@ -298,11 +334,7 @@ impl Sim {
         let key = w.key;
         let wd = data::weapon(key);
 
-        // One shot per weapon per turn at most, plus any extra turn gap the
-        // weapon asks for. The archive's arithmetic made cooldown 0 and 1 both
-        // fire every turn, and that is preserved rather than tidied.
-        let gap = self.turn - w.last_fired_turn;
-        if w.last_fired_turn >= 0 && gap < wd.cooldown_turns.max(1) {
+        if !self.can_fire(si, order.weapon_index) {
             return;
         }
 
@@ -854,16 +886,10 @@ impl Sim {
             if self.ships[si].destroyed || ti >= self.ships.len() {
                 continue;
             }
-            let cls = self.ships[si].class_def();
-            let in_range = self.ships[si].pos.dist(self.ships[ti].pos) <= cls.boarding_range;
-            let capacity = cls.boarding_capacity;
-            if self.ships[ti].destroyed
-                || self.ships[ti].faction == self.ships[si].faction
-                || !in_range
-                || self.ships[si].marines <= 0
-            {
+            if !self.can_board(si, ti) {
                 continue;
             }
+            let capacity = self.ships[si].class_def().boarding_capacity;
             let send = self.ships[si].marines.min(capacity);
             self.ships[si].marines -= send;
             let faction = self.ships[si].faction;
@@ -925,6 +951,16 @@ impl Sim {
             &mut byte,
         );
         int(self.next_proj_id as i32, &mut byte);
+
+        // The field bends every flight, so it decides outcomes and belongs in
+        // the hash. Count first, so an empty field and a zero strength well
+        // are not the same match.
+        int(self.wells.len() as i32, &mut byte);
+        for w in &self.wells {
+            for v in [w.pos.x, w.pos.y, w.pos.z, w.mu, w.soft] {
+                num(v, &mut byte);
+            }
+        }
 
         for s in &self.ships {
             int(s.id as i32, &mut byte);
