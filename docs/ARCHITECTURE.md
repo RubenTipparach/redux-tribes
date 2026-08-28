@@ -377,6 +377,8 @@ The format is a flat f32 array, matching the rest of the boundary, with counts a
 
 This landed before evaluating any physics engine, on purpose. "This integrator is deterministic" is not a testable sentence without the ability to put the world back and run it again.
 
+**The two build oracle now has evidence.** ADR-15 said the determinism oracle becomes "two Rust builds agree" rather than the JS prototype. That has now been run rather than asserted: the module CI ships and a local build of the same source differ by 1582 bytes, having been compiled by different rustc versions, and they produce identical state hashes over six turns of the same match. Different code generation, same simulation, which is exactly the property lockstep rests on. Re-run it after any change to the maths by fetching `/sim_core.wasm` from the live site and hashing the same match against the local build.
+
 **Decision two: Rapier stays out of the authoritative path.** Measured against rapier3d 0.35.2, built for `wasm32-unknown-unknown` at `opt-level = "z"` with LTO and strip.
 
 *Determinism is not the problem.* A two ball collision run 240 steps produced bit identical output on native x86-64 and on wasm32 under Node, repeated across processes, with and without `enhanced-determinism`. Two different code generators and instruction sets agreeing to the last bit after a contact is a strong signal.
@@ -397,7 +399,7 @@ Serialising the entire world does resume correctly, identically at every cut, vi
 
 Our 840 bytes covers four ships including hulls, subsystems, weapon cooldowns, marines, boarding parties, AI state and every projectile in flight. Rapier needs eleven times that for four bare boxes, in a layout versioned by Rapier rather than by us, growing with contact count rather than with fleet size.
 
-*Module size.* 834050 bytes with `enhanced-determinism`, 807356 without, against 120249 bytes for the entire current core. Seven times the whole simulation, for a page that must work on a phone. The determinism feature itself is nearly free at 26694 bytes, so any adoption keeps it.
+*Module size.* 834050 bytes with `enhanced-determinism`, 807356 without, against 118667 bytes for the entire current core as CI builds and ships it (45224 gzipped; the same source built here on rustc 1.94.1 comes out 120249, which is why the shipped figure is the one quoted). Seven times the whole simulation, for a page that must work on a phone. The determinism feature itself is nearly free at 26694 bytes, so any adoption keeps it.
 
 *Speed is not an objection.* About 10 microseconds per step for two bodies in wasm, so a 600 tick turn costs roughly 6 ms. The current core resolves a full turn of four ships and their projectiles in 452 microseconds. Rapier is around thirteen times more expensive and both are irrelevant next to a player thinking about their orders.
 

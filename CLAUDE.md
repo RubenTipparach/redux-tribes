@@ -195,7 +195,7 @@ a run from position, orientation and velocity diverged at every cut point in a
 sustained contact, because the solver's warm start cache is state a body
 snapshot does not carry. Serialising the whole world does resume correctly, and
 costs 9203 bytes for four bare boxes against 840 bytes for a whole four ship
-match here. And the module is 834050 bytes against 120249 for this entire core,
+match here. And the module is 834050 bytes against 118667 for this entire core,
 on a page that has to work on a phone. Speed was never the issue: 6 ms a turn
 against 452 microseconds, both invisible.
 
@@ -257,8 +257,11 @@ Rules that came out of actually measuring this repo:
 - **Numbers in the commit message.** "Faster" is not a result; 16 ms to 0.4 ms
   is. If it was not measured, do not claim it.
 
-Current figures, worth not regressing: wasm 108 KB (43 KB gzipped), envelope 96
-shell cells at 7.9 units, 61 fps while planning.
+Current figures, worth not regressing: wasm 118667 bytes as CI builds and ships
+it (45224 gzipped), a turn resolved in 452 microseconds, envelope 96 shell cells
+at 7.9 units, 61 fps while planning. Quote the shipped size rather than a local
+one: the same source on rustc 1.94.1 here comes out 120249, and a figure nobody
+else can reproduce is not a measurement.
 
 ## Sides are a match fact, not a point of view
 
@@ -273,6 +276,13 @@ changes the simulation. Both clients must pass the same value.
 
 Determinism is checked, not assumed:
 `NODE_PATH=/opt/node22/lib/node_modules node prototype/tools/xclient-check.js`.
+
+Two DIFFERENT builds of the core agree too, which is the stronger claim and the
+one lockstep actually rests on. The module CI ships and a local build of the
+same source differ by 1582 bytes, having been compiled by different rustc
+versions, and they produce identical hashes over six turns. Worth re-running
+after any change to the maths: fetch `/sim_core.wasm` from the live site and
+hash the same match against the local build.
 
 `.github/workflows/deploy.yml` is one file with five jobs (`sim`, `prototype`, `api`,
 `web`, `deploy`). Parse it with a YAML parser before pushing a change to it: an unquoted
