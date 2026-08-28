@@ -7,6 +7,18 @@ enforced by CI and will fail the build.
 Design and architecture: `docs/DESIGN.md` reconstructs the archived Unity game,
 `docs/ARCHITECTURE.md` holds the ADRs for the rebuild.
 
+## Only this repository is ever modified
+
+`redux-tribes` is the only thing to change. Anything else on the machine is a
+REFERENCE, checked out to be read and copied from, never worked on. That
+includes `high-frontier-fan-game`, which the server and the deploy workflow
+were adapted from, and it holds no matter what turns up while reading one: a
+bug, a stale comment, a rule that looks wrong. Read it, learn from it, leave it
+exactly as it was.
+
+A pasted log or error from another project is not a request to go and fix that
+project. Say what it looks like if it helps, and stop there.
+
 ## After every push, hand over both links
 
 A push is not finished when git returns. It is finished when the change is visible and
