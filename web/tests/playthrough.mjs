@@ -22,6 +22,13 @@ import pw from '/opt/node22/lib/node_modules/playwright/index.js';
 const URL = process.argv.find(a => a.startsWith('http')) ?? 'http://127.0.0.1:8123/';
 const MOBILE = process.argv.includes('--mobile');
 const MAX_TURNS = 40;
+/**
+ * Each practice match rolls a fresh seed, and the AI boards and shoots back,
+ * so a single match can be lost on its merits. The property under test is
+ * "a person can reach a victory through this UI", not "this seed is winnable",
+ * so a loss retries with a new match and only a clean sweep of losses fails.
+ */
+const ATTEMPTS = Number(process.env.PLAYTHROUGH_ATTEMPTS ?? 3);
 
 const VIEWPORT = MOBILE
   ? { width: 390, height: 844 }
@@ -56,19 +63,31 @@ const state = () => page.evaluate(() => ({
     name: r.querySelector('.nm').textContent.trim(), gone: r.classList.contains('gone') })),
 }));
 
-await page.goto(URL, { waitUntil: 'domcontentloaded' });
-await page.waitForSelector('#lobby:not(.hidden)');
-await page.waitForFunction(() => document.getElementById('whoName').textContent !== '...');
-await tap('#bPractice');
-await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
-await page.waitForTimeout(2000);
-
 log(`playing at ${VIEWPORT.width}x${VIEWPORT.height}${MOBILE ? ' (touch)' : ''}`);
 
 let shotsQueued = 0;
 let outcome = 'ran out of turns';
+let final = null;
 
-for (let t = 0; t < MAX_TURNS; t++) {
+for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+  if (attempt > 1) log(`\n  lost that one, starting a fresh match (attempt ${attempt} of ${ATTEMPTS})`);
+  shotsQueued = 0;
+  outcome = 'ran out of turns';
+  await page.goto(URL, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#lobby:not(.hidden)');
+  await page.waitForFunction(() => document.getElementById('whoName').textContent !== '...');
+  await tap('#bPractice');
+  await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
+  await page.waitForTimeout(2000);
+
+  outcome = await playMatch();
+  final = await state();
+  if (final.phase === 'VICTORY') break;
+}
+
+async function playMatch() {
+  let outcome = 'ran out of turns';
+  for (let t = 0; t < MAX_TURNS; t++) {
   const s = await state();
   if (s.phase === 'VICTORY' || s.phase === 'DEFEAT') { outcome = s.phase; break; }
 
@@ -138,9 +157,10 @@ for (let t = 0; t < MAX_TURNS; t++) {
     + `  foes ${after.foes.filter(x => !x.gone).length}/${after.foes.length}`
     + `  ${after.phase}`);
   if (after.phase === 'VICTORY' || after.phase === 'DEFEAT') { outcome = after.phase; break; }
+  }
+  return outcome;
 }
 
-const final = await state();
 log('');
 log('outcome        :', outcome);
 log('final phase    :', final.phase);

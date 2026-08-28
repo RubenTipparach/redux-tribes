@@ -118,10 +118,21 @@ TurnSlide         4    24               0           0.0 u</div>
   <div class="num" id="cNum" style="margin-top:8px"></div>
 </div>
 
+<h2 id="decided">Decided, and shipped</h2>
+<div class="card" style="border-color:#1f4a35">
+  <p style="margin-top:0"><b>The dots are gone.</b> The shell is now a real surface, built by marching tetrahedra over the same sampled field, with every vertex bisected onto the boundary rather than dropped at an edge midpoint. Six tetrahedra per cube sharing the main diagonal gives sixteen cases and no 256 entry table, and it stays watertight for any topology, which is what the pocket around a moving hull needs.</p>
+  <p><b>Discs did not get the job,</b> for the reason measured above: ray casting cannot describe a region that is not star shaped, and the reachable set stops being star shaped as soon as the ship carries speed. The disc method stays here as the way to get a volume figure, not as the way to build the surface.</p>
+  <div class="num" style="white-space:pre;overflow-x:auto">                       probes  result
+today, dot shell         2744  a cloud of shell cells
+shipped, marching tets   2491  576 triangles, closed surface</div>
+  <p class="num">Measured in the game at rest with the client's own probe box: 14 cubed over 111 units, 1140 triangles from 572 bisected edges, cell 7.9 units. Fewer probes than the dots it replaces, because a crossing edge is solved once and cached rather than re-solved for every tetrahedron that shares it.</p>
+  <p><b>Still open:</b> the probe box grows with speed while the grid does not, so the cell coarsens from 11.1 units at rest to 19.1 at speed 8 and the surface drops from 576 triangles to 72. The shape is least detailed exactly when it matters most. Holding the cell size constant instead would cost roughly 8,000 probes at speed against 1,483 today.</p>
+</div>
+
 <h2>What is being decided</h2>
 <div class="q">
   <p><b>1. Bisect the contour vertices?</b> Yes gives a smooth outline that matches the rule exactly. It costs about two probes per boundary vertex, measured below.</p>
-  <p><b>2. Draw the volume as stacked contours or discs instead of dots?</b> Same order of probes either way, so this is a look decision. Discs additionally give a volume figure, at the cost of understating the shape in the states measured above.</p>
+  <p><b>2. Draw the volume as a surface instead of dots?</b> <b class="warn">Settled:</b> yes, as marching tetrahedra with bisected vertices. See above.</p>
   <p><b>3. Slide the picker along the boundary instead of freezing?</b> This changes how planning feels at the edge, which is where most of the interesting orders are given.</p>
 </div>
 <p class="num">If none of these is right, the fallback is to raise the grid resolution instead, which costs probes cubically for the volume and quadratically for the contour, and still lands vertices on midpoints.</p>

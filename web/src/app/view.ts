@@ -27,6 +27,22 @@ const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
 const GRID_N = 14;
+/**
+ * Bisection steps used to place a surface vertex on the boundary. Four halves
+ * the cell four times, which puts the vertex within a sixteenth of a cell of
+ * the real surface: about 0.5 units at rest, against half a cell, 5.5 units,
+ * for the midpoint it replaces.
+ */
+const BISECT_STEPS = 4;
+/** Cube corners, then six tetrahedra sharing the main diagonal 0 to 6. */
+const CUBE: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
+  [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
+];
+const TETS: ReadonlyArray<readonly number[]> = [
+  [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6],
+  [0, 7, 4, 6], [0, 4, 5, 6], [0, 5, 1, 6],
+];
 /** How finely the movable AREA on the working plane is probed. */
 const PLANE_N = 40;
 /**
@@ -74,7 +90,8 @@ export class View {
   #planLine: THREE.Line;
   #planPip: THREE.Mesh;
   #headingArrow: THREE.Line;
-  #shell: THREE.Points;
+  #shell: THREE.Mesh;
+  #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
   #planeGrid: THREE.GridHelper;
@@ -90,6 +107,8 @@ export class View {
   mySide = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
   #shellKey = '';
+  #shellTris = 0;
+  #shellEdges = 0;
   #planeKey = '';
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
@@ -140,16 +159,31 @@ export class View {
     );
     this.#scene.add(this.#headingArrow);
 
-    // A shell, not a solid: filling the volume with dots hides the shape it is
-    // meant to show, and the surface is the part a player reads.
-    this.#shell = new THREE.Points(
+    // A surface, not a cloud. Dots at the grid spacing read as scatter rather
+    // than as a shape, and the shape is the entire point. The skin is drawn
+    // twice: a translucent additive hull for volume, and its edges over the
+    // top so the silhouette still reads against a dark field.
+    this.#shell = new THREE.Mesh(
       new THREE.BufferGeometry(),
-      new THREE.PointsMaterial({
-        color: GREEN, size: 1.5, transparent: true, opacity: 0.5,
+      new THREE.MeshBasicMaterial({
+        color: GREEN, transparent: true, opacity: 0.07, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
     this.#scene.add(this.#shell);
+    // The silhouette, drawn as the surface seen edge on. Every triangle edge
+    // was too much: marching tetrahedra makes thin triangles and the mesh read
+    // as wire soup rather than as a shape. The skin carries the volume and the
+    // contour where it crosses the working plane carries the line you click
+    // against, so this only needs to keep the outline from dissolving.
+    this.#shellLines = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: GREEN, transparent: true, opacity: 0.5,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.#scene.add(this.#shellLines);
 
     // Where the shell meets the working plane. The shell says where the ship
     // can go; this says where a click means it, which is the part a hand needs
@@ -398,6 +432,7 @@ export class View {
   drawEnvelope(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#shell.visible = false;
+      this.#shellLines.visible = false;
       return;
     }
     // Size the box from what the hull can actually cover, plus the ground the
@@ -425,35 +460,133 @@ export class View {
       body, flight, flyOrder, ship.pos, half, GRID_N, REACH_EPS, PROBE_STEPS,
     );
 
-    // Keep only cells on the surface: a reachable cell with at least one
-    // unreachable (or absent) neighbour. Filling the interior would hide the
-    // shape, and the shape is the entire point.
-    const pts: number[] = [];
+    // Marching tetrahedra over the sampled field. Six tets per cube sharing
+    // the main diagonal gives sixteen cases and no 256 entry table, and it is
+    // watertight for any topology, which matters here: a ship carrying speed
+    // cannot stop where it already is, so the reachable set has a pocket
+    // around the hull that a ray cast from one centre cannot describe.
+    //
+    // Every vertex is then BISECTED onto the real boundary rather than dropped
+    // at the edge midpoint. A midpoint sits up to half a cell off, which is
+    // what made the old shell look blocky, and the correction is the same
+    // question the router asks: can the ship finish here.
     const step = (2 * half) / GRID_N;
+    const px = (i: number) => ship.pos.x - half + (i + 0.5) * step;
+    const py = (j: number) => ship.pos.y - half + (j + 0.5) * step;
+    const pz = (k: number) => ship.pos.z - half + (k + 0.5) * step;
     const at = (i: number, j: number, k: number) =>
       i >= 0 && j >= 0 && k >= 0 && i < GRID_N && j < GRID_N && k < GRID_N && grid.at(i, j, k);
-    for (let i = 0; i < GRID_N; i++) {
-      for (let j = 0; j < GRID_N; j++) {
-        for (let k = 0; k < GRID_N; k++) {
-          if (!grid.at(i, j, k)) continue;
-          const interior =
-            at(i - 1, j, k) && at(i + 1, j, k) &&
-            at(i, j - 1, k) && at(i, j + 1, k) &&
-            at(i, j, k - 1) && at(i, j, k + 1);
-          if (interior) continue;
-          pts.push(
-            ship.pos.x - half + (i + 0.5) * step,
-            ship.pos.y - half + (j + 0.5) * step,
-            ship.pos.z - half + (k + 0.5) * step,
-          );
+
+    // A crossing edge is shared by several tetrahedra, so solve it once and
+    // key the answer by the edge. Without that the same edge is bisected four
+    // or five times over and the placement looks far dearer than it is.
+    const edge = new Map<number, Vec3>();
+    const edgeKey = (a: number[], b: number[]) => {
+      const ka = (a[0]! * GRID_N + a[1]!) * GRID_N + a[2]!;
+      const kb = (b[0]! * GRID_N + b[1]!) * GRID_N + b[2]!;
+      return ka < kb ? ka * 1e7 + kb : kb * 1e7 + ka;
+    };
+    const surfacePoint = (ga: number[], gb: number[]): Vec3 => {
+      const k = edgeKey(ga, gb);
+      const hit = edge.get(k);
+      if (hit) return hit;
+      const A = { x: px(ga[0]!), y: py(ga[1]!), z: pz(ga[2]!) };
+      const B = { x: px(gb[0]!), y: py(gb[1]!), z: pz(gb[2]!) };
+      const inside = at(ga[0]!, ga[1]!, ga[2]!);
+      const from = inside ? A : B;
+      const to = inside ? B : A;
+      let lo = 0;
+      let hi = 1;
+      for (let n = 0; n < BISECT_STEPS; n++) {
+        const m = (lo + hi) / 2;
+        const q = {
+          x: from.x + (to.x - from.x) * m,
+          y: from.y + (to.y - from.y) * m,
+          z: from.z + (to.z - from.z) * m,
+        };
+        if (this.#sim.canReach(body, flight, flyOrder, q, REACH_EPS, PROBE_STEPS)) lo = m;
+        else hi = m;
+      }
+      const v: Vec3 = {
+        x: from.x + (to.x - from.x) * lo,
+        y: from.y + (to.y - from.y) * lo,
+        z: from.z + (to.z - from.z) * lo,
+      };
+      edge.set(k, v);
+      return v;
+    };
+
+    const tri: number[] = [];
+    const wire: number[] = [];
+    // Keep an edge only if exactly one triangle owns it. A shared edge lies
+    // inside the skin and drawing it is what turned the shell into wire soup.
+    const seen = new Map<string, [Vec3, Vec3]>();
+    const rim = (a: Vec3, b: Vec3) => {
+      const q = (v: Vec3) => `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}`;
+      const ka = q(a);
+      const kb = q(b);
+      const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+      if (seen.has(k)) seen.delete(k);
+      else seen.set(k, [a, b]);
+    };
+    const push = (a: Vec3, b: Vec3, c: Vec3) => {
+      tri.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+      rim(a, b); rim(b, c); rim(c, a);
+    };
+    for (let i = 0; i < GRID_N - 1; i++) {
+      for (let j = 0; j < GRID_N - 1; j++) {
+        for (let k = 0; k < GRID_N - 1; k++) {
+          const corner = CUBE.map(([dx, dy, dz]) => [i + dx!, j + dy!, k + dz!]);
+          const inside = corner.map((c) => at(c[0]!, c[1]!, c[2]!));
+          let n = 0;
+          for (const b of inside) if (b) n++;
+          if (n === 0 || n === 8) continue;
+          for (const tet of TETS) {
+            const ins = tet.filter((t) => inside[t!]);
+            const outs = tet.filter((t) => !inside[t!]);
+            const g = (t: number) => corner[t]!;
+            if (ins.length === 1) {
+              const a = ins[0]!;
+              push(surfacePoint(g(a), g(outs[0]!)),
+                   surfacePoint(g(a), g(outs[1]!)),
+                   surfacePoint(g(a), g(outs[2]!)));
+            } else if (ins.length === 3) {
+              const o = outs[0]!;
+              push(surfacePoint(g(ins[0]!), g(o)),
+                   surfacePoint(g(ins[1]!), g(o)),
+                   surfacePoint(g(ins[2]!), g(o)));
+            } else if (ins.length === 2) {
+              const [a, b] = ins as [number, number];
+              const [c, d] = outs as [number, number];
+              const v1 = surfacePoint(g(a), g(c));
+              const v2 = surfacePoint(g(a), g(d));
+              const v3 = surfacePoint(g(b), g(d));
+              const v4 = surfacePoint(g(b), g(c));
+              push(v1, v2, v3);
+              push(v1, v3, v4);
+            }
+          }
         }
       }
     }
+
     this.#shell.geometry.dispose();
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
+    geo.computeVertexNormals();
     this.#shell.geometry = geo;
-    this.#shell.visible = pts.length > 0;
+    this.#shell.visible = tri.length > 0;
+
+    for (const [a, b] of seen.values()) {
+      wire.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+    this.#shellLines.geometry.dispose();
+    const wgeo = new THREE.BufferGeometry();
+    wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
+    this.#shellLines.geometry = wgeo;
+    this.#shellLines.visible = wire.length > 0;
+    this.#shellTris = tri.length / 9;
+    this.#shellEdges = edge.size;
   }
 
   /**
@@ -566,9 +699,9 @@ export class View {
     if (!ship) return 'no ship selected';
     const half = this.probeHalf(ship, flight);
     const cell = (2 * half) / GRID_N;
-    const count = (this.#shell.geometry.getAttribute('position')?.count ?? 0);
     return `${GRID_N}<sup>3</sup> probes over ${(2 * half).toFixed(0)} units, `
-      + `${count} shell cells at ${cell.toFixed(1)} u each`;
+      + `${this.#shellTris} triangles from ${this.#shellEdges} bisected edges, `
+      + `cell ${cell.toFixed(1)} u`;
   }
 
   invalidateEnvelope(): void {
