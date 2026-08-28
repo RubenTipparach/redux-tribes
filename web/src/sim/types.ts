@@ -106,8 +106,34 @@ export const Scenario = {
   Skirmish: 0,
   Duel: 1,
   Convoy: 2,
+  LowOrbit: 3,
+  Binary: 4,
+  Slingshot: 5,
 } as const;
 export type Scenario = (typeof Scenario)[keyof typeof Scenario];
+
+/**
+ * The name a lobby carries, mapped to the id the core builds from. The field a
+ * scenario is fought in comes from that id and lives on the match, so both
+ * seats get the same wells and the state hash covers them.
+ */
+export const SCENARIO_BY_NAME: Record<string, Scenario> = {
+  skirmish: Scenario.Skirmish,
+  duel: Scenario.Duel,
+  convoy: Scenario.Convoy,
+  'low-orbit': Scenario.LowOrbit,
+  binary: Scenario.Binary,
+  slingshot: Scenario.Slingshot,
+};
+
+/** A point source of gravity, as the core reports it. */
+export interface Well {
+  readonly pos: Vec3;
+  /** GM, in u^3/s^2. */
+  readonly mu: number;
+  /** Softening radius: inside it the field stops growing. */
+  readonly soft: number;
+}
 
 /** Matches `sim_core::turn::EventKind` discriminants. */
 export const EventKind = {

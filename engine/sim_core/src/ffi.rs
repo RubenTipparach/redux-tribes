@@ -313,6 +313,8 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
 /// about 14,600 leaves. Zero initialised, so it lands in .bss and costs the
 /// module nothing.
 const OCT_LEN: usize = 65536;
+/// Bit 8 of word 1: this entry is a uniform block, not a straddling leaf.
+const UNIFORM: u32 = 1 << 8;
 static mut OCT: [u32; OCT_LEN] = [0; OCT_LEN];
 
 #[no_mangle]
@@ -345,9 +347,17 @@ pub extern "C" fn ft_octree_len() -> u32 {
 ///
 /// Writes two words per leaf from `ft_octree_ptr`:
 ///   word 0  i | j<<8 | k<<16 | level<<24, in cells of the FINEST grid
-///   word 1  the eight corner bits, in the corner order below
-/// so a caller has everything it needs to march without probing again.
-/// Returns the leaf count, or 0 if `n` is not a power of two at least `base`.
+///   word 1  bits 0..7 the eight corner values, bit 8 set on a UNIFORM block
+///
+/// A straddling leaf is always at level 0 and carries its real corners. A
+/// uniform block is whatever level the traversal stopped at, and its corners
+/// are all 0 or all 1: that is the interior and the exterior, reported rather
+/// than discarded, because a caller rebuilding a dense field needs them and
+/// the traversal already knows them. Together the two kinds determine every
+/// corner of the grid, so a client can march at a resolution it could never
+/// afford to probe densely.
+///
+/// Returns the entry count, or 0 if `n` is not a power of two at least `base`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn ft_reach_octree(
@@ -429,17 +439,27 @@ pub extern "C" fn ft_reach_octree(
                 _ => {}
             }
         }
-        if size == 1 {
-            if !all_same && count * 2 + 1 < OCT_LEN {
-                let level = size.trailing_zeros();
-                out[count * 2] = (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (level << 24);
-                out[count * 2 + 1] = bits;
+        let mut emit = |lvl: u32, flag: u32| {
+            if count * 2 + 1 < OCT_LEN {
+                out[count * 2] =
+                    (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (lvl << 24);
+                out[count * 2 + 1] = bits | flag;
                 count += 1;
+            }
+        };
+        if size == 1 {
+            if !all_same {
+                emit(0, 0);
+            } else {
+                emit(0, UNIFORM);
             }
             continue;
         }
         if all_same {
-            continue; // the interior and the exterior, each settled in one test
+            // The interior and the exterior, each settled in one test and then
+            // reported at the level it was settled at.
+            emit(size.trailing_zeros(), UNIFORM);
+            continue;
         }
         let h = size / 2;
         for (a, b, d) in CORNERS.iter() {
@@ -634,6 +654,9 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_
     let sim = match scenario {
         1 => scenario_duel(seed, mask),
         2 => scenario_convoy(seed, mask),
+        3 => scenario_low_orbit(seed, mask),
+        4 => scenario_binary(seed, mask),
+        5 => scenario_slingshot(seed, mask),
         _ => scenario_skirmish(seed, mask),
     };
     let n = sim.ships.len();
@@ -699,6 +722,90 @@ fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
         Faction::Benefactor,
         human_sides,
     )
+}
+
+/// Fought over something heavy. The well pulls at about a quarter of the main
+/// drive, which is enough to lean the reachable set hard without taking the
+/// match away from the players: downhill reach beats uphill by about six to one
+/// out of identical stats.
+///
+/// The field is on the MATCH, so it is in the state hash and in the snapshot,
+/// and both seats get it from the scenario id rather than from a client that
+/// might have set it up differently.
+fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = Sim::new_skirmish(
+        seed,
+        &[
+            spec(TerranFrigate, (-40.0, 20.0, 0.0), (1.0, 0.0, 0.0)),
+            spec(TerranFrigate, (-40.0, 26.0, -15.0), (1.0, 0.0, 0.0)),
+        ],
+        &[
+            spec(KarisenFrigate, (40.0, 22.0, 5.0), (-1.0, 0.0, 0.0)),
+            spec(RogueFrigate, (40.0, 16.0, -10.0), (-1.0, 0.0, 0.0)),
+        ],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(0.0, -300.0, 0.0), 20000.0, 20.0));
+    sim
+}
+
+/// A binary, one either side. The pulls cancel on the centre line and add
+/// further out, so a single number at the hull says nothing: sitting between
+/// them the field reads zero while the envelope is stretched along the axis
+/// joining them and squeezed across it.
+fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = Sim::new_skirmish(
+        seed,
+        &[spec(TerranFrigate, (0.0, 0.0, -35.0), (0.0, 0.0, 1.0))],
+        &[spec(KarisenFrigate, (0.0, 0.0, 35.0), (0.0, 0.0, -1.0))],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(-160.0, 0.0, 0.0), 16000.0, 20.0));
+    sim.wells.push(Well::new(V3::new(160.0, 0.0, 0.0), 16000.0, 20.0));
+    sim
+}
+
+/// A well close enough to matter, off the line the two sides start on. At 0.15
+/// u/s^2 against a 0.9 drive it perturbs rather than dominates, which is the
+/// interesting band: 1.03 was measured and empties the reachable set entirely.
+fn scenario_slingshot(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = Sim::new_skirmish(
+        seed,
+        &[spec(TerranFrigate, (-55.0, 0.0, -30.0), (1.0, 0.0, 0.3))],
+        &[
+            spec(KarisenFrigate, (55.0, 0.0, -30.0), (-1.0, 0.0, 0.3)),
+            spec(RogueFrigate, (60.0, 8.0, -45.0), (-1.0, 0.0, 0.3)),
+        ],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(0.0, 0.0, 60.0), 1750.0, 15.0));
+    sim
+}
+
+/// The match's field, for a client drawing it: five floats a well from slot 64,
+/// x, y, z, mu, soft. Returns the count.
+#[no_mangle]
+pub extern "C" fn ft_wells_read() -> u32 {
+    let w = wells();
+    let s = scratch();
+    for (i, g) in w.iter().enumerate() {
+        let b = 64 + i * 5;
+        if b + 5 > SCRATCH_LEN {
+            return i as u32;
+        }
+        s[b] = g.pos.x;
+        s[b + 1] = g.pos.y;
+        s[b + 2] = g.pos.z;
+        s[b + 3] = g.mu;
+        s[b + 4] = g.soft;
+    }
+    w.len() as u32
 }
 
 #[no_mangle]

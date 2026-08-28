@@ -257,10 +257,11 @@ export class Lobby {
     $('bPractice').onclick = () => {
       this.#stopPolling();
       this.hide();
+      const pick = document.getElementById('selScenario') as HTMLSelectElement | null;
       this.#onLaunch({
         kind: 'offline',
         seed: randomSeed(),
-        scenario: 'skirmish',
+        scenario: pick?.value || 'skirmish',
         humanSides: 0b01,
         side: 0,
       });

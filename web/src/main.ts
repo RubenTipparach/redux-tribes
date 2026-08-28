@@ -15,7 +15,7 @@ import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedOrder, type ShipState, type SimEvent,
-  CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
+  CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
   TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
@@ -80,7 +80,15 @@ let waiting = false;
 const mine = (s: ShipState): boolean => s.side === launch.side;
 
 function start(): void {
-  match.start(seed, Scenario.Skirmish, launch.humanSides);
+  // The lobby has always carried a scenario name and this always ignored it,
+  // so every match was a skirmish however it was entered.
+  const scenario = SCENARIO_BY_NAME[launch.scenario] ?? Scenario.Skirmish;
+  match.start(seed, scenario, launch.humanSides);
+  // The rings compare the field against the drive of a hull actually in the
+  // match, so they mean something for the ships being flown.
+  const own = match.ships().find(mine);
+  const drive = own ? flightOf(own.id).accelFwd : 0;
+  view.setWells(match.wells(), drive);
   view.mySide = launch.side;
   waiting = false;
   banner(false);
@@ -881,6 +889,11 @@ Object.defineProperty(window, 'ftDebug', {
     playing: () => playTick,
     side: () => launch.side,
     kind: () => launch.kind,
+    // Observation only, like everything else here. A harness that could WRITE
+    // state would stop testing the app and start testing itself.
+    scenario: () => launch.scenario,
+    shipCount: () => match.shipCount,
+    wells: () => match.wells(),
     canPlan,
   },
 });

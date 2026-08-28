@@ -15,6 +15,7 @@
 import {
   type ClassInfo, type MountInfo, type PlannedOrder, type Pose, type ShipState,
   type SimEvent, type TrackProjectile, type Vec3,
+  type Well,
   EventKind, Mode, Scenario, TICKS_PER_TURN,
 } from './types.js';
 
@@ -37,6 +38,8 @@ export interface MatchExports {
   ft_hash_hi(): number;
   ft_hash_lo(): number;
   ft_read_ships(): number;
+  ft_wells_read(): number;
+  ft_gravity_at(x: number, y: number, z: number): number;
   ft_load_ship(ship: number): number;
   ft_set_flight(
     ship: number, yaw: number, pitch: number,
@@ -140,6 +143,34 @@ export class Match {
     const hi = this.#ex.ft_hash_hi() >>> 0;
     const lo = this.#ex.ft_hash_lo() >>> 0;
     return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
+  }
+
+  /**
+   * The gravity field this match is fought in. It comes from the scenario and
+   * lives on the match, so it is the same on both seats and the state hash
+   * covers it: the client reads it to draw, never to decide.
+   */
+  wells(): Well[] {
+    const n = this.#ex.ft_wells_read();
+    const s = this.#s;
+    const out: Well[] = [];
+    for (let i = 0; i < n; i++) {
+      const b = 64 + i * 5;
+      out.push({
+        pos: { x: s[b] ?? 0, y: s[b + 1] ?? 0, z: s[b + 2] ?? 0 },
+        mu: s[b + 3] ?? 0,
+        soft: s[b + 4] ?? 1,
+      });
+    }
+    return out;
+  }
+
+  /** The field's acceleration at a point, in u/s^2. Asked for rather than
+   * recomputed, so the arrows the client draws are the field the ship flies. */
+  gravityAt(p: Vec3): Vec3 {
+    this.#ex.ft_gravity_at(p.x, p.y, p.z);
+    const s = this.#s;
+    return { x: s[32] ?? 0, y: s[33] ?? 0, z: s[34] ?? 0 };
   }
 
   ships(): ShipState[] {

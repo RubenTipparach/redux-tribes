@@ -110,6 +110,10 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 .tune span { flex:0 0 62px; }
 .tune input { flex:1; }
 .tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600; }
+select { font-family:"Exo 2",system-ui,sans-serif; font-size:13px; width:100%;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:4px; padding:7px 8px; margin-top:4px; }
+select:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:0 4px; font-size:11px; }
 #lPlay { margin-left:10px; }
@@ -270,6 +274,19 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
             <div class="s">Play the AI offline. Nothing is sent anywhere.</div>
           </div>
           <button id="bPractice" class="primary">Play</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="grow" for="selScenario">
+            <div class="s">Scenario</div>
+            <select id="selScenario">
+              <option value="skirmish">Skirmish, two on two</option>
+              <option value="duel">Duel, one on one</option>
+              <option value="convoy">Convoy, a hull worth boarding</option>
+              <option value="low-orbit">Low orbit, a heavy body below</option>
+              <option value="binary">Binary, a well either side</option>
+              <option value="slingshot">Slingshot, a well off the line</option>
+            </select>
+          </label>
         </div>
       </div>
 

@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type Vec3,
+  type Flight, type PlannedOrder, type ShipState, type Vec3, type Well,
   isCommitted, PROBE_STEPS,
 } from '../sim/types.js';
 
@@ -26,7 +26,22 @@ const MUTED = 0x7c8b9d;
 const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
-const GRID_N = 14;
+/**
+ * Cells a side for the envelope probe.
+ *
+ * The dense probe could afford 14, because it pays for the whole volume. The
+ * octree pays for the surface, so the same budget buys a finer grid: 32 cells
+ * is a cell a little over half the size for a comparable number of flights.
+ * A power of two, which the traversal requires.
+ */
+const GRID_N = 32;
+/** Cells the traversal starts from before it begins descending. */
+const OCTREE_BASE = 4;
+/**
+ * The field is sampled at grid CORNERS, so a grid of GRID_N cells has one more
+ * sample a side than it has cells.
+ */
+const FIELD_N = GRID_N + 1;
 /**
  * Bisection steps used to place a surface vertex on the boundary. Four halves
  * the cell four times, which puts the vertex within a sixteenth of a cell of
@@ -109,6 +124,9 @@ export class View {
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
+  /** The gravity field, drawn from what the match reports rather than from a
+   * second model of gravity living here. */
+  #wellGroup = new THREE.Group();
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -117,6 +135,9 @@ export class View {
    * simulation never knows, which is what lets both seats hash the same.
    */
   mySide = 0;
+  /** Octree entries the last probe returned: straddling leaves plus the
+   * uniform blocks it settled in one test each. */
+  #lastEntries = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
   #shellKey = '';
   #shellTris = 0;
@@ -184,6 +205,7 @@ export class View {
       }),
     );
     this.#scene.add(this.#shell);
+    this.#scene.add(this.#wellGroup);
     // The silhouette, drawn as the surface seen edge on. Every triangle edge
     // was too much: marching tetrahedra makes thin triangles and the mesh read
     // as wire soup rather than as a shape. The skin carries the volume and the
@@ -528,9 +550,11 @@ export class View {
       up: Math.max(6, hu + FIT_PAD),
       forward: Math.max(6, hf + FIT_PAD),
     };
-    const grid = this.#sim.reachGridAt(
-      body, flight, flyOrder, landing, along, boxHalf, GRID_N, REACH_EPS, PROBE_STEPS,
+    const grid = this.#sim.reachOctreeAt(
+      body, flight, flyOrder, landing, along, boxHalf,
+      GRID_N, REACH_EPS, OCTREE_BASE, PROBE_STEPS,
     );
+    this.#lastEntries = grid.entries;
 
     // Marching tetrahedra over the sampled field. Six tets per cube sharing
     // the main diagonal gives sixteen cases and no 256 entry table, and it is
@@ -544,7 +568,7 @@ export class View {
     // question the router asks: can the ship finish here.
     // Cell centres in the box's own frame, mapped out through the basis the
     // core probed with, so a drawn cell is the cell that was asked about.
-    const axis = (i: number, h: number) => -h + (i + 0.5) * ((2 * h) / GRID_N);
+    const axis = (i: number, h: number) => -h + i * ((2 * h) / GRID_N);
     const cell = (i: number, j: number, k: number): Vec3 => {
       const a = axis(i, boxHalf.right);
       const b = axis(j, boxHalf.up);
@@ -556,15 +580,15 @@ export class View {
       };
     };
     const at = (i: number, j: number, k: number) =>
-      i >= 0 && j >= 0 && k >= 0 && i < GRID_N && j < GRID_N && k < GRID_N && grid.at(i, j, k);
+      i >= 0 && j >= 0 && k >= 0 && i < FIELD_N && j < FIELD_N && k < FIELD_N && grid.at(i, j, k);
 
     // A crossing edge is shared by several tetrahedra, so solve it once and
     // key the answer by the edge. Without that the same edge is bisected four
     // or five times over and the placement looks far dearer than it is.
     const edge = new Map<number, Vec3>();
     const edgeKey = (a: number[], b: number[]) => {
-      const ka = (a[0]! * GRID_N + a[1]!) * GRID_N + a[2]!;
-      const kb = (b[0]! * GRID_N + b[1]!) * GRID_N + b[2]!;
+      const ka = (a[0]! * FIELD_N + a[1]!) * FIELD_N + a[2]!;
+      const kb = (b[0]! * FIELD_N + b[1]!) * FIELD_N + b[2]!;
       return ka < kb ? ka * 1e7 + kb : kb * 1e7 + ka;
     };
     const surfacePoint = (ga: number[], gb: number[]): Vec3 => {
@@ -614,9 +638,9 @@ export class View {
       tri.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
       rim(a, b); rim(b, c); rim(c, a);
     };
-    for (let i = 0; i < GRID_N - 1; i++) {
-      for (let j = 0; j < GRID_N - 1; j++) {
-        for (let k = 0; k < GRID_N - 1; k++) {
+    for (let i = 0; i < FIELD_N - 1; i++) {
+      for (let j = 0; j < FIELD_N - 1; j++) {
+        for (let k = 0; k < FIELD_N - 1; k++) {
           const corner = CUBE.map(([dx, dy, dz]) => [i + dx!, j + dy!, k + dz!]);
           const inside = corner.map((c) => at(c[0]!, c[1]!, c[2]!));
           let n = 0;
@@ -854,14 +878,73 @@ export class View {
   }
 
   /** Cells probed, cells reachable, and the volume that implies. */
+  /**
+   * Draw the match's gravity field.
+   *
+   * A well is a body plus the region where it actually bites. The rings are
+   * NOT decoration and not a second gravity model: each is the radius at which
+   * the pull equals a given fraction of `drive`, the ship's own main drive,
+   * solved from mu / r^2 = a. So the outer ring is where the field starts to
+   * be worth planning around and the inner one is where it beats the engine
+   * outright. The drive comes in from the caller rather than being written
+   * down here, because it is authored per class in data.rs and a copy of it
+   * in the renderer is a number that can drift.
+   */
+  setWells(wells: Well[], drive: number): void {
+    while (this.#wellGroup.children.length) {
+      const c = this.#wellGroup.children.pop() as THREE.Mesh | THREE.LineSegments;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    if (!(drive > 0)) return;
+    for (const w of wells) {
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(2, w.soft), 24, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0x2a3550, emissive: 0x101c33, roughness: 0.9, metalness: 0.0,
+        }),
+      );
+      body.position.set(w.pos.x, w.pos.y, w.pos.z);
+      this.#wellGroup.add(body);
+
+      // ACCEL_FWD is the frigate main drive from data.rs. A ring at a fraction
+      // of it is the honest way to show reach: the field is inverse square, so
+      // a single sphere would say nothing about where it stops mattering.
+      for (const [frac, colour, op] of [
+        [1.0, 0xff5f6d, 0.55],
+        [0.25, 0xffa23f, 0.35],
+        [0.05, 0x35c7ff, 0.2],
+      ] as const) {
+        const r = Math.sqrt(w.mu / (drive * frac));
+        if (!Number.isFinite(r) || r < w.soft) continue;
+        const mat = new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: op });
+        for (const axis of [0, 1, 2]) {
+          const pts: THREE.Vector3[] = [];
+          for (let i = 0; i <= 72; i++) {
+            const a = (i / 72) * Math.PI * 2;
+            const c = Math.cos(a) * r;
+            const d = Math.sin(a) * r;
+            pts.push(axis === 0 ? new THREE.Vector3(0, c, d)
+                   : axis === 1 ? new THREE.Vector3(c, 0, d)
+                                : new THREE.Vector3(c, d, 0));
+          }
+          const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+          ring.position.set(w.pos.x, w.pos.y, w.pos.z);
+          this.#wellGroup.add(ring);
+        }
+      }
+    }
+  }
+
   envelopeSummary(ship: ShipState | undefined, _flight: Flight): string {
     if (!ship) return 'no ship selected';
     const b = this.#shellBox;
     const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (GRID_N * GRID_N * GRID_N));
-    return `${GRID_N}<sup>3</sup> probes in a box `
+    return `${GRID_N}<sup>3</sup> cells in a box `
       + `${(2 * b.right).toFixed(0)} x ${(2 * b.up).toFixed(0)} x ${(2 * b.forward).toFixed(0)} u `
-      + `on the velocity, ${this.#shellTris} triangles from ${this.#shellEdges} `
-      + `bisected edges, cell ${cell.toFixed(1)} u`;
+      + `on the velocity, octree ${this.#lastEntries} entries, `
+      + `${this.#shellTris} triangles from ${this.#shellEdges} bisected edges, `
+      + `cell ${cell.toFixed(1)} u`;
   }
 
   invalidateEnvelope(): void {
