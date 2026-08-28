@@ -158,9 +158,24 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:v
 <div class="note">
   <p>Accuracy is scored at points <em>between</em> the samples, where a fit is weakest, against a fresh 16 step bisection. So it measures what the surface predicts, not how well it memorised what it was given.</p>
 </div>
+<p class="sub">A finer grid keeps paying, and it does not plateau: rms drift falls from 1.16 u at 32 x 18 to 0.25 u at 160 x 82, roughly in step with the sample spacing.</p>
+<div class="tw">
+  <table>
+    <thead><tr><th>grid</th><th>rays</th><th>probes</th><th>rms drift</th>
+      <th>margin for 99% inside</th><th>gap that costs</th></tr></thead>
+    <tbody>
+      <tr><td>32 x 18</td><td>576</td><td>7,488</td><td>1.17 u</td><td>3.50 u</td><td>3.10 u</td></tr>
+      <tr><td>48 x 26</td><td>1,248</td><td>16,224</td><td>0.80 u</td><td>2.75 u</td><td>2.45 u</td></tr>
+      <tr><td>64 x 34</td><td>2,176</td><td>28,288</td><td>0.62 u</td><td>1.75 u</td><td>1.58 u</td></tr>
+      <tr><td>96 x 50</td><td>4,800</td><td>62,400</td><td>0.37 u</td><td>1.00 u</td><td>0.87 u</td></tr>
+      <tr><td>128 x 66</td><td>8,448</td><td>109,824</td><td class="win">0.29 u</td><td class="win">0.75 u</td><td class="win">0.67 u</td></tr>
+    </tbody>
+  </table>
+</div>
 <div class="note warn">
-  <p>A smooth surface cannot follow a crease, and the creases here are real: they survive at 600 ticks and mark where the flight model switches which acceleration axis is binding. So the fit bulges slightly past the edge at every one of them. Pulling the drawn radius in buys the guarantee back and costs reach: about 3 u of margin keeps 97% of the surface inside what the game allows, but leaves the drawn hull some 2.6 u short of the real one all over.</p>
-  <p>Which is why the conclusion is to <b>draw smooth and pick exact</b>. The surface is presentation and may be approximate; the picker keeps asking the core, so no player is ever offered a point the ship cannot reach.</p>
+  <p>A smooth surface cannot follow a crease, and the creases here are real: they survive at 600 ticks and mark where the flight model switches which acceleration axis is binding. So the fit bulges past the edge at every one of them, and an interpolating spline oscillates around the truth in between, which is why the share of the surface sitting outside the set stays near two thirds at <em>every</em> density. That number never improves. What improves is how far outside, and that is what matters.</p>
+  <p>So the margin needed to be conservative collapses as the grid refines. At 32 x 18 it takes 3.50 u to keep 99% of the surface inside, which leaves the drawn hull 3.10 u short of the real one all over. At 128 x 66 it takes 0.75 u and costs 0.67 u, on a set some 50 u across.</p>
+  <p>Even so, the conclusion is to <b>draw smooth and pick exact</b>. The surface is presentation and may approximate; the picker keeps asking the core, so no player is ever offered a point the ship cannot reach.</p>
 </div>
 <h2>What it came to</h2>
 <div class="note">
@@ -334,7 +349,9 @@ function drive(job, label) {
       let r;
       do { r = job.next(); } while (!r.done && performance.now() - t0 < 14);
       ms += performance.now() - t0;
-      if (r.done) { pbar.style.width = '0%'; resolve({ ...r.value, ms, probes }); }
+      if (r.done) { pbar.style.width = '0%';
+        resolve(Array.isArray(r.value) || typeof r.value !== 'object' || r.value === null
+          ? { value: r.value, ms, probes } : { ...r.value, value: r.value, ms, probes }); }
       else {
         pbar.style.width = (r.value*100).toFixed(1) + '%';
         stat.innerHTML = `${label}: <b>${probes.toLocaleString()}</b> probes, `
@@ -637,7 +654,8 @@ function clearG(g) { while (g.children.length) { const c = g.children.pop();
 function drawSpline() {
   if (!fitState) return;
   const { ctrl, NU, NV, anchor, grid, margin } = fitState;
-  const RU = 108, RV = 56;
+  const RU = Math.min(288, Math.max(108, NU*2)),
+        RV = Math.min(148, Math.max(56, NV*2));
   const pos = [], idx = [];
   for (let a=0;a<=RU;a++) for (let b=0;b<=RV;b++) {
     const u = a/RU, v = b/RV, d = dirOf(u,v);
@@ -688,7 +706,8 @@ for (const id of ['tSpline','tCloud','tCtrl'])
 
 let sgrid = [32,18];
 chips(document.getElementById('sgrid'),
-  [['16 x 10','16,10'],['24 x 14','24,14'],['32 x 18','32,18'],['48 x 26','48,26']],
+  [['16 x 10','16,10'],['24 x 14','24,14'],['32 x 18','32,18'],['48 x 26','48,26'],
+   ['64 x 34','64,34'],['96 x 50','96,50'],['128 x 66','128,66']],
   () => sgrid.join(','), v => sgrid = v.split(',').map(Number));
 const marginEl = document.getElementById('margin'), marginV = document.getElementById('marginV');
 marginEl.oninput = () => {
@@ -698,47 +717,63 @@ marginEl.oninput = () => {
   fitState.margin = m;
   fitState.ctrl = fitSurface(fitState.grid.map(c => c.map(r => r-m)), fitState.NU, fitState.NV);
   drawSpline();
-  scoreFit();
+  clearTimeout(marginEl._t);
+  marginEl._t = setTimeout(() => scoreFit(), 250);   // wait out the drag
 };
 
 const fstat = document.getElementById('fstat'), fnums = document.getElementById('fnums');
-function scoreFit() {
-  if (!fitState) return;
+function* scoreJob() {
   const { ctrl, NU, NV, anchor } = fitState;
+  const A = 33, Bn = 17;
   let worst = 0, sum = 0, n = 0, inSet = 0;
-  for (let a=0;a<25;a++) for (let b=0;b<13;b++) {
-    const u = (a+0.5)/25, v = (b+0.5)/13, d = dirOf(u,v);
-    const rFit = evalSurface(ctrl, NU, NV, u, v);
-    const rTrue = radiusAt(anchor, d, 14);
-    const e = Math.abs(rFit-rTrue); sum += e*e; n++; if (e > worst) worst = e;
-    if (reach(anchor[0]+d[0]*rFit, anchor[1]+d[1]*rFit, anchor[2]+d[2]*rFit)) inSet++;
+  for (let a=0;a<A;a++) {
+    for (let b=0;b<Bn;b++) {
+      const u = (a+0.5)/A, v = (b+0.5)/Bn, d = dirOf(u,v);
+      const rFit = evalSurface(ctrl, NU, NV, u, v);
+      const rTrue = radiusAt(anchor, d, 14);
+      const e = Math.abs(rFit-rTrue); sum += e*e; n++; if (e > worst) worst = e;
+      if (reach(anchor[0]+d[0]*rFit, anchor[1]+d[1]*rFit, anchor[2]+d[2]*rFit)) inSet++;
+    }
+    yield a/A;
   }
+  return { rms: Math.sqrt(sum/n), worst, pc: 100*inSet/n };
+}
+async function scoreFit() {
+  if (!fitState) return;
+  const { NU, NV } = fitState;
+  const r = await drive(scoreJob(), 'scoring');
   fnums.innerHTML =
     `<dt>samples</dt><dd>${NU} x ${NV} = ${(NU*NV).toLocaleString()} rays, `
     + `${fitState.probes.toLocaleString()} probes, ${fitState.ms.toFixed(0)} ms</dd>`
-    + `<dt>rms drift</dt><dd>${Math.sqrt(sum/n).toFixed(2)} u from the true edge, `
-    + `worst ${worst.toFixed(2)} u</dd>`
-    + `<dt>drawn inside</dt><dd>${(100*inSet/n).toFixed(1)}% of the surface is somewhere `
-    + `the ship can actually finish the turn</dd>`;
+    + `<dt>rms drift</dt><dd>${r.rms.toFixed(3)} u from the true edge, `
+    + `worst ${r.worst.toFixed(2)} u</dd>`
+    + `<dt>drawn inside</dt><dd>${r.pc.toFixed(1)}% of the surface is somewhere the ship `
+    + `can actually finish the turn, at a ${fitState.margin.toFixed(1)} u margin</dd>`;
 }
-document.getElementById('fit').onclick = async () => {
-  const btn = document.getElementById('fit'); btn.disabled = true;
-  fstat.textContent = 'Bisecting the boundary along each ray...';
-  await new Promise(r => requestAnimationFrame(r));
-  setBody();
-  probes = 0;
-  const t0 = performance.now();
-  const anchor = land(0, 0, cfg.speed*10);
-  const [NU,NV] = sgrid, grid = [];
-  for (let u=0;u<NU;u++) { grid[u] = [];
-    for (let v=0;v<NV;v++) grid[u][v] = radiusAt(anchor, dirOf(u/NU, v/(NV-1)), 12); }
+function* sampleJob(anchor, NU, NV) {
+  const grid = [];
+  for (let u=0;u<NU;u++) {
+    grid[u] = [];
+    for (let v=0;v<NV;v++) grid[u][v] = radiusAt(anchor, dirOf(u/NU, v/(NV-1)), 12);
+    yield u/NU;
+  }
   // Every theta at a pole is the same direction, so the samples there must
   // agree exactly. Bisection noise between them puts a dimple in the fit.
   for (const v of [0, NV-1]) {
     let m = 0; for (let u=0;u<NU;u++) m += grid[u][v];
     m /= NU; for (let u=0;u<NU;u++) grid[u][v] = m;
   }
-  const ms = performance.now()-t0, p = probes;
+  return grid;
+}
+document.getElementById('fit').onclick = async () => {
+  const btn = document.getElementById('fit'); btn.disabled = true;
+  const [NU,NV] = sgrid;
+  fstat.innerHTML = `Bisecting the boundary along <b>${(NU*NV).toLocaleString()}</b> rays...`;
+  await new Promise(r => requestAnimationFrame(r));
+  setBody();
+  probes = 0;
+  const anchor = land(0, 0, cfg.speed*10);
+  const { value: grid, ms, probes: p } = await drive(sampleJob(anchor, NU, NV), 'sampling');
   const m = marginEl.value/10;
   fitState = { grid, NU, NV, anchor, margin: m, probes: p, ms,
                ctrl: fitSurface(grid.map(c => c.map(r => r-m)), NU, NV) };
@@ -748,7 +783,7 @@ document.getElementById('fit').onclick = async () => {
   fstat.innerHTML = `Fitted at speed <b>${cfg.speed}</b>, `
     + `${cfg.mode ? 'TurnSlide' : 'MoveAndTurn'}. Scoring against fresh bisections...`;
   await new Promise(r => requestAnimationFrame(r));
-  scoreFit();
+  await scoreFit();
   fstat.innerHTML = `Fitted at speed <b>${cfg.speed}</b>, `
     + `${cfg.mode ? 'TurnSlide' : 'MoveAndTurn'}.`;
   btn.disabled = false;
