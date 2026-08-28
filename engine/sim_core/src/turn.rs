@@ -234,9 +234,11 @@ impl Sim {
         let flown = if dead {
             // No thrust and no attitude authority: coast, and let fly_span
             // handle it through Drift rather than special casing it here.
-            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN, 1.0 / TICKS_PER_SECOND as f32)
+            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN,
+                     1.0 / TICKS_PER_SECOND as f32, &self.wells)
         } else {
-            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN, 1.0 / TICKS_PER_SECOND as f32)
+            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN,
+                     1.0 / TICKS_PER_SECOND as f32, &self.wells)
         };
 
         let ship = &mut self.ships[si];
@@ -277,6 +279,7 @@ impl Sim {
             ship.plan_face,
             steps,
             1.0 / TICKS_PER_SECOND as f32,
+            &self.wells,
         );
         let ship = &mut self.ships[si];
         ship.plan = flown.path;
@@ -948,6 +951,16 @@ impl Sim {
             &mut byte,
         );
         int(self.next_proj_id as i32, &mut byte);
+
+        // The field bends every flight, so it decides outcomes and belongs in
+        // the hash. Count first, so an empty field and a zero strength well
+        // are not the same match.
+        int(self.wells.len() as i32, &mut byte);
+        for w in &self.wells {
+            for v in [w.pos.x, w.pos.y, w.pos.z, w.mu, w.soft] {
+                num(v, &mut byte);
+            }
+        }
 
         for s in &self.ships {
             int(s.id as i32, &mut byte);

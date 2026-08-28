@@ -9,7 +9,7 @@
 //! part several turns later.
 
 use crate::data::{self, ShipClassId, SubKind, WeaponKey};
-use crate::flight::{Body, Flight, Mode};
+use crate::flight::{Body, Flight, Mode, Well};
 use crate::math::{Quat, V3};
 
 pub type ShipId = u16;
@@ -317,6 +317,11 @@ pub struct Sim {
     /// never needs them; a client playing the turn back always does.
     pub record: bool,
     pub tracks: Vec<TrackFrame>,
+    /// The gravity field this match is fought in. Environmental, so it lives
+    /// here rather than on a hull, and the state hash covers it: two clients
+    /// flying the same orders through different fields part on turn one.
+    /// Order matters, because the accelerations are summed in it.
+    pub wells: Vec<Well>,
 }
 
 /// One ship in a scenario request.
@@ -355,6 +360,7 @@ impl Sim {
             game_over: None,
             record: false,
             tracks: Vec::new(),
+            wells: Vec::new(),
         }
     }
 

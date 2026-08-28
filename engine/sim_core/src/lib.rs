@@ -15,5 +15,5 @@ pub mod snapshot;
 pub mod state;
 pub mod turn;
 
-pub use flight::{can_reach, fly_turn, Body, Flight, Flown, Mode};
+pub use flight::{can_reach, fly_turn, gravity_at, Body, Flight, Flown, Mode, Well};
 pub use math::{Quat, V3};

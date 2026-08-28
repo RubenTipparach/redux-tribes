@@ -31,7 +31,10 @@ use crate::state::{
 /// refused rather than misread: silently reading an old layout produces a
 /// state that looks plausible and is wrong, which is the worst outcome
 /// available.
-pub const SNAPSHOT_VERSION: f32 = 1.0;
+/// Bumped to 2 when the gravity field joined the format. A turn flown
+/// through a field cannot be re-run without it, so an older snapshot is
+/// refused rather than restored into empty space.
+pub const SNAPSHOT_VERSION: f32 = 2.0;
 
 struct Writer<'a> {
     buf: &'a mut [f32],
@@ -125,6 +128,17 @@ impl Sim {
         });
         w.i(self.ships.len() as i32);
         w.i(self.projectiles.len() as i32);
+        w.i(self.wells.len() as i32);
+
+        // The field bends the flight, so it is part of what a turn starts
+        // from. Written in order, because the accelerations are summed in it.
+        for g in &self.wells {
+            w.f(g.pos.x);
+            w.f(g.pos.y);
+            w.f(g.pos.z);
+            w.f(g.mu);
+            w.f(g.soft);
+        }
 
         for s in &self.ships {
             w.i(s.id as i32);
@@ -211,6 +225,13 @@ impl Sim {
         };
         let ship_count = r.i().max(0) as usize;
         let proj_count = r.i().max(0) as usize;
+        let well_count = r.i().max(0) as usize;
+
+        self.wells.clear();
+        for _ in 0..well_count {
+            let pos = V3::new(r.f(), r.f(), r.f());
+            self.wells.push(crate::flight::Well::new(pos, r.f(), r.f()));
+        }
 
         self.ships.clear();
         for _ in 0..ship_count {

@@ -54,6 +54,55 @@ impl Mode {
     }
 }
 
+/// A point source of gravity.
+///
+/// Environmental rather than per ship, so it lives on the match and not on the
+/// hull, and the state hash covers it: two clients flying the same orders
+/// through different fields would part on the first turn.
+///
+/// Deterministic by the same short list the rest of the core keeps to. The
+/// only transcendental is `sqrt`, which IEEE-754 specifies exactly, and the
+/// rest is multiply and divide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Well {
+    pub pos: V3,
+    /// GM, in u^3/s^2. Positive pulls in.
+    pub mu: f32,
+    /// Softening radius. Inside it the field stops growing and falls off
+    /// linearly to zero at the centre, which is the interior field of a
+    /// uniform sphere rather than a fudge. Without it a close pass divides by
+    /// something near zero and the integrator throws the ship to infinity.
+    pub soft: f32,
+}
+
+impl Well {
+    pub const fn new(pos: V3, mu: f32, soft: f32) -> Self {
+        Self { pos, mu, soft }
+    }
+}
+
+/// Acceleration from every well at a point, in u/s^2.
+///
+/// Summed in the order given, which is therefore part of the simulation: two
+/// clients adding the same wells in a different order would round differently
+/// and part. The caller keeps them in a `Vec` and never reorders it.
+pub fn gravity_at(p: V3, wells: &[Well]) -> V3 {
+    let mut a = V3::ZERO;
+    for w in wells {
+        let d = w.pos.sub(p);
+        let soft2 = w.soft * w.soft;
+        let r2 = d.len2().max(soft2);
+        let r = r2.sqrt();
+        if r < 1e-6 {
+            continue;
+        }
+        // d / r is the unit direction and mu / r2 the magnitude, so the whole
+        // thing is d * mu / r^3.
+        a = a.add(d.scale(w.mu / (r2 * r)));
+    }
+    a
+}
+
 /// The flight envelope. The model reads nothing else about a ship.
 #[derive(Clone, Copy, Debug)]
 pub struct Flight {
@@ -136,6 +185,7 @@ fn desired_velocity(pos: V3, target: V3, seconds_left: f32, fl: &Flight, mode: M
     aim.scale(1.0 / seconds_left.max(1e-3)).clamp_len(fl.max_speed)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn step_flight(
     b: Body,
     target: V3,
@@ -144,6 +194,7 @@ fn step_flight(
     mode: Mode,
     face_dir: V3,
     dt: f32,
+    wells: &[Well],
 ) -> Body {
     let boosting = mode == Mode::FullSpeed;
     let accel_fwd = fl.accel_fwd * if boosting { BOOST_ACCEL_MULT } else { 1.0 };
@@ -179,7 +230,14 @@ fn step_flight(
         local.y.clamp(-lat_cap, lat_cap),
         local.z.clamp(-z_cap, z_cap),
     );
-    let vel = b.vel.add(quat.rot(applied)).clamp_len(top_speed);
+    // Gravity lands AFTER the speed clamp on purpose. max_speed is what the
+    // drive can hold against nothing; a well is entitled to throw a hull past
+    // it, and a ship that cannot be flung is not in a gravity field at all.
+    let vel = b
+        .vel
+        .add(quat.rot(applied))
+        .clamp_len(top_speed)
+        .add(gravity_at(b.pos, wells).scale(dt));
     Body { pos: b.pos.add(vel.scale(dt)), vel, quat }
 }
 
@@ -189,6 +247,7 @@ fn step_flight(
 /// tick (600). A reachability probe may ask for fewer: the controller is
 /// smooth, so 60 slices land within about 0.75 units of the executed flight on
 /// a 44 unit reach, which is close enough to draw with and ten times cheaper.
+#[allow(clippy::too_many_arguments)]
 pub fn fly_turn(
     body: Body,
     target: Option<V3>,
@@ -196,9 +255,10 @@ pub fn fly_turn(
     fl: &Flight,
     face: Option<V3>,
     steps: u32,
+    wells: &[Well],
 ) -> Flown {
     let steps = steps.max(1);
-    fly_span(body, target, mode, fl, face, steps, TURN_SECONDS / steps as f32)
+    fly_span(body, target, mode, fl, face, steps, TURN_SECONDS / steps as f32, wells)
 }
 
 /// Fly `steps` slices of `dt` seconds each, from wherever the body is now.
@@ -208,6 +268,7 @@ pub fn fly_turn(
 /// REMAINDER of its turn, and those slices are still one tick each. Deriving
 /// dt from the step count there would silently stretch the last slices to fill
 /// ten seconds again, so the two callers differ in dt and in nothing else.
+#[allow(clippy::too_many_arguments)]
 pub fn fly_span(
     body: Body,
     target: Option<V3>,
@@ -216,6 +277,7 @@ pub fn fly_span(
     face: Option<V3>,
     steps: u32,
     dt: f32,
+    wells: &[Well],
 ) -> Flown {
     let steps = steps.max(1);
     let mut b = body;
@@ -234,10 +296,13 @@ pub fn fly_span(
     path.push((b.pos, b.quat));
     for i in 0..steps {
         if dead {
+            // A drifting hull has no thrust and no attitude authority, but it
+            // still falls: that is the whole point of a dead ship near a well.
+            b.vel = b.vel.add(gravity_at(b.pos, wells).scale(dt));
             b.pos = b.pos.add(b.vel.scale(dt));
         } else {
             let seconds_left = (steps - i) as f32 * dt;
-            b = step_flight(b, target, seconds_left, fl, mode, face_dir, dt);
+            b = step_flight(b, target, seconds_left, fl, mode, face_dir, dt, wells);
         }
         path.push((b.pos, b.quat));
     }
@@ -247,6 +312,7 @@ pub fn fly_span(
 /// Can this ship finish the turn within `eps` of the point? The reachability
 /// oracle the planner draws its envelope from: no assumed shape, just the
 /// integrator asked a yes or no question.
+#[allow(clippy::too_many_arguments)]
 pub fn can_reach(
     body: Body,
     target: V3,
@@ -255,9 +321,10 @@ pub fn can_reach(
     face: Option<V3>,
     eps: f32,
     steps: u32,
+    wells: &[Well],
 ) -> bool {
     let t = if mode.committed() { None } else { Some(target) };
-    fly_turn(body, t, mode, fl, face, steps).end_pos.dist(target) <= eps
+    fly_turn(body, t, mode, fl, face, steps, wells).end_pos.dist(target) <= eps
 }
 
 /// Angle between two directions, in degrees. Used to report how much of a
