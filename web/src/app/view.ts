@@ -34,6 +34,10 @@ const GRID_N = 14;
  * for the midpoint it replaces.
  */
 const BISECT_STEPS = 4;
+/** Bisections used to measure how far the lobe runs while fitting the box. */
+const FIT_STEPS = 12;
+/** Slack on the fitted box, since 26 rays can slip between creases. */
+const FIT_PAD = 6;
 /**
  * Bisection steps for sliding the picker onto the boundary. Seven halvings of
  * the drag length, which is finer than a pixel at any sane zoom and costs
@@ -117,6 +121,7 @@ export class View {
   #shellKey = '';
   #shellTris = 0;
   #shellEdges = 0;
+  #shellBox = { right: 0, up: 0, forward: 0 };
   #planeKey = '';
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
@@ -464,8 +469,67 @@ export class View {
     const flyOrder = order.face
       ? { mode: order.mode, face: order.face }
       : { mode: order.mode };
-    const grid = this.#sim.reachGrid(
-      body, flight, flyOrder, ship.pos, half, GRID_N, REACH_EPS, PROBE_STEPS,
+    // WHERE to look, before how finely. The reachable set leans along the
+    // velocity and at speed it leaves the hull behind: a ship carrying eight
+    // units per second finishes its turn about eighty units away whatever it
+    // does. A cube centred on the hull therefore spends nearly all of itself
+    // on space the ship cannot use, and the cell it can afford grows from 7.9
+    // units at rest to 13.7 at speed, which is backwards.
+    //
+    // So anchor on where the turn actually LANDS with no order given, which is
+    // one flight and lies along the velocity by construction, then measure how
+    // far the lobe runs around it. Same probe count, cells of about 3.8 units
+    // at rest and 2.8 at speed.
+    const landing = this.#sim.flyTurn(body, flight, { mode: order.mode }, PROBE_STEPS, 1).endPos;
+    const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
+    const along = speed > 0.05
+      ? { x: ship.vel.x / speed, y: ship.vel.y / speed, z: ship.vel.z / speed }
+      : this.#match.forward(ship.id);
+    const basis = this.#sim.lookBasis(along);
+    const reachAlong = (dx: number, dy: number, dz: number): number => {
+      let lo = 0;
+      let hi = half * 2.2;
+      const hit = (t: number) => this.#sim.canReach(
+        body, flight, flyOrder,
+        { x: landing.x + dx * t, y: landing.y + dy * t, z: landing.z + dz * t },
+        REACH_EPS, PROBE_STEPS,
+      );
+      if (hit(hi)) return hi;
+      for (let n = 0; n < FIT_STEPS; n++) {
+        const m = (lo + hi) / 2;
+        if (hit(m)) lo = m; else hi = m;
+      }
+      return lo;
+    };
+    // The 26 face, edge and corner directions of a cube, in the box's own
+    // frame, so the extents come back as half sizes along its three axes.
+    let hr = 0;
+    let hu = 0;
+    let hf = 0;
+    for (let a = -1; a <= 1; a++) {
+      for (let b = -1; b <= 1; b++) {
+        for (let c = -1; c <= 1; c++) {
+          if (!a && !b && !c) continue;
+          const l = Math.hypot(a, b, c);
+          const dx = (basis.right.x * a + basis.up.x * b + basis.forward.x * c) / l;
+          const dy = (basis.right.y * a + basis.up.y * b + basis.forward.y * c) / l;
+          const dz = (basis.right.z * a + basis.up.z * b + basis.forward.z * c) / l;
+          const r = reachAlong(dx, dy, dz);
+          hr = Math.max(hr, Math.abs((a / l) * r));
+          hu = Math.max(hu, Math.abs((b / l) * r));
+          hf = Math.max(hf, Math.abs((c / l) * r));
+        }
+      }
+    }
+    // Twenty six rays can slip between the lobes of a shape this creased, so
+    // pad before probing rather than clipping the surface at the box wall.
+    const boxHalf = {
+      right: Math.max(6, hr + FIT_PAD),
+      up: Math.max(6, hu + FIT_PAD),
+      forward: Math.max(6, hf + FIT_PAD),
+    };
+    const grid = this.#sim.reachGridAt(
+      body, flight, flyOrder, landing, along, boxHalf, GRID_N, REACH_EPS, PROBE_STEPS,
     );
 
     // Marching tetrahedra over the sampled field. Six tets per cube sharing
@@ -478,10 +542,19 @@ export class View {
     // at the edge midpoint. A midpoint sits up to half a cell off, which is
     // what made the old shell look blocky, and the correction is the same
     // question the router asks: can the ship finish here.
-    const step = (2 * half) / GRID_N;
-    const px = (i: number) => ship.pos.x - half + (i + 0.5) * step;
-    const py = (j: number) => ship.pos.y - half + (j + 0.5) * step;
-    const pz = (k: number) => ship.pos.z - half + (k + 0.5) * step;
+    // Cell centres in the box's own frame, mapped out through the basis the
+    // core probed with, so a drawn cell is the cell that was asked about.
+    const axis = (i: number, h: number) => -h + (i + 0.5) * ((2 * h) / GRID_N);
+    const cell = (i: number, j: number, k: number): Vec3 => {
+      const a = axis(i, boxHalf.right);
+      const b = axis(j, boxHalf.up);
+      const c = axis(k, boxHalf.forward);
+      return {
+        x: landing.x + basis.right.x * a + basis.up.x * b + basis.forward.x * c,
+        y: landing.y + basis.right.y * a + basis.up.y * b + basis.forward.y * c,
+        z: landing.z + basis.right.z * a + basis.up.z * b + basis.forward.z * c,
+      };
+    };
     const at = (i: number, j: number, k: number) =>
       i >= 0 && j >= 0 && k >= 0 && i < GRID_N && j < GRID_N && k < GRID_N && grid.at(i, j, k);
 
@@ -498,8 +571,8 @@ export class View {
       const k = edgeKey(ga, gb);
       const hit = edge.get(k);
       if (hit) return hit;
-      const A = { x: px(ga[0]!), y: py(ga[1]!), z: pz(ga[2]!) };
-      const B = { x: px(gb[0]!), y: py(gb[1]!), z: pz(gb[2]!) };
+      const A = cell(ga[0]!, ga[1]!, ga[2]!);
+      const B = cell(gb[0]!, gb[1]!, gb[2]!);
       const inside = at(ga[0]!, ga[1]!, ga[2]!);
       const from = inside ? A : B;
       const to = inside ? B : A;
@@ -629,6 +702,7 @@ export class View {
     this.#shellLines.visible = wire.length > 0;
     this.#shellTris = tri.length / 9;
     this.#shellEdges = edge.size;
+    this.#shellBox = boxHalf;
   }
 
   /**
@@ -780,13 +854,14 @@ export class View {
   }
 
   /** Cells probed, cells reachable, and the volume that implies. */
-  envelopeSummary(ship: ShipState | undefined, flight: Flight): string {
+  envelopeSummary(ship: ShipState | undefined, _flight: Flight): string {
     if (!ship) return 'no ship selected';
-    const half = this.probeHalf(ship, flight);
-    const cell = (2 * half) / GRID_N;
-    return `${GRID_N}<sup>3</sup> probes over ${(2 * half).toFixed(0)} units, `
-      + `${this.#shellTris} triangles from ${this.#shellEdges} bisected edges, `
-      + `cell ${cell.toFixed(1)} u`;
+    const b = this.#shellBox;
+    const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (GRID_N * GRID_N * GRID_N));
+    return `${GRID_N}<sup>3</sup> probes in a box `
+      + `${(2 * b.right).toFixed(0)} x ${(2 * b.up).toFixed(0)} x ${(2 * b.forward).toFixed(0)} u `
+      + `on the velocity, ${this.#shellTris} triangles from ${this.#shellEdges} `
+      + `bisected edges, cell ${cell.toFixed(1)} u`;
   }
 
   invalidateEnvelope(): void {

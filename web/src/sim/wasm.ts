@@ -26,6 +26,13 @@ interface SimExports {
     mode: number, eps: number, steps: number, n: number,
     cx: number, cy: number, cz: number, half: number,
   ): number;
+  ft_reach_grid_at(
+    mode: number, eps: number, steps: number, n: number,
+    cx: number, cy: number, cz: number,
+    fx: number, fy: number, fz: number,
+    hr: number, hu: number, hf: number,
+  ): number;
+  ft_look_basis(fx: number, fy: number, fz: number): number;
 }
 
 // input slots
@@ -153,6 +160,60 @@ export class Sim {
         return ((mask[idx >>> 5] ?? 0) & (1 << (idx & 31))) !== 0;
       },
     };
+  }
+
+  /**
+   * The same probe, in a box that is PLACED and TURNED rather than centred on
+   * the hull and aligned to the world.
+   *
+   * The reachable set leans along the velocity, and at speed it leaves the
+   * hull behind entirely: a ship carrying eight units per second finishes its
+   * turn about eighty units away whatever it does. A cube on the hull
+   * therefore spends nearly all of itself on space the ship cannot use, and
+   * the cell it can afford grows from 7.9 units at rest to 13.7 at speed,
+   * which is backwards. Placing the box on the landing and turning it to
+   * follow the velocity buys 3.8 units at rest and 2.8 at speed for the same
+   * probe count.
+   *
+   * How far out to look is the client's business; which way the box faces is
+   * not, so the frame comes from `lookBasis` rather than being rebuilt here.
+   */
+  reachGridAt(
+    body: Body, flight: Flight, order: FlyOrder,
+    centre: Vec3, forward: Vec3,
+    half: { right: number; up: number; forward: number },
+    n: number, eps: number, steps = PROBE_STEPS,
+  ): { hits: number; at: (i: number, j: number, k: number) => boolean } {
+    const size = Math.max(1, Math.min(32, n));
+    this.#writeInputs(body, flight, order);
+    const hits = this.#ex.ft_reach_grid_at(
+      order.mode, eps, steps, size,
+      centre.x, centre.y, centre.z,
+      forward.x, forward.y, forward.z,
+      half.right, half.up, half.forward,
+    );
+    const s = this.#s;
+    const words = Math.ceil((size * size * size) / 32);
+    const mask = new Uint32Array(words);
+    mask.set(new Uint32Array(s.buffer, s.byteOffset + OUT_PATH * 4, words));
+    return {
+      hits,
+      at: (i, j, k) => {
+        const idx = (i * size + j) * size + k;
+        return ((mask[idx >>> 5] ?? 0) & (1 << (idx & 31))) !== 0;
+      },
+    };
+  }
+
+  /**
+   * The basis `reachGridAt` samples in: right, up, forward. Asked for rather
+   * than recomputed, so a cell the client draws is the cell the core probed.
+   */
+  lookBasis(forward: Vec3): { right: Vec3; up: Vec3; forward: Vec3 } {
+    this.#ex.ft_look_basis(forward.x, forward.y, forward.z);
+    const s = this.#s;
+    const v = (o: number): Vec3 => ({ x: s[o] ?? 0, y: s[o + 1] ?? 0, z: s[o + 2] ?? 0 });
+    return { right: v(44), up: v(47), forward: v(50) };
   }
 }
 

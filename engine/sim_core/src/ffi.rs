@@ -215,6 +215,92 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
     hits
 }
 
+/// Probe a box that is POSITIONED and ORIENTED, rather than an axis aligned
+/// cube centred on the hull.
+///
+/// The reachable set is a lobe that leans along the velocity, and at speed it
+/// leaves the hull behind entirely: a ship carrying 8 units per second ends
+/// its turn about 80 units away whatever it does, so a cube centred on the
+/// hull spends almost all of itself on space the ship cannot use. Measured,
+/// the cell it can afford grows from 7.9 units at rest to 13.7 at speed, which
+/// is backwards: the envelope gets coarsest exactly when it matters most.
+///
+/// Centring on where the turn actually lands and turning the box to follow the
+/// velocity puts the cells where the answer is. Same probe count, cells of 3.8
+/// units at rest and 2.8 at speed.
+///
+/// The frame is built here with `Quat::look` rather than in the client, so
+/// there is one definition of which way the box faces and the caller cannot
+/// place its vertices somewhere the probe did not look.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_reach_grid_at(
+    mode: u32, eps: f32, steps: u32, n: u32,
+    cx: f32, cy: f32, cz: f32,
+    fx: f32, fy: f32, fz: f32,
+    hr: f32, hu: f32, hf: f32,
+) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let (body, _t, face, fl) = read_inputs(s);
+    let mode = Mode::from_u32(mode);
+    let n = n.max(1).min(32) as usize;
+    let fwd = V3::new(fx, fy, fz);
+    let q = if fwd.len2() > 1e-12 { Quat::look(fwd, None) } else { Quat::IDENTITY };
+    let centre = V3::new(cx, cy, cz);
+    let mut hits = 0u32;
+    let mut idx = 0usize;
+    let words = (n * n * n).div_ceil(32);
+    for w in 0..words {
+        if 64 + w < SCRATCH_LEN {
+            s[64 + w] = 0.0;
+        }
+    }
+    let mut mask = vec![0u32; words];
+    let at = |i: usize, half: f32| -> f32 {
+        -half + (i as f32 + 0.5) * (2.0 * half / n as f32)
+    };
+    for i in 0..n {
+        let lx = at(i, hr);
+        for j in 0..n {
+            let ly = at(j, hu);
+            for k in 0..n {
+                let lz = at(k, hf);
+                let p = centre.add(q.rot(V3::new(lx, ly, lz)));
+                if can_reach(body, p, mode, &fl, face, eps, steps) {
+                    mask[idx / 32] |= 1 << (idx % 32);
+                    hits += 1;
+                }
+                idx += 1;
+            }
+        }
+    }
+    for (w, word) in mask.iter().enumerate() {
+        if 64 + w < SCRATCH_LEN {
+            s[64 + w] = f32::from_bits(*word);
+        }
+    }
+    hits
+}
+
+/// The basis `ft_reach_grid_at` samples in, so a caller can place the cells it
+/// was told about without rebuilding the convention. Right, up and forward go
+/// to slots 44 to 52.
+#[no_mangle]
+pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
+    let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
+    let fwd = V3::new(fx, fy, fz);
+    let q = if fwd.len2() > 1e-12 { Quat::look(fwd, None) } else { Quat::IDENTITY };
+    let r = q.rot(V3::new(1.0, 0.0, 0.0));
+    let u = q.rot(V3::new(0.0, 1.0, 0.0));
+    let f = q.rot(V3::new(0.0, 0.0, 1.0));
+    for (o, v) in [(44, r), (47, u), (50, f)] {
+        s[o] = v.x;
+        s[o + 1] = v.y;
+        s[o + 2] = v.z;
+    }
+    1
+}
+
 // ------------------------------------------------------------- the match --
 
 /// Start a match. The seed arrives as two u32 halves and is reassembled into
