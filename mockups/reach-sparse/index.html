@@ -131,6 +131,37 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:v
   <dl class="dl" id="vstat"></dl>
 </div>
 
+
+<h2>A smooth surface</h2>
+<p class="sub">A grid of cubes is the honest answer and an ugly one. Measured over 400 rays from the anchor, <b>398 cross the boundary exactly twice</b>, so the set is star shaped almost everywhere and its edge is a radius field over a rectangle: exactly the domain a tensor product surface wants. This fits an interpolating bicubic B spline to that field, which is a NURBS with every weight left at one.</p>
+<p class="sub">There is nothing to weld. A spherical grid shares its vertices by construction, so no two of them ever coincide and there are no cracks between levels to stitch.</p>
+<div class="card">
+  <div class="row">
+    <span class="lab">Sample grid</span>
+    <span id="sgrid"></span>
+  </div>
+  <div class="row">
+    <span class="lab">Pull the drawn edge in by</span>
+    <input type="range" id="margin" min="0" max="30" value="0" style="width:130px;accent-color:var(--cyan)">
+    <span class="num" id="marginV" style="font-family:var(--mono);font-size:12px;color:var(--ink)">0.0 u</span>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <button class="go" id="fit">Fit the surface</button>
+    <button class="on" id="tSpline">Surface</button>
+    <button id="tCloud">Point cloud</button>
+    <button id="tCtrl">Control mesh</button>
+  </div>
+  <div class="st" id="fstat">Not fitted yet.</div>
+  <canvas id="cv2"></canvas>
+  <dl class="dl" id="fnums"></dl>
+</div>
+<div class="note">
+  <p>Accuracy is scored at points <em>between</em> the samples, where a fit is weakest, against a fresh 16 step bisection. So it measures what the surface predicts, not how well it memorised what it was given.</p>
+</div>
+<div class="note warn">
+  <p>A smooth surface cannot follow a crease, and the creases here are real: they survive at 600 ticks and mark where the flight model switches which acceleration axis is binding. So the fit bulges slightly past the edge at every one of them. Pulling the drawn radius in buys the guarantee back and costs reach: about 3 u of margin keeps 97% of the surface inside what the game allows, but leaves the drawn hull some 2.6 u short of the real one all over.</p>
+  <p>Which is why the conclusion is to <b>draw smooth and pick exact</b>. The surface is presentation and may be approximate; the picker keeps asking the core, so no player is ever offered a point the ship cannot reach.</p>
+</div>
 <h2>What it came to</h2>
 <div class="note">
   <p>At a matched 0.83 u cell the octree is <b>5.7 times cheaper</b> than dense, and the saving doubles with every level because it tracks area where dense tracks volume: 1.7x at 16, 3.0x at 32, 5.7x at 64, 11.1x at 128, 21.8x at 256.</p>
@@ -517,6 +548,216 @@ btnSweep.onclick = async () => {
 document.getElementById('clear').onclick = () => {
   rows.innerHTML = ''; denseRef = {}; maxProbes = 1; stat.textContent = 'Cleared.';
 };
+
+
+// ======================================================================
+// The boundary as a radius field, and a bicubic B spline through it.
+// ======================================================================
+const dirOf = (u,v) => { const th = u*2*Math.PI, ph = v*Math.PI;
+  return [Math.sin(ph)*Math.cos(th), Math.cos(ph), Math.sin(ph)*Math.sin(th)]; };
+function radiusAt(anchor, d, iters) {
+  let lo = 0, hi = 200;
+  if (reach(anchor[0]+d[0]*hi, anchor[1]+d[1]*hi, anchor[2]+d[2]*hi)) return hi;
+  for (let i=0;i<iters;i++) { const m = (lo+hi)/2;
+    if (reach(anchor[0]+d[0]*m, anchor[1]+d[1]*m, anchor[2]+d[2]*m)) lo = m; else hi = m; }
+  return (lo+hi)/2;
+}
+// [1,4,1]/6 interpolation, so the spline passes THROUGH each sample rather
+// than merely near it. Cyclic around theta because the seam has to close.
+function solveTri(a,b,c,d) { const n = d.length, cp = new Array(n), dp = new Array(n);
+  cp[0]=c[0]/b[0]; dp[0]=d[0]/b[0];
+  for (let i=1;i<n;i++) { const m = b[i]-a[i]*cp[i-1];
+    cp[i]=c[i]/m; dp[i]=(d[i]-a[i]*dp[i-1])/m; }
+  const x = new Array(n); x[n-1]=dp[n-1];
+  for (let i=n-2;i>=0;i--) x[i]=dp[i]-cp[i]*x[i+1];
+  return x; }
+function solveCyclic(y) { const n = y.length;
+  if (n < 4) return y.slice();
+  const a = new Array(n).fill(1/6), b = new Array(n).fill(4/6), c = new Array(n).fill(1/6);
+  const alpha = 1/6, beta = 1/6, gamma = -b[0];
+  const bb = b.slice(); bb[0] = b[0]-gamma; bb[n-1] = b[n-1]-alpha*beta/gamma;
+  const u = new Array(n).fill(0); u[0] = gamma; u[n-1] = alpha;
+  const x = solveTri(a,bb,c,y), z = solveTri(a,bb,c,u);
+  const f = (x[0]+beta*x[n-1]/gamma)/(1+z[0]+beta*z[n-1]/gamma);
+  return x.map((v,i) => v - f*z[i]); }
+function solveClamped(y) { const n = y.length;
+  if (n < 3) return y.slice();
+  const a = new Array(n).fill(1/6), b = new Array(n).fill(4/6), c = new Array(n).fill(1/6);
+  a[0]=0; b[0]=1; c[0]=0; a[n-1]=0; b[n-1]=1; c[n-1]=0;      // pin the poles
+  return solveTri(a,b,c,y); }
+const Bs = t => { const t2=t*t, t3=t2*t;
+  return [(1-3*t+3*t2-t3)/6, (4-6*t2+3*t3)/6, (1+3*t+3*t2-3*t3)/6, t3/6]; };
+function fitSurface(grid, NU, NV) {
+  const rows = grid.map(col => solveClamped(col));
+  const ctrl = [];
+  for (let v=0; v<NV; v++) {
+    solveCyclic(rows.map(r => r[v])).forEach((val,u) => { (ctrl[u] ||= [])[v] = val; });
+  }
+  return ctrl; }
+function evalSurface(ctrl, NU, NV, u, v) {
+  const fu = u*NU, fv = v*(NV-3);
+  const iu = Math.floor(fu), iv = Math.min(NV-4, Math.max(0, Math.floor(fv)));
+  const bu = Bs(fu-iu), bv = Bs(fv-iv);
+  let r = 0;
+  for (let a=0;a<4;a++) for (let b2=0;b2<4;b2++)
+    r += bu[a]*bv[b2]*ctrl[(iu+a-1+NU*2)%NU][Math.min(NV-1, Math.max(0, iv+b2))];
+  return r; }
+
+// ---- its own view
+const cv2 = document.getElementById('cv2');
+const r2 = new THREE.WebGLRenderer({ canvas: cv2, antialias: true });
+r2.setPixelRatio(Math.min(devicePixelRatio, 2));
+const sc2 = new THREE.Scene();
+const cam2 = new THREE.PerspectiveCamera(45, 2, 0.5, 4000);
+sc2.add(new THREE.AmbientLight(0xffffff, 0.55));
+const dl2 = new THREE.DirectionalLight(0xffffff, 1.0); dl2.position.set(1,1.6,1.2); sc2.add(dl2);
+const dl3 = new THREE.DirectionalLight(0x3a6fa8, 0.5); dl3.position.set(-1,-0.8,-1); sc2.add(dl3);
+const g2 = { spline: new THREE.Group(), cloud: new THREE.Group(), ctrl: new THREE.Group() };
+for (const g of Object.values(g2)) sc2.add(g);
+let orb2 = { th: 0.7, ph: 1.05, r: 150, tgt: new THREE.Vector3() };
+function place2() {
+  cam2.position.set(
+    orb2.tgt.x + orb2.r*Math.sin(orb2.ph)*Math.sin(orb2.th),
+    orb2.tgt.y + orb2.r*Math.cos(orb2.ph),
+    orb2.tgt.z + orb2.r*Math.sin(orb2.ph)*Math.cos(orb2.th));
+  cam2.lookAt(orb2.tgt); }
+let drag2 = null;
+cv2.addEventListener('pointerdown', e => { drag2 = {x:e.clientX,y:e.clientY}; cv2.setPointerCapture(e.pointerId); });
+cv2.addEventListener('pointermove', e => { if (!drag2) return;
+  orb2.th -= (e.clientX-drag2.x)*0.008;
+  orb2.ph = Math.min(3.0, Math.max(0.14, orb2.ph - (e.clientY-drag2.y)*0.008));
+  drag2 = {x:e.clientX,y:e.clientY}; place2(); });
+addEventListener('pointerup', () => drag2 = null);
+cv2.addEventListener('wheel', e => { e.preventDefault();
+  orb2.r = Math.min(900, Math.max(20, orb2.r*(1+Math.sign(e.deltaY)*0.1))); place2(); }, { passive:false });
+
+let fitState = null;
+function clearG(g) { while (g.children.length) { const c = g.children.pop();
+  c.geometry && c.geometry.dispose(); c.material && c.material.dispose(); } }
+function drawSpline() {
+  if (!fitState) return;
+  const { ctrl, NU, NV, anchor, grid, margin } = fitState;
+  const RU = 108, RV = 56;
+  const pos = [], idx = [];
+  for (let a=0;a<=RU;a++) for (let b=0;b<=RV;b++) {
+    const u = a/RU, v = b/RV, d = dirOf(u,v);
+    const r = Math.max(0, evalSurface(ctrl, NU, NV, u, v));
+    pos.push(anchor[0]+d[0]*r, anchor[1]+d[1]*r, anchor[2]+d[2]*r);
+  }
+  for (let a=0;a<RU;a++) for (let b=0;b<RV;b++) {
+    const i0 = a*(RV+1)+b, i1 = (a+1)*(RV+1)+b;
+    idx.push(i0, i1, i0+1, i1, i1+1, i0+1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  clearG(g2.spline);
+  g2.spline.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({
+    color: 0x35C7FF, transparent: true, opacity: 0.82, side: THREE.DoubleSide })));
+
+  // the samples the fit was built from
+  const cp = [];
+  for (let u=0;u<NU;u++) for (let v=0;v<NV;v++) {
+    const d = dirOf(u/NU, v/(NV-1)), r = grid[u][v] - margin;
+    cp.push(anchor[0]+d[0]*r, anchor[1]+d[1]*r, anchor[2]+d[2]*r);
+  }
+  clearG(g2.cloud);
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute('position', new THREE.Float32BufferAttribute(cp, 3));
+  g2.cloud.add(new THREE.Points(pg, new THREE.PointsMaterial({ color: 0xFFA23F, size: 1.4 })));
+
+  // the control mesh, which is what the spline is actually steered by
+  const seg = [];
+  const cpt = (u,v) => { const d = dirOf(u/NU, v/(NV-1)), r = ctrl[u][v];
+    return [anchor[0]+d[0]*r, anchor[1]+d[1]*r, anchor[2]+d[2]*r]; };
+  for (let u=0;u<NU;u++) for (let v=0;v<NV;v++) {
+    if (v+1 < NV) seg.push(...cpt(u,v), ...cpt(u,v+1));
+    seg.push(...cpt(u,v), ...cpt((u+1)%NU,v));
+  }
+  clearG(g2.ctrl);
+  const cg = new THREE.BufferGeometry();
+  cg.setAttribute('position', new THREE.Float32BufferAttribute(seg, 3));
+  g2.ctrl.add(new THREE.LineSegments(cg, new THREE.LineBasicMaterial({ color: 0x9B8CFF })));
+
+  g2.spline.visible = document.getElementById('tSpline').classList.contains('on');
+  g2.cloud.visible  = document.getElementById('tCloud').classList.contains('on');
+  g2.ctrl.visible   = document.getElementById('tCtrl').classList.contains('on');
+}
+for (const id of ['tSpline','tCloud','tCtrl'])
+  document.getElementById(id).onclick = e => { e.currentTarget.classList.toggle('on'); drawSpline(); };
+
+let sgrid = [32,18];
+chips(document.getElementById('sgrid'),
+  [['16 x 10','16,10'],['24 x 14','24,14'],['32 x 18','32,18'],['48 x 26','48,26']],
+  () => sgrid.join(','), v => sgrid = v.split(',').map(Number));
+const marginEl = document.getElementById('margin'), marginV = document.getElementById('marginV');
+marginEl.oninput = () => {
+  marginV.textContent = (marginEl.value/10).toFixed(1) + ' u';
+  if (!fitState) return;
+  const m = marginEl.value/10;
+  fitState.margin = m;
+  fitState.ctrl = fitSurface(fitState.grid.map(c => c.map(r => r-m)), fitState.NU, fitState.NV);
+  drawSpline();
+  scoreFit();
+};
+
+const fstat = document.getElementById('fstat'), fnums = document.getElementById('fnums');
+function scoreFit() {
+  if (!fitState) return;
+  const { ctrl, NU, NV, anchor } = fitState;
+  let worst = 0, sum = 0, n = 0, inSet = 0;
+  for (let a=0;a<25;a++) for (let b=0;b<13;b++) {
+    const u = (a+0.5)/25, v = (b+0.5)/13, d = dirOf(u,v);
+    const rFit = evalSurface(ctrl, NU, NV, u, v);
+    const rTrue = radiusAt(anchor, d, 14);
+    const e = Math.abs(rFit-rTrue); sum += e*e; n++; if (e > worst) worst = e;
+    if (reach(anchor[0]+d[0]*rFit, anchor[1]+d[1]*rFit, anchor[2]+d[2]*rFit)) inSet++;
+  }
+  fnums.innerHTML =
+    `<dt>samples</dt><dd>${NU} x ${NV} = ${(NU*NV).toLocaleString()} rays, `
+    + `${fitState.probes.toLocaleString()} probes, ${fitState.ms.toFixed(0)} ms</dd>`
+    + `<dt>rms drift</dt><dd>${Math.sqrt(sum/n).toFixed(2)} u from the true edge, `
+    + `worst ${worst.toFixed(2)} u</dd>`
+    + `<dt>drawn inside</dt><dd>${(100*inSet/n).toFixed(1)}% of the surface is somewhere `
+    + `the ship can actually finish the turn</dd>`;
+}
+document.getElementById('fit').onclick = async () => {
+  const btn = document.getElementById('fit'); btn.disabled = true;
+  fstat.textContent = 'Bisecting the boundary along each ray...';
+  await new Promise(r => requestAnimationFrame(r));
+  setBody();
+  probes = 0;
+  const t0 = performance.now();
+  const anchor = land(0, 0, cfg.speed*10);
+  const [NU,NV] = sgrid, grid = [];
+  for (let u=0;u<NU;u++) { grid[u] = [];
+    for (let v=0;v<NV;v++) grid[u][v] = radiusAt(anchor, dirOf(u/NU, v/(NV-1)), 12); }
+  // Every theta at a pole is the same direction, so the samples there must
+  // agree exactly. Bisection noise between them puts a dimple in the fit.
+  for (const v of [0, NV-1]) {
+    let m = 0; for (let u=0;u<NU;u++) m += grid[u][v];
+    m /= NU; for (let u=0;u<NU;u++) grid[u][v] = m;
+  }
+  const ms = performance.now()-t0, p = probes;
+  const m = marginEl.value/10;
+  fitState = { grid, NU, NV, anchor, margin: m, probes: p, ms,
+               ctrl: fitSurface(grid.map(c => c.map(r => r-m)), NU, NV) };
+  const span = Math.max(...grid.flat())*2;
+  orb2.tgt.set(anchor[0], anchor[1], anchor[2]); orb2.r = span*1.3; place2();
+  drawSpline();
+  fstat.innerHTML = `Fitted at speed <b>${cfg.speed}</b>, `
+    + `${cfg.mode ? 'TurnSlide' : 'MoveAndTurn'}. Scoring against fresh bisections...`;
+  await new Promise(r => requestAnimationFrame(r));
+  scoreFit();
+  fstat.innerHTML = `Fitted at speed <b>${cfg.speed}</b>, `
+    + `${cfg.mode ? 'TurnSlide' : 'MoveAndTurn'}.`;
+  btn.disabled = false;
+};
+function resize2() { const w = cv2.clientWidth, h = cv2.clientHeight;
+  r2.setSize(w, h, false); cam2.aspect = w/h; cam2.updateProjectionMatrix(); }
+addEventListener('resize', resize2);
+(function loop2(){ requestAnimationFrame(loop2); r2.render(sc2, cam2); })();
+resize2(); place2();
 
 resize();
 placeCam();
