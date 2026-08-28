@@ -135,6 +135,7 @@ footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:v
 <h2>A smooth surface</h2>
 <p class="sub">A grid of cubes is the honest answer and an ugly one. Measured over 400 rays from the anchor, <b>398 cross the boundary exactly twice</b>, so the set is star shaped almost everywhere and its edge is a radius field over a rectangle: exactly the domain a tensor product surface wants. This fits an interpolating bicubic B spline to that field, which is a NURBS with every weight left at one.</p>
 <p class="sub">There is nothing to weld. A spherical grid shares its vertices by construction, so no two of them ever coincide and there are no cracks between levels to stitch.</p>
+<p class="sub">It is also visibly uneven, and that is deliberate. On the surface, neighbouring samples run from 0.03 u to 2.38 u apart, a spread of 70x, because meridians converge and the set is not a sphere. Two more even charts were measured against it at an equal ray budget and <b>both fit worse</b>: an equal area chart is 3.4 times more even and 36% worse, a six face cube map is 18 times more even and 2.2 times worse. The crowding at the poles is what pays for the resolution at the equator, which is where the shape actually varies. Poles on Y also beat X and Z. The wireframe thins its drawn meridians toward each pole so it stays readable; the fit behind it uses every one.</p>
 <div class="card">
   <div class="row">
     <span class="lab">Sample grid</span>
@@ -688,9 +689,17 @@ function drawSpline() {
   const seg = [];
   const cpt = (u,v) => { const d = dirOf(u/NU, v/(NV-1)), r = ctrl[u][v];
     return [anchor[0]+d[0]*r, anchor[1]+d[1]*r, anchor[2]+d[2]*r]; };
-  for (let u=0;u<NU;u++) for (let v=0;v<NV;v++) {
-    if (v+1 < NV) seg.push(...cpt(u,v), ...cpt(u,v+1));
-    seg.push(...cpt(u,v), ...cpt((u+1)%NU,v));
+  // Meridians converge, so near a pole all NU of them land inside a circle a
+  // fraction of a unit across and read as a solid disc. Thin the DRAWN ones by
+  // the latitude, in powers of two so the survivors nest instead of crawling.
+  const strideAt = v => { const s = Math.sin((v/(NV-1))*Math.PI);
+    let k = 1; while (k < NU/4 && s * NU < k * 12) k *= 2; return k; };
+  for (let v=0;v<NV;v++) {
+    const k = strideAt(v), kNext = Math.max(k, strideAt(Math.min(NV-1, v+1)));
+    for (let u=0;u<NU;u++) {
+      if (v+1 < NV && u % kNext === 0) seg.push(...cpt(u,v), ...cpt(u,v+1));
+      if (u % k === 0) seg.push(...cpt(u,v), ...cpt((u+k)%NU,v));
+    }
   }
   clearG(g2.ctrl);
   const cg = new THREE.BufferGeometry();
