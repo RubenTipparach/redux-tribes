@@ -94,6 +94,22 @@ symmetry          rotational, in 3D              a mirror plane only, measured b
 <p class="num">Which leaves a genuine choice, and it is not a rendering one. <b>A smooth envelope is available by changing the flight model,</b> to constant speed and a single curvature bound, at which point the set is a solid of revolution and discs are exact. Keeping the flight model means keeping the creases, and drawing them.</p>
 <p class="num">Sources: <a style="color:var(--cyan)" href="https://link.springer.com/article/10.1134/S106456242360080X">Reachable Set of the Dubins Car with an Integral Constraint on Control</a>, <a style="color:var(--cyan)" href="https://www.researchgate.net/publication/361244826_Analytical_description_of_three-dimensional_reachable_set_for_Dubins_car">Analytical description of three-dimensional reachable set for Dubins car</a>, <a style="color:var(--cyan)" href="https://arxiv.org/abs/2403.18707">On the Reachability of 3-Dimensional Paths with a Prescribed Curvature Bound</a>, <a style="color:var(--cyan)" href="https://arxiv.org/abs/1709.07523">Hamilton-Jacobi Reachability: A Brief Overview and Recent Advances</a>, <a style="color:var(--cyan)" href="https://www.cs.ubc.ca/~mitchell/Class/CPSC515-2020W1/2020-11-04-reachability.pdf">Mitchell, Level Set Methods for Control and Reachability</a>.</p>
 
+<h2>Why the contours are not symmetrical</h2>
+<p>The reachable set <b>is</b> mirror symmetric about the hull's vertical plane. Measured at the top of this page, left and right agree to the digit: 47.5 against 47.5, 17.3 against 17.3. So a lopsided drawing is the sampling, and it is worth knowing which part.</p>
+<p>Taking the mesh and looking for each vertex's mirror partner, at a cell size of 8 units:</p>
+<div class="num" style="white-space:pre;overflow-x:auto">hull heading    mean mismatch   worst      note
+    0 deg           0.795 u     5.745 u    lattice aligned to the mirror plane
+   15 deg           1.797 u     4.826 u
+   30 deg           1.785 u     4.769 u
+   45 deg           0.000 u     0.000 u    exactly symmetric</div>
+<p><b>The 45 degree row is the whole answer.</b> Six tetrahedra per cube all share the main diagonal, from corner (0,0,0) to (1,1,1). That decomposition is <b>not</b> symmetric about a coordinate plane, but it <b>is</b> symmetric about a plane containing that diagonal, which is the plane at 45 degrees. So the drawing comes out exactly symmetric when the hull's own mirror plane happens to line up with the decomposition's, and off by most of a cell when it does not. Nothing about the ship changed between those rows; only which way it was pointing relative to the grid.</p>
+<p>The obvious cheap fix does not work. Alternating the diagonal by cell parity, the usual remedy for directional bias, improves the average by about a third (0.795 to 0.547 u) and leaves the worst case untouched at 5.7 u, because the worst case is a single cell straddling the plane rather than an accumulated drift.</p>
+<p><b>Two fixes that would work,</b> neither yet done:</p>
+<div class="num" style="white-space:pre;overflow-x:auto">marching cubes, 256 case table   removes the diagonal bias outright; costs the table and its ambiguity cases
+turn the lattice 45 deg to the   measured exactly symmetric at 0.000 u, but the grid probe takes an
+hull before probing               axis aligned box, so it needs an orientation across the boundary</div>
+<p class="num">Worth being clear about the scale before spending anything on it: 5.7 units of mismatch is 12 percent of the envelope at the nose, where it reaches 47 units, and 40 percent abeam, where it reaches 14. It is most visible exactly where the envelope is smallest.</p>
+
 <h2>Why neither one is smooth, measured</h2>
 <p>Because the reachable set is not smooth. Bisecting deeply and sweeping 256 rays around one slice, adjacent rays 1.4 degrees apart differ by as much as <b>14.1 units</b> of reach. Walking across that angle a tenth of a degree at a time finds a genuine cliff:</p>
 <div class="num" style="white-space:pre;overflow-x:auto">   angle   probe, 60 steps   full turn, 600 steps
