@@ -74,8 +74,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 21, the JS design reference
-cd engine/sim_core && cargo test            # 25, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 18, the wasm boundary
+cd engine/sim_core && cargo test            # 31, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 21, the wasm boundary
 npm --prefix server test                    # 9, the lobby and the lockstep API
 ```
 
@@ -120,6 +120,22 @@ Framing and presentation: how far out to probe for a drawing, how big a mesh is,
 where a finger landed. These change the picture and nothing else. When in doubt,
 ask whether a second client that disagreed would desync.
 
+### Configs may live in the client, logic may not
+
+Numbers can be authored on the client side. Rules cannot. A config is inert
+until something reads it, and the thing that reads it has to be the core.
+
+The pattern already in the tree is the one to copy: flight stats (yaw rate,
+pitch rate, the three accelerations, max speed) are tunable from sliders in the
+client, and every one of them is pushed into the core before a turn resolves
+and is covered by the state hash. The client owns the value. The core owns what
+the value means, and both seats therefore see the same match.
+
+What this rules out is the shortcut where a config sits next to a small piece of
+TypeScript that interprets it, because that interpreter is a rule, and a rule in
+the client is a rule two clients can disagree about. If a config needs logic to
+be useful, ship the config across the boundary and put the logic in `sim_core`.
+
 ## Physics and determinism
 
 Two clients on the same build MUST produce the same state hash from the same
@@ -144,18 +160,49 @@ not a hope, so the core keeps to a short list:
 - **Ship index is ship id**, and ships are never removed. An id that can shift
   is an id two clients can disagree about.
 
+If you add a system to the core, check it against that list before adding it.
+
 Contact resolution is ours (`turn.rs`), not a physics engine: positional
 separation plus impulse damage, pairs visited in index order, per pair cooldown.
 
-**Rapier is compatible but deliberately not adopted** (ADR-15). It needs the
-`enhanced-determinism` feature, strictly IEEE 754-2008 targets, nalgebra's
-`ComplexField`/`RealField` in place of the built in float methods, and identical
-initialisation and insertion order; it cannot be combined with `simd8`. Contact
-needs here are small and already covered deterministically with no dependency.
-Because the sim is a crate behind a numeric boundary, adopting it later is a
-change the renderer never sees.
+### Snapshots and replay are how any of this is checked
 
-If you add a system to the core, check it against that list before adding it.
+Every turn records what it started from, the orders that drove it, and the hash
+it produced (`snapshot.rs`, `tests/replay.rs`). A hash says two clients parted;
+a snapshot plus the orders says where, because either machine can restore the
+world and re-run that one turn alone.
+
+Snapshots store what a turn starts from and nothing derived. A ship's flown plan
+is rebuilt from the orders, so recording it would store a value that can
+disagree with what it derives from. Keep it that way when you add state: ask
+whether the next turn could recompute it, and if it could, leave it out.
+
+The replay tests are the acceptance criteria for anything that claims to be
+deterministic. Restore a turn, feed it its orders, get its hash. Out of order
+too, and across seats. A new system in the core is not done until it survives
+that.
+
+**Rapier is compatible, and still deliberately not adopted** (ADR-16 measured
+it against the replay harness, superseding the account in ADR-15).
+
+Determinism is not the objection. A collision run 240 steps gave bit identical
+output on native x86-64 and on wasm32, repeated. In 0.35 `enhanced-determinism`
+expands to software transcendentals, stable iteration order and SIMD off, which
+are the same three hazards listed above, handled the same way.
+
+Three things decided it. Rapier's turn state is bigger than its bodies: resuming
+a run from position, orientation and velocity diverged at every cut point in a
+sustained contact, because the solver's warm start cache is state a body
+snapshot does not carry. Serialising the whole world does resume correctly, and
+costs 9203 bytes for four bare boxes against 840 bytes for a whole four ship
+match here. And the module is 834050 bytes against 120249 for this entire core,
+on a page that has to work on a phone. Speed was never the issue: 6 ms a turn
+against 452 microseconds, both invisible.
+
+What it would replace is forty lines of sphere separation in `turn.rs`, and it
+would replace the flight model with rigid body dynamics, which is exactly the
+part that is hand authored on purpose (ADR-14). It becomes worth it when
+contacts get rich: hull shaped colliders, debris, jointed structures, terrain.
 
 ## Keeping the code clean: SOLID, applied here
 

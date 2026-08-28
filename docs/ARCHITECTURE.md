@@ -344,7 +344,7 @@ Nothing else feeds it. `MaxThrusterRange` is gone as a movement rule; a derived 
 
 **The boundary is a C ABI over one flat f32 buffer, not wasm-bindgen.** The simulation's entire interface is numeric (poses, orders and stats in; poses out), so there is nothing for object marshalling to do. Skipping the glue keeps the build to plain `cargo build --target wasm32-unknown-unknown` with no extra toolchain, and it keeps the boundary explicit: slot offsets are declared in `ffi.rs` and mirrored in `web/src/sim/wasm.ts`, and they move together or not at all. Cost: a 58 KB wasm module and one call to probe a whole envelope grid instead of several thousand.
 
-**Rapier: yes, and here are the conditions.** Rapier is not cross-platform deterministic by default, but it can be, via the `enhanced-determinism` feature. The requirements are:
+**Rapier: yes, and here are the conditions.** *Superseded by ADR-16, which measured this against the replay harness on rapier3d 0.35. The conditions below were correct for the nalgebra era; 0.35 moved to glam, and the blocking issue turned out to be snapshot completeness rather than determinism. Read ADR-16 before acting on this paragraph.* Rapier is not cross-platform deterministic by default, but it can be, via the `enhanced-determinism` feature. The requirements are:
 
 1. the target platforms comply strictly with IEEE 754-2008;
 2. floating point maths comes from nalgebra's `ComplexField` / `RealField` traits rather than the built in methods, so `ComplexField::sin()` and not `.sin()`;
@@ -365,6 +365,47 @@ The feature cannot be combined with `simd8`. Requirement 2 is exactly the libm d
 - **Storage is `node:sqlite`,** built into Node 22, so the API image needs no native build toolchain at all. One file, one writer, one machine, which is what the deploy workflow enforces before every release.
 - **TypeScript is strict everywhere,** including `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. The point of the migration is a checked boundary; a loose config gives that up and keeps the churn.
 - **CI gates the core first.** If the model is wrong nothing downstream matters, so `sim` runs alone, then the prototype, API and web jobs, then the two deploys.
+## ADR-16: Snapshots, Replay, and Rapier Measured Against Them (extends ADR-5 and ADR-15)
+
+**Status:** snapshots and replay are built and tested (`engine/sim_core/src/snapshot.rs`, `tests/replay.rs`). Rapier was measured against them and is still not adopted, now for a reason with numbers attached rather than a judgement call.
+
+**Decision one: a turn is recorded by its initial conditions, not only its result.** Every turn stores the exact state it started from, the orders that drove it, and the hash it produced. The state hash alone says two clients parted; it cannot say where. A snapshot plus that turn's orders can, because either machine can restore the world and re-run that one turn in isolation.
+
+The format is a flat f32 array, matching the rest of the boundary, with counts ahead of every variable length run. It stores what a turn starts from and nothing derived: a ship's flown plan is scratch that `plan_movement` rebuilds from the orders, so recording it would store a value that can disagree with what it derives from. Ships are rebuilt through `Ship::new`, so class tables come from data and a stale snapshot cannot silently override current balance. A version mismatch is refused, because reading an old layout yields a state that looks plausible and is wrong. A snapshot from another seed is refused, because it would restore cleanly and then diverge for reasons nothing could explain.
+
+`tests/replay.rs` asserts the property the format exists for: restore any turn, feed it that turn's orders, get that turn's hash. Out of order as well, which is what proves a turn depends on its snapshot and its orders rather than on anything left over in the process. And across seats: one player's snapshot plus the other player's orders reproduces the turn both reported.
+
+This landed before evaluating any physics engine, on purpose. "This integrator is deterministic" is not a testable sentence without the ability to put the world back and run it again.
+
+**Decision two: Rapier stays out of the authoritative path.** Measured against rapier3d 0.35.2, built for `wasm32-unknown-unknown` at `opt-level = "z"` with LTO and strip.
+
+*Determinism is not the problem.* A two ball collision run 240 steps produced bit identical output on native x86-64 and on wasm32 under Node, repeated across processes, with and without `enhanced-determinism`. Two different code generators and instruction sets agreeing to the last bit after a contact is a strong signal.
+
+The feature's mechanism is also now clear, and it is not what ADR-15 described. In 0.35 `enhanced-determinism` expands to `simba/libm_force`, `indexmap`, `glamx/libm` and `glamx/scalar-math`: software transcendentals instead of platform intrinsics, stable iteration order instead of hashed, and SIMD off so vector maths does not vary with register width. Those are the same three hazards this core already handles by hand, which is reassuring about the diagnosis and says nothing about the cost. ADR-15's nalgebra `ComplexField` guidance is stale: Rapier 0.35 moved its maths types to glam through parry, so `Vector` is `glam::Vec3` and the `vector!` macro no longer applies.
+
+*The problem is that Rapier's turn state is bigger than its bodies.* Two boxes settling on a floor, 600 steps, cut at 60, 120, 200, 300, 450 and 599 and resumed from a full body state (position, orientation, linear and angular velocity): **every cut diverged from the continuous run**, worst position delta 2.0e-4 at the latest cut. That is not nondeterminism and not drift. It is the solver's warm start impulses, contact manifolds, island structure and broad phase tree, none of which a body state carries. The first probe missed this because a bouncing collision separates in a few steps and never accumulates a cache; sustained contact does.
+
+Serialising the entire world does resume correctly, identically at every cut, via the `serde-serialize` feature. So the rescue path exists, and it prices the adoption:
+
+| | our format | Rapier world |
+| --- | --- | --- |
+| 2 boxes and a floor | n/a | 5192 bytes |
+| 4 bodies in contact | n/a | 9203 bytes |
+| a whole 4 ship match | 840 bytes | n/a |
+| 12 bodies in contact | n/a | 30899 bytes |
+| 24 bodies in contact | n/a | 82240 bytes |
+
+Our 840 bytes covers four ships including hulls, subsystems, weapon cooldowns, marines, boarding parties, AI state and every projectile in flight. Rapier needs eleven times that for four bare boxes, in a layout versioned by Rapier rather than by us, growing with contact count rather than with fleet size.
+
+*Module size.* 834050 bytes with `enhanced-determinism`, 807356 without, against 120249 bytes for the entire current core. Seven times the whole simulation, for a page that must work on a phone. The determinism feature itself is nearly free at 26694 bytes, so any adoption keeps it.
+
+*Speed is not an objection.* About 10 microseconds per step for two bodies in wasm, so a 600 tick turn costs roughly 6 ms. The current core resolves a full turn of four ships and their projectiles in 452 microseconds. Rapier is around thirteen times more expensive and both are irrelevant next to a player thinking about their orders.
+
+**Why this is a no for now, and what would make it a yes.** What the game asks of contacts is forty lines in `turn.rs`: separate overlapping hulls, charge both ships for the impulse, visit pairs in index order. Rapier's dynamics would replace the part deliberately not modelled as rigid bodies, since ships fly on rate limited attitude and per axis thrust by design (ADR-14), not because that approximates physics. So adoption would cost 7x the module, replace our snapshot format with theirs, and buy collision response we already have.
+
+It becomes worth it when contacts get rich enough that hand rolling stops being cheaper: hull shaped colliders instead of spheres, debris, jointed structures, terrain. At that point the work is: enable `enhanced-determinism` and `serde-serialize`, make the world serialisation part of the snapshot rather than the body states, and point `tests/replay.rs` at it unchanged. The replay tests are the acceptance criteria, which is why they exist first.
+
+Rapier remains fine right now for **non-authoritative client side effects**, where divergence has no consequence because nothing reads it back.
 
 ## Migration Roadmap
 
