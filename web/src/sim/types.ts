@@ -71,3 +71,168 @@ export const TURN_SECONDS = 10;
 /** Resolution flies one slice per tick; a probe may ask for fewer. */
 export const RESOLUTION_STEPS = TICKS_PER_TURN;
 export const PROBE_STEPS = 60;
+
+// ------------------------------------------------------------ the match --
+
+/**
+ * Ship classes, matching `sim_core::data::ALL_CLASSES` order. Like `Mode`,
+ * these indices cross the boundary and are therefore part of the contract.
+ */
+export const ShipClass = {
+  TerranFrigate: 0,
+  KarisenFrigate: 1,
+  RogueFrigate: 2,
+  BenefactorFrigate: 3,
+  Freighter: 4,
+} as const;
+export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
+
+export const CLASS_NAMES: Record<number, string> = {
+  0: 'Terran Frigate',
+  1: 'Karisen Frigate',
+  2: 'Rogue Frigate',
+  3: 'Benefactor Frigate',
+  4: 'Freighter',
+};
+
+export const FACTION_NAMES: Record<number, string> = {
+  0: 'terran',
+  1: 'karisen',
+  2: 'rogue',
+  3: 'benefactor',
+};
+
+export const Scenario = {
+  Skirmish: 0,
+  Duel: 1,
+  Convoy: 2,
+} as const;
+export type Scenario = (typeof Scenario)[keyof typeof Scenario];
+
+/** Matches `sim_core::turn::EventKind` discriminants. */
+export const EventKind = {
+  TurnStart: 0,
+  ShotFired: 1,
+  ShotHit: 2,
+  ShotMiss: 3,
+  ShotSkippedRange: 4,
+  ShotSkippedArc: 5,
+  ProjectileSpawned: 6,
+  ProjectileExpired: 7,
+  Damage: 8,
+  SubsystemDestroyed: 9,
+  ShipDrifting: 10,
+  ShipDestroyed: 11,
+  Collision: 12,
+  BoardingStarted: 13,
+  BoardingTick: 14,
+  ShipCaptured: 15,
+  GameOver: 16,
+} as const;
+export type EventKind = (typeof EventKind)[keyof typeof EventKind];
+
+export interface SimEvent {
+  readonly kind: EventKind;
+  readonly tick: number;
+  /** the ship this happened TO, or -1 */
+  readonly ship: number;
+  /** attacker, owner, or the other party to a collision, or -1 */
+  readonly other: number;
+  /** subsystem index, weapon index or projectile id, per kind */
+  readonly aux: number;
+  readonly amount: number;
+  readonly pos: Vec3;
+  readonly to: Vec3;
+}
+
+export interface SubState {
+  readonly hp: number;
+  readonly dead: boolean;
+}
+
+export interface PartyState {
+  readonly faction: number;
+  readonly count: number;
+}
+
+export interface ShipState {
+  readonly id: number;
+  readonly cls: number;
+  readonly faction: number;
+  /**
+   * Which side of the match this hull fights for, 0 or 1. NOT "mine": the
+   * simulation has no idea who is looking at it, and must not, or two clients
+   * playing each other would hash differently from the first turn. Whether a
+   * ship is yours is `side === mySide`, which only the client knows.
+   */
+  readonly side: number;
+  readonly destroyed: boolean;
+  readonly hull: number;
+  readonly hullMax: number;
+  readonly marines: number;
+  readonly pos: Vec3;
+  readonly quat: Quat;
+  readonly vel: Vec3;
+  readonly mode: Mode;
+  readonly drifting: boolean;
+  readonly subs: readonly SubState[];
+  readonly weaponLastFired: readonly number[];
+  readonly parties: readonly PartyState[];
+  readonly radius: number;
+  readonly maxSpeed: number;
+  readonly aiTarget: number;
+  readonly boardingRange: number;
+}
+
+export interface Pose {
+  readonly id: number;
+  readonly destroyed: boolean;
+  readonly pos: Vec3;
+  readonly quat: Quat;
+}
+
+export interface TrackProjectile {
+  readonly id: number;
+  readonly missile: boolean;
+  readonly pos: Vec3;
+}
+
+export interface MountInfo {
+  readonly key: number;
+  readonly kind: number;
+  readonly damage: number;
+  readonly range: number;
+  readonly cooldownTurns: number;
+  readonly arcH: readonly [number, number];
+  readonly arcV: readonly [number, number];
+  readonly batch: number;
+  readonly mount: Vec3;
+}
+
+export const WEAPON_NAMES: Record<number, string> = {
+  0: 'beam',
+  1: 'cannon',
+  2: 'plasma',
+  3: 'missile',
+};
+
+export interface ClassInfo {
+  readonly hull: number;
+  readonly radius: number;
+  readonly mass: number;
+  readonly boardingRange: number;
+  readonly marines: number;
+  readonly boardingCapacity: number;
+  readonly mountCount: number;
+  readonly subCount: number;
+  readonly flight: Flight;
+}
+
+/** A player's plan for one ship, before it is submitted. */
+export interface PlannedOrder {
+  mode: Mode;
+  target?: Vec3;
+  face?: Vec3;
+  weapons: Array<{ weaponIndex: number; second: number; targetShip: number; targetSub: number }>;
+  board?: number;
+}

@@ -5,9 +5,14 @@
 //! events come out, and the same crate serves a TypeScript client through
 //! `ffi` compiled to wasm32 and a future native Rust client as an rlib.
 
+pub mod ai;
+pub mod data;
 pub mod ffi;
 pub mod flight;
 pub mod math;
+pub mod rng;
+pub mod state;
+pub mod turn;
 
 pub use flight::{can_reach, fly_turn, Body, Flight, Flown, Mode};
 pub use math::{Quat, V3};

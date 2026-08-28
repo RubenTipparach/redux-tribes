@@ -14,6 +14,7 @@ import {
   type Body, type Flight, type FlyOrder, type Flown, type Quat, type Vec3,
   isCommitted, PROBE_STEPS, RESOLUTION_STEPS,
 } from './types.js';
+import { Match, type MatchExports } from './match.js';
 
 interface SimExports {
   readonly memory: WebAssembly.Memory;
@@ -58,6 +59,15 @@ export class Sim {
       ? await WebAssembly.instantiateStreaming(fetch(source), {})
       : await WebAssembly.instantiate(source, {});
     return new Sim(wasm.instance.exports as unknown as SimExports);
+  }
+
+  /**
+   * The match API over the SAME instance, so both share one scratch buffer and
+   * one copy of the state. Loading the module twice would give two cores that
+   * agree only by luck, which is the exact failure lockstep is built to catch.
+   */
+  match(): Match {
+    return new Match(this.#ex as unknown as MatchExports);
   }
 
   #writeInputs(body: Body, flight: Flight, order: FlyOrder): void {

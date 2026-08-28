@@ -198,7 +198,26 @@ pub fn fly_turn(
     steps: u32,
 ) -> Flown {
     let steps = steps.max(1);
-    let dt = TURN_SECONDS / steps as f32;
+    fly_span(body, target, mode, fl, face, steps, TURN_SECONDS / steps as f32)
+}
+
+/// Fly `steps` slices of `dt` seconds each, from wherever the body is now.
+///
+/// `fly_turn` is this with the slices spread evenly across a whole turn.
+/// Resolution needs the other case: after a collision a ship re-flies only the
+/// REMAINDER of its turn, and those slices are still one tick each. Deriving
+/// dt from the step count there would silently stretch the last slices to fill
+/// ten seconds again, so the two callers differ in dt and in nothing else.
+pub fn fly_span(
+    body: Body,
+    target: Option<V3>,
+    mode: Mode,
+    fl: &Flight,
+    face: Option<V3>,
+    steps: u32,
+    dt: f32,
+) -> Flown {
+    let steps = steps.max(1);
     let mut b = body;
 
     // A slide with no commanded heading holds the one the ship already has:
