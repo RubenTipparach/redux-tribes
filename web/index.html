@@ -63,23 +63,37 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px;
   background:var(--panel2); border-top:1px solid var(--line); position:relative;
   -webkit-user-select:none; user-select:none; }
-/* The scrubber and the seconds it scrubs through, stacked and sharing a width,
-   so the eleven slots read as the timeline's own marks rather than as a second
-   strip that counts the same thing.
-   The slots FLEX rather than taking a fixed width, which is what keeps eleven
-   of them inside a phone at every size: fixed widths needed a rule per
-   breakpoint and one of them quietly lost to another, which is how 456px of
-   slots ended up in a 390px viewport. Alignment is therefore by position in a
-   shared width and not pixel exact against the thumb, whose size the UA owns
-   and does not expose; what carries the association is the number on each slot
-   and the one that lights up under the scrubber. */
-#timeline { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
-#slots { display:flex; gap:2px; }
-.slot { flex:1 1 0; min-width:0; max-width:30px; height:24px;
-  border:1px solid var(--line); border-radius:3px;
+/* The scrubber and the seconds it scrubs through, stacked and sharing a width.
+   Each slot is placed at the position the thumb takes for that second, so the
+   two line up by construction: laying them out with flex only put them in the
+   right ORDER, and on a wide window they packed together at the left while the
+   thumb ran the whole width.
+   The thumb's travel is half a thumb in from each end, so the tick for second
+   k sits at thumb/2 + (W - thumb) * k/10. That needs the thumb's width to be a
+   number we know, which is why the scrubber is drawn here rather than by the
+   UA: its default thumb size is not exposed and differs between browsers, and
+   an alignment resting on a guess is one that is wrong somewhere. */
+#timeline { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;
+  --thumb:16px; --slotw:26px;
+  /* Room for the half slot that overhangs at each end. */
+  padding:0 calc((var(--slotw) - var(--thumb)) / 2); }
+#slots { position:relative; height:24px; }
+#scrub { -webkit-appearance:none; appearance:none; width:100%; margin:0;
+  height:var(--thumb); background:transparent; }
+#scrub::-webkit-slider-runnable-track { height:4px; border-radius:2px; background:var(--line); }
+#scrub::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+  width:var(--thumb); height:var(--thumb); border-radius:50%; background:var(--cyan);
+  margin-top:calc((4px - var(--thumb)) / 2); }
+#scrub::-moz-range-track { height:4px; border-radius:2px; background:var(--line); }
+#scrub::-moz-range-thumb { width:var(--thumb); height:var(--thumb); border:0;
+  border-radius:50%; background:var(--cyan); }
+#scrub:disabled::-webkit-slider-thumb { background:var(--muted); }
+#scrub:disabled::-moz-range-thumb { background:var(--muted); }
+.slot { position:absolute; top:0; transform:translateX(-50%);
+  width:var(--slotw); height:24px; border:1px solid var(--line); border-radius:3px;
   display:flex; align-items:center; justify-content:center;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
-  color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
+  color:var(--muted); cursor:pointer; background:var(--panel); }
 .slot:hover { border-color:var(--cyan); }
 .slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
 /* Where the scrubber is standing. The preview on screen is this second, so the
@@ -88,7 +102,8 @@ footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 
 .slot.cd { opacity:.3; cursor:not-allowed; border-style:dashed; }
 .slot.cd:hover { border-color:var(--line); }
 .slot.mark::after { content:""; position:absolute; bottom:1px; left:50%;
-  transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
+  transform:translateX(-50%); width:5px; height:5px; border-radius:50%;
+  background:var(--orange); }
 #scrub { width:100%; margin:0; }
 input[type=range] { width:100%; accent-color:var(--cyan); }
 
@@ -245,7 +260,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #toolbar, #pAlt { grid-column:1; }
   #pAlt { margin-bottom:56px; }
   button { padding:10px 13px; }
-  .slot { height:26px; }
+  #timeline { --slotw:22px; }
+  #slots, .slot { height:26px; }
   .shipRow { padding:9px 8px; margin-bottom:7px; }
   .wrow { padding:8px 6px; }
   .modes { gap:6px; }
@@ -264,12 +280,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
   #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
   footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
-  /* 46px of footer holds a 16px scrubber over a 22px tick row with a pixel
-     between, so the slots lose height here. Their width looks after itself. */
-  #timeline { flex:1 1 auto; }
-  .slot { height:22px; }
-  #scrub { height:16px; }
-  input[type=range] { height:16px; }
+  /* 46px of footer holds the scrubber over a 22px tick row. Narrower slots
+     here too: the timeline shares its row with the speed button and the clock,
+     so eleven of them have about 215px to sit in without touching. */
+  #timeline { flex:1 1 auto; --slotw:18px; }
+  #slots, .slot { height:22px; }
   #left, #right { left:54px; right:auto; top:40px; bottom:0;
     width:min(330px, 54vw); height:auto; border-top:0; border-right:1px solid var(--line);
     box-shadow:14px 0 34px #000a; transform:translateX(-110%); }

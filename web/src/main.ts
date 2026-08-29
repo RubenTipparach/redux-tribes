@@ -411,6 +411,10 @@ function renderSlots(): void {
     const div = document.createElement('div');
     div.className = 'slot';
     div.textContent = String(sec);
+    // Where the scrubber's thumb sits for this second. Its centre travels from
+    // half a thumb in to half a thumb from the far end, so the slot is placed
+    // on that same line rather than merely in the same order.
+    div.style.left = `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${sec} / ${TURN_SECONDS})`;
     const queued = order?.weapons.filter(w => w.second === sec) ?? [];
     if (queued.length) div.classList.add('q', 'mark');
     if (sec === now) div.classList.add('now');
