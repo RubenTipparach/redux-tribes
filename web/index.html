@@ -61,21 +61,67 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 #cv.rotating { cursor:none; }
 
 footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px;
-  background:var(--panel2); border-top:1px solid var(--line);
+  background:var(--panel2); border-top:1px solid var(--line); position:relative;
   -webkit-user-select:none; user-select:none; }
-#slots { display:flex; gap:3px; }
-.slot { width:30px; height:30px; border:1px solid var(--line); border-radius:3px;
+/* The scrubber and the seconds it scrubs through, stacked and sharing a width,
+   so the eleven slots read as the timeline's own marks rather than as a second
+   strip that counts the same thing.
+   The slots FLEX rather than taking a fixed width, which is what keeps eleven
+   of them inside a phone at every size: fixed widths needed a rule per
+   breakpoint and one of them quietly lost to another, which is how 456px of
+   slots ended up in a 390px viewport. Alignment is therefore by position in a
+   shared width and not pixel exact against the thumb, whose size the UA owns
+   and does not expose; what carries the association is the number on each slot
+   and the one that lights up under the scrubber. */
+#timeline { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+#slots { display:flex; gap:2px; }
+.slot { flex:1 1 0; min-width:0; max-width:30px; height:24px;
+  border:1px solid var(--line); border-radius:3px;
   display:flex; align-items:center; justify-content:center;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
   color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
 .slot:hover { border-color:var(--cyan); }
 .slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+/* Where the scrubber is standing. The preview on screen is this second, so the
+   slot that names it is lit whether or not anything is queued in it. */
+.slot.now { color:var(--ink); border-color:var(--ink); background:#16202e; }
 .slot.cd { opacity:.3; cursor:not-allowed; border-style:dashed; }
 .slot.cd:hover { border-color:var(--line); }
-.slot.mark::after { content:""; position:absolute; bottom:2px; left:50%;
+.slot.mark::after { content:""; position:absolute; bottom:1px; left:50%;
   transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
-#scrub { flex:1; }
+#scrub { width:100%; margin:0; }
 input[type=range] { width:100%; accent-color:var(--cyan); }
+
+/* What can be done in one second of the turn. Above the footer rather than
+   inside it, so eleven of these do not have to fit side by side. */
+#slotMenu { position:absolute; bottom:calc(100% + 6px); left:50%;
+  transform:translateX(-50%); width:min(340px, calc(100vw - 20px));
+  max-height:min(46vh, 320px); overflow-y:auto; z-index:12; padding:7px;
+  background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
+  box-shadow:0 -12px 34px #000c; }
+#slotMenu.hidden, #slotNote.hidden { display:none; }
+.smhead { display:flex; align-items:center; justify-content:space-between;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.1em; color:var(--cyan); padding:0 2px 5px; }
+.smx { width:24px; height:24px; padding:0; font-size:15px; line-height:1;
+  border-radius:4px; }
+.srow { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:7px 8px; border:1px solid var(--line); border-radius:4px;
+  margin-bottom:4px; cursor:pointer; font-size:11px; color:var(--muted); }
+.srow:hover { border-color:var(--cyan); }
+.srow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.06em; color:var(--ink); }
+/* Queued here already, so this row takes the shot back. */
+.srow.on { border-color:var(--orange); background:#2a1607; }
+.srow.on .k { color:var(--orange); }
+/* Cannot fire in this second, and says which rule stopped it. */
+.srow.off { opacity:.4; cursor:not-allowed; }
+.srow.off:hover { border-color:var(--line); }
+#slotNote { position:absolute; bottom:calc(100% + 6px); left:50%;
+  transform:translateX(-50%); z-index:11; padding:5px 11px; border-radius:6px;
+  background:#2a1607; border:1px solid var(--orange); color:var(--orange);
+  font-size:11px; white-space:nowrap; }
+.slot.open { border-color:var(--cyan); box-shadow:0 0 0 1px var(--cyan); }
 
 #log { font-size:12px; line-height:1.5; }
 #log div { padding:1px 0; border-bottom:1px solid #131c29; color:var(--muted); }
@@ -125,7 +171,6 @@ select:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 @media(prefers-reduced-motion:reduce){ .rbar i { transition:none; } }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:0 4px; font-size:11px; }
-#lPlay { margin-left:10px; }
 #turns { margin-bottom:8px; }
 #turns button { padding:4px 8px; font-size:11px; }
 
@@ -171,10 +216,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      the sheet, which is why queueing a shot looked impossible on a phone. */
   footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px;
     gap:8px 10px; min-width:0; position:relative; z-index:9; }
-  #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
-  #slots::-webkit-scrollbar { display:none; }
-  #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
-  #scrub { min-width:130px; }
+  /* The timeline takes a row of its own, so eleven seconds fit across a phone
+     without the sideways scroll the old strip needed. That scroll was the
+     reason the strip was cramped: a control you have to scroll to reach is one
+     you cannot tap by position. */
+  #timeline { flex:1 1 100%; }
 
   #left, #right { position:fixed; left:0; right:0; top:auto;
     bottom:calc(var(--tabh) + var(--safe));
@@ -199,7 +245,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #toolbar, #pAlt { grid-column:1; }
   #pAlt { margin-bottom:56px; }
   button { padding:10px 13px; }
-  .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
+  .slot { height:26px; }
   .shipRow { padding:9px 8px; margin-bottom:7px; }
   .wrow { padding:8px 6px; }
   .modes { gap:6px; }
@@ -218,9 +264,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
   #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
   footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
-  #lSlots, #lPlay { display:none; }
-  .slot { width:32px; height:32px; }
-  input[type=range] { height:30px; }
+  /* 46px of footer holds a 16px scrubber over a 22px tick row with a pixel
+     between, so the slots lose height here. Their width looks after itself. */
+  #timeline { flex:1 1 auto; }
+  .slot { height:22px; }
+  #scrub { height:16px; }
+  input[type=range] { height:16px; }
   #left, #right { left:54px; right:auto; top:40px; bottom:0;
     width:min(330px, 54vw); height:auto; border-top:0; border-right:1px solid var(--line);
     box-shadow:14px 0 34px #000a; transform:translateX(-110%); }
@@ -417,11 +466,20 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   </div>
 
   <footer>
-    <span class="stat" id="lSlots">fire slot</span>
-    <div id="slots"></div>
-    <span class="stat" id="lPlay">playback</span>
+    <!-- Anchored to the footer so it sits over the canvas and never under a
+         sheet: arming happened in one place and firing in another, and a sheet
+         between them is how queueing a shot became impossible on a phone. -->
+    <div id="slotMenu" class="hidden" role="dialog" aria-label="Fire slot"></div>
+    <div id="slotNote" class="hidden"></div>
     <button id="bSpeed">1x</button>
-    <input type="range" id="scrub" min="0" max="600" value="0">
+    <!-- One control, not two. The slots ARE the timeline's seconds, so they sit
+         under the scrubber at the positions they name rather than in a separate
+         strip that happens to count the same thing. -->
+    <div id="timeline">
+      <input type="range" id="scrub" min="0" max="600" value="0"
+             aria-label="Scrub the turn">
+      <div id="slots" aria-label="Fire slots, one per second of the turn"></div>
+    </div>
     <span class="stat"><b id="hSec">0.0</b>s</span>
   </footer>
 </div>

@@ -16,7 +16,7 @@ import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
   CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
-  TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
+  TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -59,8 +59,15 @@ let selected = -1;
  * used to do in three separate places. Now it is chosen, and chosen once.
  */
 let target = -1;
-/** Which weapon is armed for the next fire slot click, or -1. */
-let armedWeapon = -1;
+/**
+ * Which second's fire slot is open, or null.
+ *
+ * Arming a weapon and then hunting for a slot is gone. It was a mode: the
+ * console looked identical whether or not one was armed, so a slot tap did
+ * nothing at all when nothing was, which is most of the time. A slot now opens
+ * the list of mounts that could fire in it, and says why any of them cannot.
+ */
+let openSlot: number | null = null;
 /** null while planning; a tick while a resolved turn is being played back. */
 let playTick: number | null = null;
 let playing = false;
@@ -96,7 +103,7 @@ function start(): void {
   ships = match.ships();
   selected = ships.find(mine)?.id ?? -1;
   target = -1;
-  armedWeapon = -1;
+  openSlot = null;
   playTick = null;
   playing = false;
   reviewTurn = null;
@@ -140,6 +147,12 @@ function flightOf(id: number): Flight {
 
 const shipName = (s: ShipState): string =>
   `${mine(s) ? 'P' : 'E'}${s.id + 1} ${CLASS_NAMES[s.cls] ?? '?'}`;
+
+/** The same, by id, for anything holding an order rather than a ship. */
+const nameOf = (id: number): string => {
+  const s = ships.find(x => x.id === id);
+  return s ? shipName(s) : `ship ${id + 1}`;
+};
 
 /** Planning is only possible on a live player ship, on the live turn. */
 const canPlan = (): boolean => {
@@ -265,7 +278,7 @@ function renderWeapons(): void {
     const nextFree = match.nextFreeSecond(s.id, i, last);
     const room = nextFree <= TURN_SECONDS;
     const div = document.createElement('div');
-    div.className = `wrow${armedWeapon === i ? ' armed' : ''}${spent || !room ? ' spent' : ''}`;
+    div.className = `wrow${spent || !room ? ' spent' : ''}`;
     const when = shots.length
       ? ` &middot; t+${shots.map(w => w.second).join(', ')}s`
       : spent ? ` &middot; ready t+${nextFree}s`
@@ -275,7 +288,10 @@ function renderWeapons(): void {
       + `<span>${(+m.damage.toFixed(1))} dmg &middot; ${m.range.toFixed(0)} u `
       + `&middot; ${m.cooldown.toFixed(0)}s cd${when}</span>`;
     if (!spent && room && canPlan()) {
-      div.onclick = () => { armedWeapon = armedWeapon === i ? -1 : i; refreshAll(); };
+      // Queues where the scrubber is standing (DESIGN 2.2), which is the
+      // second the preview on screen is showing. No arming step, so the row
+      // does the thing it names rather than putting the console in a mode.
+      div.onclick = () => { queueShot(scrubbedSecond(), i); };
     }
     host.appendChild(div);
   }
@@ -284,8 +300,8 @@ function renderWeapons(): void {
   const note = document.createElement('div');
   note.className = 'hint';
   note.textContent = !aimed ? 'No hostiles left.'
-    : armedWeapon >= 0 ? `Armed. Now tap a fire slot below to shoot ${shipName(aimed)}.`
-    : `Firing at ${shipName(aimed)}. Tap a hostile to switch.`;
+    : `Firing at ${shipName(aimed)} at t+${scrubbedSecond()}s. `
+      + 'Tap a hostile to switch, or a fire slot to pick the second.';
   host.appendChild(note);
 }
 
@@ -310,48 +326,164 @@ function slotOpen(
   return after === undefined || after >= match.nextFreeSecond(ship, weapon, sec);
 }
 
+/** The second the scrubber is standing on, which is what the preview shows. */
+/**
+ * Move the scrubber, the preview and the range input together.
+ *
+ * One function, because they are one position: setting the preview without the
+ * input leaves the thumb pointing at a second the console is not showing.
+ */
+function scrubTo(tick: number): void {
+  const t = Math.max(0, Math.min(TICKS_PER_TURN, tick));
+  if (playTick !== null) {
+    playing = false;
+    playTick = t;
+    showTick(t);
+    return;
+  }
+  if (!canPlan()) return;
+  previewTick = t;
+  $<HTMLInputElement>('scrub').value = String(t);
+  showPreview();
+}
+
+function scrubbedSecond(): number {
+  const t = playTick ?? previewTick;
+  return Math.max(0, Math.min(TURN_SECONDS, Math.round(t / TICKS_PER_SECOND)));
+}
+
+/**
+ * Put a shot in a slot, or say why it cannot go there.
+ *
+ * The one place a shot is queued, reached from the mount list and from the
+ * slot's own menu. Two ways in, one implementation: a second copy of this is a
+ * second set of rules about when a mount may fire.
+ */
+function queueShot(sec: number, weaponIndex: number): void {
+  if (!canPlan() || selected < 0) return;
+  const t = targetShip();
+  if (!t) { flash('Nothing left to shoot at.'); return; }
+  const o = match.order(selected);
+  if (!slotOpen(selected, weaponIndex, sec, o.weapons)) {
+    flash(`That mount is still cooling at t+${sec}s.`);
+    return;
+  }
+  // A mount may fire more than once in a turn, so a second shot is ADDED
+  // rather than replacing the first. It used to replace it, which is what
+  // "weapons queuing is not working" looked like.
+  o.weapons.push({ weaponIndex, second: sec, targetShip: t.id, targetSub: -1 });
+  o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
+  refreshAll();
+}
+
+/**
+ * Take a shot back out of a slot.
+ *
+ * Always allowed. Whether a mount COULD fire at a second is a question about
+ * adding a shot; removing one it already has can never be refused, or a plan
+ * could be walked into a state it cannot be walked out of.
+ */
+function unqueueShot(sec: number, weaponIndex: number): void {
+  if (!canPlan() || selected < 0) return;
+  const o = match.order(selected);
+  const at = o.weapons.findIndex(w => w.second === sec && w.weaponIndex === weaponIndex);
+  if (at < 0) return;
+  o.weapons.splice(at, 1);
+  refreshAll();
+}
+
+/** A one line note under the slots, for a tap that could not do what it meant. */
+function flash(msg: string): void {
+  const el = $('slotNote');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => el.classList.add('hidden'), 2600);
+}
+let flashTimer = 0;
+
 function renderSlots(): void {
   const host = $('slots');
   host.innerHTML = '';
   const order = selected >= 0 ? match.order(selected) : null;
+  const now = scrubbedSecond();
   for (let sec = 0; sec <= TURN_SECONDS; sec++) {
     const div = document.createElement('div');
     div.className = 'slot';
     div.textContent = String(sec);
     const queued = order?.weapons.filter(w => w.second === sec) ?? [];
     if (queued.length) div.classList.add('q', 'mark');
-    // With a weapon armed, a slot its cooldown forbids is shown as blocked
-    // rather than silently ignoring the tap.
-    const blocked = armedWeapon >= 0 && selected >= 0
-      && !slotOpen(selected, armedWeapon, sec, order?.weapons ?? []);
-    if (blocked) div.classList.add('cd');
+    if (sec === now) div.classList.add('now');
+    if (sec === openSlot) div.classList.add('open');
     div.title = queued.length
       ? queued.map(w => `weapon ${w.weaponIndex} at ship ${w.targetShip + 1}`).join(', ')
-      : blocked ? `second ${sec}: still cooling` : `second ${sec}`;
+      : `second ${sec}`;
+    // A slot is a point on the timeline first, so a tap always moves the
+    // preview there. Then it offers what can be done at that second, rather
+    // than depending on a mode set somewhere else on screen.
     div.onclick = () => {
-      if (!canPlan()) return;
-      const o = match.order(selected);
-      if (armedWeapon < 0) {
-        // No weapon armed: a click clears whatever is in the slot, which is
-        // the only way to take a shot back.
-        o.weapons = o.weapons.filter(w => w.second !== sec);
-        refreshAll();
-        return;
-      }
-      const t = targetShip();
-      if (!t) return;
-      // A mount may fire more than once in a turn now, so a second shot is
-      // ADDED rather than replacing the first. It used to replace it, which
-      // is what "weapons queuing is not working" looked like: queue a second
-      // shot and the first silently vanished.
-      if (!slotOpen(selected, armedWeapon, sec, o.weapons)) return;
-      o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: t.id, targetSub: -1 });
-      o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
-      armedWeapon = -1;
+      scrubTo(sec * TICKS_PER_SECOND);
+      openSlot = openSlot === sec ? null : sec;
       refreshAll();
     };
     host.appendChild(div);
   }
+  renderSlotMenu();
+}
+
+/**
+ * What can be done in the open slot: what is queued there, and what could be.
+ *
+ * Queued shots come first and are always removable. Below them every mount,
+ * with the reason it cannot fire at this second where there is one, because a
+ * disabled row that says why is the difference between a rule and a dead tap.
+ */
+function renderSlotMenu(): void {
+  const menu = $('slotMenu');
+  const s = selectedShip();
+  if (openSlot === null || !s || !canPlan()) {
+    menu.classList.add('hidden');
+    menu.innerHTML = '';
+    return;
+  }
+  const sec = openSlot;
+  const o = match.order(s.id);
+  const info = match.classInfo(s.cls);
+  const aimed = targetShip();
+  const rows: string[] = [
+    `<div class="smhead">t+${sec}s`
+    + `<button class="smx" id="smClose" aria-label="Close">&times;</button></div>`,
+  ];
+  const queued = o.weapons.filter(w => w.second === sec);
+  for (const w of queued) {
+    const m = match.mount(s.cls, w.weaponIndex);
+    rows.push(
+      `<div class="srow on" data-drop="${w.weaponIndex}">`
+      + `<span class="k">${WEAPON_NAMES[m?.key ?? 0] ?? '?'}</span>`
+      + `<span>at ${nameOf(w.targetShip)} &middot; remove</span></div>`);
+  }
+  for (let i = 0; i < info.mountCount; i++) {
+    const m = match.mount(s.cls, i);
+    if (!m) continue;
+    const why = !aimed ? 'no target'
+      : !slotOpen(s.id, i, sec, o.weapons) ? 'cooling'
+      : '';
+    rows.push(
+      `<div class="srow${why ? ' off' : ''}"${why ? '' : ` data-add="${i}"`}>`
+      + `<span class="k">${WEAPON_NAMES[m.key] ?? '?'}`
+      + `${m.batch > 1 ? ` x${m.batch}` : ''}</span>`
+      + `<span>${why || `queue &middot; ${(+m.damage.toFixed(1))} dmg`}</span></div>`);
+  }
+  if (!info.mountCount) rows.push('<div class="hint">no mounts</div>');
+  menu.innerHTML = rows.join('');
+  menu.classList.remove('hidden');
+  $('smClose').onclick = () => { openSlot = null; refreshAll(); };
+  menu.querySelectorAll<HTMLElement>('[data-add]').forEach(el => {
+    el.onclick = () => queueShot(sec, Number(el.dataset.add));
+  });
+  menu.querySelectorAll<HTMLElement>('[data-drop]').forEach(el => {
+    el.onclick = () => unqueueShot(sec, Number(el.dataset.drop));
+  });
 }
 
 function renderBoard(): void {
@@ -484,8 +616,9 @@ function renderHelp(): void {
     + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
     + '<kbd>F</kbd> face the target.<br><br>'
     + '<b>To shoot:</b> tap a hostile to make it the target, tap a weapon to arm it, '
-    + 'then tap a <b>fire slot</b> (0 to 9, the second of the turn to fire at). '
-    + 'Tap a slot with nothing armed to take the shot back.<br><br>'
+    + 'then tap a <b>fire slot</b> under the timeline to pick the second, and '
+    + 'choose a mount from the list it opens. A shot already queued there is in '
+    + 'the same list, and tapping it takes the shot back.<br><br>'
     + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
     + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
     + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
@@ -631,7 +764,10 @@ function showPreview(): void {
       : match.preview(s.id, { mode: Mode.Drift, weapons: [] }, 48),
   }));
   view.setPaths(paths);
-  $('lPlay').textContent = `${((previewTick / TICKS_PER_TURN) * TURN_SECONDS).toFixed(1)}s`;
+  // One readout for both states. It used to be two, and the planning one was
+  // an element the footer no longer has, so every preview refresh threw and
+  // took the click that asked for it with it.
+  $('hSec').textContent = ((previewTick / TICKS_PER_TURN) * TURN_SECONDS).toFixed(1);
 }
 
 let envelopeWanted = false;
@@ -681,7 +817,7 @@ function envelopeProgress(shipId: number): string {
 
 function select(id: number): void {
   selected = id;
-  armedWeapon = -1;
+  openSlot = null;
   view.setSelection(id);
   refreshAll();
 }

@@ -8,9 +8,9 @@
  * trapped the app in playback with no way back to planning, and a bottom sheet
  * that covered the fire slots so a queued shot could not be placed on a phone.
  *
- * So this drives the actual console: taps a hostile to target it, arms each
- * mount, drops it in a fire slot, ends the turn, watches the playback out, and
- * repeats until the header says VICTORY. Nothing here reaches into app state to
+ * So this drives the actual console: taps a hostile to target it, opens a fire
+ * slot, queues a mount from the list it offers, ends the turn, watches the
+ * playback out, and repeats until the header says VICTORY. Nothing here reaches into app state to
  * make progress; ftDebug is read only and used only to observe.
  *
  *   node web/tests/playthrough.mjs [url] [--mobile]
@@ -120,17 +120,28 @@ async function playMatch() {
       await page.waitForTimeout(150);
     }
 
-    const weps = page.locator('#weps .wrow:not(.spent)');
-    const n = await weps.count();
+    // A fire slot opens what can happen in that second. There is no arming
+    // step any more: pick the second, then pick the mount out of its list.
+    const n = await page.locator('#weps .wrow:not(.spent)').count();
     for (let w = 0; w < n; w++) {
-      const wep = page.locator('#weps .wrow:not(.spent)').nth(w);
-      if (!(await wep.count())) break;
-      await (MOBILE ? wep.tap() : wep.click());
-      await page.waitForTimeout(120);
       // Spread the shots across the ten seconds of the turn.
       const slot = page.locator('#slots .slot').nth(Math.min(9, 1 + w * 3));
       await (MOBILE ? slot.tap() : slot.click());
-      await page.waitForTimeout(120);
+      await page.waitForTimeout(140);
+      // Mount w if it can fire in this second, else whatever can. Taking the
+      // first row every time fires mount 0 over and over and leaves the rest
+      // of the battery cold, which looks like queueing and does not shoot.
+      const mine = page.locator(`#slotMenu .srow[data-add="${w}"]`);
+      const add = (await mine.count()) ? mine : page.locator('#slotMenu .srow[data-add]').first();
+      if (await add.count()) {
+        await (MOBILE ? add.tap() : add.click());
+        await page.waitForTimeout(140);
+      }
+      const close = page.locator('#smClose');
+      if (await close.count()) {
+        await (MOBILE ? close.tap() : close.click());
+        await page.waitForTimeout(100);
+      }
     }
     const order = await page.evaluate(() => window.ftDebug.order());
     queuedThisTurn += order?.weapons?.length ?? 0;

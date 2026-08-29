@@ -68,6 +68,8 @@ export interface Flown {
 /** Turn geometry, mirroring `sim_core::flight`. */
 export const TICKS_PER_TURN = 600;
 export const TURN_SECONDS = 10;
+/** Mirrors `flight::TICKS_PER_SECOND`. A fire slot is one of these seconds. */
+export const TICKS_PER_SECOND = TICKS_PER_TURN / TURN_SECONDS;
 /** Resolution flies one slice per tick; a probe may ask for fewer. */
 export const RESOLUTION_STEPS = TICKS_PER_TURN;
 export const PROBE_STEPS = 60;
