@@ -167,6 +167,12 @@ export class View {
   #pathGroup = new THREE.Group();
   /** Who is aiming at whom, drawn hull to hull. */
   #aimGroup = new THREE.Group();
+  /** The yaw ring around the arrival estimate, and the knob you drag on it. */
+  #yawRing: THREE.Line;
+  #yawKnob: THREE.Mesh;
+  /** Where the ring is centred and how wide, so a pointer can be tested
+   * against it without guessing at the geometry that drew it. */
+  #yawAt: { centre: Vec3; radius: number } | null = null;
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -225,6 +231,27 @@ export class View {
     );
     this.#planPip.visible = false;
     this.#scene.add(this.#planPip);
+
+    // Yaw, as a ring around where the ship ends up. The heading is a direction
+    // in the working plane, so the control is a direction in the working plane:
+    // a dial reads as an angle, where two nudge buttons read as a rate.
+    const ringPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      ringPts.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
+    }
+    this.#yawRing = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(ringPts),
+      new THREE.LineBasicMaterial({ color: CYAN, transparent: true, opacity: 0.4 }),
+    );
+    this.#yawRing.visible = false;
+    this.#scene.add(this.#yawRing);
+    this.#yawKnob = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 12),
+      new THREE.MeshBasicMaterial({ color: CYAN }),
+    );
+    this.#yawKnob.visible = false;
+    this.#scene.add(this.#yawKnob);
 
     this.#headingArrow = new THREE.Line(
       new THREE.BufferGeometry(),
@@ -598,6 +625,66 @@ export class View {
     } else {
       this.#headingArrow.visible = false;
     }
+
+    // The ring sits on the arrival estimate, because that is the hull whose
+    // heading is being set: the ship on screen now is where it starts from.
+    const spin = order.mode === Mode.TurnSlide;
+    if (spin) {
+      const centre = { x: end.x, y: end.y, z: end.z };
+      // Wide enough to clear the selection ring around the hull, so the two
+      // circles read as two controls rather than one thick one.
+      const radius = Math.max(14, this.#dist * 0.105);
+      this.#yawAt = { centre, radius };
+      this.#yawRing.position.set(centre.x, centre.y, centre.z);
+      this.#yawRing.scale.setScalar(radius);
+      const dir = face ?? { x: 0, y: 0, z: 1 };
+      const flat = Math.hypot(dir.x, dir.z) || 1;
+      this.#yawKnob.position.set(
+        centre.x + (dir.x / flat) * radius, centre.y, centre.z + (dir.z / flat) * radius);
+      this.#yawKnob.scale.setScalar(Math.max(1.1, radius * 0.10));
+    } else {
+      this.#yawAt = null;
+    }
+    this.#yawRing.visible = spin;
+    this.#yawKnob.visible = spin;
+  }
+
+  /** Is this screen point on the yaw knob? Generous, because it is a target
+   * for a thumb as well as a cursor. */
+  onYawKnob(clientX: number, clientY: number): boolean {
+    if (!this.#yawKnob.visible) return false;
+    const rect = this.#canvas.getBoundingClientRect();
+    const p = this.#yawKnob.position.clone().project(this.#camera);
+    const sx = rect.left + ((p.x + 1) / 2) * rect.width;
+    const sy = rect.top + ((1 - p.y) / 2) * rect.height;
+    return Math.hypot(clientX - sx, clientY - sy) <= 26;
+  }
+
+  /**
+   * The heading a pointer over the ring is asking for.
+   *
+   * Read off the ring's own plane rather than the working plane: the ring sits
+   * at the arrival estimate, which is rarely the height a click projects to,
+   * and reading the wrong plane puts the knob under the hand only by accident.
+   */
+  yawFromPointer(clientX: number, clientY: number): Vec3 | null {
+    const at = this.#yawAt;
+    if (!at) return null;
+    const rect = this.#canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.#camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -at.centre.y);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hit)) return null;
+    const dx = hit.x - at.centre.x;
+    const dz = hit.z - at.centre.z;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-4) return null;
+    return { x: dx / l, y: 0, z: dz / l };
   }
 
   /**

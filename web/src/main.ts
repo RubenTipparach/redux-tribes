@@ -86,6 +86,36 @@ const targets = new Map<number, number>();
  */
 const standingFace = new Map<number, Vec3>();
 
+/**
+ * Put a yaw onto the pitch this ship already holds.
+ *
+ * A heading is one direction, so yaw and pitch live in the same vector: the
+ * ring sets where the nose points on the compass and must not flatten whatever
+ * climb was asked for while doing it.
+ */
+function keepPitch(id: number, flat: Vec3): Vec3 {
+  const cur = standingFace.get(id) ?? match.order(id).face;
+  const rise = cur ? cur.y : 0;
+  const l = Math.hypot(flat.x, flat.z) || 1;
+  const c = Math.sqrt(Math.max(0, 1 - rise * rise));
+  return { x: (flat.x / l) * c, y: rise, z: (flat.z / l) * c };
+}
+
+/** The climb this ship is holding, in degrees, positive up. */
+function pitchOf(id: number): number {
+  const f = standingFace.get(id) ?? match.order(id).face;
+  return f ? Math.round((Math.asin(Math.max(-1, Math.min(1, f.y))) * 180) / Math.PI) : 0;
+}
+
+/** Set the climb, keeping the compass heading it is already on. */
+function setPitch(id: number, deg: number): void {
+  const cur = standingFace.get(id) ?? match.order(id).face ?? match.forward(id);
+  const a = (Math.max(-80, Math.min(80, deg)) * Math.PI) / 180;
+  const l = Math.hypot(cur.x, cur.z) || 1;
+  const c = Math.cos(a);
+  faceToward(id, { x: (cur.x / l) * c, y: Math.sin(a), z: (cur.z / l) * c });
+}
+
 /** Command a heading for this ship, which slide mode will hold and keep. */
 function faceToward(id: number, dir: Vec3): void {
   const l = Math.hypot(dir.x, dir.y, dir.z) || 1;
@@ -725,6 +755,7 @@ function refreshAll(): void {
   renderSlots();
   renderBoard();
   renderTurnStrip();
+  renderAttitude();
   renderLog();
   renderHeader();
   draw();
@@ -936,8 +967,9 @@ interface Drag {
   x: number;
   y: number;
   moved: boolean;
-  /** 'plan' issues a move order, 'heading' swings the nose, else camera. */
-  kind: 'plan' | 'heading' | 'pan' | 'orbit';
+  /** 'plan' issues a move order, 'yaw' drags the ring knob, 'heading' swings
+   * the nose from anywhere on the plane, else camera. */
+  kind: 'plan' | 'yaw' | 'heading' | 'pan' | 'orbit';
 }
 let drag: Drag | null = null;
 const pointers = new Map<number, { x: number; y: number }>();
@@ -971,6 +1003,14 @@ canvas.addEventListener('pointerdown', ev => {
   // near their own ships.
   if (ev.pointerType === 'mouse' && ev.button === 2) {
     drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'orbit' };
+    return;
+  }
+
+  // The yaw knob is a control sitting in the scene, so it is tested before
+  // anything that treats a press as a click on the world.
+  if (canPlan() && view.onYawKnob(ev.clientX, ev.clientY)) {
+    canvas.classList.add('rotating');
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'yaw' };
     return;
   }
 
@@ -1016,6 +1056,12 @@ canvas.addEventListener('pointermove', ev => {
   drag.y = ev.clientY;
   if (Math.abs(dx) + Math.abs(dy) > 1) drag.moved = true;
 
+  if (drag.kind === 'yaw') {
+    const s = selectedShip();
+    const dir = view.yawFromPointer(ev.clientX, ev.clientY);
+    if (s && dir) { faceToward(s.id, keepPitch(s.id, dir)); refreshAll(); }
+    return;
+  }
   if (drag.kind === 'pan') { view.pan(dx, dy); return; }
   if (drag.kind === 'orbit') { view.orbit(dx, dy); return; }
 
@@ -1057,7 +1103,7 @@ function endPointer(ev: PointerEvent): void {
   if (pointers.size < 2) pinchDist = 0;
   if (drag && drag.id === ev.pointerId) {
     canvas.classList.remove('rotating');
-    const wasPlan = drag.kind === 'plan' || drag.kind === 'heading';
+    const wasPlan = drag.kind === 'plan' || drag.kind === 'heading' || drag.kind === 'yaw';
     const kind = drag.kind;
     drag = null;
     if (wasPlan) refreshAll();
@@ -1249,6 +1295,28 @@ $('cMode').onclick = () => {
     : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
+// Attitude flyout: pitch is live, roll is not, and the panel says which.
+$('atTab').onclick = () => { $('attitude').classList.toggle('shut'); refreshAll(); };
+$<HTMLInputElement>('atPitch').oninput = () => {
+  const s = selectedShip();
+  if (!s || !canPlan()) return;
+  setPitch(s.id, Number($<HTMLInputElement>('atPitch').value));
+  refreshAll();
+};
+
+/** Show the climb this ship is holding, so the slider reads the ship rather
+ * than the ship reading the slider. */
+function renderAttitude(): void {
+  const s = selectedShip();
+  const on = !!s && canPlan();
+  const deg = s ? pitchOf(s.id) : 0;
+  $<HTMLInputElement>('atPitch').disabled = !on;
+  if (document.activeElement !== $('atPitch')) {
+    $<HTMLInputElement>('atPitch').value = String(deg);
+  }
+  $('atPitchV').textContent = `${deg > 0 ? '+' : ''}${deg}`;
+}
+
 holdRepeat($('pUp'), 1);
 holdRepeat($('pDown'), -1);
 $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
@@ -1368,6 +1436,10 @@ Object.defineProperty(window, 'ftDebug', {
     /** Where the selected hull's nose actually points, for checking that a
      * commanded heading is being turned INTO over several turns. */
     forward: () => (selected < 0 ? null : match.forward(selected)),
+    /** Whether a screen point lands on the yaw knob. Observation only, and the
+     * same test the pointer router runs, so a harness can find the control
+     * without being told where it was drawn. */
+    onYawKnob: (x: number, y: number) => view.onYawKnob(x, y),
     playing: () => playTick,
     side: () => launch.side,
     kind: () => launch.kind,
