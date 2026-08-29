@@ -307,11 +307,17 @@ Rules that came out of actually measuring this repo:
 - **Numbers in the commit message.** "Faster" is not a result; 16 ms to 0.4 ms
   is. If it was not measured, do not claim it.
 
-Current figures, worth not regressing: wasm 118667 bytes as CI builds and ships
-it (45224 gzipped), a turn resolved in 452 microseconds, envelope 96 shell cells
+Current figures, worth not regressing: wasm 132669 bytes as CI builds and ships
+it (50116 gzipped), a turn resolved in 452 microseconds, envelope 96 shell cells
 at 7.9 units, 61 fps while planning. Quote the shipped size rather than a local
-one: the same source on rustc 1.94.1 here comes out 120249, and a figure nobody
+one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
+
+Attribute growth to the change that caused it, not to the branch it landed on.
+Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
+either side of the commit. Reading it off the shipped figure instead would have
+charged it 14002, which is gravity, the reach chart and the scenario table as
+well.
 
 ## Sides are a match fact, not a point of view
 
