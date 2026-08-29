@@ -79,10 +79,48 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await tap('#bPractice');
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
+  if (attempt === 1) await checkNothingIsBuried();
 
   outcome = await playMatch();
   final = await state();
   if (final.phase === 'VICTORY') break;
+}
+
+/**
+ * Nothing a player needs may sit UNDER a sheet.
+ *
+ * This defect has landed twice and looks identical both times: a control is
+ * drawn, is not disabled, and swallows every touch because a sheet is over it.
+ * The fire slots went first, then the heading dials. So the class is checked
+ * rather than the instances: with a sheet open, the centre of every on canvas
+ * control must hit that control and not something else.
+ *
+ * elementFromPoint is the browser's own answer to "what would this tap reach",
+ * which is why it catches a case that a screenshot and a visibility check both
+ * pass.
+ */
+async function checkNothingIsBuried() {
+  await sheet(true);
+  const buried = await page.evaluate(() => {
+    const out = [];
+    const sel = '#modes button, .dial, #toolbar button, #bEnd, #timeline, footer .slot';
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (top && el.contains(top)) continue;
+      const over = top ? (top.closest('[id]')?.id || top.tagName) : 'nothing';
+      out.push(`${el.id || el.className || el.tagName}:${el.textContent.trim().slice(0, 8)} under ${over}`);
+    }
+    return out;
+  });
+  await sheet(false);
+  if (buried.length) {
+    console.log(`\nFAIL: ${buried.length} control(s) buried under an open sheet:`);
+    for (const b of buried) console.log('  ' + b);
+    process.exit(1);
+  }
+  log('nothing buried under an open sheet');
 }
 
 async function playMatch() {

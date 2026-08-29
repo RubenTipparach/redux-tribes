@@ -54,6 +54,18 @@ const ENVELOPE_LEVELS: ReadonlyArray<readonly [number, number]> =
 /** Bisections a ray, over a 200 u reach: 0.05 u, well inside the 1.6 u the
  * predicate itself is fuzzy by. */
 const RAY_STEPS = 12;
+/**
+ * How still a heading has to be before the boundary is re-probed, while it is
+ * under a finger. A trailing debounce: a drag that keeps moving never pays for
+ * a rebuild it is about to invalidate.
+ */
+const SETTLE_MS = 180;
+/**
+ * And the longest the drawn boundary may lag a heading that never settles, so
+ * a slow continuous sweep still shows roughly where it can get to rather than
+ * where it could a second ago. The throttle over the debounce.
+ */
+const LIVE_MAX_MS = 700;
 /** How finely the fitted surface is tessellated, as a multiple of the sample
  * grid. Twice the control density: any less throws away what a fine fit
  * bought, any more costs triangles for a curve that is already smooth. */
@@ -103,6 +115,9 @@ interface ShellEntry {
   built: BuiltShell | null;
   /** True while `built` belongs to a superseded key: drawn, but not current. */
   stale: boolean;
+  /** True while the ladder is capped at its coarsest rung because a heading is
+   * under a finger. Cleared, and the rest of the ladder queued, on release. */
+  coarse: boolean;
 }
 /**
  * Points around the working plane contour. Denser than a slice because this is
@@ -189,6 +204,14 @@ export class View {
    * for. Read by the console to say so. */
   #pending: number[] = [];
   #planeKey = '';
+  /** True while a heading is being dragged, so the boundary is not re-probed
+   * once per pointer event. */
+  #live = false;
+  /** Ships whose boundary is out of date because a heading is still moving. */
+  #deferred = new Set<number>();
+  /** When the heading last moved, and when a deferred rebuild last ran. */
+  #movedAt = 0;
+  #liveBuiltAt = 0;
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
     this.#canvas = canvas;
@@ -718,6 +741,39 @@ export class View {
     }
   }
 
+  /**
+   * Say whether a heading is under a finger right now.
+   *
+   * A rotation drag fires a pointer event per pixel, and in slide mode every
+   * one of them moves the boundary, so the envelope was re-probed per event:
+   * a 16 x 10 chart is 1920 flights through the core, and the console fell
+   * from 46 fps to 14, with a median frame of 68 ms against 21 idle. The dial
+   * then stutters under its own feedback, which reads as a broken control
+   * rather than a slow one.
+   *
+   * So while this is on, the boundary follows at a fixed rate and only to its
+   * coarsest rung, and the fine ones are left until the finger comes off. The
+   * shape still tracks the dial; it is simply not re-derived to 48 x 26 for a
+   * heading that is still moving.
+   */
+  setLiveHeading(on: boolean): void {
+    if (this.#live === on) return;
+    this.#live = on;
+    if (on) {
+      this.#movedAt = performance.now();
+      this.#liveBuiltAt = this.#movedAt;
+      return;
+    }
+    // Released. Anything still deferred is asked for by the refresh that
+    // follows, and every capped ladder is uncapped so it sharpens to the end.
+    this.#deferred.clear();
+    for (const [id, e] of this.#shells) {
+      if (!e.coarse) continue;
+      e.coarse = false;
+      if (e.next < ENVELOPE_LEVELS.length && !this.#pending.includes(id)) this.#pending.push(id);
+    }
+  }
+
   /** Note what this ship's envelope depends on, and queue it if that changed. */
   requestShell(ship: ShipState, order: PlannedOrder, flight: Flight): void {
     if (ship.destroyed || isCommitted(order.mode)) {
@@ -728,12 +784,23 @@ export class View {
     const key = this.#shellKeyFor(ship, order, flight);
     const have = this.#shells.get(ship.id);
     if (have && have.key === key) return;
+    if (this.#live) {
+      // Under the finger the boundary is not rebuilt per event. The request is
+      // noted and the frame loop runs it once the heading settles, or once it
+      // has lagged far enough to be worth one anyway. The old surface stays
+      // drawn in the meantime, which is what `stale` is for.
+      this.#movedAt = performance.now();
+      this.#deferred.add(ship.id);
+      return;
+    }
     // Keep the old surface on screen while the new one is found. It used to be
     // thrown away here, so anything that re-opened the ladder blanked the
     // envelope and grew it back from the coarsest level: a flash on every
     // rotation in slide mode, where turning genuinely does move the boundary
     // and so cannot be spared the rebuild. Stale for a few frames beats absent.
-    this.#shells.set(ship.id, { key, next: 0, built: have?.built ?? null, stale: !!have?.built });
+    this.#shells.set(ship.id, {
+      key, next: 0, built: have?.built ?? null, stale: !!have?.built, coarse: this.#live,
+    });
     if (!this.#pending.includes(ship.id)) this.#pending.push(ship.id);
   }
 
@@ -770,6 +837,49 @@ export class View {
   }
 
   /**
+   * Run a deferred rebuild once the heading has stopped moving, or once the
+   * drawn boundary has lagged a heading that will not stop.
+   *
+   * Which of the two it is decides how far the ladder runs. A heading that has
+   * settled gets the whole thing, finger down or not, because nothing is about
+   * to throw it away: pausing on a dial should sharpen the shape, not coarsen
+   * it. One that is still sweeping gets the coarsest rung only, since the fine
+   * ones are the expensive ones and the next nudge would discard them.
+   */
+  #flushDeferred(orderOf: (id: number) => PlannedOrder,
+                 flightOf: (id: number) => Flight,
+                 shipOf: (id: number) => ShipState | undefined): void {
+    if (!this.#live) return;
+    const now = performance.now();
+    const settled = now - this.#movedAt >= SETTLE_MS;
+    if (this.#deferred.size) {
+      if (!settled && now - this.#liveBuiltAt < LIVE_MAX_MS) return;
+      this.#liveBuiltAt = now;
+      for (const id of this.#deferred) {
+        const ship = shipOf(id);
+        if (!ship) continue;
+        const have = this.#shells.get(id);
+        this.#shells.set(id, {
+          key: this.#shellKeyFor(ship, orderOf(id), flightOf(id)),
+          next: 0, built: have?.built ?? null, stale: !!have?.built, coarse: !settled,
+        });
+        if (!this.#pending.includes(id)) this.#pending.push(id);
+      }
+      this.#deferred.clear();
+      return;
+    }
+    // Nothing outstanding, but a sweep that ran past LIVE_MAX_MS left its
+    // ladder capped at the coarse rung. Once the heading stops, uncap it: the
+    // shape must sharpen when the finger rests, not only when it lifts.
+    if (!settled) return;
+    for (const [id, e] of this.#shells) {
+      if (!e.coarse) continue;
+      e.coarse = false;
+      if (e.next < ENVELOPE_LEVELS.length && !this.#pending.includes(id)) this.#pending.push(id);
+    }
+  }
+
+  /**
    * Build at most ONE level, for one ship, and return whether anything is
    * still outstanding.
    *
@@ -782,6 +892,7 @@ export class View {
   stepShells(orderOf: (id: number) => PlannedOrder,
              flightOf: (id: number) => Flight,
              shipOf: (id: number) => ShipState | undefined): boolean {
+    this.#flushDeferred(orderOf, flightOf, shipOf);
     while (this.#pending.length) {
       const id = this.#pending[0]!;
       const entry = this.#shells.get(id);
@@ -801,7 +912,9 @@ export class View {
         this.#wireKey = '';
       }
       entry.next++;
-      if (entry.next >= ENVELOPE_LEVELS.length) this.#pending.shift();
+      // Capped while a heading is being dragged: one rung is the whole answer
+      // for now, and the rest waits for the finger to come off.
+      if (entry.next >= ENVELOPE_LEVELS.length || entry.coarse) this.#pending.shift();
       return this.#pending.length > 0;
     }
     return false;

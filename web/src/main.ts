@@ -1031,6 +1031,7 @@ canvas.addEventListener('pointerdown', ev => {
   if (canPlan() && view.onYawKnob(ev.clientX, ev.clientY)) {
     canvas.classList.add('rotating');
     drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'yaw' };
+    view.setLiveHeading(true);
     return;
   }
 
@@ -1126,6 +1127,9 @@ function endPointer(ev: PointerEvent): void {
     const wasPlan = drag.kind === 'plan' || drag.kind === 'heading' || drag.kind === 'yaw';
     const kind = drag.kind;
     drag = null;
+    // The hand is off, so the boundary may sharpen to the full ladder again.
+    // Before the refresh, so the request that follows is not still capped.
+    if (kind === 'yaw' || kind === 'heading') view.setLiveHeading(false);
     if (wasPlan) refreshAll();
     if (kind === 'plan') logPlacement();
   }
@@ -1329,6 +1333,7 @@ $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.
  */
 function dialDrag(id: string, apply: (deg: number, e: PointerEvent) => void): void {
   const el = $(id);
+  let held = -1;
   const set = (e: PointerEvent) => {
     const r = el.getBoundingClientRect();
     apply(Math.atan2(e.clientX - (r.left + r.width / 2),
@@ -1337,14 +1342,26 @@ function dialDrag(id: string, apply: (deg: number, e: PointerEvent) => void): vo
   el.addEventListener('pointerdown', e => {
     if (!canPlan() || selected < 0) return;
     e.preventDefault();
+    held = e.pointerId;
     try { el.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ }
+    // A heading is moving, so the envelope follows at a fixed rate rather than
+    // once per event. Released below, which the dial had no handler for at all
+    // before: it tracked the finger and never told anything the drag was over.
+    view.setLiveHeading(true);
     set(e);
   });
   el.addEventListener('pointermove', e => {
     // Only while held. `buttons` covers mouse and touch alike.
-    if (e.buttons === 0 || !canPlan() || selected < 0) return;
+    if (e.pointerId !== held || e.buttons === 0 || !canPlan() || selected < 0) return;
     set(e);
   });
+  const release = (e: PointerEvent) => {
+    if (e.pointerId !== held) return;
+    held = -1;
+    view.setLiveHeading(false);
+    refreshAll();
+  };
+  for (const ev of ['pointerup', 'pointercancel'] as const) el.addEventListener(ev, release);
 }
 
 dialDrag('atRoll', deg => {
@@ -1545,6 +1562,10 @@ Object.defineProperty(window, 'ftDebug', {
     wells: () => match.wells(),
     paths: () => view.pathStats(),
     ghosts: () => view.ghostCount(),
+    /** How far the selected hull's reachable volume has sharpened, so a
+     * harness can see that a heading under a finger is not re-probing it and
+     * that letting go finishes the ladder. */
+    envelope: () => (selected < 0 ? null : view.shellProgress(selected)),
     canPlan,
   },
 });

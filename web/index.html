@@ -15,6 +15,9 @@
   --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
   --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
   --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+  /* How tall a phone's bottom sheet is. Named because the canvas controls
+     have to step over exactly this much when one is open. */
+  --sheeth:min(56dvh, 440px);
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--ground); color:var(--ink);
@@ -211,6 +214,16 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
 #toolbar button.off { opacity:.28; }
 .tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+/* Move mode, over the canvas. Top centre, which is the one band no rail,
+   sheet, toolbar, readout or dial uses at any size, so the control that
+   decides what all the others mean is always in sight. */
+#modes { grid-column:2; grid-row:2; align-self:start; justify-self:center;
+  z-index:6; margin-top:10px; justify-content:center; pointer-events:none; }
+#modes button { pointer-events:auto; padding:6px 11px; font-size:11px;
+  border-radius:7px; background:#111823dd;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#modes button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+
 /* The working altitude, above the toolbar rather than in it: at 390px the row
    is already seven 44px targets wide, and a readout inside it would push the
    row past the viewport. Hidden at zero, so it appears only once it means
@@ -269,7 +282,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   #left, #right { position:fixed; left:0; right:0; top:auto;
     bottom:calc(var(--tabh) + var(--safe));
-    height:min(56dvh, 440px); z-index:7; border:0; border-top:1px solid var(--line);
+    height:var(--sheeth); z-index:7; border:0; border-top:1px solid var(--line);
     box-shadow:0 -14px 34px #000a;
     /* Clears the tallest the footer wraps to, so no sheet content is trapped
        underneath the row that now sits on top of it. */
@@ -287,7 +300,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   /* One column here, so the readout follows the toolbar out of column 2.
      Left behind, it opens an implicit second column and shoves the row. */
-  #toolbar, #pAlt, #attitude { grid-column:1; }
+  #toolbar, #pAlt, #attitude, #modes { grid-column:1; }
   /* The toolbar owns the bottom of the canvas on a phone and is centred, so
      the dials cannot share that line at any width: they sit above it. 44px of
      button plus its 12px margin plus a gap. */
@@ -302,6 +315,31 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   .wrow { padding:8px 6px; }
   .modes { gap:6px; }
   input[type=range] { height:36px; }
+}
+
+/* Phone held upright, where the sheets rise from the BOTTOM.
+   A sheet owns that half of the screen while it is open, and a z-index alone
+   would only float the canvas controls over its contents. So they step UP and
+   sit above it. They were silently underneath before: a finger on a dial
+   landed on the sheet, the dial did not move, and nothing said why.
+
+   Fixed rather than a bigger margin, and measured from the same edge the sheet
+   is, so the lift is exact instead of guessing how tall the footer wrapped to
+   this time. The offsets keep the order they already sit in. */
+@media (max-width: 900px) and (min-height: 561px) {
+  #app:has(> #left.open) #toolbar, #app:has(> #right.open) #toolbar,
+  #app:has(> #left.open) #pAlt, #app:has(> #right.open) #pAlt,
+  #app:has(> #left.open) #attitude, #app:has(> #right.open) #attitude {
+    position:fixed; left:0; right:0; z-index:8; margin:0;
+    justify-content:center; }
+  #app:has(> #left.open) #toolbar, #app:has(> #right.open) #toolbar {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 12px); }
+  #app:has(> #left.open) #pAlt, #app:has(> #right.open) #pAlt {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 62px);
+    width:max-content; margin:0 auto; }
+  #app:has(> #left.open) #attitude, #app:has(> #right.open) #attitude {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 96px);
+    justify-content:flex-start; padding-left:12px; }
 }
 
 /* Phone held sideways: only about 390px of height exists and stacked chrome
@@ -325,10 +363,18 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     width:min(330px, 54vw); height:auto; border-top:0; border-right:1px solid var(--line);
     box-shadow:14px 0 34px #000a; transform:translateX(-110%); }
   #left.open, #right.open { transform:none; }
-  #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
-  #pAlt { grid-column:2; grid-row:2; margin-bottom:52px; }
-  /* Same again in landscape, where the toolbar is 38px tall. */
-  #attitude { grid-column:2; grid-row:2; margin-bottom:54px; }
+  /* Sideways the sheets come in from the LEFT and run the whole height, so
+     stepping over one is not possible the way it is in portrait: the canvas
+     controls move to the right strip instead, which is the part of the map a
+     sheet never covers. */
+  #toolbar { grid-column:2; grid-row:2; margin:0 10px 8px 0; gap:5px;
+    justify-self:end; }
+  #attitude { grid-column:2; grid-row:2; margin:0 10px 54px 0; justify-self:end; }
+  /* Above the dials, not across them: both are right aligned here. */
+  #pAlt { grid-column:2; grid-row:2; margin:0 10px 126px 0; justify-self:end; }
+  /* Wraps into the strip the sheet leaves rather than running under it. */
+  #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
+    max-width:calc(100% - min(330px, 54vw) - 20px); justify-content:flex-end; }
   .dial { width:64px; height:64px; }
   #toolbar button { width:38px; height:38px; font-size:13px; }
 }
@@ -474,8 +520,6 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <div id="fleet"></div>
     <div class="sect">Hostiles</div>
     <div id="hostiles"></div>
-    <div class="sect">Selected &middot; Move Mode</div>
-    <div class="modes" id="modes"></div>
     <div class="sect">Movement Envelope</div>
     <div id="env" class="hint"></div>
     <div class="sect">Flight Envelope</div>
@@ -505,6 +549,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <button id="tLog" aria-pressed="false">Events</button>
     <button id="tFit">Fit view</button>
   </div>
+
+  <!-- Move mode, over the viewport rather than in the fleet rail.
+       It decides what every other planning control means, so it cannot live
+       behind a tab: on a phone the rail is a sheet, and a mode you can only
+       reach by opening one is a mode you forget you are in. -->
+  <div id="modes" class="modes" aria-label="Move mode"></div>
 
   <!-- Heading, over the viewport. Two dials, one per axis the core can be
        told about, sitting on the canvas rather than in a rail: a heading is

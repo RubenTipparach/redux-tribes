@@ -73,6 +73,14 @@ checked, not assumed:
 - Every control a player needs is reachable by thumb. The side rails are bottom
   sheets on a tab bar; the nudges that are keyboard only on a desktop (elevation,
   heading, face target) have on canvas buttons, because a phone has no Q/E/A/D/F.
+- **Reachable means the tap ARRIVES.** A control drawn over the map can sit under
+  an open sheet: visible, enabled, and swallowing every touch. The fire slots went
+  that way first and the heading dials went the same way after. And a control that
+  is only in a sheet is worse, because nothing on screen says it exists: move mode
+  was in the fleet rail, so on a phone you could not change it without opening a
+  tab you had no reason to open. The playthrough checks the class now, on both
+  sizes: with a sheet open, the centre of every on canvas control must hit that
+  control and not something over it.
 - Touch does what a mouse does. There is no second mouse button on a phone, so any
   gesture given to the right button needs a touch route as well: one finger, the
   orbit and pan toggle, or a control.
