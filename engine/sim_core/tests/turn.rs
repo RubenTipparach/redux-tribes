@@ -556,3 +556,33 @@ fn the_resolver_drops_a_shot_inside_the_cooldown() {
     assert_eq!(fired, 1, "only the first shot lands");
     assert_eq!(skipped, 1, "and the second is reported, not silently dropped");
 }
+
+/// The AI preview is not an estimate. It is the order the resolver will use.
+///
+/// The whole point of showing a hostile's course while the player is still
+/// planning is that the course is real, and that rests on two properties: the
+/// planner writes nothing, and the resolver asks it FIRST, from the same
+/// untouched boundary state the client is sitting in. Both are checked here,
+/// because a preview that merely usually matched would be worse than none.
+#[test]
+fn an_ai_preview_is_the_order_the_turn_actually_flies() {
+    let mut sim = duel("seed-ai-preview", 70.0);
+    let before = sim_core::ai::plan_ship(&sim, 1);
+    let hash = sim.hash_state();
+    // Asking twice gives the same answer and moves nothing: the planner draws
+    // its own RNG stream from the seed and the turn rather than the match's.
+    let again = sim_core::ai::plan_ship(&sim, 1);
+    assert_eq!(hash, sim.hash_state(), "asking the AI what it will do moved the match");
+    assert_eq!(before.target, again.target, "the planner is not a pure function of the state");
+    assert_eq!(before.mode, again.mode);
+    assert_eq!(before.ai_target, again.ai_target);
+    assert!(before.target.is_some(), "the fixture should have the AI going somewhere");
+
+    // And the turn flies exactly that. `plan_target` is what resolution kept.
+    let mut orders = vec![Some(hold(V3::new(0.0, 0.0, 0.0))), None];
+    sim.resolve_turn(&mut orders);
+    assert_eq!(
+        sim.ships[1].plan_target, before.target,
+        "the hostile flew somewhere other than the course the preview drew",
+    );
+}

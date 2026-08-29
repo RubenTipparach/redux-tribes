@@ -177,6 +177,19 @@ let speed = 1;
 /** null means live; a number means a past turn is being reviewed. */
 let reviewTurn: number | null = null;
 /**
+ * The selected hull's attitude at the tick on screen, while one is playing
+ * back. Null when planning, where the dials read the turn boundary instead.
+ */
+let atAttitude: { forward: Vec3; roll: number } | null = null;
+/**
+ * What the AI intends this turn, by ship id, cached for the turn.
+ *
+ * The planner is a pure function of the boundary state and that state does not
+ * move while a player plans, so this is asked once rather than per scrub: a
+ * drag would otherwise re-plan every hostile per pointer event.
+ */
+let aiPlans = new Map<number, PlannedOrder & { aiTarget: number }>();
+/**
  * Watching the whole match back, turn by turn.
  *
  * `live` is the world as it stood when the replay started, because playing the
@@ -229,6 +242,8 @@ function start(): void {
   standingRoll.clear();
   trails.clear();
   battle = null;
+  atAttitude = null;
+  aiPlans = new Map();
   openSlot = null;
   playTick = null;
   playing = false;
@@ -237,6 +252,7 @@ function start(): void {
   view.setSelection(selected);
   view.fit();
   restoreFacing();
+  refreshAiPlans();
   view.invalidateEnvelope();
   planTurnEnvelopes();
   previewTick = TICKS_PER_TURN;
@@ -960,23 +976,46 @@ let previewTick = TICKS_PER_TURN;
  * stay where they are and this stays a preview of the plan rather than a
  * preview of the turn.
  */
+/**
+ * Ask the AI what it means to do, once, for the turn now open.
+ *
+ * Once and not per frame: the planner is a pure function of the boundary
+ * state, that state does not move while a player plans, and a scrub calls
+ * `showPreview` per pointer event.
+ */
+function refreshAiPlans(): void {
+  aiPlans = new Map();
+  if (match.gameOver >= 0) return;
+  for (const s of ships) {
+    if (s.destroyed || mine(s)) continue;
+    const plan = match.aiPreview(s.id);
+    if (plan) aiPlans.set(s.id, plan);
+  }
+}
+
 function showPreview(): void {
   if (!canPlan()) { view.setGhosts([]); view.setPaths([]); return; }
+  // What each hull will fly: my order for mine, the AI's own plan for one it
+  // flies. A hostile used to be drawn coasting, because the AI planned during
+  // resolution and there was no earlier answer to draw. It plans from the
+  // boundary state and writes nothing, so there is one now, and it is the very
+  // order the resolver will use rather than a guess at it.
+  const orderFor = (s: ShipState): PlannedOrder =>
+    mine(s) ? match.order(s.id) : aiPlans.get(s.id) ?? { mode: Mode.Drift, weapons: [] };
+
   const ghosts = ships
-    .filter(s => mine(s) && !s.destroyed)
-    .map(s => ({ id: s.id, pose: match.previewPose(s.id, match.order(s.id), previewTick) }))
-    .filter((g): g is { id: number; pose: Pose } => !!g.pose);
+    .filter(s => !s.destroyed && (mine(s) || aiPlans.has(s.id)))
+    .map(s => ({
+      id: s.id, side: s.side,
+      pose: match.previewPose(s.id, orderFor(s), previewTick),
+    }))
+    .filter((g): g is { id: number; side: number; pose: Pose } => !!g.pose);
   view.setGhosts(ghosts);
 
-  // Every ship's course, ours planned and theirs estimated. A hostile has no
-  // orders yet, so what is drawn is the course it is already on: honest, and
-  // the same thing the core would fly for it given no order at all.
   const paths = ships.filter(s => !s.destroyed).map(s => ({
     id: s.id,
     estimated: !mine(s),
-    pts: mine(s)
-      ? match.preview(s.id, match.order(s.id), 48)
-      : match.preview(s.id, { mode: Mode.Drift, weapons: [] }, 48),
+    pts: match.preview(s.id, orderFor(s), 48),
   }));
   view.setPaths(paths);
 
@@ -990,8 +1029,11 @@ function showPreview(): void {
   const myTarget = meAt ? targetShip(meAt.id) : undefined;
   if (meAt && myTarget) links.push({ from: meAt.pos, to: myTarget.pos, mine: true });
   for (const e of live) {
-    if (mine(e) || e.aiTarget < 0) continue;
-    const at = posOf(e.aiTarget);
+    if (mine(e)) continue;
+    // The plan for THIS turn where the AI has one, which is what a player
+    // wants to know; `aiTarget` on the hull is who it last retaliated against
+    // and is the fallback for a hull the AI is not flying.
+    const at = posOf(aiPlans.get(e.id)?.aiTarget ?? e.aiTarget);
     if (at) links.push({ from: e.pos, to: at, mine: false });
   }
   view.setAiming(links);
@@ -1490,11 +1532,14 @@ function renderAttitude(): void {
   $('attitude').classList.toggle('off', !s);
   for (const d of ['atRoll', 'atPitch']) $(d).classList.toggle('numb', !on);
   if (!s) return;
-  const now = match.forward(s.id);
-  const cmd = standingFace.get(s.id) ?? match.order(s.id).face ?? now;
+  // While a turn plays back the hull is posed from the recorded track, so the
+  // dials read THAT rather than the turn boundary: a silhouette frozen at the
+  // start of a turn is not showing the roll being flown in front of it.
+  const now = atAttitude ? atAttitude.forward : match.forward(s.id);
+  const cmd = atAttitude ? now : (standingFace.get(s.id) ?? match.order(s.id).face ?? now);
   const climb = (v: Vec3) => (Math.asin(Math.max(-1, Math.min(1, v.y))) * 180) / Math.PI;
-  const rollNow = (match.rollOf(s.id) * 180) / Math.PI;
-  const rollCmd = standingRoll.get(s.id) ?? match.order(s.id).roll;
+  const rollNow = ((atAttitude ? atAttitude.roll : match.rollOf(s.id)) * 180) / Math.PI;
+  const rollCmd = atAttitude ? atAttitude.roll : (standingRoll.get(s.id) ?? match.order(s.id).roll);
   const rollDeg = rollCmd === undefined ? rollNow : (rollCmd * 180) / Math.PI;
 
   // Both start upright, where a hull's own up is world up, so a roll turns
@@ -1586,7 +1631,15 @@ function shownRecord(): typeof match.history[number] | undefined {
 }
 
 function showTick(tick: number): void {
-  view.setPoses(match.poses(tick));
+  const poses = match.poses(tick);
+  view.setPoses(poses);
+  // The dials follow the hull through the turn rather than sitting at the
+  // attitude it started from. Asked of the core per tick, because forward and
+  // wings level are its conventions and a renderer holding a second opinion
+  // about either is how two clients start disagreeing.
+  const me = poses.find(p => p.id === selected && !p.destroyed);
+  atAttitude = me ? match.attitudeOf(me.quat) : null;
+  renderAttitude();
   view.setProjectiles(match.trackProjectiles(tick));
 
   // Beams last one tick in the simulation, so what is on screen is drawn from
@@ -1708,6 +1761,8 @@ function endBattle(): void {
   ships = match.ships();
   view.setShips(ships);
   view.setSelection(selected);
+  atAttitude = null;
+  refreshAiPlans();
   view.invalidateEnvelope();
   planTurnEnvelopes();
   refreshAll();
@@ -1779,7 +1834,9 @@ function frame(): void {
         selected = ships.find(s => mine(s) && !s.destroyed)?.id ?? selected;
       }
       view.setSelection(selected);
+      atAttitude = null;
       restoreFacing();
+      refreshAiPlans();
       view.invalidateEnvelope();
       planTurnEnvelopes();
       refreshAll();
@@ -1820,11 +1877,20 @@ Object.defineProperty(window, 'ftDebug', {
     wells: () => match.wells(),
     paths: () => view.pathStats(),
     ghosts: () => view.ghostCount(),
+    /** Every hull's position right now, for checking a preview against what
+     * the turn actually did. */
+    poses: () => ships.map(s => ({ id: s.id, side: s.side, destroyed: s.destroyed, pos: s.pos })),
     /** What the effects layer is drawing right now, and how far the biggest
      * blast has grown, so "bigger and more visible" is a measurement. */
     fx: () => view.fxStats(),
     /** Which turn a battle replay is on, or null when it is not running. */
     battle: () => (battle ? battle.at : null),
+    /** The selected hull's attitude at the tick on screen while a turn plays,
+     * so a harness can watch the dials follow it. */
+    attitude: () => atAttitude,
+    /** What the AI means to do this turn, by ship id. */
+    aiPlans: () => [...aiPlans].map(([id, p]) => ({ id, mode: p.mode, target: p.target ?? null,
+                                                    aiTarget: p.aiTarget })),
     /** The last tick this turn's playback runs to: the turn's own length plus
      * whatever tail its effects still need. */
     playEnd: () => TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []),

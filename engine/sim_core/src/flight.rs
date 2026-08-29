@@ -48,6 +48,17 @@ impl Mode {
             _ => Mode::MoveAndTurn,
         }
     }
+    /// The inverse, so a mode can cross the boundary in either direction from
+    /// one table rather than two that can drift apart.
+    pub fn to_u32(self) -> u32 {
+        match self {
+            Mode::MoveAndTurn => 0,
+            Mode::TurnSlide => 1,
+            Mode::FullSpeed => 2,
+            Mode::FullStop => 3,
+            Mode::Drift => 4,
+        }
+    }
     /// A committed mode is one whose outcome the destination cannot influence.
     pub fn committed(self) -> bool {
         matches!(self, Mode::FullSpeed | Mode::FullStop | Mode::Drift)

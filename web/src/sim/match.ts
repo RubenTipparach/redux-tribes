@@ -70,6 +70,8 @@ export interface MatchExports {
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
   ft_ship_roll(ship: number): number;
+  ft_attitude_of(qx: number, qy: number, qz: number, qw: number): number;
+  ft_ai_preview(ship: number): number;
   ft_snapshot_len(): number;
   ft_snapshot(): number;
   ft_restore(count: number): number;
@@ -313,6 +315,38 @@ export class Match {
   rollOf(ship: number): number {
     this.#ex.ft_ship_roll(ship);
     return this.#s[32] ?? 0;
+  }
+
+  /**
+   * Nose and roll for an ORIENTATION rather than for a ship.
+   *
+   * Playback poses hulls from a recorded track, so the dials that read an
+   * attitude have to read that track and not the turn boundary. Which axis is
+   * forward and which way is level stay the core's conventions.
+   */
+  attitudeOf(q: { x: number; y: number; z: number; w: number }): { forward: Vec3; roll: number } {
+    this.#ex.ft_attitude_of(q.x, q.y, q.z, q.w);
+    return { forward: v3(this.#s, 32), roll: this.#s[35] ?? 0 };
+  }
+
+  /**
+   * The order the AI will fly this hull with this turn, or null for a hull it
+   * does not fly.
+   *
+   * Not a guess: the resolver asks the same planner first, from this same
+   * boundary state, and the planner writes nothing. A seat held by a person
+   * returns null, because answering for one would hand over their orders.
+   */
+  aiPreview(ship: number): (PlannedOrder & { aiTarget: number }) | null {
+    if (!this.#ex.ft_ai_preview(ship)) return null;
+    const s = this.#s;
+    const out: PlannedOrder & { aiTarget: number } = {
+      mode: (s[32] ?? 0) as Mode,
+      aiTarget: Math.round(s[37] ?? -1),
+      weapons: [],
+    };
+    if ((s[36] ?? 0) !== 0) out.target = v3(s, 33);
+    return out;
   }
 
   setFlight(ship: number, f: ClassInfo['flight']): void {

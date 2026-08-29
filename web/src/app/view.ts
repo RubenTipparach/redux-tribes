@@ -1418,7 +1418,7 @@ export class View {
    * that before committing. Only our own ships are ghosted, because the other
    * side's orders do not exist until the turn is released.
    */
-  setGhosts(poses: readonly { id: number; pose: Pose }[]): void {
+  setGhosts(poses: readonly { id: number; side: number; pose: Pose }[]): void {
     while (this.#ghostGroup.children.length) {
       const c = this.#ghostGroup.children.pop() as THREE.Mesh;
       c.geometry?.dispose();
@@ -1428,7 +1428,11 @@ export class View {
       const mesh = new THREE.Mesh(
         new THREE.ConeGeometry(1.6, 5.2, 4),
         new THREE.MeshBasicMaterial({
-          color: CYAN, wireframe: true, transparent: true, opacity: 0.5,
+          // A hostile's ghost is where the AI's own plan puts it, so it is
+          // drawn in their colour: a cyan cone out among the enemy would read
+          // as one of mine.
+          color: g.side === this.mySide ? CYAN : ORANGE,
+          wireframe: true, transparent: true, opacity: 0.5,
         }),
       );
       // The cone points along +Y as built and a hull points along +Z, so it is

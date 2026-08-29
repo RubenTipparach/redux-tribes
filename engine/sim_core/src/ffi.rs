@@ -1336,6 +1336,65 @@ pub extern "C" fn ft_ship_roll(ship: u32) -> u32 {
     }
 }
 
+/// The nose direction and roll of a GIVEN orientation, rather than of a ship's
+/// current one.
+///
+/// Playback poses a hull from a recorded track, so the dials that read its
+/// attitude have to read the same track. Deriving forward or roll from the
+/// quaternion in the renderer would be a second opinion about which axis is
+/// forward and which way is level, and those are the core's conventions.
+///
+/// Forward lands in slots 32..34 and roll in 35. Returns 0 when the nose is
+/// vertical, where there is no wings level to measure a roll from.
+#[no_mangle]
+pub extern "C" fn ft_attitude_of(qx: f32, qy: f32, qz: f32, qw: f32) -> u32 {
+    let q = Quat { x: qx, y: qy, z: qz, w: qw }.norm();
+    let f = q.forward();
+    let s = scratch();
+    s[32] = f.x;
+    s[33] = f.y;
+    s[34] = f.z;
+    match crate::flight::roll_of(q) {
+        Some(r) => { s[35] = r; 1 }
+        None => { s[35] = 0.0; 0 }
+    }
+}
+
+/// What the AI will do with this hull this turn, asked BEFORE the turn runs.
+///
+/// The planner is a pure function of the boundary state: it takes `&Sim`, so it
+/// cannot write, and it draws its own RNG stream from the seed, the turn and
+/// the ship index rather than from the match's. Asking it early therefore
+/// changes nothing and returns exactly what the resolver will get, because the
+/// resolver asks it first, from this same untouched state.
+///
+/// Only for a hull the AI actually flies. A seat held by a person plans in
+/// secret, and answering for one would hand a player the other's orders.
+///
+///   32     mode
+///   33..35 destination
+///   36     1 if it has one
+///   37     the ship it means to shoot, or -1
+#[no_mangle]
+pub extern "C" fn ft_ai_preview(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    if sh.destroyed || !sh.ai_enabled {
+        return 0;
+    }
+    let pos = sh.pos;
+    let plan = crate::ai::plan_ship(sim, ship as usize);
+    let s = scratch();
+    s[32] = plan.mode.unwrap_or(Mode::MoveAndTurn).to_u32() as f32;
+    let t = plan.target.unwrap_or(pos);
+    s[33] = t.x;
+    s[34] = t.y;
+    s[35] = t.z;
+    s[36] = if plan.target.is_some() { 1.0 } else { 0.0 };
+    s[37] = plan.ai_target.map(|i| i as f32).unwrap_or(-1.0);
+    1
+}
+
 // ------------------------------------------------------------- snapshots --
 
 /// How many f32 slots the current turn boundary state needs.
