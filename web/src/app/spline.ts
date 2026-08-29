@@ -145,3 +145,78 @@ export function radiusAt(f: Fitted, u: number, v: number): number {
   }
   return r;
 }
+
+/**
+ * Height of the surface point at (u, v), relative to the chart centre.
+ */
+const heightOf = (f: Fitted, u: number, v: number): number =>
+  chartDir(u, v)[1] * Math.max(0, radiusAt(f, u, v));
+
+/**
+ * Where one meridian crosses a horizontal plane, as an offset in x and z.
+ *
+ * Walks phi from the top pole down and takes the first crossing. Height falls
+ * monotonically along a meridian for any shape that is star shaped about the
+ * centre, which is the same property the fit itself rests on, so the first
+ * crossing is the only one.
+ */
+function crossing(f: Fitted, u: number, want: number): [number, number] | null {
+  const COARSE = 24;
+  const REFINE = 18;
+  let v0 = 0;
+  let h0 = heightOf(f, u, 0) - want;
+  for (let k = 1; k <= COARSE; k++) {
+    const v1 = k / COARSE;
+    const h1 = heightOf(f, u, v1) - want;
+    if ((h0 > 0) !== (h1 > 0)) {
+      let lo = v0;
+      let hi = v1;
+      for (let s = 0; s < REFINE; s++) {
+        const mid = (lo + hi) / 2;
+        if ((heightOf(f, u, mid) - want > 0) === (h0 > 0)) lo = mid;
+        else hi = mid;
+      }
+      const vc = (lo + hi) / 2;
+      const d = chartDir(u, vc);
+      const r = Math.max(0, radiusAt(f, u, vc));
+      return [d[0] * r, d[2] * r];
+    }
+    v0 = v1;
+    h0 = h1;
+  }
+  return null;
+}
+
+/**
+ * Where a horizontal plane cuts the surface, as segments ready to draw.
+ *
+ * Walks the meridians rather than the plane, which is what makes the line
+ * smooth. Cutting the tessellated triangles instead was geometrically correct
+ * and looked wrong: where the plane runs nearly tangent to a flat face, a
+ * wobble of one unit in the radius becomes an excursion of tens of units
+ * across that face, so the contour wandered over the middle of the shape
+ * instead of tracing its edge. A meridian walk cannot do that, because each
+ * azimuth contributes one point at that azimuth or none at all.
+ *
+ * An azimuth whose meridian never reaches the plane contributes nothing, so a
+ * cut above the shoulder of the shape comes out as an arc rather than as a
+ * fabricated ring.
+ *
+ * `rays` is the resolution of the LINE and is independent of the sample grid,
+ * because the surface is continuous: asking it for 120 points costs 120
+ * evaluations and no flights at all.
+ */
+export function sliceLoop(
+  f: Fitted, cx: number, cy: number, cz: number, y: number, rays: number,
+): number[] {
+  const found: Array<[number, number] | null> = [];
+  for (let i = 0; i < rays; i++) found.push(crossing(f, i / rays, y - cy));
+  const out: number[] = [];
+  for (let i = 0; i < rays; i++) {
+    const a = found[i];
+    const b = found[(i + 1) % rays];
+    if (!a || !b) continue;
+    out.push(cx + a[0], y, cz + a[1], cx + b[0], y, cz + b[1]);
+  }
+  return out;
+}

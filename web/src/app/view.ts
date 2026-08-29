@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
-import { chartDir, fit, radiusAt } from './spline.js';
+import { chartDir, fit, radiusAt, sliceLoop, type Fitted } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
   isCommitted, PROBE_STEPS,
@@ -57,12 +57,22 @@ const RAY_STEPS = 12;
 const TESS = 2;
 /** Horizontal slices cut from the surface for the contour lines. */
 const SLICES = 9;
+/**
+ * Points around one slice. This is the resolution of the LINE, not of the
+ * probe: the fitted surface is continuous, so a finer contour costs
+ * evaluations of a polynomial and not one extra flight.
+ */
+const SLICE_RAYS = 120;
 
 /** One finished resolution of one ship's envelope. */
 interface BuiltShell {
   readonly cells: number;
   readonly geo: THREE.BufferGeometry;
   readonly wire: THREE.BufferGeometry;
+  /** The surface itself, kept so the working plane can be cut from the same
+   * thing the skin is drawn from rather than from a second model of it. */
+  readonly fitted: Fitted;
+  readonly anchor: Vec3;
   readonly tris: number;
   readonly edges: number;
   readonly entries: number;
@@ -84,8 +94,11 @@ interface ShellEntry {
  * seven flights.
  */
 const SLIDE_STEPS = 7;
-/** How finely the movable AREA on the working plane is probed. */
-const PLANE_N = 40;
+/**
+ * Points around the working plane contour. Denser than a slice because this is
+ * the line a hand aims at rather than one of nine that suggest a volume.
+ */
+const PLANE_RAYS = 192;
 /**
  * "Close enough to count as arriving", for both the drawn boundary and the
  * click router. One constant on purpose: if the contour and the router used
@@ -94,18 +107,6 @@ const PLANE_N = 40;
  * lands.
  */
 const REACH_EPS = 1.6;
-
-/**
- * Marching squares: which edge midpoints to join, per corner membership code.
- * Edges are 0 top, 1 right, 2 bottom, 3 left. The two saddle cases (5 and 10)
- * emit both segments rather than guessing which way the region connects.
- */
-const MARCHING: number[][] = [
-  [], [3, 0], [0, 1], [3, 1],
-  [1, 2], [3, 0, 1, 2], [0, 2], [3, 2],
-  [2, 3], [2, 0], [0, 1, 2, 3], [2, 1],
-  [1, 3], [1, 0], [0, 3], [],
-];
 
 export class View {
   readonly #canvas: HTMLCanvasElement;
@@ -710,8 +711,10 @@ export class View {
     geo.setIndex(idx);
     geo.computeVertexNormals();
 
-    // Contours, cut from the surface above rather than from the cells that
-    // produced it, so they follow the same curve the skin does.
+    // Contours, cut from the fitted surface by walking its meridians. Not
+    // from the triangles above: those carry the same curve, but a plane that
+    // runs nearly tangent to a flat face cuts them into a line that wanders
+    // across the middle of the shape instead of tracing its edge.
     let ylo = Infinity;
     let yhi = -Infinity;
     for (let i = 1; i < pos.length; i += 3) {
@@ -720,27 +723,9 @@ export class View {
       if (y > yhi) yhi = y;
     }
     const wire: number[] = [];
-    const at = (i: number): [number, number, number] =>
-      [pos[i * 3]!, pos[i * 3 + 1]!, pos[i * 3 + 2]!];
     for (let sI = 0; sI < SLICES; sI++) {
       const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
-      for (let t = 0; t < idx.length; t += 3) {
-        const p = [at(idx[t]!), at(idx[t + 1]!), at(idx[t + 2]!)];
-        const cut: number[] = [];
-        for (let e = 0; e < 3; e++) {
-          const f = (e + 1) % 3;
-          const a = p[e]![1];
-          const b = p[f]![1];
-          if ((a <= y && b > y) || (b <= y && a > y)) {
-            const w = (y - a) / (b - a);
-            cut.push(
-              p[e]![0] + (p[f]![0] - p[e]![0]) * w, y,
-              p[e]![2] + (p[f]![2] - p[e]![2]) * w,
-            );
-          }
-        }
-        if (cut.length === 6) wire.push(...cut);
-      }
+      wire.push(...sliceLoop(fitted, anchor.x, anchor.y, anchor.z, y, SLICE_RAYS));
     }
     const wgeo = new THREE.BufferGeometry();
     wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
@@ -752,6 +737,8 @@ export class View {
       cells: nu,
       geo,
       wire: wgeo,
+      fitted,
+      anchor,
       tris: idx.length / 3,
       edges: nu * nv,
       entries: radii.length,
@@ -826,72 +813,43 @@ export class View {
   /**
    * Trace the movable area where it crosses the working plane.
    *
-   * The shell is a cloud of points in three dimensions, which reads well as a
-   * shape and badly as a target. A click happens on the plane, so the plane is
-   * where the boundary has to be drawn. Marching squares over the same
-   * predicate the router uses, so the line and the rule are one thing: the
-   * contour is a discretisation of it, and can disagree by under half a cell
-   * right at the edge, which is the only honest way to draw a curve on a grid.
+   * A click happens on the plane, so the plane is where the boundary has to be
+   * drawn. This cuts the SAME fitted surface the skin is drawn from, one
+   * meridian walk per azimuth, so the bright line and the shell around it are
+   * one model of the boundary rather than two that can disagree.
+   *
+   * It used to be marching squares over its own 40 by 40 grid of `can_reach`
+   * probes, with each vertex snapped to a cell edge midpoint and no
+   * interpolation at all. That was a second, coarser model of a boundary the
+   * surface already described, which is the divergent path GUIDELINES 5.1
+   * forbids, and it looked like one: a hard polygon sitting inside a smooth
+   * shell. It also cost 1681 flights every time the working altitude moved,
+   * where cutting the surface costs none.
+   *
+   * The drawn line may now sit up to the fit error off the predicate, 0.80 u
+   * rms at the finest level, against up to half a cell of midpoint snapping
+   * before. The picker is unaffected either way: it asks the core, never this.
    */
   drawPlaneShape(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#planeShape.visible = false;
       return;
     }
-    const half = this.probeHalf(ship, flight);
+    const built = this.#shells.get(ship.id)?.built;
+    if (!built) {
+      this.#planeShape.visible = false;
+      return;
+    }
     const y = this.planeY();
     const key = [
-      ship.id, order.mode, half.toFixed(1), y.toFixed(2),
-      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
-      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
-      order.face?.x.toFixed(3) ?? '-', order.face?.z.toFixed(3) ?? '-',
-      flight.yawRate, flight.pitchRate, flight.accelFwd,
-      flight.accelRetro, flight.accelLat, flight.maxSpeed,
+      ship.id, built.cells, y.toFixed(2),
+      this.#shellKeyFor(ship, order, flight),
     ].join('|');
     if (key === this.#planeKey) return;
     this.#planeKey = key;
 
-    const step = (2 * half) / PLANE_N;
-    const x0 = ship.pos.x - half;
-    const z0 = ship.pos.z - half;
-    const px = (i: number) => x0 + i * step;
-    const pz = (j: number) => z0 + j * step;
-
-    // Membership at every grid CORNER, so a cell can read its four corners
-    // without probing any point twice.
-    const n = PLANE_N + 1;
-    const inside = new Uint8Array(n * n);
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        inside[i * n + j] =
-          this.canReachPoint(ship, flight, order, { x: px(i), y, z: pz(j) }) ? 1 : 0;
-      }
-    }
-
-    const pts: number[] = [];
-    const mid = (e: number, i: number, j: number): [number, number] => {
-      switch (e) {
-        case 0: return [px(i + 0.5), pz(j)];
-        case 1: return [px(i + 1), pz(j + 0.5)];
-        case 2: return [px(i + 0.5), pz(j + 1)];
-        default: return [px(i), pz(j + 0.5)];
-      }
-    };
-    for (let i = 0; i < PLANE_N; i++) {
-      for (let j = 0; j < PLANE_N; j++) {
-        const code =
-          (inside[i * n + j] ?? 0) |
-          ((inside[(i + 1) * n + j] ?? 0) << 1) |
-          ((inside[(i + 1) * n + j + 1] ?? 0) << 2) |
-          ((inside[i * n + j + 1] ?? 0) << 3);
-        const edges = MARCHING[code] ?? [];
-        for (let e = 0; e < edges.length; e += 2) {
-          const a = mid(edges[e] ?? 0, i, j);
-          const b = mid(edges[e + 1] ?? 0, i, j);
-          pts.push(a[0], y, a[1], b[0], y, b[1]);
-        }
-      }
-    }
+    const pts = sliceLoop(
+      built.fitted, built.anchor.x, built.anchor.y, built.anchor.z, y, PLANE_RAYS);
     this.#planeShape.geometry.dispose();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
@@ -899,17 +857,6 @@ export class View {
     this.#planeShape.visible = pts.length > 0;
   }
 
-  /**
-   * How far out to probe. The core owns the reach; the momentum term is this
-   * side's business, since it is about framing rather than about flight.
-   */
-  probeHalf(ship: ShipState, flight: Flight): number {
-    const carried = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
-    const reach = this.#match.nominalReach(ship.id) || flight.maxSpeed * 5;
-    return Math.max(30, reach * 1.25 + carried * 5);
-  }
-
-  /** Cells probed, cells reachable, and the volume that implies. */
   /**
    * Draw the match's gravity field.
    *
