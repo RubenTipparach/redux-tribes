@@ -19,7 +19,8 @@ const out = await build({
   entryPoints: [resolve(root, 'src/app/spline.ts')],
   bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
 });
-const { chartDir, contourLevels, fit, radiusAt, sliceFill, sliceOutline, sliceRegion } =
+const { chartDir, contourLevels, fit, radiusAt, sliceClamp, sliceFill, sliceHolds,
+  sliceOutline, sliceRegion } =
   await import('data:text/javascript;base64,' +
     Buffer.from(out.outputFiles[0].text).toString('base64'));
 
@@ -270,4 +271,48 @@ test('an annulus fills as a ring, with the hole left open', () => {
   let nearest = Infinity;
   for (let i = 0; i < tris.length; i += 3) nearest = Math.min(nearest, Math.hypot(tris[i], tris[i + 2]));
   assert.ok(nearest > 0.5, `the fill reached ${nearest} from the axis, filling the hole`);
+});
+
+test('a clamped point is always inside the area it was clamped into', () => {
+  // The picker stores what the clamp returns and the highlight is asked about
+  // that stored point, so landing exactly ON an edge is not enough: the radius
+  // goes out through a cos and comes back through a hypot, and can return a
+  // hair outside the edge it was placed on.
+  const f = fit(field((u, v) => {
+    const h = Math.cos(Math.PI * v);
+    return 20 - 12 * h * h + 5 * Math.cos(2 * Math.PI * u);
+  }), NU, NV);
+  let clamped = 0;
+  for (const y of [-8, -3, 0, 5, 9, 12]) {
+    const cut = sliceRegion(f, 0, y, 192);
+    for (let k = 0; k < 64; k++) {
+      const th = (k / 64) * 2 * Math.PI;
+      for (const rho of [0.05, 3, 12, 26, 90]) {
+        const q = sliceClamp(cut, Math.cos(th) * rho, Math.sin(th) * rho);
+        if (!q) continue;
+        clamped++;
+        assert.ok(sliceHolds(cut, q.dx, q.dz),
+          `clamp at height ${y}, bearing ${k}, radius ${rho} landed outside`);
+      }
+    }
+  }
+  assert.ok(clamped > 500, `only ${clamped} clamps exercised`);
+});
+
+test('a point already inside is left exactly where it is', () => {
+  const f = fit(field(() => 20), NU, NV);
+  const cut = sliceRegion(f, 0, 4, 192);
+  const q = sliceClamp(cut, 6, 8);
+  assert.ok(q);
+  assert.ok(Math.abs(q.dx - 6) < 1e-9 && Math.abs(q.dz - 8) < 1e-9,
+    `moved a point that was already inside: ${JSON.stringify(q)}`);
+});
+
+test('a clamp pulls a far point in rather than refusing it', () => {
+  const f = fit(field(() => 20), NU, NV);
+  const cut = sliceRegion(f, 0, 0, 192);
+  const q = sliceClamp(cut, 500, 0);
+  assert.ok(q, 'a point far outside must still land somewhere');
+  assert.ok(Math.hypot(q.dx, q.dz) < 20.1, `clamped to ${Math.hypot(q.dx, q.dz)}`);
+  assert.ok(sliceHolds(cut, q.dx, q.dz));
 });

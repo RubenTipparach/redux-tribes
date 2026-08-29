@@ -744,7 +744,7 @@ canvas.addEventListener('pointerdown', ev => {
   const p = view.planePoint(ev.clientX, ev.clientY);
   const s = selectedShip();
   let kind: Drag['kind'] = 'pan';
-  if (canPlan() && p && s && view.canReachPoint(s, flightOf(s.id), match.order(s.id), p)) {
+  if (canPlan() && p && s && view.sliceContains(p)) {
     kind = ev.shiftKey ? 'heading' : 'plan';
   } else if (ev.pointerType !== 'mouse' && !view.panMode) {
     // Touch has no second button, so the toolbar toggle still decides what one
@@ -787,7 +787,11 @@ canvas.addEventListener('pointermove', ev => {
     // unstuck; walking in from a reachable point keeps it under the finger and
     // lands it exactly on the edge. Either way the plan on screen is always a
     // plan the ship could fly, because the point comes from the core.
-    const q = view.clampToReach(s, flightOf(s.id), o, p);
+    // Clamped into the area drawn at this elevation, so the marker cannot
+    // leave the highlight, and always AT that elevation: a target off the
+    // slice plane is not a target on the plane the section describes. No point
+    // means no update, rather than moving the plan somewhere arbitrary.
+    const q = view.clampToSlice(p);
     if (!q) return;
     o.target = q;
     // A commanded destination with a held heading is a slide; asking for both
@@ -811,9 +815,46 @@ function endPointer(ev: PointerEvent): void {
   if (drag && drag.id === ev.pointerId) {
     canvas.classList.remove('rotating');
     const wasPlan = drag.kind === 'plan' || drag.kind === 'heading';
+    const kind = drag.kind;
     drag = null;
     if (wasPlan) refreshAll();
+    if (kind === 'plan') logPlacement();
   }
+}
+
+/**
+ * Say where the plan ended up, once the hand comes off it.
+ *
+ * Printed on release rather than per pointer move, which would be a line a
+ * pixel. The estimate is one flight of the planned order through the core, so
+ * it is what the ship will actually do rather than what was asked for: those
+ * differ by however much of the turn the hull could not deliver.
+ *
+ * The target's y must equal the slice elevation exactly. It is the plane the
+ * highlighted area is a section of, so a target off it is a target outside the
+ * region that was drawn to place it.
+ */
+function logPlacement(): void {
+  const s = selectedShip();
+  if (!s) return;
+  const o = match.order(s.id);
+  const y = view.planeY();
+  if (!o.target) {
+    console.log(`FT place | elevation ${y.toFixed(3)} | no target`);
+    return;
+  }
+  const est = match.previewPose(s.id, o, TICKS_PER_TURN)?.pos;
+  const t = o.target;
+  console.log(
+    `FT place | elevation ${y.toFixed(3)}`
+    + ` | target (${t.x.toFixed(3)}, ${t.y.toFixed(3)}, ${t.z.toFixed(3)})`
+    + ` | ship est ${est
+      ? `(${est.x.toFixed(3)}, ${est.y.toFixed(3)}, ${est.z.toFixed(3)})`
+      : 'none'}`
+    + ` | ship now (${s.pos.x.toFixed(3)}, ${s.pos.y.toFixed(3)}, ${s.pos.z.toFixed(3)})`
+    + ` | inside ${view.sliceContains(t)}`
+    + (t.y === y ? '' : `  OFF PLANE by ${(t.y - y).toFixed(4)}`),
+  );
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);

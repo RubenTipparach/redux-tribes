@@ -127,20 +127,42 @@ export function fit(radii: Float32Array | number[], nu: number, nv: number): Fit
   return { nu, nv, ctrl };
 }
 
-/** The fitted radius at a point on the chart. */
+/**
+ * The fitted radius at a point on the chart.
+ *
+ * The two axes evaluate the same way, four controls centred on the span, which
+ * they did not. Theta took `iu - 1 .. iu + 2` and phi took `iv .. iv + 3`: one
+ * control out of step, over a range of `nv - 3` rather than `nv - 1`. So the
+ * chart was shifted by a whole sample and squeezed by two. `radiusAt(f, u, 0)`
+ * returned the SECOND row of samples and v = 1 returned the second to last, and
+ * the surface never reached either pole. A field of constant radius hides that
+ * completely, which is why a sphere fitted perfectly and the poles were still
+ * wrong; measured on a radius rising 10 to 30 down the chart, the poles came
+ * out 10.8 and 29.2.
+ *
+ * Phi is clamped rather than cyclic, so the two controls off each end are
+ * mirrored, `2c0 - c1`. That is what makes the ends interpolate exactly:
+ * plain clamping evaluates the first span as `(5c0 + c1) / 6` and misses.
+ */
 export function radiusAt(f: Fitted, u: number, v: number): number {
   const { nu, nv, ctrl } = f;
   const fu = u * nu;
   const iu = Math.floor(fu);
   const bu = basis(fu - iu);
-  const fv = v * (nv - 3);
-  const iv = Math.min(nv - 4, Math.max(0, Math.floor(fv)));
+  const fv = v * (nv - 1);
+  const iv = Math.min(nv - 2, Math.max(0, Math.floor(fv)));
   const bv = basis(fv - iv);
   let r = 0;
   for (let a = 0; a < 4; a++) {
     const col = ctrl[(iu + a - 1 + nu * 2) % nu]!;
     for (let b = 0; b < 4; b++) {
-      r += bu[a]! * bv[b]! * col[Math.min(nv - 1, Math.max(0, iv + b))]!;
+      const j = iv + b - 1;
+      const c = j < 0
+        ? 2 * col[0]! - col[1]!
+        : j > nv - 1
+          ? 2 * col[nv - 1]! - col[nv - 2]!
+          : col[j]!;
+      r += bu[a]! * bv[b]! * c;
     }
   }
   return r;
@@ -351,4 +373,68 @@ export function contourLevels(
     if (Math.abs(y - skipY) > step * 1e-3) out.push(y);
   }
   return out;
+}
+
+/** Which ray of a cut a planar offset falls on, and how far out it sits. */
+function bearing(cut: SliceCut, dx: number, dz: number): { i: number; rho: number } {
+  let th = Math.atan2(dz, dx) / (2 * Math.PI);
+  if (th < 0) th += 1;
+  return { i: Math.round(th * cut.rays) % cut.rays, rho: Math.hypot(dx, dz) };
+}
+
+/** Is this planar offset from the cut's centre inside the area it covers? */
+export function sliceHolds(cut: SliceCut, dx: number, dz: number): boolean {
+  const { i, rho } = bearing(cut, dx, dz);
+  return (cut.spans[i] ?? []).some(([lo, hi]) => rho >= lo && rho <= hi);
+}
+
+/**
+ * The nearest offset inside the area, as x and z from the centre.
+ *
+ * Landing exactly ON a span edge is not good enough: the caller stores the
+ * point, and asking whether that stored point is inside runs the radius back
+ * through a sin, a cos and a hypot, which can return it a hair outside the
+ * edge it was placed on. So a clamp settles just inside, by a thousandth of a
+ * unit or half the span where the span is thinner than that.
+ *
+ * Null when nothing is within reach of this bearing at all, which the caller
+ * reads as "leave the plan alone".
+ */
+export function sliceClamp(
+  cut: SliceCut, dx: number, dz: number,
+): { dx: number; dz: number } | null {
+  const { i, rho } = bearing(cut, dx, dz);
+  const settle = (lo: number, hi: number, to: number): number => {
+    const inset = Math.min(1e-3, (hi - lo) / 2);
+    return to <= lo ? lo + inset : hi - inset;
+  };
+  const nearestIn = (spans: ReadonlyArray<readonly [number, number]>): number | null => {
+    let best: number | null = null;
+    for (const [lo, hi] of spans) {
+      if (rho >= lo && rho <= hi) return rho;
+      const edge = settle(lo, hi, rho);
+      if (best === null || Math.abs(edge - rho) < Math.abs(best - rho)) best = edge;
+    }
+    return best;
+  };
+  const out = (k: number, r: number) => {
+    const th = (k / cut.rays) * 2 * Math.PI;
+    return { dx: Math.cos(th) * r, dz: Math.sin(th) * r };
+  };
+  // Already inside: hand it back untouched. Rebuilding it from the nearest ray
+  // would snap a free drag onto one of `rays` bearings, and quantising the
+  // whole interior to hold the edge steady is the wrong trade.
+  if ((cut.spans[i] ?? []).some(([lo, hi]) => rho >= lo && rho <= hi)) return { dx, dz };
+  const here = nearestIn(cut.spans[i] ?? []);
+  if (here !== null) return out(i, here);
+  // Nothing on this bearing: take the closest one that has something, so the
+  // marker slides round the edge of the area rather than stopping dead.
+  for (let step = 1; step <= cut.rays / 2; step++) {
+    for (const j of [i + step, i - step]) {
+      const k = ((j % cut.rays) + cut.rays) % cut.rays;
+      const r = nearestIn(cut.spans[k] ?? []);
+      if (r !== null) return out(k, r);
+    }
+  }
+  return null;
 }

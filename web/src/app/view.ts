@@ -13,8 +13,8 @@ import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
-  chartDir, contourLevels, fit, radiusAt, sliceFill, sliceOutline, sliceRegion,
-  type Fitted,
+  chartDir, contourLevels, fit, radiusAt, sliceClamp, sliceFill, sliceHolds,
+  sliceOutline, sliceRegion, type Fitted, type SliceCut,
 } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
@@ -103,12 +103,6 @@ interface ShellEntry {
   built: BuiltShell | null;
 }
 /**
- * Bisection steps for sliding the picker onto the boundary. Seven halvings of
- * the drag length, which is finer than a pixel at any sane zoom and costs
- * seven flights.
- */
-const SLIDE_STEPS = 7;
-/**
  * Points around the working plane contour. Denser than a slice because this is
  * the line a hand aims at rather than one of nine that suggest a volume.
  */
@@ -153,6 +147,12 @@ export class View {
   #planeFill: THREE.Mesh;
   /** Which shell and working plane the drawn contours belong to. */
   #wireKey = '';
+  /**
+   * The cut currently drawn on the working plane, kept because it is also what
+   * a drag is clamped into. One region, drawn and picked against, so the marker
+   * cannot sit outside the area highlighted for it.
+   */
+  #planeCut: { cut: SliceCut; anchor: Vec3; y: number } | null = null;
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
@@ -821,65 +821,36 @@ export class View {
 
 
   /**
-   * Can this ship finish its turn at this exact point?
+   * Is this point inside the area the ship can finish its turn in, AT the
+   * working plane?
    *
-   * The one authority on whether a click is a move order. Asking the core the
-   * real question costs a single flight, which is nothing, and it means the
-   * router can never disagree with the model about what is reachable. The
-   * alternative, a radius, was wrong in both directions at once: it accepted
-   * clicks far outside a lobe that does not extend that way, and rejected
-   * nothing at all behind a ship carrying velocity.
+   * Asked of the region already drawn there rather than of the core. That is
+   * not a second model of the rule: the region IS the core's own bisections,
+   * taken once when the turn started, which is when reachability is decided.
+   * Re-probing per pointer move answers the same question again at a flight a
+   * pixel, and the answer it gives can disagree with the picture, which is
+   * what let a marker sit outside the area lit up for it.
    */
-  /**
-   * The furthest point toward `p` the ship can still finish its turn at.
-   *
-   * A drag that leaves the reachable set used to be refused outright, so the
-   * marker stopped dead and the plan stopped tracking the hand. Walking in
-   * from a point that IS reachable puts the marker on the boundary instead,
-   * so it keeps following and lands exactly on the edge rather than a grid
-   * cell inside it. Same bisection the surface uses, so the line you slide
-   * along is the line you see.
-   *
-   * Walks from the HULL by preference, because that anchor is fixed while the
-   * cursor sweeps, so the boundary point sweeps with it. Anchoring on the last
-   * marker instead makes the ray stop turning once it is already on the edge,
-   * and the marker stalls when you drag straight outward. The hull is not
-   * always reachable though, since a ship carrying speed cannot stop where it
-   * already is, so the standing target is the fallback and then the caller
-   * holds its last good point.
-   */
-  clampToReach(
-    ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3,
-  ): Vec3 | null {
-    if (this.canReachPoint(ship, flight, order, p)) return p;
-    const seeds = [ship.pos, order.target].filter((q): q is Vec3 => !!q);
-    const from = seeds.find((q) => this.canReachPoint(ship, flight, order, q));
-    if (!from) return null;
-    let lo = 0;
-    let hi = 1;
-    for (let n = 0; n < SLIDE_STEPS; n++) {
-      const m = (lo + hi) / 2;
-      const q = {
-        x: from.x + (p.x - from.x) * m,
-        y: from.y + (p.y - from.y) * m,
-        z: from.z + (p.z - from.z) * m,
-      };
-      if (this.canReachPoint(ship, flight, order, q)) lo = m; else hi = m;
-    }
-    return {
-      x: from.x + (p.x - from.x) * lo,
-      y: from.y + (p.y - from.y) * lo,
-      z: from.z + (p.z - from.z) * lo,
-    };
+  sliceContains(p: Vec3): boolean {
+    const c = this.#planeCut;
+    if (!c) return false;
+    return sliceHolds(c.cut, p.x - c.anchor.x, p.z - c.anchor.z);
   }
 
-  canReachPoint(ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3): boolean {
-    if (isCommitted(order.mode)) return false;
-    const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
-    const flyOrder = order.face
-      ? { mode: order.mode, face: order.face }
-      : { mode: order.mode };
-    return this.#sim.canReach(body, flight, flyOrder, p, REACH_EPS, PROBE_STEPS);
+  /**
+   * The nearest point to `p` inside the drawn region, always AT the working
+   * plane.
+   *
+   * y comes from the plane and never from `p` or from anything interpolated.
+   * The walk this replaces bisected between the click and the SHIP's own
+   * position, which sits at the ship's height rather than the plane's, so the
+   * point it returned drifted off the plane and out of the area drawn for it.
+   */
+  clampToSlice(p: Vec3): Vec3 | null {
+    const c = this.#planeCut;
+    if (!c) return null;
+    const q = sliceClamp(c.cut, p.x - c.anchor.x, p.z - c.anchor.z);
+    return q ? { x: c.anchor.x + q.dx, y: c.y, z: c.anchor.z + q.dz } : null;
   }
 
   /**
@@ -906,12 +877,14 @@ export class View {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#planeShape.visible = false;
       this.#planeFill.visible = false;
+      this.#planeCut = null;
       return;
     }
     const built = this.#shells.get(ship.id)?.built;
     if (!built) {
       this.#planeShape.visible = false;
       this.#planeFill.visible = false;
+      this.#planeCut = null;
       return;
     }
     const y = this.planeY();
@@ -926,6 +899,7 @@ export class View {
     // come off the same spans, so the fill cannot spill past its own outline.
     const cut = sliceRegion(built.fitted, built.anchor.y, y, PLANE_RAYS);
     const a = built.anchor;
+    this.#planeCut = { cut, anchor: a, y };
     const pts = sliceOutline(cut, a.x, a.z, y);
     const tris = sliceFill(cut, a.x, a.z, y);
 
