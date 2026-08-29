@@ -68,6 +68,53 @@ let selected = -1;
  * underneath it.
  */
 const targets = new Map<number, number>();
+
+/**
+ * The heading each ship is trying to come round to, by ship id.
+ *
+ * A standing order, not a per turn one. A hull turns at 6 degrees a second and
+ * a turn is ten seconds, so 60 degrees is all it gets: asking for more than
+ * that used to be forgotten the moment the turn resolved, because orders are
+ * cleared once they are spent and the heading went with them. The ship stopped
+ * part way round and stayed there. The heading is re-issued each turn instead,
+ * so a hull keeps coming about until it is pointed where it was told.
+ *
+ * Move mode drops it, because that mode faces its own course (DESIGN 3.2) and
+ * a commanded heading means nothing there. Coming back to slide takes the
+ * heading the ship is ACTUALLY on at that moment, so the nose never jumps to
+ * an order given before the ship spent two turns flying somewhere else.
+ */
+const standingFace = new Map<number, Vec3>();
+
+/** Command a heading for this ship, which slide mode will hold and keep. */
+function faceToward(id: number, dir: Vec3): void {
+  const l = Math.hypot(dir.x, dir.y, dir.z) || 1;
+  const unit = { x: dir.x / l, y: dir.y / l, z: dir.z / l };
+  const o = match.order(id);
+  o.face = unit;
+  standingFace.set(id, unit);
+  // Only slide reads a face, so commanding one is what puts a ship in it.
+  if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
+}
+
+/**
+ * Re-issue standing headings on a fresh turn, and seed one for a ship that has
+ * just entered slide mode from where its nose actually is.
+ */
+function restoreFacing(): void {
+  for (const s of ships) {
+    if (!mine(s) || s.destroyed) continue;
+    const want = standingFace.get(s.id);
+    // No standing heading means nothing to restore. A fresh order defaults to
+    // Move, so reading the mode here and skipping would have skipped every
+    // ship: the standing heading IS the slide order, and re-issuing one means
+    // re-issuing both.
+    if (!want) continue;
+    const o = match.order(s.id);
+    o.face = want;
+    o.mode = Mode.TurnSlide;
+  }
+}
 /**
  * Which second's fire slot is open, or null.
  *
@@ -119,6 +166,7 @@ function start(): void {
   view.setShips(ships);
   view.setSelection(selected);
   view.fit();
+  restoreFacing();
   view.invalidateEnvelope();
   planTurnEnvelopes();
   previewTick = TICKS_PER_TURN;
@@ -238,6 +286,17 @@ function renderModes(): void {
       // A committed mode has a single outcome, so a destination it cannot
       // influence would be a lie on screen.
       if (isCommitted(mode)) delete o.target;
+      if (mode === Mode.TurnSlide) {
+        // Entering slide takes the heading the nose is ACTUALLY on, so there
+        // is a heading to see and turn from at once, and so the ship never
+        // snaps to an order given before it flew somewhere else.
+        faceToward(selected, standingFace.get(selected) ?? match.forward(selected));
+      } else {
+        // Move faces its own course, so a commanded heading means nothing in
+        // it and is dropped rather than kept to surprise a later slide.
+        delete o.face;
+        standingFace.delete(selected);
+      }
       refreshAll();
     };
     host.appendChild(b);
@@ -1054,10 +1113,9 @@ addEventListener('keydown', ev => {
   const nudgeHeading = (deg: number) => {
     if (!canPlan()) return;
     const o = match.order(s.id);
-    const cur = o.face ?? match.forward(s.id);
+    const cur = o.face ?? standingFace.get(s.id) ?? match.forward(s.id);
     const a = Math.atan2(cur.x, cur.z) + (deg * Math.PI) / 180;
-    o.face = { x: Math.sin(a), y: 0, z: Math.cos(a) };
-    if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
+    faceToward(s.id, { x: Math.sin(a), y: 0, z: Math.cos(a) });
     refreshAll();
   };
   switch (ev.key.toLowerCase()) {
@@ -1068,11 +1126,7 @@ addEventListener('keydown', ev => {
     case 'f': {
       const t = targetShip();
       if (!t || !canPlan()) break;
-      const o = match.order(s.id);
-      const d = { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z };
-      const l = Math.hypot(d.x, d.z) || 1;
-      o.face = { x: d.x / l, y: 0, z: d.z / l };
-      if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
+      faceToward(s.id, { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z });
       refreshAll();
       break;
     }
@@ -1286,6 +1340,7 @@ function frame(): void {
         selected = ships.find(s => mine(s) && !s.destroyed)?.id ?? selected;
       }
       view.setSelection(selected);
+      restoreFacing();
       view.invalidateEnvelope();
       planTurnEnvelopes();
       refreshAll();
@@ -1310,6 +1365,9 @@ Object.defineProperty(window, 'ftDebug', {
     order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
     selected: () => selected,
     target: () => targetShip()?.id ?? -1,
+    /** Where the selected hull's nose actually points, for checking that a
+     * commanded heading is being turned INTO over several turns. */
+    forward: () => (selected < 0 ? null : match.forward(selected)),
     playing: () => playTick,
     side: () => launch.side,
     kind: () => launch.kind,

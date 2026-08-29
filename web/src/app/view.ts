@@ -18,7 +18,7 @@ import {
 } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
-  isCommitted, PROBE_STEPS,
+  isCommitted, Mode, PROBE_STEPS,
 } from '../sim/types.js';
 
 const CYAN = 0x35c7ff;
@@ -101,6 +101,8 @@ interface ShellEntry {
   /** Index into ENVELOPE_LEVELS of the next level still to build. */
   next: number;
   built: BuiltShell | null;
+  /** True while `built` belongs to a superseded key: drawn, but not current. */
+  stale: boolean;
 }
 /**
  * Points around the working plane contour. Denser than a slice because this is
@@ -581,8 +583,13 @@ export class View {
       shortfall > 1.0 ? 0xffd24b : CYAN,
     );
 
-    const face = order.face;
-    if (face) {
+    // Slide always shows a heading, whether or not one has been commanded yet:
+    // it is the mode where the nose is an input, so there has to be something
+    // on screen to turn. Move faces its own course, so it shows none.
+    const face = order.mode === Mode.TurnSlide
+      ? (order.face ?? this.#match.forward(ship.id))
+      : order.face;
+    if (face && order.mode === Mode.TurnSlide) {
       const from = v(ship.pos);
       const to = from.clone().add(new THREE.Vector3(face.x, face.y, face.z).normalize().multiplyScalar(18));
       this.#headingArrow.geometry.dispose();
@@ -634,9 +641,12 @@ export class View {
     const key = this.#shellKeyFor(ship, order, flight);
     const have = this.#shells.get(ship.id);
     if (have && have.key === key) return;
-    if (have?.built) have.built.geo.dispose();
-    this.#wireKey = '';
-    this.#shells.set(ship.id, { key, next: 0, built: null });
+    // Keep the old surface on screen while the new one is found. It used to be
+    // thrown away here, so anything that re-opened the ladder blanked the
+    // envelope and grew it back from the coarsest level: a flash on every
+    // rotation in slide mode, where turning genuinely does move the boundary
+    // and so cannot be spared the rebuild. Stale for a few frames beats absent.
+    this.#shells.set(ship.id, { key, next: 0, built: have?.built ?? null, stale: !!have?.built });
     if (!this.#pending.includes(ship.id)) this.#pending.push(ship.id);
   }
 
@@ -650,11 +660,17 @@ export class View {
       ship.id, order.mode,
       ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
       ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
-      // All three components. The old key carried x and z only, so a purely
-      // vertical change of commanded heading never invalidated the shell.
-      order.face?.x.toFixed(3) ?? '-',
-      order.face?.y.toFixed(3) ?? '-',
-      order.face?.z.toFixed(3) ?? '-',
+      // The commanded heading, but ONLY where the flight reads it. Slide holds
+      // the nose, so turning re-points the strong drive and moves the boundary:
+      // measured at 19.09 u worst and 0.81 u mean over a 48 x 26 chart. Move
+      // faces its own course, so the same turn moves it by 0.00 u, exactly, and
+      // carrying the face here rebuilt a surface that could not have changed.
+      // All three components, since the old key carried x and z only.
+      ...(order.mode === Mode.TurnSlide
+        ? [order.face?.x.toFixed(3) ?? '-',
+           order.face?.y.toFixed(3) ?? '-',
+           order.face?.z.toFixed(3) ?? '-']
+        : []),
       flight.yawRate, flight.pitchRate, flight.accelFwd,
       flight.accelRetro, flight.accelLat, flight.maxSpeed,
     ].join('|');
@@ -686,6 +702,7 @@ export class View {
       if (built) {
         if (entry.built) entry.built.geo.dispose();
         entry.built = built;
+        entry.stale = false;
         // A new level is a new surface, so whatever contours were cut from the
         // old one are stale even if the working plane has not moved.
         this.#wireKey = '';
