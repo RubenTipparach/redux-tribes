@@ -10,7 +10,7 @@
 
 import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
-import { View } from './app/view.js';
+import { HIT_TICKS, KILL_TICKS, View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
@@ -176,6 +176,26 @@ let playing = false;
 let speed = 1;
 /** null means live; a number means a past turn is being reviewed. */
 let reviewTurn: number | null = null;
+/**
+ * Watching the whole match back, turn by turn.
+ *
+ * `live` is the world as it stood when the replay started, because playing the
+ * battle means restoring and re-resolving each recorded turn IN the core, and a
+ * review that left the match somewhere else would be worse than no review. It
+ * is put back the moment the replay ends, however it ends.
+ */
+let battle: { at: number; live: Float32Array } | null = null;
+/**
+ * Where hulls have been, by ship id, one entry per turn flown.
+ *
+ * Sampled from the poses the core reported for the turn that just resolved,
+ * not re-flown: the client draws history, it does not compute it.
+ */
+const trails = new Map<number, Array<{ turn: number; points: Vec3[] }>>();
+/** How much of that history is drawn. */
+let trailScope: 'off' | 'turn' | 'all' = 'turn';
+/** One sample every this many ticks. 600 ticks a turn, so 61 points a ship. */
+const TRAIL_STEP = 10;
 let flightOverride = new Map<number, Flight>();
 /** How this match was entered, which decides how its turns are resolved. */
 let launch: Launch = { kind: 'offline', seed: '', scenario: 'skirmish', humanSides: 0b01, side: 0 };
@@ -207,6 +227,8 @@ function start(): void {
   targets.clear();
   standingFace.clear();
   standingRoll.clear();
+  trails.clear();
+  battle = null;
   openSlot = null;
   playTick = null;
   playing = false;
@@ -663,7 +685,11 @@ function renderTurnStrip(): void {
     host.appendChild(b);
   };
   for (const h of match.history) {
-    mk(`T${h.turn}`, reviewTurn === h.turn, () => { reviewTurn = h.turn; refreshAll(); });
+    mk(`T${h.turn}`, reviewTurn === h.turn, () => {
+      endBattle();
+      reviewTurn = h.turn;
+      refreshAll();
+    });
   }
   if (match.history.length) {
     mk('live', reviewTurn === null, () => { reviewTurn = null; refreshAll(); });
@@ -733,12 +759,23 @@ function renderHeader(): void {
   // gameOver reports the winning SIDE, not a verdict: which of those is a
   // victory depends on the seat, and only the client knows the seat.
   const over = match.gameOver;
-  $('hPhase').textContent = over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
+  $('hPhase').textContent = battle ? `BATTLE T${battle.at}`
+    : over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
     : reviewTurn !== null ? `REVIEW T${reviewTurn}`
     : waiting ? 'COMMITTED'
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
   $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
+  const bb = $<HTMLButtonElement>('bBattle');
+  bb.textContent = battle ? 'Stop' : 'Replay';
+  bb.classList.toggle('on', !!battle);
+  bb.disabled = match.history.length === 0;
+  bb.title = battle ? 'Stop the replay and return to the live turn'
+    : `Play the whole battle back, all ${match.history.length} turns`;
+  const tb = $<HTMLButtonElement>('bTrail');
+  tb.textContent = trailScope === 'off' ? 'Trails' : trailScope === 'turn' ? 'Trail 1' : 'Trail all';
+  tb.classList.toggle('on', trailScope !== 'off');
+  tb.title = 'Where hulls have been: off, the last turn, or the whole match';
   // Live during playback AND during planning, but they are two states on one
   // control: playback scrubs the turn that was resolved, planning scrubs a
   // preview of the plan. Only the playback one touches playTick, which is the
@@ -778,6 +815,7 @@ function refreshAll(): void {
   renderAttitude();
   renderLog();
   renderHeader();
+  renderTrails();
   draw();
   const s = selectedShip();
   $('env').innerHTML = s ? view.envelopeSummary(s, flightOf(s.id)) : 'no ship selected';
@@ -1264,6 +1302,7 @@ async function endTurn(): Promise<void> {
   banner(false);
   ships = match.ships();
   view.setShips(ships);
+  recordTrails();
   playTick = 0;
   playing = true;
   previewTick = TICKS_PER_TURN;
@@ -1436,6 +1475,11 @@ $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' 
 $('pCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
 $('pFace').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
 
+$('bBattle').onclick = startBattle;
+$('bTrail').onclick = () => {
+  trailScope = trailScope === 'turn' ? 'all' : trailScope === 'all' ? 'off' : 'turn';
+  refreshAll();
+};
 $('bSpeed').onclick = () => {
   speed = speed === 1 ? 2 : speed === 2 ? 4 : 1;
   $('bSpeed').textContent = `${speed}x`;
@@ -1488,20 +1532,151 @@ $('tFit').onclick = () => view.fit();
 
 // ------------------------------------------------------------ playback --
 
+/** The turn whose track and events are on screen: the one being replayed
+ * during a battle playback, else the one just resolved. */
+function shownRecord(): typeof match.history[number] | undefined {
+  return battle ? match.history[battle.at] : match.history[match.history.length - 1];
+}
+
 function showTick(tick: number): void {
   view.setPoses(match.poses(tick));
   view.setProjectiles(match.trackProjectiles(tick));
 
   // Beams last one tick in the simulation, so they are drawn from the event
-  // stream for the tick being shown rather than kept as objects.
-  const entry = match.history[match.history.length - 1];
-  const beams = (entry?.events ?? [])
+  // stream for the tick being shown rather than kept as objects. Blasts come
+  // off the same stream and last longer, so they carry an age instead.
+  const events = shownRecord()?.events ?? [];
+  view.setBeams(events
     .filter(e => e.kind === EventKind.ShotFired && Math.abs(e.tick - tick) < 6)
-    .map(e => ({ from: e.pos, to: e.to }));
-  view.setBeams(beams);
+    .map(e => ({ from: e.pos, to: e.to })));
+  view.setBlasts(blastsAt(events, tick));
 
   scrub.value = String(tick);
   $('hSec').textContent = (tick / 60).toFixed(1);
+}
+
+/**
+ * Keep the track the turn that just resolved was flown along.
+ *
+ * Taken from the core's own poses, once, rather than re-derived whenever the
+ * overlay is drawn: the track is a fact about a turn that has happened, and
+ * asking again per frame would be several hundred boundary crossings to be
+ * told the same thing.
+ */
+function recordTrails(): void {
+  const turn = match.history.length - 1;
+  if (turn < 0) return;
+  const leg = new Map<number, Vec3[]>();
+  for (let t = 0; t <= TICKS_PER_TURN; t += TRAIL_STEP) {
+    for (const p of match.poses(t)) {
+      // A wreck's track stops where it died rather than running on.
+      if (p.destroyed) continue;
+      let pts = leg.get(p.id);
+      if (!pts) leg.set(p.id, pts = []);
+      pts.push(p.pos);
+    }
+  }
+  for (const [id, points] of leg) {
+    let byShip = trails.get(id);
+    if (!byShip) trails.set(id, byShip = []);
+    // Keyed by turn rather than pushed, because a ship that dies stops adding
+    // legs and its list would otherwise stop lining up with the turn numbers.
+    byShip.push({ turn, points });
+  }
+}
+
+/**
+ * Watch the whole match back, from the records rather than from a second copy
+ * of what happened.
+ *
+ * Each turn is restored from the snapshot it began at and resolved again in
+ * place, which is the same thing `replay` does to check a hash, so the track
+ * on screen is the core re-flying the turn rather than a recording of pixels.
+ * It costs one resolve per turn, about half a millisecond each.
+ *
+ * The live world is stashed first and put back when it ends, however it ends.
+ */
+function startBattle(): void {
+  if (battle) { endBattle(); return; }
+  if (match.history.length === 0) return;
+  const live = match.snapshot();
+  if (!live) return;
+  battle = { at: -1, live };
+  reviewTurn = null;
+  enterBattleTurn(0);
+  refreshAll();
+}
+
+function enterBattleTurn(index: number): void {
+  const rec = match.history[index];
+  if (!battle || !rec) { endBattle(); return; }
+  if (!match.restore(rec.before)) { endBattle(); return; }
+  match.resolveInPlace(rec.orders);
+  battle.at = index;
+  ships = match.ships();
+  view.setShips(ships);
+  playTick = 0;
+  playing = true;
+  showTick(0);
+  renderTrails();
+  renderHeader();
+}
+
+function endBattle(): void {
+  if (!battle) return;
+  match.restore(battle.live);
+  battle = null;
+  playTick = null;
+  playing = false;
+  view.setBeams([]);
+  view.setBlasts([]);
+  view.setProjectiles([]);
+  ships = match.ships();
+  view.setShips(ships);
+  view.setSelection(selected);
+  view.invalidateEnvelope();
+  planTurnEnvelopes();
+  refreshAll();
+}
+
+/** Draw as much of that history as the scope asks for. */
+function renderTrails(): void {
+  const upTo = battle ? battle.at : match.history.length - 1;
+  if (trailScope === 'off' || upTo < 0) { view.setTrails([]); return; }
+  // While the battle is replaying, show only what had happened by the turn on
+  // screen: a track running ahead of the playback spoils the thing being
+  // watched.
+  const first = trailScope === 'all' ? 0 : upTo;
+  const out = [];
+  for (const [id, legs] of trails) {
+    const side = ships.find(s => s.id === id)?.side ?? 0;
+    for (const leg of legs) {
+      if (leg.turn < first || leg.turn > upTo) continue;
+      out.push({ points: leg.points, side, age: upTo - leg.turn });
+    }
+  }
+  view.setTrails(out);
+}
+
+/**
+ * Which blasts are burning at this tick, and how far through each is.
+ *
+ * Derived rather than spawned, so scrubbing back through a kill runs it
+ * backwards and holding on a tick holds the flame where it was.
+ */
+function blastsAt(events: readonly SimEvent[], tick: number)
+  : Array<{ pos: Vec3; age: number; radius: number; kill: boolean }> {
+  const out = [];
+  for (const e of events) {
+    const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision;
+    if (!kill && e.kind !== EventKind.ShotHit) continue;
+    const life = kill ? KILL_TICKS : HIT_TICKS;
+    const age = (tick - e.tick) / life;
+    if (age < 0 || age > 1) continue;
+    const hull = ships.find(x => x.id === e.ship)?.radius ?? 2;
+    out.push({ pos: e.pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill });
+  }
+  return out;
 }
 
 function frame(): void {
@@ -1511,9 +1686,17 @@ function frame(): void {
     playTick = Math.min(TICKS_PER_TURN, playTick + speed);
     showTick(playTick);
     if (playTick >= TICKS_PER_TURN) {
+      // A battle replay runs on to the next recorded turn rather than handing
+      // the console back, and only puts the world down once it runs out.
+      if (battle && battle.at + 1 < match.history.length) {
+        enterBattleTurn(battle.at + 1);
+        return;
+      }
+      if (battle) { endBattle(); return; }
       playing = false;
       playTick = null;
       view.setBeams([]);
+      view.setBlasts([]);
       view.setProjectiles([]);
       ships = match.ships();
       view.setShips(ships);
@@ -1562,6 +1745,18 @@ Object.defineProperty(window, 'ftDebug', {
     wells: () => match.wells(),
     paths: () => view.pathStats(),
     ghosts: () => view.ghostCount(),
+    /** What the effects layer is drawing right now, and how far the biggest
+     * blast has grown, so "bigger and more visible" is a measurement. */
+    fx: () => view.fxStats(),
+    /** Which turn a battle replay is on, or null when it is not running. */
+    battle: () => (battle ? battle.at : null),
+    trailScope: () => trailScope,
+    /** Turn index and event kinds only: enough to find a kill, not a second
+     * copy of the match. */
+    history: () => match.history.map(h => ({
+      turn: h.turn,
+      events: h.events.map(e => ({ kind: e.kind, tick: e.tick, ship: e.ship })),
+    })),
     /** How far the selected hull's reachable volume has sharpened, so a
      * harness can see that a heading under a finger is not re-probing it and
      * that letting go finishes the ladder. */

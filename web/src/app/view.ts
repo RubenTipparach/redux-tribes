@@ -26,6 +26,20 @@ const ORANGE = 0xfa6a0a;
 const GREEN = 0x4cd97b;
 const RED = 0xff4b4b;
 const MUTED = 0x7c8b9d;
+const FLAME = 0xffd24b;
+const WHITE = 0xfff3d0;
+
+/**
+ * How long a blast is on screen, in ticks of the 60 Hz sim clock.
+ *
+ * A kill lasts most of a second because it is the thing a player is watching
+ * for; a hit is a flick, because six of them can land in a turn and a second
+ * of fire each would be a light show rather than a report.
+ */
+export const KILL_TICKS = 54;
+export const HIT_TICKS = 14;
+/** A kill's fireball, as a multiple of the hull radius it consumed. */
+const KILL_REACH = 7.5;
 
 const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
@@ -173,6 +187,10 @@ export class View {
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
+  /** Blasts: kills, collisions and hits, drawn for the tick being shown. */
+  #fxGroup = new THREE.Group();
+  /** Where hulls have actually been, one line per ship per turn flown. */
+  #trailGroup = new THREE.Group();
   /** The gravity field, drawn from what the match reports rather than from a
    * second model of gravity living here. */
   #wellGroup = new THREE.Group();
@@ -336,6 +354,8 @@ export class View {
 
     this.#scene.add(this.#projGroup);
     this.#scene.add(this.#beamGroup);
+    this.#scene.add(this.#fxGroup);
+    this.#scene.add(this.#trailGroup);
   }
 
   // ------------------------------------------------------------- camera --
@@ -537,6 +557,96 @@ export class View {
         color: CYAN, transparent: true, opacity: 0.85,
       })));
     }
+  }
+
+  /**
+   * Blasts, drawn from the same event stream the beams come from.
+   *
+   * A pure function of (event tick, tick being shown): `age` is passed in
+   * rather than accumulated here, so scrubbing backwards runs an explosion
+   * backwards and pausing holds it. Animation state kept in the renderer would
+   * make the picture depend on how the player got to a tick rather than on
+   * which tick it is.
+   *
+   * A kill is three things because one sphere reads as a bubble: a white core
+   * that flashes and shrinks, a fireball that expands to KILL_REACH hull radii
+   * and fades, and a flat ring that keeps expanding past both, which is what
+   * makes it legible from a camera looking down the blast rather than across
+   * it. Additive and depth-write off, so they light each other instead of
+   * cutting holes.
+   */
+  setBlasts(list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>): void {
+    for (const c of this.#fxGroup.children) {
+      const m = c as THREE.Mesh;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.#fxGroup.clear();
+    for (const b of list) {
+      const a = Math.max(0, Math.min(1, b.age));
+      const at = v(b.pos);
+      if (!b.kill) {
+        // A hit: one spark, out fast.
+        const r = b.radius * (0.35 + 2.2 * a);
+        this.#fxGroup.add(this.#blastMesh(
+          new THREE.SphereGeometry(r, 10, 8), at, FLAME, (1 - a) * 0.9));
+        continue;
+      }
+      // Eased so the fireball leaps and then coasts, which is what an
+      // explosion looks like and what a linear ramp never does.
+      const out = 1 - (1 - a) * (1 - a);
+      const reach = b.radius * KILL_REACH;
+      this.#fxGroup.add(this.#blastMesh(
+        new THREE.SphereGeometry(reach * (0.18 + 0.82 * out), 20, 14),
+        at, a < 0.45 ? FLAME : RED, (1 - a) * 0.55));
+      this.#fxGroup.add(this.#blastMesh(
+        new THREE.SphereGeometry(b.radius * (1.8 - 1.4 * a), 14, 10),
+        at, WHITE, Math.max(0, 1 - a * 2.6)));
+      const ring = new THREE.RingGeometry(reach * out * 0.92, reach * out * 1.12, 40);
+      ring.rotateX(-Math.PI / 2);
+      const m = this.#blastMesh(ring, at, WHITE, (1 - a) * 0.5);
+      (m.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;
+      this.#fxGroup.add(m);
+    }
+  }
+
+  /**
+   * Where hulls have been.
+   *
+   * One line per ship per turn, taken from poses the core reported rather than
+   * re-flown here: a second integrator drawing a second path is exactly the
+   * divergent rule GUIDELINES 5.1 forbids, and this one would be wrong in a
+   * way nobody could see.
+   *
+   * `age` is how many turns back the line is, so the oldest fade out and the
+   * turn just flown reads clearly against them.
+   */
+  setTrails(list: ReadonlyArray<{ points: readonly Vec3[]; side: number; age: number }>): void {
+    for (const c of this.#trailGroup.children) {
+      (c as THREE.Line).geometry.dispose();
+      ((c as THREE.Line).material as THREE.Material).dispose();
+    }
+    this.#trailGroup.clear();
+    for (const t of list) {
+      if (t.points.length < 2) continue;
+      const geo = new THREE.BufferGeometry().setFromPoints(t.points.map(v));
+      this.#trailGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: t.side === this.mySide ? CYAN : ORANGE,
+        transparent: true,
+        // Never all the way to nothing: a line that fades out entirely is a
+        // history that quietly stops rather than one that recedes.
+        opacity: Math.max(0.12, 0.75 / (1 + t.age * 0.9)),
+      })));
+    }
+  }
+
+  #blastMesh(geo: THREE.BufferGeometry, at: THREE.Vector3, color: number, opacity: number): THREE.Mesh {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: Math.max(0, opacity),
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    m.position.copy(at);
+    return m;
   }
 
   // ------------------------------------------------------------- planning --
@@ -932,6 +1042,22 @@ export class View {
 
   /** How many plan ghosts are drawn. */
   ghostCount(): number { return this.#ghostGroup.children.length; }
+
+  /** How much blast and how much history is on screen, and how big the biggest
+   * blast has grown. Observation only, for the harness and the console. */
+  fxStats(): { blasts: number; trails: number; widest: number } {
+    let widest = 0;
+    for (const c of this.#fxGroup.children) {
+      const g = (c as THREE.Mesh).geometry;
+      g.computeBoundingSphere();
+      widest = Math.max(widest, g.boundingSphere?.radius ?? 0);
+    }
+    return {
+      blasts: this.#fxGroup.children.length,
+      trails: this.#trailGroup.children.length,
+      widest,
+    };
+  }
 
   /** True while any ship's envelope is still sharpening. */
   get rebuilding(): boolean { return this.#pending.length > 0; }

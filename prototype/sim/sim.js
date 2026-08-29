@@ -125,7 +125,10 @@
     if (ship.ai.enabled && attackerId) ship.ai.targetId = attackerId;
     if (ship.hull <= 0) {
       ship.destroyed = true;
-      events.push({ tick, type: "ShipDestroyed", ship: ship.id, by: attackerId || null });
+      // Where it died, same as the core: the wreck's pose is gone by the time
+      // anything draws the event.
+      events.push({ tick, type: "ShipDestroyed", ship: ship.id, by: attackerId || null,
+                    pos: V.clone(ship.pos) });
     }
   }
 

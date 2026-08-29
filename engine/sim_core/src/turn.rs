@@ -211,6 +211,10 @@ impl Sim {
             let mut e = Event::new(EventKind::ShipDestroyed, tick);
             e.ship = si as i32;
             e.other = attacker.map(|a| a as i32).unwrap_or(-1);
+            // Where it died. Every other event worth drawing carries one, and
+            // a client that looked the hull's position up instead would be
+            // reading a pose the wreck no longer has.
+            e.pos = ship.pos;
             events.push(e);
         }
     }
