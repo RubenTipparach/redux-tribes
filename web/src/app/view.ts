@@ -30,14 +30,19 @@ const FLAME = 0xffd24b;
 const WHITE = 0xfff3d0;
 
 /**
- * How long a blast is on screen, in ticks of the 60 Hz sim clock.
+ * How long an effect is on screen, in ticks of the 60 Hz sim clock.
  *
- * A kill lasts most of a second because it is the thing a player is watching
- * for; a hit is a flick, because six of them can land in a turn and a second
- * of fire each would be a light show rather than a report.
+ * A kill runs two whole seconds, because losing a hull is the event of the
+ * turn and a flicker is not an ending. A hit is half a second, and a beam
+ * holds for one: long enough to see which mount fired at what, short enough
+ * that a turn's worth of them is a battle rather than a lightshow.
  */
-export const KILL_TICKS = 54;
-export const HIT_TICKS = 14;
+export const KILL_TICKS = 120;
+export const HIT_TICKS = 30;
+export const BEAM_TICKS = 60;
+/** The longest anything burns, which is how much playback tail a turn may
+ * need before the next one starts. */
+export const FX_TICKS = Math.max(KILL_TICKS, HIT_TICKS, BEAM_TICKS);
 /** A kill's fireball, as a multiple of the hull radius it consumed. */
 const KILL_REACH = 7.5;
 
@@ -548,13 +553,28 @@ export class View {
     }
   }
 
-  /** Beams are events, not objects: drawn for the tick they happened on. */
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3 }>): void {
+  /**
+   * Beams are events, not objects: drawn from the tick they fired on, for as
+   * long as the mount holds them.
+   *
+   * A beam holds bright for the first third of its second and then dies down,
+   * which is what a sustained shot looks like and what a line that simply
+   * vanishes never does. `age` is passed in for the same reason a blast's is:
+   * scrubbing must be able to run one backwards.
+   */
+  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+    for (const c of this.#beamGroup.children) {
+      (c as THREE.Line).geometry.dispose();
+      ((c as THREE.Line).material as THREE.Material).dispose();
+    }
     this.#beamGroup.clear();
     for (const b of list) {
+      const a = Math.max(0, Math.min(1, b.age));
       const geo = new THREE.BufferGeometry().setFromPoints([v(b.from), v(b.to)]);
       this.#beamGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
-        color: CYAN, transparent: true, opacity: 0.85,
+        color: CYAN, transparent: true,
+        opacity: a < 0.35 ? 0.95 : 0.95 * (1 - (a - 0.35) / 0.65),
+        blending: THREE.AdditiveBlending, depthWrite: false,
       })));
     }
   }
@@ -585,24 +605,34 @@ export class View {
     for (const b of list) {
       const a = Math.max(0, Math.min(1, b.age));
       const at = v(b.pos);
+      // An explosion leaps and then lingers: it reaches its size in the first
+      // third of its life and spends the rest fading. Growth spread evenly
+      // over two seconds would be a balloon inflating, not a hull coming
+      // apart, which is why the reach and the fade run on separate clocks.
+      const grow = (frac: number) => {
+        const g = Math.min(1, a / frac);
+        return 1 - (1 - g) * (1 - g);
+      };
       if (!b.kill) {
-        // A hit: one spark, out fast.
-        const r = b.radius * (0.35 + 2.2 * a);
         this.#fxGroup.add(this.#blastMesh(
-          new THREE.SphereGeometry(r, 10, 8), at, FLAME, (1 - a) * 0.9));
+          new THREE.SphereGeometry(b.radius * (0.35 + 2.2 * grow(0.35)), 10, 8),
+          at, FLAME, (1 - a) * 0.9));
         continue;
       }
-      // Eased so the fireball leaps and then coasts, which is what an
-      // explosion looks like and what a linear ramp never does.
-      const out = 1 - (1 - a) * (1 - a);
+      const out = grow(0.32);
       const reach = b.radius * KILL_REACH;
       this.#fxGroup.add(this.#blastMesh(
         new THREE.SphereGeometry(reach * (0.18 + 0.82 * out), 20, 14),
-        at, a < 0.45 ? FLAME : RED, (1 - a) * 0.55));
+        at, a < 0.4 ? FLAME : RED, (1 - a) * 0.55));
       this.#fxGroup.add(this.#blastMesh(
-        new THREE.SphereGeometry(b.radius * (1.8 - 1.4 * a), 14, 10),
-        at, WHITE, Math.max(0, 1 - a * 2.6)));
-      const ring = new THREE.RingGeometry(reach * out * 0.92, reach * out * 1.12, 40);
+        new THREE.SphereGeometry(b.radius * (1.8 - 1.4 * Math.min(1, a * 3)), 14, 10),
+        at, WHITE, Math.max(0, 1 - a * 5)));
+      // The shockwave runs on past the fireball, which is what reads from a
+      // camera looking down the blast rather than across it. Same reach as the
+      // fireball, on a slower clock: it is the fireball's edge still travelling
+      // after the flame has stopped, not a wider explosion.
+      const wide = reach * grow(0.55);
+      const ring = new THREE.RingGeometry(wide * 0.92, wide * 1.12, 44);
       ring.rotateX(-Math.PI / 2);
       const m = this.#blastMesh(ring, at, WHITE, (1 - a) * 0.5);
       (m.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;
@@ -1045,7 +1075,7 @@ export class View {
 
   /** How much blast and how much history is on screen, and how big the biggest
    * blast has grown. Observation only, for the harness and the console. */
-  fxStats(): { blasts: number; trails: number; widest: number } {
+  fxStats(): { blasts: number; beams: number; trails: number; widest: number } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
       const g = (c as THREE.Mesh).geometry;
@@ -1054,6 +1084,7 @@ export class View {
     }
     return {
       blasts: this.#fxGroup.children.length,
+      beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,
       widest,
     };

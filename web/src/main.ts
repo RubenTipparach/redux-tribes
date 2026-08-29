@@ -10,7 +10,7 @@
 
 import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
-import { HIT_TICKS, KILL_TICKS, View } from './app/view.js';
+import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
@@ -1542,17 +1542,44 @@ function showTick(tick: number): void {
   view.setPoses(match.poses(tick));
   view.setProjectiles(match.trackProjectiles(tick));
 
-  // Beams last one tick in the simulation, so they are drawn from the event
-  // stream for the tick being shown rather than kept as objects. Blasts come
-  // off the same stream and last longer, so they carry an age instead.
+  // Beams last one tick in the simulation, so what is on screen is drawn from
+  // the event stream for the tick being shown rather than kept as an object.
+  // Blasts come off the same stream. Both carry an age, so both can be
+  // scrubbed backwards.
   const events = shownRecord()?.events ?? [];
   view.setBeams(events
-    .filter(e => e.kind === EventKind.ShotFired && Math.abs(e.tick - tick) < 6)
-    .map(e => ({ from: e.pos, to: e.to })));
+    .filter(e => e.kind === EventKind.ShotFired
+                 && tick >= e.tick && tick < e.tick + BEAM_TICKS)
+    .map(e => ({ from: e.pos, to: e.to, age: (tick - e.tick) / BEAM_TICKS })));
   view.setBlasts(blastsAt(events, tick));
 
-  scrub.value = String(tick);
-  $('hSec').textContent = (tick / 60).toFixed(1);
+  // The tail past the end of the turn is effects finishing, not time passing,
+  // so the scrubber and the clock both stop at the turn's own length.
+  const shown = Math.min(TICKS_PER_TURN, tick);
+  scrub.value = String(shown);
+  $('hSec').textContent = (shown / 60).toFixed(1);
+}
+
+/**
+ * How far past the end of a turn its playback has to run for every effect to
+ * finish, in ticks.
+ *
+ * A hull killed at second 9.5 used to be a flash and a cut: the turn ended at
+ * 600 and took the fireball with it, and in a battle replay the next turn
+ * started over the top of it. So playback holds at the final pose for exactly
+ * as long as something is still burning, and not one tick longer when nothing
+ * is.
+ */
+function tailFor(events: readonly SimEvent[]): number {
+  let need = 0;
+  for (const e of events) {
+    const life = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision ? KILL_TICKS
+      : e.kind === EventKind.ShotHit ? HIT_TICKS
+      : e.kind === EventKind.ShotFired ? BEAM_TICKS
+      : 0;
+    if (life) need = Math.max(need, e.tick + life - TICKS_PER_TURN);
+  }
+  return Math.max(0, Math.min(FX_TICKS, need));
 }
 
 /**
@@ -1683,9 +1710,10 @@ function frame(): void {
   view.resize();
   probeEnvelopeIfWanted();
   if (playTick !== null && playing) {
-    playTick = Math.min(TICKS_PER_TURN, playTick + speed);
+    const end = TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []);
+    playTick = Math.min(end, playTick + speed);
     showTick(playTick);
-    if (playTick >= TICKS_PER_TURN) {
+    if (playTick >= end) {
       // A battle replay runs on to the next recorded turn rather than handing
       // the console back, and only puts the world down once it runs out.
       if (battle && battle.at + 1 < match.history.length) {
@@ -1750,6 +1778,9 @@ Object.defineProperty(window, 'ftDebug', {
     fx: () => view.fxStats(),
     /** Which turn a battle replay is on, or null when it is not running. */
     battle: () => (battle ? battle.at : null),
+    /** The last tick this turn's playback runs to: the turn's own length plus
+     * whatever tail its effects still need. */
+    playEnd: () => TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []),
     trailScope: () => trailScope,
     /** Turn index and event kinds only: enough to find a kill, not a second
      * copy of the match. */

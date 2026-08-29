@@ -99,7 +99,11 @@ static W_BEAM: WeaponDef = WeaponDef {
     dmg: 5.0,
     mult: 5.5,
     range: 300.0,
-    cooldown_secs: 2.0,
+    // Three seconds, so a beam mount is free on four of a turn's eleven fire
+    // slots rather than six, and picking a second is a choice rather than a
+    // formality. Measured on the match clock, so a shot at second 9 still
+    // holds the mount into second 2 of the next turn.
+    cooldown_secs: 3.0,
     arc_h: (-110.0, 110.0),
     arc_v: (-60.0, 60.0),
     batch: 1,
