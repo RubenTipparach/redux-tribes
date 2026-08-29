@@ -176,7 +176,7 @@ impl Sim {
             }
             w.i(s.weapons.len() as i32);
             for x in &s.weapons {
-                w.i(x.last_fired_turn);
+                w.i(x.last_fired_tick);
             }
             w.i(s.boarding_parties.len() as i32);
             for p in &s.boarding_parties {
@@ -281,7 +281,7 @@ impl Sim {
             for k in 0..weapons {
                 let fired = r.i();
                 if let Some(w) = s.weapons.get_mut(k) {
-                    w.last_fired_turn = fired;
+                    w.last_fired_tick = fired;
                 }
             }
             let parties = r.i().max(0) as usize;

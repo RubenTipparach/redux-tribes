@@ -66,6 +66,10 @@ pub enum EventKind {
     BoardingTick,
     ShipCaptured,
     GameOver,
+    /// Appended rather than filed next to the other two skips on purpose: the
+    /// client mirrors these discriminants by position, so inserting one in the
+    /// middle silently renumbers every kind after it.
+    ShotSkippedCooldown,
 }
 
 /// One thing that happened, flattened to numbers so it crosses the wasm
@@ -297,16 +301,64 @@ impl Sim {
 
     /// May this weapon fire this turn?
     ///
-    /// One shot per weapon per turn at most, plus any extra turn gap the
-    /// weapon asks for. The archive's arithmetic made cooldown 0 and 1 both
-    /// fire every turn, and that is preserved rather than tidied.
+    /// Now just `fire_gate` at second zero: "can this mount fire at all this
+    /// turn". The old arithmetic counted whole turns, which made cooldown 0
+    /// and 1 both mean fire every turn, so no weapon ever waited.
     pub fn can_fire(&self, si: usize, weapon_index: usize) -> bool {
+        self.fire_gate(si, weapon_index, 0)
+    }
+
+    /// May this mount fire at `second` of the CURRENT turn?
+    ///
+    /// One rule on the match clock: the gap since the mount last fired must
+    /// reach its cooldown. Absolute ticks, so a shot at second 9 of one turn
+    /// still holds the mount at second 0 of the next, and a second shot later
+    /// in the same turn is gated by exactly the same comparison.
+    ///
+    /// The planner asks this to decide which fire slots to offer, and the
+    /// resolver asks it before every shot, so a slot the client offers is a
+    /// slot the resolver will honour.
+    pub fn fire_gate(&self, si: usize, weapon_index: usize, second: i32) -> bool {
         let Some(ship) = self.ships.get(si) else { return false };
         let Some(w) = ship.weapons.get(weapon_index) else { return false };
-        if w.last_fired_turn < 0 {
+        if w.last_fired_tick < 0 {
             return true;
         }
-        self.turn - w.last_fired_turn >= data::weapon(w.key).cooldown_turns.max(1)
+        let at = self.absolute_tick(second * TICKS_PER_SECOND as i32);
+        at - w.last_fired_tick >= Self::cooldown_ticks(w.key)
+    }
+
+    /// A weapon's cooldown in ticks. Rounded once, here, so the planner and the
+    /// resolver cannot round it differently.
+    pub fn cooldown_ticks(key: crate::data::WeaponKey) -> i32 {
+        (data::weapon(key).cooldown_secs * TICKS_PER_SECOND as f32) as i32
+    }
+
+    /// Ticks since the match began, which is the clock cooldown runs on.
+    pub fn absolute_tick(&self, tick: i32) -> i32 {
+        self.turn * TICKS_PER_TURN as i32 + tick
+    }
+
+    /// The earliest second of THIS turn at which a mount could fire again,
+    /// given a shot already planned at `prev_second`. Negative `prev_second`
+    /// means nothing is planned yet. The client walks its own queue and asks
+    /// this, so the spacing itself is never computed in the renderer.
+    pub fn next_free_second(&self, si: usize, weapon_index: usize, prev_second: i32) -> i32 {
+        let Some(ship) = self.ships.get(si) else { return 0 };
+        let Some(w) = ship.weapons.get(weapon_index) else { return 0 };
+        let gap = Self::cooldown_ticks(w.key);
+        let from_state = if w.last_fired_tick < 0 {
+            0
+        } else {
+            let t = w.last_fired_tick + gap - self.absolute_tick(0);
+            (t + TICKS_PER_SECOND as i32 - 1) / TICKS_PER_SECOND as i32
+        };
+        let from_queue = if prev_second < 0 {
+            0
+        } else {
+            prev_second + (gap + TICKS_PER_SECOND as i32 - 1) / TICKS_PER_SECOND as i32
+        };
+        from_state.max(from_queue).max(0)
     }
 
     /// May this ship send marines to that one right now?
@@ -334,7 +386,16 @@ impl Sim {
         let key = w.key;
         let wd = data::weapon(key);
 
-        if !self.can_fire(si, order.weapon_index) {
+        // The same gate the planner offered slots from, asked again here at
+        // the moment of firing. A shot the cooldown does not allow is dropped
+        // rather than silently fired: the client will not have offered it, and
+        // a hand written or stale order set must not get a free shot.
+        let second = tick / TICKS_PER_SECOND as i32;
+        if !self.fire_gate(si, order.weapon_index, second) {
+            let mut e = Event::new(EventKind::ShotSkippedCooldown, tick);
+            e.ship = si as i32;
+            e.aux = order.weapon_index as i32;
+            events.push(e);
             return;
         }
 
@@ -374,8 +435,8 @@ impl Sim {
             return;
         }
 
-        let turn = self.turn;
-        self.ships[si].weapons[order.weapon_index].last_fired_turn = turn;
+        let fired_at = self.absolute_tick(tick);
+        self.ships[si].weapons[order.weapon_index].last_fired_tick = fired_at;
         let dmg = wd.damage();
         let owner = self.ships[si].id;
 
@@ -993,7 +1054,7 @@ impl Sim {
                 int(x.dead as i32, &mut byte);
             }
             for w in &s.weapons {
-                int(w.last_fired_turn, &mut byte);
+                int(w.last_fired_tick, &mut byte);
             }
             for p in &s.boarding_parties {
                 int(p.faction.index() as i32, &mut byte);

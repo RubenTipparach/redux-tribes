@@ -423,22 +423,46 @@ fn a_weapon_fires_once_per_turn_at_most() {
     // a weapon already fired THIS turn, is one the planner cannot reach: it
     // only exists mid resolution.
     //
-    // With the authored data cooldown 0 and 1 both floor to 1, so every
-    // weapon fires every turn and the gate never bites between turns. That is
-    // the archive's own arithmetic, preserved rather than tidied, and the
-    // reason the client's copy of it was quietly doing nothing.
+    // Cooldown runs on the match clock in absolute ticks, so one comparison
+    // covers a second shot later in the same turn and a shot early in the
+    // next one. The old arithmetic counted whole turns, which made cooldown 0
+    // and 1 both mean fire every turn: no mount ever waited, and the client's
+    // copy of the rule was quietly doing nothing.
     let mut sim = duel("seed-cooldown", 60.0);
     assert!(sim.can_fire(0, 0), "an unused mount is available");
 
-    sim.ships[0].weapons[0].last_fired_turn = sim.turn;
-    assert!(!sim.can_fire(0, 0), "a mount that already fired this turn is spent");
-    assert!(sim.can_fire(0, 1), "and its neighbour is not");
+    // fired at second 0 of this turn
+    sim.ships[0].weapons[0].last_fired_tick = sim.absolute_tick(0);
+    assert!(!sim.can_fire(0, 0), "a mount that just fired is not ready at once");
+    assert!(sim.can_fire(0, 1), "and its neighbour is untouched");
 
+    // it comes back WITHIN the turn, once its own cooldown has run
+    let gap = Sim::cooldown_ticks(sim.ships[0].weapons[0].key);
+    let secs = gap / 60;
+    assert!(secs >= 1 && secs <= 10, "a cooldown of {secs} s should fit inside a turn");
+    assert!(!sim.fire_gate(0, 0, secs - 1), "not a second early");
+    assert!(sim.fire_gate(0, 0, secs), "ready exactly on its cooldown");
+
+    // and the clock carries across the turn boundary rather than resetting
+    sim.ships[0].weapons[0].last_fired_tick = sim.absolute_tick(9 * 60);
     sim.turn += 1;
-    assert!(sim.can_fire(0, 0), "next turn it is available again");
+    assert!(!sim.fire_gate(0, 0, 0),
+        "a shot at second 9 still holds the mount at second 0 of the next turn");
 
     assert!(!sim.can_fire(0, 99), "a mount that does not exist cannot fire");
     assert!(!sim.can_fire(99, 0), "nor can one on a ship that does not exist");
+}
+
+/// What the planner offers has to be what the resolver honours, so the slot
+/// arithmetic lives in the core and both ask it.
+#[test]
+fn the_next_free_second_walks_the_queue() {
+    let sim = duel("seed-slots", 60.0);
+    let gap_secs = Sim::cooldown_ticks(sim.ships[0].weapons[0].key) / 60;
+
+    assert_eq!(sim.next_free_second(0, 0, -1), 0, "nothing queued, fire at once");
+    assert_eq!(sim.next_free_second(0, 0, 0), gap_secs, "one cooldown after a shot at 0");
+    assert_eq!(sim.next_free_second(0, 0, 3), 3 + gap_secs, "and after a shot at 3");
 }
 
 #[test]
@@ -457,4 +481,76 @@ fn boarding_needs_range_an_enemy_and_marines() {
 
     let far = duel("seed-board-far", 400.0);
     assert!(!far.can_board(0, 1), "nor across open space");
+}
+
+/// The point of a cooldown in seconds: a mount can fire more than once in a
+/// turn. Under the old per turn arithmetic that was impossible, and the client
+/// enforced it by throwing away the previous shot whenever a second one was
+/// queued, which is exactly what "weapons queuing is broken" looked like.
+#[test]
+fn a_mount_fires_twice_in_one_turn_when_its_cooldown_allows() {
+    let mut sim = duel("seed-twice", 60.0);
+    let gap = Sim::cooldown_ticks(sim.ships[0].weapons[0].key) / 60;
+    let shot = |second: i32| FireOrder {
+        weapon_index: 0,
+        second,
+        target_ship: 1,
+        target_sub: None,
+    };
+    let mut orders = vec![
+        Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            target: None,
+            face: None,
+            ai_target: None,
+            weapons: vec![shot(0), shot(gap)],
+            board: None,
+        }),
+        None,
+    ];
+    let r = sim.resolve_turn(&mut orders);
+    let fired = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotFired && e.ship == 0 && e.aux == 0)
+        .count();
+    assert_eq!(fired, 2, "both shots should be taken, {gap} s apart");
+}
+
+/// And the resolver refuses one that is too close rather than trusting the
+/// planner to have filtered it, so a stale or hand written order set cannot
+/// buy a free shot.
+#[test]
+fn the_resolver_drops_a_shot_inside_the_cooldown() {
+    let mut sim = duel("seed-tooclose", 60.0);
+    let shot = |second: i32| FireOrder {
+        weapon_index: 0,
+        second,
+        target_ship: 1,
+        target_sub: None,
+    };
+    let mut orders = vec![
+        Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            target: None,
+            face: None,
+            ai_target: None,
+            weapons: vec![shot(0), shot(1)],
+            board: None,
+        }),
+        None,
+    ];
+    let r = sim.resolve_turn(&mut orders);
+    let fired = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotFired && e.ship == 0 && e.aux == 0)
+        .count();
+    let skipped = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotSkippedCooldown && e.ship == 0)
+        .count();
+    assert_eq!(fired, 1, "only the first shot lands");
+    assert_eq!(skipped, 1, "and the second is reported, not silently dropped");
 }

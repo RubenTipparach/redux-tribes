@@ -63,7 +63,10 @@ pub struct Sub {
 pub struct WeaponSlot {
     pub key: WeaponKey,
     pub mount: V3,
-    pub last_fired_turn: i32,
+    /// Absolute tick this mount last fired on, or -1. Absolute rather than per
+    /// turn, so one comparison covers both a second shot later in the same
+    /// turn and a shot early in the next one.
+    pub last_fired_tick: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -167,7 +170,7 @@ impl Ship {
             weapons: cls
                 .weapons
                 .iter()
-                .map(|m| WeaponSlot { key: m.key, mount: m.mount, last_fired_turn: -99 })
+                .map(|m| WeaponSlot { key: m.key, mount: m.mount, last_fired_tick: -99 })
                 .collect(),
             marines: cls.marines,
             boarding_parties: Vec::new(),

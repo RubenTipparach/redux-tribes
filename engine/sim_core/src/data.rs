@@ -75,7 +75,12 @@ pub struct WeaponDef {
     pub dmg: f32,
     pub mult: f32,
     pub range: f32,
-    pub cooldown_turns: i32,
+    /// Seconds between two shots from the same mount, measured on the match
+    /// clock rather than per turn, so a shot at the end of one turn still
+    /// holds the mount into the next one. The archive counted whole turns,
+    /// which made every cooldown either 0 or 1 and therefore no cooldown at
+    /// all: a turn always advances by one.
+    pub cooldown_secs: f32,
     pub arc_h: (f32, f32),
     pub arc_v: (f32, f32),
     pub batch: i32,
@@ -94,7 +99,7 @@ static W_BEAM: WeaponDef = WeaponDef {
     dmg: 5.0,
     mult: 5.5,
     range: 300.0,
-    cooldown_turns: 0,
+    cooldown_secs: 2.0,
     arc_h: (-110.0, 110.0),
     arc_v: (-60.0, 60.0),
     batch: 1,
@@ -104,7 +109,7 @@ static W_CANNON: WeaponDef = WeaponDef {
     dmg: 5.0,
     mult: 5.5,
     range: 200.0,
-    cooldown_turns: 1,
+    cooldown_secs: 4.0,
     arc_h: (-90.0, 90.0),
     arc_v: (-60.0, 60.0),
     batch: 1,
@@ -114,7 +119,7 @@ static W_MISSILE: WeaponDef = WeaponDef {
     dmg: 25.0,
     mult: 1.0,
     range: 250.0,
-    cooldown_turns: 1,
+    cooldown_secs: 6.0,
     arc_h: (-360.0, 360.0),
     arc_v: (-360.0, 360.0),
     batch: 2,

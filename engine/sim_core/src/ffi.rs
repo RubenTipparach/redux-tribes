@@ -357,7 +357,11 @@ pub extern "C" fn ft_octree_len() -> u32 {
 /// corner of the grid, so a client can march at a resolution it could never
 /// afford to probe densely.
 ///
-/// Returns the entry count, or 0 if `n` is not a power of two at least `base`.
+/// Returns the entry count, or 0 if `n` is not a power of two at least `base`,
+/// or if the traversal would not FIT. A partial list is worse than none: the
+/// two kinds tile the grid, so a caller that rebuilt a dense field from a
+/// truncated one would be left with holes it marches through as empty space.
+/// Refusing lets the caller drop a level instead of drawing a lie.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn ft_reach_octree(
@@ -412,6 +416,7 @@ pub extern "C" fn ft_reach_octree(
     ];
     let out: &mut [u32] = unsafe { &mut *(&raw mut OCT) };
     let mut count = 0usize;
+    let mut overflowed = false;
 
     // An explicit stack, because a wasm recursion this deep is a stack the
     // caller cannot see the bottom of.
@@ -445,6 +450,8 @@ pub extern "C" fn ft_reach_octree(
                     (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (lvl << 24);
                 out[count * 2 + 1] = bits | flag;
                 count += 1;
+            } else {
+                overflowed = true;
             }
         };
         if size == 1 {
@@ -466,7 +473,17 @@ pub extern "C" fn ft_reach_octree(
             stack.push((i + a * h, j + b * h, k + d * h, h));
         }
     }
+    if overflowed {
+        return 0;
+    }
     count as u32
+}
+
+/// How many entries the output buffer can hold, so a caller can pick a level
+/// it knows will fit rather than discovering the refusal.
+#[no_mangle]
+pub extern "C" fn ft_octree_capacity() -> u32 {
+    (OCT_LEN / 2) as u32
 }
 
 /// The boundary as a radius field, for a caller fitting a smooth surface to it.
@@ -808,6 +825,26 @@ pub extern "C" fn ft_wells_read() -> u32 {
     w.len() as u32
 }
 
+/// The earliest second of this turn at which a mount may fire, given a shot
+/// already planned at `prev_second` (negative for none).
+///
+/// The planner walks its own queue and asks this per weapon, so the spacing
+/// itself is never computed in the renderer: the client owns WHAT is queued,
+/// the core owns WHEN it is allowed.
+#[no_mangle]
+pub extern "C" fn ft_next_free_second(ship: u32, weapon: u32, prev_second: i32) -> i32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    sim.next_free_second(ship as usize, weapon as usize, prev_second)
+}
+
+/// May this mount fire at this second of the current turn? The same gate the
+/// resolver applies at the moment of firing.
+#[no_mangle]
+pub extern "C" fn ft_fire_gate(ship: u32, weapon: u32, second: i32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    sim.fire_gate(ship as usize, weapon as usize, second) as u32
+}
+
 #[no_mangle]
 pub extern "C" fn ft_ship_count() -> u32 {
     sim_opt().map(|s| s.ships.len() as u32).unwrap_or(0)
@@ -883,7 +920,7 @@ pub extern "C" fn ft_read_ships() -> u32 {
         }
         s[b + 27] = ship.weapons.len() as f32;
         for k in 0..3 {
-            s[b + 28 + k] = ship.weapons.get(k).map(|w| w.last_fired_turn as f32).unwrap_or(-99.0);
+            s[b + 28 + k] = ship.weapons.get(k).map(|w| w.last_fired_tick as f32).unwrap_or(-99.0);
         }
         s[b + 31] = ship.boarding_parties.len() as f32;
         for k in 0..2 {
@@ -1216,7 +1253,7 @@ pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
     s[OUT + 1] = wd.kind as u32 as f32;
     s[OUT + 2] = wd.damage();
     s[OUT + 3] = wd.range;
-    s[OUT + 4] = wd.cooldown_turns as f32;
+    s[OUT + 4] = wd.cooldown_secs;
     s[OUT + 5] = wd.arc_h.0;
     s[OUT + 6] = wd.arc_h.1;
     s[OUT + 7] = wd.arc_v.0;
