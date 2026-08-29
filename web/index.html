@@ -70,6 +70,8 @@ footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 
   color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
 .slot:hover { border-color:var(--cyan); }
 .slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+.slot.cd { opacity:.3; cursor:not-allowed; border-style:dashed; }
+.slot.cd:hover { border-color:var(--line); }
 .slot.mark::after { content:""; position:absolute; bottom:2px; left:50%;
   transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
 #scrub { flex:1; }
@@ -102,7 +104,9 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
   cursor:pointer; }
 .wrow.armed { border-color:var(--cyan); background:#0d2231; }
 .wrow.spent { opacity:.4; cursor:default; }
-.wrow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.06em; }
+.wrow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.06em;
+  flex:0 0 auto; margin-right:8px; }
+.wrow span:last-child { text-align:right; }
 .hint { font-size:11px; color:var(--muted); line-height:1.5; }
 .modes { display:flex; flex-wrap:wrap; gap:4px; }
 .tune { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
@@ -114,6 +118,11 @@ select { font-family:"Exo 2",system-ui,sans-serif; font-size:13px; width:100%;
   background:var(--panel); color:var(--ink); border:1px solid var(--line);
   border-radius:4px; padding:7px 8px; margin-top:4px; }
 select:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
+.rebuild { color:var(--cyan); font-size:11px; letter-spacing:.04em; }
+.rbar { display:block; height:2px; background:var(--line); border-radius:1px;
+  overflow:hidden; margin-top:4px; }
+.rbar i { display:block; height:100%; background:var(--cyan); transition:width .15s linear; }
+@media(prefers-reduced-motion:reduce){ .rbar i { transition:none; } }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:0 4px; font-size:11px; }
 #lPlay { margin-left:10px; }

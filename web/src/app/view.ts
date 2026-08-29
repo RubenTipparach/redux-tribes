@@ -13,7 +13,7 @@ import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type Vec3, type Well,
+  type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
   isCommitted, PROBE_STEPS,
 } from '../sim/types.js';
 
@@ -34,14 +34,39 @@ const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
  * is a cell a little over half the size for a comparable number of flights.
  * A power of two, which the traversal requires.
  */
-const GRID_N = 32;
+/**
+ * Resolutions the envelope sharpens through, coarsest first.
+ *
+ * Every octree level is a complete answer at its own cell size, so the shape
+ * appears at once and gets finer over the following frames instead of the
+ * console blocking on the fine one. Measured per ship on a 45 x 60 x 82 u box:
+ * 8 cells costs 5 ms, 16 costs 14, 32 costs 57. 64 is a further 228 ms for a
+ * cell already well under a hull radius, so it is not in the ladder: one
+ * frame of 228 ms is a stutter a player feels and a cell of 1.4 u is not
+ * something they can see.
+ */
+const ENVELOPE_LEVELS = [8, 16, 32] as const;
 /** Cells the traversal starts from before it begins descending. */
 const OCTREE_BASE = 4;
-/**
- * The field is sampled at grid CORNERS, so a grid of GRID_N cells has one more
- * sample a side than it has cells.
- */
-const FIELD_N = GRID_N + 1;
+
+/** One finished resolution of one ship's envelope. */
+interface BuiltShell {
+  readonly cells: number;
+  readonly geo: THREE.BufferGeometry;
+  readonly wire: THREE.BufferGeometry;
+  readonly tris: number;
+  readonly edges: number;
+  readonly entries: number;
+  readonly box: { right: number; up: number; forward: number };
+}
+
+/** What is known about one ship's envelope, and how far it has sharpened. */
+interface ShellEntry {
+  key: string;
+  /** Index into ENVELOPE_LEVELS of the next level still to build. */
+  next: number;
+  built: BuiltShell | null;
+}
 /**
  * Bisection steps used to place a surface vertex on the boundary. Four halves
  * the cell four times, which puts the vertex within a sixteenth of a cell of
@@ -127,6 +152,8 @@ export class View {
   /** The gravity field, drawn from what the match reports rather than from a
    * second model of gravity living here. */
   #wellGroup = new THREE.Group();
+  /** Where our own hulls would be part way through the turn being planned. */
+  #ghostGroup = new THREE.Group();
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -138,8 +165,14 @@ export class View {
   /** Octree entries the last probe returned: straddling leaves plus the
    * uniform blocks it settled in one test each. */
   #lastEntries = 0;
+  #lastCells = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
-  #shellKey = '';
+  /** One entry per ship, so selecting a hull shows its envelope at once
+   * instead of starting a probe. */
+  #shells = new Map<number, ShellEntry>();
+  /** Ships whose envelope is still sharpening, in the order they were asked
+   * for. Read by the console to say so. */
+  #pending: number[] = [];
   #shellTris = 0;
   #shellEdges = 0;
   #shellBox = { right: 0, up: 0, forward: 0 };
@@ -206,6 +239,7 @@ export class View {
     );
     this.#scene.add(this.#shell);
     this.#scene.add(this.#wellGroup);
+    this.#scene.add(this.#ghostGroup);
     // The silhouette, drawn as the surface seen edge on. Every triangle edge
     // was too much: marching tetrahedra makes thin triangles and the mesh read
     // as wire soup rather than as a shape. The skin carries the volume and the
@@ -464,29 +498,151 @@ export class View {
    * the only honest way to know where a ship can get to is to fly it there and
    * see. That is what this does, once per grid cell, in a single crossing.
    */
+  /**
+   * What every ship on this side can reach, computed once at the start of a
+   * turn rather than when a hull is selected.
+   *
+   * Reachability is fixed the moment a turn opens: nothing a player does while
+   * planning changes where a ship could have gone. So this is asked once per
+   * ship, and picking a destination afterwards never probes anything, which is
+   * what keeps the picker instant.
+   *
+   * The one exception is a commanded heading in slide mode. There the nose is
+   * an INPUT to the flight rather than aimed at the target, and thrust is spent
+   * in the ship's own frame, so turning re-points the strong drive: measured,
+   * commanding a different heading moves the boundary by up to 30 u. The cache
+   * key carries the face for that reason, and changing it re-opens the ladder.
+   */
+  planTurn(ships: readonly ShipState[], orderOf: (id: number) => PlannedOrder,
+           flightOf: (id: number) => Flight, side: number): void {
+    for (const ship of ships) {
+      if (ship.side !== side || ship.destroyed) continue;
+      this.requestShell(ship, orderOf(ship.id), flightOf(ship.id));
+    }
+  }
+
+  /** Note what this ship's envelope depends on, and queue it if that changed. */
+  requestShell(ship: ShipState, order: PlannedOrder, flight: Flight): void {
+    if (ship.destroyed || isCommitted(order.mode)) {
+      this.#shells.delete(ship.id);
+      this.#pending = this.#pending.filter(id => id !== ship.id);
+      return;
+    }
+    const key = this.#shellKeyFor(ship, order, flight);
+    const have = this.#shells.get(ship.id);
+    if (have && have.key === key) return;
+    if (have?.built) {
+      have.built.geo.dispose();
+      have.built.wire.dispose();
+    }
+    this.#shells.set(ship.id, { key, next: 0, built: null });
+    if (!this.#pending.includes(ship.id)) this.#pending.push(ship.id);
+  }
+
+  /**
+   * The inputs the boundary actually depends on. Everything here changes where
+   * the ship can get to; nothing else does, which is why picking a destination
+   * is not in it.
+   */
+  #shellKeyFor(ship: ShipState, order: PlannedOrder, flight: Flight): string {
+    return [
+      ship.id, order.mode,
+      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
+      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
+      // All three components. The old key carried x and z only, so a purely
+      // vertical change of commanded heading never invalidated the shell.
+      order.face?.x.toFixed(3) ?? '-',
+      order.face?.y.toFixed(3) ?? '-',
+      order.face?.z.toFixed(3) ?? '-',
+      flight.yawRate, flight.pitchRate, flight.accelFwd,
+      flight.accelRetro, flight.accelLat, flight.maxSpeed,
+    ].join('|');
+  }
+
+  /**
+   * Build at most ONE level, for one ship, and return whether anything is
+   * still outstanding.
+   *
+   * A level is a single call into the core that runs a whole traversal, so it
+   * cannot be split part way. What keeps this off the frame budget is that the
+   * levels are cheap before they are fine: the shape is up in 5 ms and only
+   * then sharpens. Called once a frame, so a heavy level costs one frame and
+   * never a queue of them.
+   */
+  stepShells(orderOf: (id: number) => PlannedOrder,
+             flightOf: (id: number) => Flight,
+             shipOf: (id: number) => ShipState | undefined): boolean {
+    while (this.#pending.length) {
+      const id = this.#pending[0]!;
+      const entry = this.#shells.get(id);
+      const ship = shipOf(id);
+      if (!entry || !ship || entry.next >= ENVELOPE_LEVELS.length) {
+        this.#pending.shift();
+        continue;
+      }
+      const cells = ENVELOPE_LEVELS[entry.next]!;
+      const built = this.#probeShell(ship, orderOf(id), flightOf(id), cells);
+      if (built) {
+        if (entry.built) {
+          entry.built.geo.dispose();
+          entry.built.wire.dispose();
+        }
+        entry.built = built;
+      }
+      entry.next++;
+      if (entry.next >= ENVELOPE_LEVELS.length) this.#pending.shift();
+      return this.#pending.length > 0;
+    }
+    return false;
+  }
+
+  /** True while any ship's envelope is still sharpening. */
+  get rebuilding(): boolean { return this.#pending.length > 0; }
+
+  /** How far the selected ship's envelope has got, for the console to show. */
+  shellProgress(shipId: number): { cells: number; of: number; done: boolean } {
+    const e = this.#shells.get(shipId);
+    const built = e?.built?.cells ?? 0;
+    const done = !e || e.next >= ENVELOPE_LEVELS.length;
+    return { cells: built, of: ENVELOPE_LEVELS[ENVELOPE_LEVELS.length - 1]!, done };
+  }
+
+  /** Show the envelope this ship already has, without probing anything. */
   drawEnvelope(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#shell.visible = false;
       this.#shellLines.visible = false;
       return;
     }
+    this.requestShell(ship, order, flight);
+    const built = this.#shells.get(ship.id)?.built;
+    if (!built) {
+      this.#shell.visible = false;
+      this.#shellLines.visible = false;
+      return;
+    }
+    if (this.#shell.geometry !== built.geo) this.#shell.geometry = built.geo;
+    if (this.#shellLines.geometry !== built.wire) this.#shellLines.geometry = built.wire;
+    this.#shell.visible = built.tris > 0;
+    this.#shellLines.visible = built.tris > 0;
+    this.#shellTris = built.tris;
+    this.#shellEdges = built.edges;
+    this.#shellBox = built.box;
+    this.#lastEntries = built.entries;
+    this.#lastCells = built.cells;
+  }
+
+  #probeShell(
+    ship: ShipState, order: PlannedOrder, flight: Flight, cells: number,
+  ): BuiltShell | null {
+    const GRID_N = cells;
+    const FIELD_N = cells + 1;
     // Size the box from what the hull can actually cover, plus the ground the
     // carried velocity will make regardless. maxSpeed alone over-sizes it by
     // roughly double, and an over-sized box spends its cells on empty space:
     // the shell comes out coarse and the shape stops being readable, which is
     // the one thing it exists to show.
     const half = this.probeHalf(ship, flight);
-    const key = [
-      ship.id, order.mode, half.toFixed(1),
-      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
-      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
-      order.face?.x.toFixed(3) ?? '-', order.face?.z.toFixed(3) ?? '-',
-      flight.yawRate, flight.pitchRate, flight.accelFwd,
-      flight.accelRetro, flight.accelLat, flight.maxSpeed,
-    ].join('|');
-    if (key === this.#shellKey) return;
-    this.#shellKey = key;
-
     const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
     const flyOrder = order.face
       ? { mode: order.mode, face: order.face }
@@ -554,7 +710,6 @@ export class View {
       body, flight, flyOrder, landing, along, boxHalf,
       GRID_N, REACH_EPS, OCTREE_BASE, PROBE_STEPS,
     );
-    this.#lastEntries = grid.entries;
 
     // Marching tetrahedra over the sampled field. Six tets per cube sharing
     // the main diagonal gives sixteen cases and no 256 entry table, and it is
@@ -675,12 +830,9 @@ export class View {
       }
     }
 
-    this.#shell.geometry.dispose();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
     geo.computeVertexNormals();
-    this.#shell.geometry = geo;
-    this.#shell.visible = tri.length > 0;
 
     // Read the surface out as level lines rather than as a skin. Every segment
     // comes from intersecting a triangle this build already produced with a
@@ -719,14 +871,17 @@ export class View {
     for (const [a, b] of seen.values()) {
       wire.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
-    this.#shellLines.geometry.dispose();
     const wgeo = new THREE.BufferGeometry();
     wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
-    this.#shellLines.geometry = wgeo;
-    this.#shellLines.visible = wire.length > 0;
-    this.#shellTris = tri.length / 9;
-    this.#shellEdges = edge.size;
-    this.#shellBox = boxHalf;
+    return {
+      cells,
+      geo,
+      wire: wgeo,
+      tris: tri.length / 9,
+      edges: edge.size,
+      entries: grid.entries,
+      box: boxHalf,
+    };
   }
 
   /**
@@ -936,19 +1091,64 @@ export class View {
     }
   }
 
+  /**
+   * Ghost our hulls at a point in the plan, orientation included.
+   *
+   * The nose matters as much as the position: a slide order that arrives
+   * pointing the wrong way is a turn spent, and this is where a player sees
+   * that before committing. Only our own ships are ghosted, because the other
+   * side's orders do not exist until the turn is released.
+   */
+  setGhosts(poses: readonly { id: number; pose: Pose }[]): void {
+    while (this.#ghostGroup.children.length) {
+      const c = this.#ghostGroup.children.pop() as THREE.Mesh;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const g of poses) {
+      const mesh = new THREE.Mesh(
+        new THREE.ConeGeometry(1.6, 5.2, 4),
+        new THREE.MeshBasicMaterial({
+          color: CYAN, wireframe: true, transparent: true, opacity: 0.5,
+        }),
+      );
+      // The cone points along +Y as built and a hull points along +Z, so it is
+      // tipped once here rather than every frame.
+      mesh.geometry.rotateX(Math.PI / 2);
+      mesh.position.set(g.pose.pos.x, g.pose.pos.y, g.pose.pos.z);
+      mesh.quaternion.set(g.pose.quat.x, g.pose.quat.y, g.pose.quat.z, g.pose.quat.w);
+      this.#ghostGroup.add(mesh);
+    }
+  }
+
   envelopeSummary(ship: ShipState | undefined, _flight: Flight): string {
     if (!ship) return 'no ship selected';
     const b = this.#shellBox;
-    const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (GRID_N * GRID_N * GRID_N));
-    return `${GRID_N}<sup>3</sup> cells in a box `
+    const n = this.#lastCells || 1;
+    const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (n * n * n));
+    return `${n}<sup>3</sup> cells in a box `
       + `${(2 * b.right).toFixed(0)} x ${(2 * b.up).toFixed(0)} x ${(2 * b.forward).toFixed(0)} u `
       + `on the velocity, octree ${this.#lastEntries} entries, `
       + `${this.#shellTris} triangles from ${this.#shellEdges} bisected edges, `
       + `cell ${cell.toFixed(1)} u`;
   }
 
+  /**
+   * Drop every cached envelope.
+   *
+   * Only for a NEW turn. Reachability is fixed while a turn is open, so
+   * nothing a player does during planning belongs here: what a ship can reach
+   * depends on its state, its mode, its commanded heading and its flight
+   * stats, and every one of those is in the cache key, which restarts one
+   * ship's ladder rather than throwing away every ship's work.
+   */
   invalidateEnvelope(): void {
-    this.#shellKey = '';
+    for (const e of this.#shells.values()) {
+      e.built?.geo.dispose();
+      e.built?.wire.dispose();
+    }
+    this.#shells.clear();
+    this.#pending = [];
     this.#planeKey = '';
   }
 

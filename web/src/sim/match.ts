@@ -39,6 +39,8 @@ export interface MatchExports {
   ft_hash_lo(): number;
   ft_read_ships(): number;
   ft_wells_read(): number;
+  ft_next_free_second(ship: number, weapon: number, prevSecond: number): number;
+  ft_fire_gate(ship: number, weapon: number, second: number): number;
   ft_gravity_at(x: number, y: number, z: number): number;
   ft_load_ship(ship: number): number;
   ft_set_flight(
@@ -173,6 +175,21 @@ export class Match {
     return { x: s[32] ?? 0, y: s[33] ?? 0, z: s[34] ?? 0 };
   }
 
+  /**
+   * The earliest second this mount may fire, given a shot already planned at
+   * `prevSecond` (negative for none). Asked rather than worked out here: the
+   * client owns what is queued, the core owns when it is allowed, and the
+   * resolver applies the same gate at the moment of firing.
+   */
+  nextFreeSecond(ship: number, weapon: number, prevSecond: number): number {
+    return this.#ex.ft_next_free_second(ship, weapon, prevSecond);
+  }
+
+  /** May this mount fire at this second of the current turn? */
+  fireGate(ship: number, weapon: number, second: number): boolean {
+    return this.#ex.ft_fire_gate(ship, weapon, second) !== 0;
+  }
+
   ships(): ShipState[] {
     const n = this.#ex.ft_read_ships();
     const s = this.#s;
@@ -251,7 +268,7 @@ export class Match {
       kind: s[OUT + 1] ?? 0,
       damage: s[OUT + 2] ?? 0,
       range: s[OUT + 3] ?? 0,
-      cooldownTurns: s[OUT + 4] ?? 0,
+      cooldown: s[OUT + 4] ?? 0,
       arcH: [s[OUT + 5] ?? -180, s[OUT + 6] ?? 180],
       arcV: [s[OUT + 7] ?? -180, s[OUT + 8] ?? 180],
       batch: s[OUT + 9] ?? 1,
@@ -300,7 +317,9 @@ export class Match {
    * ship's live state. Preview and execution are the same code, which is the
    * only way a drawn plan can be trusted to be what happens.
    */
-  preview(ship: number, order: PlannedOrder, samples = 48): Vec3[] {
+  /** Load a ship and write the order it is planning into the input slots.
+   * Shared, so the drawn plan line and a scrubbed pose fly the same thing. */
+  #loadPlan(ship: number, order: PlannedOrder): void {
     this.#ex.ft_load_ship(ship);
     const s = this.#s;
     const t = order.target;
@@ -309,6 +328,10 @@ export class Match {
     const f = order.face;
     s[17] = f ? 1 : 0;
     s[13] = f?.x ?? 0; s[14] = f?.y ?? 0; s[15] = f?.z ?? 0;
+  }
+
+  preview(ship: number, order: PlannedOrder, samples = 48): Vec3[] {
+    this.#loadPlan(ship, order);
     const n = this.#ex.ft_ship_preview(ship, order.mode, samples);
     const out: Vec3[] = [];
     const v = this.#s;
@@ -317,6 +340,32 @@ export class Match {
   }
 
   /** Where a plan actually ends up. Read from the same flight it just flew. */
+  /**
+   * Where a ship would be, and how it would be pointing, `tick` into the turn
+   * it is planning.
+   *
+   * One flight of the plan, sampled: about 68 microseconds at 120 samples, and
+   * the scrub then reads the sampled array rather than flying again. So
+   * dragging the timeline costs nothing per frame and never touches
+   * reachability, which is settled when the turn opens.
+   */
+  previewPose(ship: number, order: PlannedOrder, tick: number): Pose | null {
+    this.#loadPlan(ship, order);
+    const n = this.#ex.ft_ship_preview(ship, order.mode, 120);
+    if (n <= 0) return null;
+    const s = this.#s;
+    const at = Math.max(0, Math.min(n - 1, Math.round((tick / TICKS_PER_TURN) * (n - 1))));
+    // The flight path is written seven floats a sample, position then
+    // orientation, which is not the nine of a resolved pose record.
+    const b = OUT + at * 7;
+    return {
+      id: ship,
+      destroyed: false,
+      pos: { x: s[b] ?? 0, y: s[b + 1] ?? 0, z: s[b + 2] ?? 0 },
+      quat: { x: s[b + 3] ?? 0, y: s[b + 4] ?? 0, z: s[b + 5] ?? 0, w: s[b + 6] ?? 1 },
+    };
+  }
+
   previewEnd(): Vec3 {
     return v3(this.#s, 32);
   }

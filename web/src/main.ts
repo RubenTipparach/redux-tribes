@@ -14,7 +14,7 @@ import { View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type SimEvent,
+  type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
   CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
   TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
@@ -104,6 +104,9 @@ function start(): void {
   view.setSelection(selected);
   view.fit();
   view.invalidateEnvelope();
+  planTurnEnvelopes();
+  previewTick = 0;
+  view.setGhosts([]);
   refreshAll();
 }
 
@@ -202,7 +205,6 @@ function renderModes(): void {
       // A committed mode has a single outcome, so a destination it cannot
       // influence would be a lie on screen.
       if (isCommitted(mode)) delete o.target;
-      view.invalidateEnvelope();
       refreshAll();
     };
     host.appendChild(b);
@@ -233,7 +235,6 @@ function renderTuning(): void {
       flightOverride.set(s.id, next);
       match.setFlight(s.id, next);
       out.textContent = Number(input.value).toFixed(2);
-      view.invalidateEnvelope();
       draw();
     };
     row.appendChild(input);
@@ -252,17 +253,27 @@ function renderWeapons(): void {
   for (let i = 0; i < info.mountCount; i++) {
     const m = match.mount(s.cls, i);
     if (!m) continue;
-    const queued = order.weapons.find(w => w.weaponIndex === i);
-    // Whether a mount can fire is the resolver's rule, so it is asked for
-    // rather than recomputed here.
+    const shots = order.weapons.filter(w => w.weaponIndex === i)
+      .sort((a, b) => a.second - b.second);
+    // Whether a mount can fire, and when it is next free, are the resolver's
+    // rules, so both are asked for rather than recomputed here.
     const spent = !match.canFire(s.id, i);
+    // A mount can fire more than once a turn now, so the row says how many
+    // slots are still open to it rather than just whether one is.
+    const last = shots.length ? shots[shots.length - 1]!.second : -1;
+    const nextFree = match.nextFreeSecond(s.id, i, last);
+    const room = nextFree <= TURN_SECONDS;
     const div = document.createElement('div');
-    div.className = `wrow${armedWeapon === i ? ' armed' : ''}${spent ? ' spent' : ''}`;
+    div.className = `wrow${armedWeapon === i ? ' armed' : ''}${spent || !room ? ' spent' : ''}`;
+    const when = shots.length
+      ? ` &middot; t+${shots.map(w => w.second).join(', ')}s`
+      : spent ? ` &middot; ready t+${nextFree}s`
+      : '';
     div.innerHTML =
       `<span class="k">${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}</span>`
-      + `<span>${(+m.damage.toFixed(1))} dmg &middot; ${m.range.toFixed(0)} u`
-      + `${queued ? ` &middot; t+${queued.second}s` : spent ? ' &middot; cooling' : ''}</span>`;
-    if (!spent && canPlan()) {
+      + `<span>${(+m.damage.toFixed(1))} dmg &middot; ${m.range.toFixed(0)} u `
+      + `&middot; ${m.cooldown.toFixed(0)}s cd${when}</span>`;
+    if (!spent && room && canPlan()) {
       div.onclick = () => { armedWeapon = armedWeapon === i ? -1 : i; refreshAll(); };
     }
     host.appendChild(div);
@@ -277,6 +288,27 @@ function renderWeapons(): void {
   host.appendChild(note);
 }
 
+/**
+ * Is this second free for this mount, given what is already queued?
+ *
+ * The core answers: `nextFreeSecond` is asked once for the gap before the
+ * candidate and once for the shot after it, so the cooldown arithmetic is
+ * never done here. A slot the planner offers is a slot the resolver honours,
+ * because both ask the same gate.
+ */
+function slotOpen(
+  ship: number, weapon: number, sec: number, queued: readonly PlannedShot[],
+): boolean {
+  const mine = queued.filter(w => w.weaponIndex === weapon).map(w => w.second).sort((a, b) => a - b);
+  if (mine.includes(sec)) return false;
+  const before = mine.filter(s => s < sec).pop() ?? -1;
+  if (sec < match.nextFreeSecond(ship, weapon, before)) return false;
+  const after = mine.find(s => s > sec);
+  // The shot after it has to survive too, or queuing this one would silently
+  // invalidate a shot the player already placed.
+  return after === undefined || after >= match.nextFreeSecond(ship, weapon, sec);
+}
+
 function renderSlots(): void {
   const host = $('slots');
   host.innerHTML = '';
@@ -287,9 +319,14 @@ function renderSlots(): void {
     div.textContent = String(sec);
     const queued = order?.weapons.filter(w => w.second === sec) ?? [];
     if (queued.length) div.classList.add('q', 'mark');
+    // With a weapon armed, a slot its cooldown forbids is shown as blocked
+    // rather than silently ignoring the tap.
+    const blocked = armedWeapon >= 0 && selected >= 0
+      && !slotOpen(selected, armedWeapon, sec, order?.weapons ?? []);
+    if (blocked) div.classList.add('cd');
     div.title = queued.length
       ? queued.map(w => `weapon ${w.weaponIndex} at ship ${w.targetShip + 1}`).join(', ')
-      : `second ${sec}`;
+      : blocked ? `second ${sec}: still cooling` : `second ${sec}`;
     div.onclick = () => {
       if (!canPlan()) return;
       const o = match.order(selected);
@@ -302,8 +339,13 @@ function renderSlots(): void {
       }
       const t = targetShip();
       if (!t) return;
-      o.weapons = o.weapons.filter(w => w.weaponIndex !== armedWeapon);
+      // A mount may fire more than once in a turn now, so a second shot is
+      // ADDED rather than replacing the first. It used to replace it, which
+      // is what "weapons queuing is not working" looked like: queue a second
+      // shot and the first silently vanished.
+      if (!slotOpen(selected, armedWeapon, sec, o.weapons)) return;
       o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: t.id, targetSub: -1 });
+      o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
       armedWeapon = -1;
       refreshAll();
     };
@@ -423,9 +465,11 @@ function renderHeader(): void {
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
   $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
-  // Nothing to scrub until a turn has been resolved, and an enabled control
-  // that traps the app is worse than one that is plainly unavailable.
-  $<HTMLInputElement>('scrub').disabled = playTick === null;
+  // Live during playback AND during planning, but they are two states on one
+  // control: playback scrubs the turn that was resolved, planning scrubs a
+  // preview of the plan. Only the playback one touches playTick, which is the
+  // state that used to trap the console.
+  $<HTMLInputElement>('scrub').disabled = playTick === null && !canPlan();
 }
 
 function renderHelp(): void {
@@ -477,24 +521,83 @@ function draw(): void {
   envelopeWanted = true;
 }
 
+/**
+ * Where the planning scrub is, in ticks. Separate from `playTick` on purpose:
+ * this one previews a plan that has not been committed, and must never gate
+ * End Turn.
+ */
+let previewTick = 0;
+
+/**
+ * Fly the plan and show where the ship would be, nose included.
+ *
+ * Only OUR hulls move. Before a turn is committed the other side's orders do
+ * not exist: against the AI they are planned during resolution, and against a
+ * person they have not been released. Ghosting a hostile here would be
+ * inventing its orders, and against the AI it would leak them, so the hostiles
+ * stay where they are and this stays a preview of the plan rather than a
+ * preview of the turn.
+ */
+function showPreview(): void {
+  if (!canPlan()) { view.setGhosts([]); return; }
+  const ghosts = ships
+    .filter(s => mine(s) && !s.destroyed)
+    .map(s => ({ id: s.id, pose: match.previewPose(s.id, match.order(s.id), previewTick) }))
+    .filter((g): g is { id: number; pose: Pose } => !!g.pose);
+  view.setGhosts(ghosts);
+  $('lPlay').textContent = `${((previewTick / TICKS_PER_TURN) * TURN_SECONDS).toFixed(1)}s`;
+}
+
 let envelopeWanted = false;
 
+/**
+ * Ask for every one of this side's envelopes at the start of a turn.
+ *
+ * Reachability is fixed when a turn opens, so this is the honest moment to
+ * compute it: selecting another hull then shows a shape that is already there
+ * rather than starting a probe under the player's finger.
+ */
+function planTurnEnvelopes(): void {
+  view.planTurn(ships, orderOf, flightOf, launch.side);
+}
+
+const orderOf = (id: number): PlannedOrder => match.order(id);
+const shipOf = (id: number): ShipState | undefined => ships.find(x => x.id === id);
+
+/**
+ * One level of one ship's envelope per frame, plus the drawing.
+ *
+ * The probe never runs inline with a click or a drag. It runs here, so a heavy
+ * level costs one frame rather than blocking the gesture that asked for it,
+ * and the shape is on screen from the first coarse pass.
+ */
 function probeEnvelopeIfWanted(): void {
-  if (!envelopeWanted) return;
+  const stillGoing = view.stepShells(orderOf, flightOf, shipOf);
+  if (!envelopeWanted && !stillGoing && !view.rebuilding) return;
   envelopeWanted = false;
   const s = selectedShip();
   if (!s) return;
   const order: PlannedOrder = selected >= 0 ? match.order(selected) : { mode: Mode.MoveAndTurn, weapons: [] };
   view.drawEnvelope(canPlan() ? s : undefined, order, flightOf(s.id));
   view.drawPlaneShape(canPlan() ? s : undefined, order, flightOf(s.id));
-  $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id));
+  $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id))
+    + envelopeProgress(s.id);
+}
+
+/** Say that the volume is still sharpening, and how far it has got. */
+function envelopeProgress(shipId: number): string {
+  const p = view.shellProgress(shipId);
+  if (p.done) return '';
+  const pct = p.cells ? Math.round((100 * p.cells) / p.of) : 0;
+  return `<br><span class="rebuild">rebuilding &middot; ${p.cells || '?'}`
+    + `<sup>3</sup> of ${p.of}<sup>3</sup> cells</span>`
+    + `<span class="rbar"><i style="width:${pct}%"></i></span>`;
 }
 
 function select(id: number): void {
   selected = id;
   armedWeapon = -1;
   view.setSelection(id);
-  view.invalidateEnvelope();
   refreshAll();
 }
 
@@ -614,7 +717,6 @@ canvas.addEventListener('pointermove', ev => {
       if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
     }
   }
-  view.invalidateEnvelope();
   draw();
 });
 
@@ -646,7 +748,6 @@ addEventListener('keydown', ev => {
     const a = Math.atan2(cur.x, cur.z) + (deg * Math.PI) / 180;
     o.face = { x: Math.sin(a), y: 0, z: Math.cos(a) };
     if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
-    view.invalidateEnvelope();
     refreshAll();
   };
   switch (ev.key.toLowerCase()) {
@@ -662,7 +763,6 @@ addEventListener('keydown', ev => {
       const l = Math.hypot(d.x, d.z) || 1;
       o.face = { x: d.x / l, y: 0, z: d.z / l };
       if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
-      view.invalidateEnvelope();
       refreshAll();
       break;
     }
@@ -732,6 +832,8 @@ async function endTurn(): Promise<void> {
   view.setShips(ships);
   playTick = 0;
   playing = true;
+  previewTick = 0;
+  view.setGhosts([]);
   refreshAll();
 }
 
@@ -800,11 +902,21 @@ const scrub = $<HTMLInputElement>('scrub');
 // never finished, never returned to planning, and End Turn stayed disabled
 // forever. The scrubber is also inert outside playback, so a stray thumb on a
 // phone cannot enter that state from the planning phase at all.
+// Two independent states on one control. During PLAYBACK it scrubs the turn
+// that was resolved; during PLANNING it scrubs a preview of the plan. The
+// planning one must never touch playTick: `playing = false` with a tick set is
+// a state nothing could leave, since the frame loop only advances while
+// playing, and that is exactly the freeze that took End Turn with it.
 scrub.oninput = () => {
-  if (playTick === null) return;
-  playing = false;
-  playTick = Number(scrub.value);
-  showTick(playTick);
+  if (playTick !== null) {
+    playing = false;
+    playTick = Number(scrub.value);
+    showTick(playTick);
+    return;
+  }
+  if (!canPlan()) return;
+  previewTick = Number(scrub.value);
+  showPreview();
 };
 scrub.onchange = () => {
   if (playTick === null) return;
@@ -864,6 +976,7 @@ function frame(): void {
       }
       view.setSelection(selected);
       view.invalidateEnvelope();
+      planTurnEnvelopes();
       refreshAll();
     }
   }

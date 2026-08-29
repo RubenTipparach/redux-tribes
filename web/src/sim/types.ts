@@ -228,7 +228,8 @@ export interface MountInfo {
   readonly kind: number;
   readonly damage: number;
   readonly range: number;
-  readonly cooldownTurns: number;
+  /** Seconds between two shots from this mount, on the match clock. */
+  readonly cooldown: number;
   readonly arcH: readonly [number, number];
   readonly arcV: readonly [number, number];
   readonly batch: number;
@@ -255,10 +256,18 @@ export interface ClassInfo {
 }
 
 /** A player's plan for one ship, before it is submitted. */
+/** One queued shot: which mount, at which second of the turn, at whom. */
+export interface PlannedShot {
+  weaponIndex: number;
+  second: number;
+  targetShip: number;
+  targetSub: number;
+}
+
 export interface PlannedOrder {
   mode: Mode;
   target?: Vec3;
   face?: Vec3;
-  weapons: Array<{ weaponIndex: number; second: number; targetShip: number; targetSub: number }>;
+  weapons: PlannedShot[];
   board?: number;
 }
