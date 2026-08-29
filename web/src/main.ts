@@ -456,24 +456,54 @@ function renderWeapons(): void {
 }
 
 /**
- * Is this second free for this mount, given what is already queued?
+ * Why this second is not free for this mount, or null when it is.
  *
- * The core answers: `nextFreeSecond` is asked once for the gap before the
+ * Two refusals wear the same word and are not the same thing, which is what
+ * made a rail of three mounts all reading "cooling" useless: one mount had
+ * fired and was recovering, and the others were being held for a shot the
+ * player had already placed a second later. Neither said which, or how long.
+ *
+ * - `after`: the mount fired, or is set to fire earlier in this turn, and is
+ *   still inside its cooldown. `at` is the second it comes back.
+ * - `before`: nothing is cooling, but a shot IS already queued later and
+ *   firing here would push it outside its own cooldown. `at` is that shot.
+ *
+ * The core answers both: `nextFreeSecond` is asked once for the gap before the
  * candidate and once for the shot after it, so the cooldown arithmetic is
  * never done here. A slot the planner offers is a slot the resolver honours,
  * because both ask the same gate.
  */
-function slotOpen(
+interface SlotBlock { kind: 'after' | 'before' | 'taken'; at: number }
+
+function slotBlock(
   ship: number, weapon: number, sec: number, queued: readonly PlannedShot[],
-): boolean {
+): SlotBlock | null {
   const mine = queued.filter(w => w.weaponIndex === weapon).map(w => w.second).sort((a, b) => a - b);
-  if (mine.includes(sec)) return false;
+  if (mine.includes(sec)) return { kind: 'taken', at: sec };
   const before = mine.filter(s => s < sec).pop() ?? -1;
-  if (sec < match.nextFreeSecond(ship, weapon, before)) return false;
+  const ready = match.nextFreeSecond(ship, weapon, before);
+  if (sec < ready) return { kind: 'after', at: ready };
   const after = mine.find(s => s > sec);
   // The shot after it has to survive too, or queuing this one would silently
   // invalidate a shot the player already placed.
-  return after === undefined || after >= match.nextFreeSecond(ship, weapon, sec);
+  if (after !== undefined && after < match.nextFreeSecond(ship, weapon, sec)) {
+    return { kind: 'before', at: after };
+  }
+  return null;
+}
+
+/**
+ * The refusal, in words, with the number that makes it actionable.
+ *
+ * A countdown for a mount still recovering, because what a player wants to
+ * know is how much longer; the second itself for one being held for a shot
+ * already placed, because that is a slot they can go and look at.
+ */
+function slotBlockText(b: SlotBlock, sec: number): string {
+  if (b.kind === 'taken') return 'already firing here';
+  return b.kind === 'after'
+    ? `-${b.at - sec}s to fire &middot; ready t+${b.at}s`
+    : `firing in ${b.at - sec}s`;
 }
 
 /** The second the scrubber is standing on, which is what the preview shows. */
@@ -514,8 +544,11 @@ function queueShot(sec: number, weaponIndex: number): void {
   const t = targetShip();
   if (!t) { flash('Nothing left to shoot at.'); return; }
   const o = match.order(selected);
-  if (!slotOpen(selected, weaponIndex, sec, o.weapons)) {
-    flash(`That mount is still cooling at t+${sec}s.`);
+  const block = slotBlock(selected, weaponIndex, sec, o.weapons);
+  if (block) {
+    // The same words the row shows, so the toast and the list never disagree
+    // about why a slot was refused.
+    flash(`t+${sec}s: ${slotBlockText(block, sec).replace(/&middot;/g, '.')}`);
     return;
   }
   // A mount may fire more than once in a turn, so a second shot is ADDED
@@ -629,9 +662,8 @@ function renderSlotMenu(): void {
         + `<span>at ${at}${here.length > 1 ? ` x${here.length}` : ''} &middot; remove</span></div>`);
       continue;
     }
-    const why = !aimed ? 'no target'
-      : !slotOpen(s.id, i, sec, o.weapons) ? 'cooling'
-      : '';
+    const block = aimed ? slotBlock(s.id, i, sec, o.weapons) : null;
+    const why = !aimed ? 'no target' : block ? slotBlockText(block, sec) : '';
     rows.push(
       `<div class="srow${why ? ' off' : ''}"${why ? '' : ` data-add="${i}"`}>`
       + `<span class="k">${name}</span>`
