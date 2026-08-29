@@ -265,12 +265,17 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dial .cmd { stroke:var(--cyan); stroke-width:2.5; }
 .dial .knob { fill:var(--cyan); }
 .dial.numb { opacity:.35; pointer-events:none; }
-.dial .val { position:absolute; left:0; right:0; top:50%; transform:translateY(-58%);
-  text-align:center; font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
-  font-size:15px; color:var(--ink); pointer-events:none; }
-.dial .cap { position:absolute; left:0; right:0; top:50%; transform:translateY(6px);
-  text-align:center; font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
-  font-size:9px; letter-spacing:.14em; color:var(--muted); pointer-events:none; }
+/* The readout sits UNDER the face, not in it. Inside, a hull rolled onto its
+   wingtip put a wing through the number, and the box a drag measures its angle
+   from has to be the circle alone: a label inside it moves the centre. */
+.gauge { display:flex; flex-direction:column; align-items:center; gap:3px;
+  pointer-events:none; }
+.glabel { display:flex; align-items:baseline; gap:5px;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; line-height:1; }
+.glabel b { font-size:14px; color:var(--ink); }
+.glabel span { font-size:9px; letter-spacing:.14em; color:var(--muted); }
+/* Where the hull IS, so it reads like the dim needle on the other dial. */
+.dial .plane { fill:var(--muted); opacity:.85; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -317,8 +322,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      button plus its 12px margin plus a gap. */
   #attitude { margin-bottom:66px; }
   .dial { width:72px; height:72px; }
-  .dial .val { font-size:13px; }
-  #pAlt { margin-bottom:56px; }
+  .glabel b { font-size:12px; }
+  /* Above the gauges, which are a readout tall now that the numbers sit under
+     the faces rather than across them. */
+  #pAlt { margin-bottom:84px; }
   button { padding:10px 13px; }
   #timeline { --slotw:22px; }
   #slots, .slot { height:26px; }
@@ -381,8 +388,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #toolbar { grid-column:2; grid-row:2; margin:0 10px 8px 0; gap:5px;
     justify-self:end; }
   #attitude { grid-column:2; grid-row:2; margin:0 10px 54px 0; justify-self:end; }
-  /* Above the dials, not across them: both are right aligned here. */
-  #pAlt { grid-column:2; grid-row:2; margin:0 10px 126px 0; justify-self:end; }
+  /* Above the gauges, not across them: both are right aligned here, and a
+     gauge is its dial plus the readout under it. */
+  #pAlt { grid-column:2; grid-row:2; margin:0 10px 146px 0; justify-self:end; }
   /* Wraps into the strip the sheet leaves rather than running under it. */
   #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
     max-width:calc(100% - min(330px, 54vw) - 20px); justify-content:flex-end; }
@@ -571,35 +579,48 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
        told about, sitting on the canvas rather than in a rail: a heading is
        aimed at something on screen, so the control belongs on screen. -->
   <div id="attitude" aria-label="Heading">
-    <div class="dial" id="atRoll" role="slider" aria-label="Roll"
-         aria-valuemin="-180" aria-valuemax="180" aria-valuenow="0" tabindex="0">
-      <svg viewBox="-50 -50 100 100" aria-hidden="true">
-        <circle class="face" cx="0" cy="0" r="45"/>
-        <g class="ticks" id="atRollTicks"></g>
-        <!-- A horizon bar, because roll is read against level and not against
-             a compass: the bar tilts, which is what a hull rolling looks like. -->
-        <g id="atRollNow"><line class="now" x1="-30" y1="0" x2="30" y2="0"/></g>
-        <g id="atRollCmd">
-          <line class="cmd" x1="-36" y1="0" x2="36" y2="0"/>
-          <circle class="knob" cx="36" cy="0" r="6.5"/>
-        </g>
-      </svg>
-      <b class="val" id="atRollV">0</b>
-      <span class="cap">ROLL</span>
+    <div class="gauge">
+      <div class="dial" id="atRoll" role="slider" aria-label="Roll"
+           aria-valuemin="-180" aria-valuemax="180" aria-valuenow="0" tabindex="0">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <circle class="face" cx="0" cy="0" r="45"/>
+          <g class="ticks" id="atRollTicks"></g>
+          <!-- The hull seen head on, tilted by its own roll. A bar through the
+               middle read as a horizon and told you nothing about WHICH way
+               up the ship was; a fin pointing at the hull's own up says it at
+               a glance, which is the whole question roll asks. -->
+          <g id="atRollNow" class="plane">
+            <rect x="-31" y="-1.7" width="62" height="3.4" rx="1.7"/>
+            <rect x="-1.7" y="-17" width="3.4" height="12" rx="1.5"/>
+            <circle cx="0" cy="0" r="5.6"/>
+          </g>
+          <!-- Zero roll is wings level, where the hull's own up IS world up, so
+               the ball sits at the top of the dial and travels round with
+               it. It used to rest at three o'clock while a drag measured from
+               twelve, so grabbing the ball where it sat snapped the roll 90
+               degrees before the finger had moved. -->
+          <g id="atRollCmd">
+            <line class="cmd" x1="0" y1="0" x2="0" y2="-36"/>
+            <circle class="knob" cx="0" cy="-36" r="6.5"/>
+          </g>
+        </svg>
+      </div>
+      <div class="glabel"><b id="atRollV">0</b><span>ROLL</span></div>
     </div>
-    <div class="dial" id="atPitch" role="slider" aria-label="Pitch"
-         aria-valuemin="-80" aria-valuemax="80" aria-valuenow="0" tabindex="0">
-      <svg viewBox="-50 -50 100 100" aria-hidden="true">
-        <path class="face" d="M 0 -45 A 45 45 0 0 1 0 45"/>
-        <line class="axis" x1="0" y1="0" x2="45" y2="0"/>
-        <g id="atPitchNow"><line class="now" x1="0" y1="0" x2="33" y2="0"/></g>
-        <g id="atPitchCmd">
-          <line class="cmd" x1="0" y1="0" x2="38" y2="0"/>
-          <circle class="knob" cx="38" cy="0" r="6.5"/>
-        </g>
-      </svg>
-      <b class="val" id="atPitchV">0</b>
-      <span class="cap">PITCH</span>
+    <div class="gauge">
+      <div class="dial" id="atPitch" role="slider" aria-label="Pitch"
+           aria-valuemin="-80" aria-valuemax="80" aria-valuenow="0" tabindex="0">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <path class="face" d="M 0 -45 A 45 45 0 0 1 0 45"/>
+          <line class="axis" x1="0" y1="0" x2="45" y2="0"/>
+          <g id="atPitchNow"><line class="now" x1="0" y1="0" x2="33" y2="0"/></g>
+          <g id="atPitchCmd">
+            <line class="cmd" x1="0" y1="0" x2="38" y2="0"/>
+            <circle class="knob" cx="38" cy="0" r="6.5"/>
+          </g>
+        </svg>
+      </div>
+      <div class="glabel"><b id="atPitchV">0</b><span>PITCH</span></div>
     </div>
   </div>
 

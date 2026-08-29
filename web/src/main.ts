@@ -1410,8 +1410,15 @@ function dialDrag(id: string, apply: (deg: number, e: PointerEvent) => void): vo
   let held = -1;
   const set = (e: PointerEvent) => {
     const r = el.getBoundingClientRect();
-    apply(Math.atan2(e.clientX - (r.left + r.width / 2),
-                     -(e.clientY - (r.top + r.height / 2))) * 180 / Math.PI, e);
+    const dx = e.clientX - (r.left + r.width / 2);
+    const dy = e.clientY - (r.top + r.height / 2);
+    // A thumb near the middle has no angle worth reading: a pixel of travel
+    // there swings the value through a whole turn. Below a fifth of the radius
+    // the dial simply waits for the finger to move out.
+    if (Math.hypot(dx, dy) < r.width * 0.1) return;
+    // Zero is straight up, which is where the ball rests and where a hull's
+    // own up points when its wings are level.
+    apply(Math.atan2(dx, -dy) * 180 / Math.PI, e);
   };
   el.addEventListener('pointerdown', e => {
     if (!canPlan() || selected < 0) return;
@@ -1490,8 +1497,13 @@ function renderAttitude(): void {
   const rollCmd = standingRoll.get(s.id) ?? match.order(s.id).roll;
   const rollDeg = rollCmd === undefined ? rollNow : (rollCmd * 180) / Math.PI;
 
-  $('atRollNow').setAttribute('transform', `rotate(${(-rollNow).toFixed(2)})`);
-  $('atRollCmd').setAttribute('transform', `rotate(${(-rollDeg).toFixed(2)})`);
+  // Both start upright, where a hull's own up is world up, so a roll turns
+  // them by the roll itself. Positive, NOT negated: a drag reads its angle
+  // clockwise from twelve and an SVG rotate turns clockwise too, so negating
+  // put the ball on the opposite side of the dial from the finger that had
+  // just placed it. The value was right and the picture was mirrored.
+  $('atRollNow').setAttribute('transform', `rotate(${rollNow.toFixed(2)})`);
+  $('atRollCmd').setAttribute('transform', `rotate(${rollDeg.toFixed(2)})`);
   $('atRollV').textContent = `${Math.round(rollDeg)}`;
   $('atRoll').setAttribute('aria-valuenow', String(Math.round(rollDeg)));
 
