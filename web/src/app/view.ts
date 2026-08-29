@@ -13,7 +13,8 @@ import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
-  chartDir, contourLevels, fit, radiusAt, sliceLoop, type Fitted,
+  chartDir, contourLevels, fit, radiusAt, sliceFill, sliceOutline, sliceRegion,
+  type Fitted,
 } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
@@ -149,6 +150,7 @@ export class View {
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
+  #planeFill: THREE.Mesh;
   /** Which shell and working plane the drawn contours belong to. */
   #wireKey = '';
   #planeGrid: THREE.GridHelper;
@@ -233,7 +235,7 @@ export class View {
     this.#shell = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.045, side: THREE.DoubleSide,
+        color: GREEN, transparent: true, opacity: 0.022, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
@@ -249,7 +251,7 @@ export class View {
     this.#shellLines = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.42,
+        color: GREEN, transparent: true, opacity: 0.16,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
@@ -260,9 +262,22 @@ export class View {
     // rather than an eye.
     this.#planeShape = new THREE.LineSegments(
       new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: GREEN, transparent: true, opacity: 0.9 }),
+      new THREE.LineBasicMaterial({ color: GREEN, transparent: true, opacity: 0.95 }),
     );
     this.#scene.add(this.#planeShape);
+
+    // The area the ship can finish its turn in AT THIS ELEVATION, filled. The
+    // shell says where it could go at all, which is a volume and reads as one;
+    // this is the single horizontal slice of it a click can actually land in,
+    // so it is the one thing on screen drawn as ground rather than as wire.
+    this.#planeFill = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: GREEN, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.#scene.add(this.#planeFill);
 
     this.#scene.add(this.#projGroup);
     this.#scene.add(this.#beamGroup);
@@ -697,14 +712,26 @@ export class View {
     // Contours follow the working plane, so they are cut here rather than with
     // the surface: the plane moves far more often than the surface does.
     const planeY = this.planeY();
-    const key = `${ship.id}|${built.cells}|${planeY.toFixed(2)}`;
+    // The ladder itself does not move with the plane. What changes is which
+    // rung is left out, so the key carries the plane rather than ignoring it.
+    const key = `${ship.id}|${built.cells}|${ship.pos.y.toFixed(2)}|${planeY.toFixed(2)}`;
     if (key !== this.#wireKey) {
       this.#wireKey = key;
       const wire: number[] = [];
-      for (const y of contourLevels(built.ylo, built.yhi, planeY, SLICES, INTERVALS)) {
-        wire.push(...sliceLoop(
-          built.fitted, built.anchor.x, built.anchor.y, built.anchor.z, y, SLICE_RAYS));
+      const levels = contourLevels(
+        built.ylo, built.yhi, ship.pos.y, planeY, SLICES, INTERVALS);
+      for (const y of levels) {
+        const cut = sliceRegion(built.fitted, built.anchor.y, y, SLICE_RAYS);
+        wire.push(...sliceOutline(cut, built.anchor.x, built.anchor.z, y));
       }
+      // The rungs are a fixed scale anchored to the ship, so this list must not
+      // change as the elevation moves: only which rung drops out, being the one
+      // the bright cut is already drawing.
+      console.log(
+        `FT rungs | ${levels.map(y => y.toFixed(1)).join(' ')}`
+        + ` | anchored at ship y ${ship.pos.y.toFixed(3)}`
+        + ` | plane ${planeY.toFixed(3)} takes its own rung out`,
+      );
       this.#shellLines.geometry.dispose();
       const wgeo = new THREE.BufferGeometry();
       wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
@@ -878,11 +905,13 @@ export class View {
   drawPlaneShape(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#planeShape.visible = false;
+      this.#planeFill.visible = false;
       return;
     }
     const built = this.#shells.get(ship.id)?.built;
     if (!built) {
       this.#planeShape.visible = false;
+      this.#planeFill.visible = false;
       return;
     }
     const y = this.planeY();
@@ -893,13 +922,46 @@ export class View {
     if (key === this.#planeKey) return;
     this.#planeKey = key;
 
-    const pts = sliceLoop(
-      built.fitted, built.anchor.x, built.anchor.y, built.anchor.z, y, PLANE_RAYS);
+    // One cut, drawn twice: the ground it covers and the edge around it. Both
+    // come off the same spans, so the fill cannot spill past its own outline.
+    const cut = sliceRegion(built.fitted, built.anchor.y, y, PLANE_RAYS);
+    const a = built.anchor;
+    const pts = sliceOutline(cut, a.x, a.z, y);
+    const tris = sliceFill(cut, a.x, a.z, y);
+
     this.#planeShape.geometry.dispose();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     this.#planeShape.geometry = geo;
     this.#planeShape.visible = pts.length > 0;
+
+    this.#planeFill.geometry.dispose();
+    const fgeo = new THREE.BufferGeometry();
+    fgeo.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
+    this.#planeFill.geometry = fgeo;
+    this.#planeFill.visible = tris.length > 0;
+
+    // Every vertex of both took `y` verbatim, so this reports the elevation
+    // asked for beside the elevation drawn. They are the same number or there
+    // is a bug, which is the only reason to print it.
+    let ylo = Infinity;
+    let yhi = -Infinity;
+    for (const src of [pts, tris]) {
+      for (let i = 1; i < src.length; i += 3) {
+        if (src[i]! < ylo) ylo = src[i]!;
+        if (src[i]! > yhi) yhi = src[i]!;
+      }
+    }
+    const p = ship.pos;
+    console.log(
+      `FT slice | elevation ${y.toFixed(3)}`
+      + ` | ship (${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)})`
+      + ` | work alt ${this.workAlt.toFixed(3)}`
+      + ` | drawn y ${Number.isFinite(ylo) ? ylo.toFixed(3) : 'none'}`
+      + ` to ${Number.isFinite(yhi) ? yhi.toFixed(3) : 'none'}`
+      + ` | ${tris.length / 9} triangles, ${pts.length / 6} edges`
+      + (Number.isFinite(ylo) && (ylo !== y || yhi !== y) ? '  DEVIATES' : ''),
+    );
   }
 
   /**

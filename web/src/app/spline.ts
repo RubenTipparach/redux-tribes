@@ -153,24 +153,23 @@ const heightOf = (f: Fitted, u: number, v: number): number =>
   chartDir(u, v)[1] * Math.max(0, radiusAt(f, u, v));
 
 /**
- * Every height at which one meridian crosses a plane, as x and z offsets.
+ * Radii at which one meridian crosses a plane, nearest the axis first.
  *
  * Taking only the first crossing was wrong at the ends of the shape, and
- * measurably so: the reachable set of a frigate at rest spans 19.38 units of
- * height but reaches only 14.43 straight up, so its top is DIMPLED, with the
- * highest ground on a ring rather than overhead. A plane laid through that
- * ring meets 17 of 96 meridians twice and the other 79 not at all, and taking
- * the first of the two drew one branch while dropping the other. The contour
- * came out as a stray open arc instead of the closed lens it is.
+ * measurably so: the reachable set of a frigate at rest spans 23.08 units of
+ * height but reaches only 14.43 straight up, because forward is the cheap
+ * direction, so its top is DIMPLED and its highest ground lies on a ring. A
+ * plane through that ring meets a meridian twice, and taking the first drew
+ * one branch while dropping the other.
  *
- * So height is not monotone along a meridian and the walk cannot stop early.
- * It IS monotone over most of a shape, which is why one crossing stays the
- * usual answer and why carrying the rest costs nothing there.
+ * Sorted by radius rather than left in the order the walk finds them. The walk
+ * runs from the top pole down, which is outward for a cut above the centre and
+ * INWARD for one below it, so the raw order flips halfway down the shape.
  */
-function crossings(f: Fitted, u: number, want: number): Array<[number, number]> {
+function crossings(f: Fitted, u: number, want: number): number[] {
   const COARSE = 32;
   const REFINE = 18;
-  const out: Array<[number, number]> = [];
+  const out: number[] = [];
   let v0 = 0;
   let h0 = heightOf(f, u, 0) - want;
   for (let k = 1; k <= COARSE; k++) {
@@ -187,81 +186,169 @@ function crossings(f: Fitted, u: number, want: number): Array<[number, number]> 
       const vc = (lo + hi) / 2;
       const d = chartDir(u, vc);
       const r = Math.max(0, radiusAt(f, u, vc));
-      out.push([d[0] * r, d[2] * r]);
+      // The planar radius at this azimuth. The direction is known from u, so
+      // the radius is the whole answer.
+      out.push(Math.hypot(d[0] * r, d[2] * r));
     }
     v0 = v1;
     h0 = h1;
   }
+  out.sort((p, q) => p - q);
   return out;
 }
 
 /**
- * Where a horizontal plane cuts the surface, as segments ready to draw.
+ * A horizontal cut through the surface, as the AREA it encloses.
  *
- * Walks the meridians rather than the plane, which is what makes the line
- * smooth. Cutting the tessellated triangles instead was geometrically correct
- * and looked wrong: where the plane runs nearly tangent to a flat face, a
- * wobble of one unit in the radius becomes an excursion of tens of units
- * across that face, so the contour wandered over the middle of the shape
- * instead of tracing its edge. A meridian walk cannot do that, because each
- * azimuth contributes points at that azimuth or none at all.
+ * Each azimuth carries the radial spans that are inside the shape at this
+ * height, nearest the axis first. That is the whole cut: an outline is its
+ * edges and a fill is the ground between them, so the two cannot disagree
+ * about where the boundary is.
  *
- * A meridian can cross more than once, so adjacent azimuths are joined branch
- * by branch, both ordered from the top pole down. Where a neighbour runs out
- * of branches the curve has reached its own edge: an even number left over is
- * closed off in pairs, which is the chord across the tangency where those two
- * branches meet, and an odd one is left open rather than joined to something
- * it is not continuous with.
- *
- * `rays` is the resolution of the LINE and is independent of the sample grid,
- * because the surface is continuous: asking it for 120 points costs 120
- * evaluations and no flights at all.
+ * The spans, not a list of boundary points, because the cut is not always a
+ * disc. Above the shoulder of a dimpled shape the axis itself is outside the
+ * set, and the section becomes a ring or a crescent. Pairing crossings off the
+ * axis outward gets all three cases right with no special casing: what decides
+ * it is whether the axis is inside, which is one comparison.
  */
-export function sliceLoop(
-  f: Fitted, cx: number, cy: number, cz: number, y: number, rays: number,
-): number[] {
-  const found: Array<Array<[number, number]>> = [];
-  for (let i = 0; i < rays; i++) found.push(crossings(f, i / rays, y - cy));
-  const out: number[] = [];
-  const seg = (p: [number, number], q: [number, number]) =>
-    out.push(cx + p[0], y, cz + p[1], cx + q[0], y, cz + q[1]);
+export interface SliceCut {
+  /** Per azimuth, inner and outer radius of each span. Empty where the plane
+   * misses the shape entirely at that azimuth. */
+  readonly spans: ReadonlyArray<ReadonlyArray<readonly [number, number]>>;
+  readonly rays: number;
+}
+
+export function sliceRegion(f: Fitted, cy: number, y: number, rays: number): SliceCut {
+  const want = y - cy;
+  // Straight up (or down) from the centre: inside, and the first crossing
+  // closes a span that starts at the axis. Outside, and it opens one.
+  const axis = Math.abs(want) <= Math.max(0, radiusAt(f, 0, want >= 0 ? 0 : 1));
+  const spans: Array<Array<readonly [number, number]>> = [];
   for (let i = 0; i < rays; i++) {
-    const here = found[i]!;
-    const next = found[(i + 1) % rays]!;
+    const cs = crossings(f, i / rays, want);
+    const here: Array<readonly [number, number]> = [];
+    let k = 0;
+    if (axis && cs.length > 0) {
+      here.push([0, cs[0]!]);
+      k = 1;
+    }
+    // Whatever is left pairs off: in at one radius, out at the next. An odd
+    // one over is a tangency the walk caught once, and closes nothing, so it
+    // is dropped rather than paired with a boundary it does not belong to.
+    for (; k + 1 < cs.length; k += 2) here.push([cs[k]!, cs[k + 1]!]);
+    spans.push(here);
+  }
+  return { spans, rays };
+}
+
+/**
+ * The edge of a cut, as segments ready to draw.
+ *
+ * Every span contributes its outer arc, its inner arc where it has one, and a
+ * chord wherever the neighbouring azimuth has no matching span, which is where
+ * the region ends and the two arcs meet. Closing only on the side that HAD the
+ * extra span left a crescent sealed at one end and hanging open at the other.
+ */
+export function sliceOutline(
+  cut: SliceCut, cx: number, cz: number, y: number,
+): number[] {
+  const { spans, rays } = cut;
+  const out: number[] = [];
+  const at = (i: number, r: number): [number, number] => {
+    const th = (i / rays) * 2 * Math.PI;
+    return [cx + Math.cos(th) * r, cz + Math.sin(th) * r];
+  };
+  const seg = (p: [number, number], q: [number, number]) =>
+    out.push(p[0], y, p[1], q[0], y, q[1]);
+  for (let i = 0; i < rays; i++) {
+    const here = spans[i]!;
+    const next = spans[(i + 1) % rays]!;
     const shared = Math.min(here.length, next.length);
-    for (let k = 0; k < shared; k++) seg(here[k]!, next[k]!);
-    for (let k = shared; k + 1 < here.length; k += 2) seg(here[k]!, here[k + 1]!);
+    for (let k = 0; k < shared; k++) {
+      const a = here[k]!;
+      const b = next[k]!;
+      seg(at(i, a[1]), at(i + 1, b[1]));
+      // A span that starts at the axis has no inner edge to trace.
+      if (a[0] > 1e-6 || b[0] > 1e-6) seg(at(i, a[0]), at(i + 1, b[0]));
+    }
+    // Close whichever side runs on alone, so both ends of an arc are sealed.
+    const solo = here.length > next.length ? here : next;
+    const where = here.length > next.length ? i : i + 1;
+    for (let k = shared; k < solo.length; k++) {
+      const sp = solo[k]!;
+      seg(at(where, sp[0]), at(where, sp[1]));
+    }
   }
   return out;
 }
 
 /**
- * The heights to cut contours at, registered to a reference plane.
+ * The ground a cut covers, as triangles at exactly one height.
  *
- * The rungs used to be even divisions of the shape's own extent, while the
- * working plane sat wherever the player had put it. Two ladders on one
- * surface, sharing no reference, so they lined up only by accident and the
- * bright line cut across the dim ones at an angle that meant nothing.
+ * Every vertex takes `y` verbatim rather than anything derived from the
+ * surface, so the filled area cannot drift off the elevation it claims to be
+ * a section of. Its outline comes from the same spans, so the fill and the
+ * bright edge around it are one thing measured once.
+ */
+export function sliceFill(
+  cut: SliceCut, cx: number, cz: number, y: number,
+): number[] {
+  const { spans, rays } = cut;
+  const out: number[] = [];
+  const at = (i: number, r: number): [number, number] => {
+    const th = (i / rays) * 2 * Math.PI;
+    return [cx + Math.cos(th) * r, cz + Math.sin(th) * r];
+  };
+  const tri = (p: [number, number], q: [number, number], r: [number, number]) =>
+    out.push(p[0], y, p[1], q[0], y, q[1], r[0], y, r[1]);
+  for (let i = 0; i < rays; i++) {
+    const here = spans[i]!;
+    const next = spans[(i + 1) % rays]!;
+    for (let k = 0; k < Math.min(here.length, next.length); k++) {
+      const a = here[k]!;
+      const b = next[k]!;
+      const ai = at(i, a[0]);
+      const ao = at(i, a[1]);
+      const bi = at(i + 1, b[0]);
+      const bo = at(i + 1, b[1]);
+      tri(ai, ao, bo);
+      tri(ai, bo, bi);
+    }
+  }
+  return out;
+}
+
+/**
+ * The heights to cut contours at.
  *
- * Here the reference plane IS a rung and the rest step from it by a round
- * number of units, so the ladder reads as an altitude scale and moving the
- * plane walks it one rung at a time. `intervals` is searched smallest first
- * for one that keeps the count near `want`.
+ * Anchored to `baseY`, which is the ship's own height, so the rungs are a
+ * fixed scale: raising the working plane walks UP the ladder instead of
+ * dragging it along. An earlier version anchored them to the plane itself so
+ * that it was always a rung, and the cost was that every line on the shape
+ * moved whenever the elevation did, when only one of them is the elevation.
  *
- * The plane's own level is left out. The caller draws that curve separately
- * and brighter, because it is the one a click aims at, and drawing it twice
- * buys nothing but z fighting.
+ * `skipY` is dropped, because the caller draws that level brighter as the cut
+ * the player is aiming with and drawing it twice buys nothing but z fighting.
+ * With the plane at a whole number of intervals it lands exactly on a rung,
+ * which is the rung that gets skipped.
+ *
+ * `intervals` is searched smallest first for one that keeps the count near
+ * `want`, so the spacing is a round number of units rather than an arbitrary
+ * fraction of however tall this shape happens to be.
  */
 export function contourLevels(
-  ylo: number, yhi: number, planeY: number, want: number,
+  ylo: number, yhi: number, baseY: number, skipY: number, want: number,
   intervals: readonly number[],
 ): number[] {
   const span = yhi - ylo;
   if (!(span > 0) || want < 1) return [];
   const step = intervals.find(i => span / i <= want) ?? span / want;
-  const lo = Math.ceil((ylo - planeY) / step);
-  const hi = Math.floor((yhi - planeY) / step);
+  const lo = Math.ceil((ylo - baseY) / step);
+  const hi = Math.floor((yhi - baseY) / step);
   const out: number[] = [];
-  for (let k = lo; k <= hi; k++) if (k !== 0) out.push(planeY + k * step);
+  for (let k = lo; k <= hi; k++) {
+    const y = baseY + k * step;
+    if (Math.abs(y - skipY) > step * 1e-3) out.push(y);
+  }
   return out;
 }
