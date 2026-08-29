@@ -134,3 +134,71 @@ fn a_probe_tracks_the_executed_flight() {
     }
     assert!(worst < 1.0, "probe drifted {worst} units from the executed flight");
 }
+
+/// MOVE_AND_TURN "auto-faces travel direction" (DESIGN 3.2), and for a long
+/// time it did not: the nose chased the thrust vector, `desired_velocity` fell
+/// to zero on arrival, so `dv` became -vel and the hull swung fully retrograde
+/// while braking. Every move ended with the ship pointing back the way it came.
+///
+/// A hull has 60 degrees of yaw and 40 of pitch over a ten second turn, so
+/// this asks for a course inside that authority and expects it delivered.
+#[test]
+fn a_move_ends_facing_the_way_it_went() {
+    let fl = Flight::default();
+    for dir in [
+        V3::new(0.0, 0.0, 1.0),
+        V3::new(0.5, 0.0, 1.0),
+        V3::new(-0.5, 0.0, 1.0),
+        V3::new(0.0, 0.4, 1.0),
+    ] {
+        let want = dir.norm();
+        let flown = fly_turn(
+            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None,
+            RESOLUTION_STEPS, &[],
+        );
+        let off = angle_between_deg(flown.end_quat.forward(), want);
+        assert!(off < 5.0, "moved along {want:?} but ended {off} degrees off it");
+    }
+}
+
+/// Beyond that authority the hull cannot finish the turn, so it arrives part
+/// way round. What it must never do is arrive nearer the REVERSE of its course
+/// than the course, which is exactly what aiming at the thrust vector did.
+#[test]
+fn a_move_too_sharp_to_finish_still_ends_nearer_its_course_than_its_reverse() {
+    let fl = Flight::default();
+    for dir in [
+        V3::new(1.0, 0.0, 0.0),
+        V3::new(-1.0, 0.0, 0.3),
+        V3::new(0.4, 0.6, -0.5),
+    ] {
+        let want = dir.norm();
+        let flown = fly_turn(
+            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None,
+            RESOLUTION_STEPS, &[],
+        );
+        let fwd = flown.end_quat.forward();
+        let along = angle_between_deg(fwd, want);
+        let against = angle_between_deg(fwd, want.scale(-1.0));
+        assert!(along < against, "moved along {want:?} and ended {along} off it, {against} off its reverse");
+        assert!(along < 90.0, "turned the wrong way entirely: {along} degrees off {want:?}");
+    }
+}
+
+/// A full stop is the one powered mode that should still swing retrograde: it
+/// brakes on the main drive, so the nose has to come round to use it. Rate
+/// limits mean it does not GET there in one turn from a standing heading, so
+/// what is asserted is that it is turning that way.
+#[test]
+fn a_full_stop_still_swings_retrograde() {
+    let fl = Flight::default();
+    let vel = V3::new(0.0, 0.0, 6.0);
+    let flown = fly_turn(ship(vel), None, Mode::FullStop, &fl, None, RESOLUTION_STEPS, &[]);
+    let retro = vel.norm().scale(-1.0);
+    let off = angle_between_deg(flown.end_quat.forward(), retro);
+    assert!(off < 179.0, "a stopping hull must turn toward retrograde, still {off} off");
+    assert!(
+        off < angle_between_deg(V3::new(0.0, 0.0, 1.0), retro),
+        "it ended no nearer retrograde than it started",
+    );
+}

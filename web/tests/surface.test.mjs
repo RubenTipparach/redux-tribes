@@ -86,6 +86,32 @@ test('a slice follows the surface it was cut from', () => {
   assert.ok(worst < 0.05, `a cut point sits ${worst} off the surface`);
 });
 
+test('a dimpled top cuts as two branches, not one', () => {
+  // The real reachable set is flatter than a sphere and dips in the middle of
+  // its top face, so its highest ground is a ring rather than a point. A plane
+  // through that ring meets each meridian TWICE, and a cutter that stopped at
+  // the first crossing drew one branch and dropped the other.
+  const f = fit(field((u, v) => {
+    const h = Math.cos(Math.PI * v);
+    return 20 - 14 * h * h;         // short at both poles, wide at the equator
+  }), NU, NV);
+  const top = Math.max(...Array.from({ length: 401 }, (_, j) => {
+    const v = j / 400;
+    return Math.cos(Math.PI * v) * radiusAt(f, 0, v);
+  }));
+  const overhead = radiusAt(f, 0, 0);
+  assert.ok(top > overhead + 1, `not dimpled: top ${top} against overhead ${overhead}`);
+
+  const pts = sliceLoop(f, 0, 0, 0, (top + overhead) / 2, 96);
+  assert.ok(pts.length > 0, 'a plane through the ring must cut something');
+  // Two branches means two distinct radii at any azimuth the plane reaches.
+  const radii = [];
+  for (let i = 0; i < pts.length; i += 3) radii.push(Math.hypot(pts[i], pts[i + 2]));
+  const lo = Math.min(...radii);
+  const hi = Math.max(...radii);
+  assert.ok(hi - lo > 1, `only one branch drawn: radii span ${lo} to ${hi}`);
+});
+
 test('a plane above the shape cuts nothing rather than inventing a ring', () => {
   const f = fit(field(() => 20), NU, NV);
   assert.equal(sliceLoop(f, 0, 0, 0, 25, 96).length, 0);

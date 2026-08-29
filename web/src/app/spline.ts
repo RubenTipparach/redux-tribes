@@ -153,16 +153,24 @@ const heightOf = (f: Fitted, u: number, v: number): number =>
   chartDir(u, v)[1] * Math.max(0, radiusAt(f, u, v));
 
 /**
- * Where one meridian crosses a horizontal plane, as an offset in x and z.
+ * Every height at which one meridian crosses a plane, as x and z offsets.
  *
- * Walks phi from the top pole down and takes the first crossing. Height falls
- * monotonically along a meridian for any shape that is star shaped about the
- * centre, which is the same property the fit itself rests on, so the first
- * crossing is the only one.
+ * Taking only the first crossing was wrong at the ends of the shape, and
+ * measurably so: the reachable set of a frigate at rest spans 19.38 units of
+ * height but reaches only 14.43 straight up, so its top is DIMPLED, with the
+ * highest ground on a ring rather than overhead. A plane laid through that
+ * ring meets 17 of 96 meridians twice and the other 79 not at all, and taking
+ * the first of the two drew one branch while dropping the other. The contour
+ * came out as a stray open arc instead of the closed lens it is.
+ *
+ * So height is not monotone along a meridian and the walk cannot stop early.
+ * It IS monotone over most of a shape, which is why one crossing stays the
+ * usual answer and why carrying the rest costs nothing there.
  */
-function crossing(f: Fitted, u: number, want: number): [number, number] | null {
-  const COARSE = 24;
+function crossings(f: Fitted, u: number, want: number): Array<[number, number]> {
+  const COARSE = 32;
   const REFINE = 18;
+  const out: Array<[number, number]> = [];
   let v0 = 0;
   let h0 = heightOf(f, u, 0) - want;
   for (let k = 1; k <= COARSE; k++) {
@@ -171,7 +179,7 @@ function crossing(f: Fitted, u: number, want: number): [number, number] | null {
     if ((h0 > 0) !== (h1 > 0)) {
       let lo = v0;
       let hi = v1;
-      for (let s = 0; s < REFINE; s++) {
+      for (let st = 0; st < REFINE; st++) {
         const mid = (lo + hi) / 2;
         if ((heightOf(f, u, mid) - want > 0) === (h0 > 0)) lo = mid;
         else hi = mid;
@@ -179,12 +187,12 @@ function crossing(f: Fitted, u: number, want: number): [number, number] | null {
       const vc = (lo + hi) / 2;
       const d = chartDir(u, vc);
       const r = Math.max(0, radiusAt(f, u, vc));
-      return [d[0] * r, d[2] * r];
+      out.push([d[0] * r, d[2] * r]);
     }
     v0 = v1;
     h0 = h1;
   }
-  return null;
+  return out;
 }
 
 /**
@@ -196,11 +204,14 @@ function crossing(f: Fitted, u: number, want: number): [number, number] | null {
  * wobble of one unit in the radius becomes an excursion of tens of units
  * across that face, so the contour wandered over the middle of the shape
  * instead of tracing its edge. A meridian walk cannot do that, because each
- * azimuth contributes one point at that azimuth or none at all.
+ * azimuth contributes points at that azimuth or none at all.
  *
- * An azimuth whose meridian never reaches the plane contributes nothing, so a
- * cut above the shoulder of the shape comes out as an arc rather than as a
- * fabricated ring.
+ * A meridian can cross more than once, so adjacent azimuths are joined branch
+ * by branch, both ordered from the top pole down. Where a neighbour runs out
+ * of branches the curve has reached its own edge: an even number left over is
+ * closed off in pairs, which is the chord across the tangency where those two
+ * branches meet, and an odd one is left open rather than joined to something
+ * it is not continuous with.
  *
  * `rays` is the resolution of the LINE and is independent of the sample grid,
  * because the surface is continuous: asking it for 120 points costs 120
@@ -209,14 +220,17 @@ function crossing(f: Fitted, u: number, want: number): [number, number] | null {
 export function sliceLoop(
   f: Fitted, cx: number, cy: number, cz: number, y: number, rays: number,
 ): number[] {
-  const found: Array<[number, number] | null> = [];
-  for (let i = 0; i < rays; i++) found.push(crossing(f, i / rays, y - cy));
+  const found: Array<Array<[number, number]>> = [];
+  for (let i = 0; i < rays; i++) found.push(crossings(f, i / rays, y - cy));
   const out: number[] = [];
+  const seg = (p: [number, number], q: [number, number]) =>
+    out.push(cx + p[0], y, cz + p[1], cx + q[0], y, cz + q[1]);
   for (let i = 0; i < rays; i++) {
-    const a = found[i];
-    const b = found[(i + 1) % rays];
-    if (!a || !b) continue;
-    out.push(cx + a[0], y, cz + a[1], cx + b[0], y, cz + b[1]);
+    const here = found[i]!;
+    const next = found[(i + 1) % rays]!;
+    const shared = Math.min(here.length, next.length);
+    for (let k = 0; k < shared; k++) seg(here[k]!, next[k]!);
+    for (let k = shared; k + 1 < here.length; k += 2) seg(here[k]!, here[k + 1]!);
   }
   return out;
 }

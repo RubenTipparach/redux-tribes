@@ -346,6 +346,29 @@ export class View {
     return ray.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y, z: hit.z } : null;
   }
 
+  /**
+   * Keep the working plane inside the shape it is cutting.
+   *
+   * Off the top of the envelope there is no reachable point at that height, so
+   * the aiming line correctly has nothing to draw and correctly disappears.
+   * That is honest and useless: the control still moves, the readout still
+   * counts up, and the thing the player was aiming with is gone with nothing
+   * saying why. Holding the button now stops at the shape instead.
+   *
+   * Held a hair inside the extreme, because exactly at it the plane is tangent
+   * and meets the surface in a point rather than a curve.
+   */
+  clampWorkAlt(): void {
+    const sel = this.#ships.find(s => s.id === this.#selected);
+    const built = sel ? this.#shells.get(sel.id)?.built : null;
+    if (!sel || !built) return;
+    const inset = (built.yhi - built.ylo) * 0.02;
+    const lo = built.ylo + inset - sel.pos.y;
+    const hi = built.yhi - inset - sel.pos.y;
+    if (hi < lo) return;
+    this.workAlt = Math.min(hi, Math.max(lo, this.workAlt));
+  }
+
   planeY(): number {
     const sel = this.#ships.find(s => s.id === this.#selected);
     return (sel ? sel.pos.y : 0) + this.workAlt;

@@ -164,7 +164,13 @@ fn rotate_toward(quat: Quat, want: V3, fl: &Flight, dt: f32) -> Quat {
     // atan2 of two near-zero numbers is noise, which the rotation then
     // amplifies. Hold the current yaw and let pitch do the work instead.
     let mut yaw_err = if flat < 1e-4 { 0.0 } else { datan2(local.x, local.z) };
-    let mut pitch_err = datan2(local.y, flat.max(1e-9));
+    // Negated, because a right handed rotation about +X carries +Z toward -Y,
+    // while a positive error means the target is at +Y. Unnegated, a nose told
+    // to come up went down instead, and did it at the full pitch rate: a hull
+    // asked for 21.8 degrees of climb ended 40 degrees below its course, which
+    // is its whole authority spent backwards. Yaw needs no such flip, because
+    // a rotation about +Y carries +Z toward +X, the way atan2 measures it.
+    let mut pitch_err = -datan2(local.y, flat.max(1e-9));
     let max_yaw = fl.yaw_rate * crate::math::PI / 180.0 * dt;
     let max_pitch = fl.pitch_rate * crate::math::PI / 180.0 * dt;
     yaw_err = yaw_err.clamp(-max_yaw, max_yaw);
@@ -193,6 +199,7 @@ fn step_flight(
     fl: &Flight,
     mode: Mode,
     face_dir: V3,
+    course_dir: V3,
     dt: f32,
     wells: &[Well],
 ) -> Body {
@@ -206,12 +213,24 @@ fn step_flight(
         desired_velocity(b.pos, target, seconds_left, fl, mode).sub(b.vel)
     };
 
-    // Point the hull. MoveAndTurn aims the nose where thrust is needed, the most
-    // manoeuvrable thing a ship can do. TurnSlide holds a commanded heading
-    // instead, leaving course changes to the RCS: a far smaller envelope, bought
-    // in exchange for keeping the guns on a bearing.
+    // Point the hull.
+    //
+    // MoveAndTurn auto-faces the course it was given (DESIGN 3.2), so the ship
+    // arrives looking the way it went. It used to aim wherever thrust was
+    // needed, which is the most manoeuvrable thing a hull can do and the wrong
+    // thing to watch: `desired_velocity` falls to zero on arrival, so `dv`
+    // becomes -vel and the nose swung fully retrograde over the last seconds
+    // of every move. The ship ended each turn pointing back where it came
+    // from.
+    //
+    // TurnSlide holds a commanded heading instead, leaving course changes to
+    // the RCS: a far smaller envelope, bought in exchange for keeping the guns
+    // on a bearing. FullStop still aims at the thrust, because a hull braking
+    // to a dead stop SHOULD swing retrograde and brake on its main drive.
     let aim_dir = if mode == Mode::TurnSlide {
         face_dir
+    } else if mode == Mode::MoveAndTurn {
+        course_dir
     } else if boosting {
         if b.vel.len() > 1e-6 { b.vel.norm() } else { b.quat.forward() }
     } else if dv.len() > 1e-6 {
@@ -290,6 +309,13 @@ pub fn fly_span(
     };
     // No order means hold course: coast on the velocity already carried.
     let target = target.unwrap_or_else(|| b.pos.add(b.vel.scale(TURN_SECONDS)));
+    // The course as plotted, fixed for the span. MoveAndTurn flies nose first
+    // along this, so it is the heading the ship ends the turn on. Resolution
+    // re-enters here after a collision with the same target, so a knocked ship
+    // aims at where it is still trying to get to rather than at where it was
+    // originally pointed.
+    let course = target.sub(b.pos);
+    let course_dir = if course.len() > 1e-6 { course.norm() } else { b.quat.forward() };
 
     let dead = mode == Mode::Drift;
     let mut path = Vec::with_capacity(steps as usize + 1);
@@ -302,7 +328,7 @@ pub fn fly_span(
             b.pos = b.pos.add(b.vel.scale(dt));
         } else {
             let seconds_left = (steps - i) as f32 * dt;
-            b = step_flight(b, target, seconds_left, fl, mode, face_dir, dt, wells);
+            b = step_flight(b, target, seconds_left, fl, mode, face_dir, course_dir, dt, wells);
         }
         path.push((b.pos, b.quat));
     }

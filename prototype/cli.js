@@ -7,7 +7,8 @@
 
 const sim = require("./sim/sim.js");
 const snap = require("./sim/snapshot.js");
-const { V } = require("./sim/dmath.js");
+const { V, Q } = require("./sim/dmath.js");
+const dmath = require("./sim/dmath.js");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -139,6 +140,34 @@ function tests() {
     const lockedDist = V.dist(lockedShip.pos, locked.target);
     check("holding a heading shortens a lateral move (nose locked, RCS only)",
       freeNose > lockedDist * 1.5, "free " + freeNose.toFixed(1) + " vs slide " + lockedDist.toFixed(1));
+
+    // 6. MOVE_AND_TURN auto-faces the travel direction (DESIGN 3.2). It used to
+    //    aim the nose at the thrust vector, which falls to -vel on arrival, so
+    //    every move ended pointing back the way it came. Asked for courses
+    //    inside the hull's 60 degrees of yaw and 40 of pitch, so a rate limit
+    //    is not what is being measured.
+    const heading = (dir) => {
+      const sh = lone("terran_frigate");
+      const want = V.norm(V.v3(dir[0], dir[1], dir[2]));
+      const r = sim.flyTurn(sh, [want.x * 20, want.y * 20, want.z * 20], "MOVE_AND_TURN", {});
+      const got = Q.forward(r.endQuat);
+      return dmath.dacos(Math.max(-1, Math.min(1, V.dot(got, want)))) * 180 / Math.PI;
+    };
+    let worst = 0;
+    for (const d of [[0, 0, 1], [0.5, 0, 1], [-0.5, 0, 1], [0, 0.4, 1], [0, -0.4, 1]]) {
+      worst = Math.max(worst, heading(d));
+    }
+    check("a move ends facing the way it went (MOVE_AND_TURN auto-faces travel)",
+      worst < 5, "worst " + worst.toFixed(1) + " degrees off course");
+
+    // 7. and the pitch axis is not inverted: a climb ends above the start, not
+    //    below it. The sign was flipped, so a nose told to come up went down
+    //    and spent its whole pitch authority doing it.
+    const climb = lone("terran_frigate");
+    const climbed = sim.flyTurn(climb, [0, 8, 20], "MOVE_AND_TURN", {});
+    check("a climb ends nose up, not nose down (pitch sign)",
+      Q.forward(climbed.endQuat).y > 0.2,
+      "end forward y " + Q.forward(climbed.endQuat).y.toFixed(3));
   }
 
   console.log("\n== slot endpoints (the Unity slot-10 bug, fixed by construction) ==");

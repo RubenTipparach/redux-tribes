@@ -147,6 +147,16 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
 #toolbar button.off { opacity:.28; }
 .tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+/* The working altitude, above the toolbar rather than in it: at 390px the row
+   is already seven 44px targets wide, and a readout inside it would push the
+   row past the viewport. Hidden at zero, so it appears only once it means
+   something. */
+#pAlt { grid-column:2; grid-row:2; align-self:end; justify-self:center;
+  z-index:6; margin-bottom:62px; pointer-events:none;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.1em; color:var(--green); background:#111823cc; border-radius:9px;
+  padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#pAlt.zero { display:none; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -184,7 +194,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     background:transparent; color:var(--muted); font-size:11px; }
   #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
 
-  #toolbar { grid-column:1; }
+  /* One column here, so the readout follows the toolbar out of column 2.
+     Left behind, it opens an implicit second column and shoves the row. */
+  #toolbar, #pAlt { grid-column:1; }
+  #pAlt { margin-bottom:56px; }
   button { padding:10px 13px; }
   .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
   .shipRow { padding:9px 8px; margin-bottom:7px; }
@@ -213,6 +226,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     box-shadow:14px 0 34px #000a; transform:translateX(-110%); }
   #left.open, #right.open { transform:none; }
   #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
+  #pAlt { grid-column:2; grid-row:2; margin-bottom:52px; }
   #toolbar button { width:38px; height:38px; font-size:13px; }
 }
 
@@ -389,12 +403,14 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <button id="tFit">Fit view</button>
   </div>
 
+  <div id="pAlt" class="zero" aria-live="polite">ALT 0</div>
+
   <div id="toolbar" aria-label="Camera and ship controls">
     <button id="cMode" title="One finger on empty space orbits. Tap to pan instead. Mouse: left pans, right orbits.">&#10227;</button>
     <button id="cCentre" title="Centre the camera on the selected ship">&#8853;</button>
     <span class="tbsep"></span>
-    <button id="pUp" class="shipctl" title="Working altitude +5 (E)">&#9650;</button>
-    <button id="pDown" class="shipctl" title="Working altitude -5 (Q)">&#9660;</button>
+    <button id="pUp" class="shipctl" title="Working altitude up (E). Hold to keep going.">&#9650;</button>
+    <button id="pDown" class="shipctl" title="Working altitude down (Q). Hold to keep going.">&#9660;</button>
     <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left (A)">&#8634;</button>
     <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">&#8635;</button>
     <button id="pFace" class="shipctl" title="Face the target (F)">&#9678;</button>

@@ -173,7 +173,13 @@
     // atan2 of two near-zero numbers is noise, which the rotation then
     // amplifies. Hold the current yaw and let pitch do the work instead.
     let yawErr = flat < 1e-4 ? 0 : dmath.datan2(local.x, local.z);
-    let pitchErr = dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
+    // Negated, because a right handed rotation about +X carries +Z toward -Y,
+    // while a positive error means the target is at +Y. Unnegated, a nose told
+    // to come up went down instead, and at the full pitch rate: a hull asked
+    // for 21.8 degrees of climb ended 40 degrees below its course, which is its
+    // whole authority spent backwards. Yaw needs no flip, because a rotation
+    // about +Y carries +Z toward +X, the way atan2 measures it.
+    let pitchErr = -dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
     const maxYaw = fl.yawRate * Math.PI / 180 * dt;
     const maxPitch = fl.pitchRate * Math.PI / 180 * dt;
     yawErr = Math.max(-maxYaw, Math.min(maxYaw, yawErr));
@@ -195,7 +201,7 @@
   }
 
   // One tick of flight. Returns the new {pos, vel, quat}.
-  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt) {
+  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, dt) {
     dt = dt || DT;
     const boosting = mode === "FULL_SPEED";
     const accelFwd = fl.accelFwd * (boosting ? CONST.BOOST_ACCEL_MULT : 1);
@@ -210,12 +216,21 @@
       dv = V.sub(want, vel);
     }
 
-    // Point the hull. MOVE_AND_TURN aims the nose where thrust is needed, which
-    // is the most manoeuvrable thing a ship can do. TURN_SLIDE holds a commanded
-    // heading instead, so course changes are left to the RCS: a far smaller
-    // envelope, bought in exchange for keeping the guns on a bearing.
+    // Point the hull.
+    //
+    // MOVE_AND_TURN auto-faces the course it was given (DESIGN 3.2), so the
+    // ship arrives looking the way it went. It used to aim wherever thrust was
+    // needed, which is the most manoeuvrable thing a hull can do and the wrong
+    // thing to watch: desiredVelocity falls to zero on arrival, so dv becomes
+    // -vel and the nose swung fully retrograde over the last seconds of every
+    // move. TURN_SLIDE holds a commanded heading instead, leaving course
+    // changes to the RCS: a far smaller envelope, bought in exchange for
+    // keeping the guns on a bearing. FULL_STOP still aims at the thrust,
+    // because a hull braking to a dead stop SHOULD swing retrograde and brake
+    // on its main drive.
     let aimDir;
     if (mode === "TURN_SLIDE" && faceDir) aimDir = faceDir;
+    else if (mode === "MOVE_AND_TURN" && courseDir) aimDir = courseDir;
     else if (boosting) aimDir = V.len(vel) > 1e-6 ? V.norm(vel) : Q.forward(quat);
     else if (V.len(dv) > 1e-6) aimDir = V.norm(dv);
     else aimDir = Q.forward(quat);
@@ -259,6 +274,14 @@
       ? V.v3(targetArr[0], targetArr[1], targetArr[2])
       : V.add(pos, V.scale(vel, CONST.TURN_SECONDS));   // no order: hold course
 
+    // The course as plotted, fixed for the span. MOVE_AND_TURN flies nose first
+    // along this, so it is the heading the ship ends the turn on. Resolution
+    // re-enters here after a collision with the same target, so a knocked ship
+    // aims at where it is still trying to get to rather than where it was
+    // originally pointed.
+    const course = V.sub(target, pos);
+    const courseDir = V.len(course) > 1e-6 ? V.norm(course) : Q.forward(quat);
+
     // engines dead: no thrust, no attitude authority, just coast
     const dead = ship.drift.active;
     const path = [{ pos: V.clone(pos), quat }];
@@ -267,7 +290,7 @@
         pos = V.add(pos, V.scale(vel, dt));
       } else {
         const secondsLeft = (steps - i) * dt;
-        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt);
+        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, dt);
         pos = r.pos; vel = r.vel; quat = r.quat;
       }
       path.push({ pos: V.clone(pos), quat });

@@ -525,6 +525,70 @@ function draw(): void {
   envelopeWanted = true;
 }
 
+/** Units the working plane moves per step, and per step of a long press. */
+const ALT_STEP = 1;
+const ALT_FAST = 5;
+
+/**
+ * Move the working plane, and say where it now is.
+ *
+ * The step used to be 5, which is the contour interval, so the plane could
+ * only ever sit on the same ladder of heights and a target between two rungs
+ * was unpickable. A unit step reaches every height; the readout carries the
+ * value, since a plane you can put anywhere is one you can lose track of.
+ */
+function nudgeAlt(dir: number, step = ALT_STEP): void {
+  view.workAlt += dir * step;
+  view.clampWorkAlt();
+  view.setSelection(selected);
+  draw();
+  const a = view.workAlt;
+  const el = $('pAlt');
+  el.textContent = `ALT ${a > 0 ? '+' : ''}${a.toFixed(0)}`;
+  el.classList.toggle('zero', Math.abs(a) < 1e-6);
+}
+
+/**
+ * Tap for one unit, hold to keep going.
+ *
+ * A unit step is precise and slow: crossing a frigate's envelope is about
+ * forty of them. So a press held past 350 ms repeats every 90 ms, and widens
+ * to 5 units after a second, which crosses the shape in about the time the
+ * old single step took to press eight times. The click that ends a long press
+ * is swallowed, or the hold would land one extra step on release.
+ */
+function holdRepeat(el: HTMLElement, dir: number): void {
+  let delay = 0;
+  let timer = 0;
+  let ticks = 0;
+  let repeated = false;
+  const stop = (): void => {
+    clearTimeout(delay);
+    clearInterval(timer);
+    delay = 0;
+    timer = 0;
+  };
+  el.addEventListener('pointerdown', () => {
+    stop();
+    repeated = false;
+    ticks = 0;
+    delay = window.setTimeout(() => {
+      repeated = true;
+      timer = window.setInterval(() => {
+        ticks++;
+        nudgeAlt(dir, ticks > 11 ? ALT_FAST : ALT_STEP);
+      }, 90);
+    }, 350);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    el.addEventListener(ev, stop);
+  }
+  el.addEventListener('click', () => {
+    if (repeated) { repeated = false; return; }
+    nudgeAlt(dir);
+  });
+}
+
 /**
  * Where the planning preview sits, in ticks.
  *
@@ -772,8 +836,8 @@ addEventListener('keydown', ev => {
     refreshAll();
   };
   switch (ev.key.toLowerCase()) {
-    case 'q': view.workAlt -= 5; view.setSelection(selected); draw(); break;
-    case 'e': view.workAlt += 5; view.setSelection(selected); draw(); break;
+    case 'q': nudgeAlt(-1); break;
+    case 'e': nudgeAlt(1); break;
     case 'a': nudgeHeading(-15); break;
     case 'd': nudgeHeading(15); break;
     case 'f': {
@@ -906,8 +970,8 @@ $('cMode').onclick = () => {
     : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
-$('pUp').onclick = () => { view.workAlt += 5; view.setSelection(selected); draw(); };
-$('pDown').onclick = () => { view.workAlt -= 5; view.setSelection(selected); draw(); };
+holdRepeat($('pUp'), 1);
+holdRepeat($('pDown'), -1);
 $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
 $('pCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
 $('pFace').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
