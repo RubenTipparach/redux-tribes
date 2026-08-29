@@ -12,7 +12,9 @@
 import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
-import { chartDir, fit, radiusAt, sliceLoop, type Fitted } from './spline.js';
+import {
+  chartDir, contourLevels, fit, radiusAt, sliceLoop, type Fitted,
+} from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
   isCommitted, PROBE_STEPS,
@@ -55,8 +57,16 @@ const RAY_STEPS = 12;
  * grid. Twice the control density: any less throws away what a fine fit
  * bought, any more costs triangles for a curve that is already smooth. */
 const TESS = 2;
-/** Horizontal slices cut from the surface for the contour lines. */
+/** About how many contour rungs to draw. Not exact: the interval is a round
+ * number of units and the shape decides how many of them fit. */
 const SLICES = 9;
+/**
+ * Contour intervals to choose from, smallest first. Round numbers on purpose,
+ * so the ladder is an altitude scale a player can count in rather than an
+ * arbitrary ninth of whatever the shape happens to be tall. 5 is the elevation
+ * nudge, so at the usual reach one press steps exactly one rung.
+ */
+const INTERVALS = [5, 10, 20, 25, 50, 100, 200, 500];
 /**
  * Points around one slice. This is the resolution of the LINE, not of the
  * probe: the fitted surface is continuous, so a finer contour costs
@@ -68,11 +78,14 @@ const SLICE_RAYS = 120;
 interface BuiltShell {
   readonly cells: number;
   readonly geo: THREE.BufferGeometry;
-  readonly wire: THREE.BufferGeometry;
-  /** The surface itself, kept so the working plane can be cut from the same
-   * thing the skin is drawn from rather than from a second model of it. */
+  /** The surface itself, kept so every line drawn on it is cut from the same
+   * thing the skin is drawn from rather than from a second model of it. The
+   * contours are NOT baked in here: they depend on where the working plane
+   * sits, which moves without the surface changing at all. */
   readonly fitted: Fitted;
   readonly anchor: Vec3;
+  readonly ylo: number;
+  readonly yhi: number;
   readonly tris: number;
   readonly edges: number;
   readonly entries: number;
@@ -136,6 +149,8 @@ export class View {
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
+  /** Which shell and working plane the drawn contours belong to. */
+  #wireKey = '';
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
@@ -547,10 +562,8 @@ export class View {
     const key = this.#shellKeyFor(ship, order, flight);
     const have = this.#shells.get(ship.id);
     if (have && have.key === key) return;
-    if (have?.built) {
-      have.built.geo.dispose();
-      have.built.wire.dispose();
-    }
+    if (have?.built) have.built.geo.dispose();
+    this.#wireKey = '';
     this.#shells.set(ship.id, { key, next: 0, built: null });
     if (!this.#pending.includes(ship.id)) this.#pending.push(ship.id);
   }
@@ -599,11 +612,11 @@ export class View {
       const [nu, nv] = ENVELOPE_LEVELS[entry.next]!;
       const built = this.#probeShell(ship, orderOf(id), flightOf(id), nu, nv);
       if (built) {
-        if (entry.built) {
-          entry.built.geo.dispose();
-          entry.built.wire.dispose();
-        }
+        if (entry.built) entry.built.geo.dispose();
         entry.built = built;
+        // A new level is a new surface, so whatever contours were cut from the
+        // old one are stale even if the working plane has not moved.
+        this.#wireKey = '';
       }
       entry.next++;
       if (entry.next >= ENVELOPE_LEVELS.length) this.#pending.shift();
@@ -657,7 +670,23 @@ export class View {
       return;
     }
     if (this.#shell.geometry !== built.geo) this.#shell.geometry = built.geo;
-    if (this.#shellLines.geometry !== built.wire) this.#shellLines.geometry = built.wire;
+
+    // Contours follow the working plane, so they are cut here rather than with
+    // the surface: the plane moves far more often than the surface does.
+    const planeY = this.planeY();
+    const key = `${ship.id}|${built.cells}|${planeY.toFixed(2)}`;
+    if (key !== this.#wireKey) {
+      this.#wireKey = key;
+      const wire: number[] = [];
+      for (const y of contourLevels(built.ylo, built.yhi, planeY, SLICES, INTERVALS)) {
+        wire.push(...sliceLoop(
+          built.fitted, built.anchor.x, built.anchor.y, built.anchor.z, y, SLICE_RAYS));
+      }
+      this.#shellLines.geometry.dispose();
+      const wgeo = new THREE.BufferGeometry();
+      wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
+      this.#shellLines.geometry = wgeo;
+    }
     this.#shell.visible = built.tris > 0;
     this.#shellLines.visible = built.tris > 0;
   }
@@ -711,10 +740,9 @@ export class View {
     geo.setIndex(idx);
     geo.computeVertexNormals();
 
-    // Contours, cut from the fitted surface by walking its meridians. Not
-    // from the triangles above: those carry the same curve, but a plane that
-    // runs nearly tangent to a flat face cuts them into a line that wanders
-    // across the middle of the shape instead of tracing its edge.
+    // How tall the shape is, which is what sets the contour interval. The
+    // contours themselves are cut later, because where they sit depends on the
+    // working plane and that moves without the surface changing.
     let ylo = Infinity;
     let yhi = -Infinity;
     for (let i = 1; i < pos.length; i += 3) {
@@ -722,13 +750,6 @@ export class View {
       if (y < ylo) ylo = y;
       if (y > yhi) yhi = y;
     }
-    const wire: number[] = [];
-    for (let sI = 0; sI < SLICES; sI++) {
-      const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
-      wire.push(...sliceLoop(fitted, anchor.x, anchor.y, anchor.z, y, SLICE_RAYS));
-    }
-    const wgeo = new THREE.BufferGeometry();
-    wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
 
     let rmin = Infinity;
     let rmax = 0;
@@ -736,9 +757,10 @@ export class View {
     return {
       cells: nu,
       geo,
-      wire: wgeo,
       fitted,
       anchor,
+      ylo,
+      yhi,
       tris: idx.length / 3,
       edges: nu * nv,
       entries: radii.length,
@@ -970,13 +992,11 @@ export class View {
    * ship's ladder rather than throwing away every ship's work.
    */
   invalidateEnvelope(): void {
-    for (const e of this.#shells.values()) {
-      e.built?.geo.dispose();
-      e.built?.wire.dispose();
-    }
+    for (const e of this.#shells.values()) e.built?.geo.dispose();
     this.#shells.clear();
     this.#pending = [];
     this.#planeKey = '';
+    this.#wireKey = '';
   }
 
   render(): void {

@@ -220,3 +220,34 @@ export function sliceLoop(
   }
   return out;
 }
+
+/**
+ * The heights to cut contours at, registered to a reference plane.
+ *
+ * The rungs used to be even divisions of the shape's own extent, while the
+ * working plane sat wherever the player had put it. Two ladders on one
+ * surface, sharing no reference, so they lined up only by accident and the
+ * bright line cut across the dim ones at an angle that meant nothing.
+ *
+ * Here the reference plane IS a rung and the rest step from it by a round
+ * number of units, so the ladder reads as an altitude scale and moving the
+ * plane walks it one rung at a time. `intervals` is searched smallest first
+ * for one that keeps the count near `want`.
+ *
+ * The plane's own level is left out. The caller draws that curve separately
+ * and brighter, because it is the one a click aims at, and drawing it twice
+ * buys nothing but z fighting.
+ */
+export function contourLevels(
+  ylo: number, yhi: number, planeY: number, want: number,
+  intervals: readonly number[],
+): number[] {
+  const span = yhi - ylo;
+  if (!(span > 0) || want < 1) return [];
+  const step = intervals.find(i => span / i <= want) ?? span / want;
+  const lo = Math.ceil((ylo - planeY) / step);
+  const hi = Math.floor((yhi - planeY) / step);
+  const out: number[] = [];
+  for (let k = lo; k <= hi; k++) if (k !== 0) out.push(planeY + k * step);
+  return out;
+}
