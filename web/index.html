@@ -14,6 +14,9 @@
 :root {
   --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
   --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  /* The same yellow the tracers and hit sparks are drawn in, so a shot already
+     placed reads as the same thing on the map and in a fire slot. */
+  --amber:#FFD24B;
   --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
   /* How tall a phone's bottom sheet is. Named because the canvas controls
      have to step over exactly this much when one is open. */
@@ -133,8 +136,16 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 .srow.on { border-color:var(--orange); background:#2a1607; }
 .srow.on .k { color:var(--orange); }
 /* Cannot fire in this second, and says which rule stopped it. */
-.srow.off { opacity:.4; cursor:not-allowed; }
+.srow.off { opacity:.5; cursor:not-allowed; }
 .srow.off:hover { border-color:var(--line); }
+/* The two refusals are not the same thing and no longer look it. Red is a
+   mount inside its own cooldown, which is a wait. Yellow is a mount being held
+   for a shot the player has already placed, which is a plan. Full opacity on
+   both, because a colour dimmed to .5 stops being a colour. */
+.srow.off.wait { opacity:1; border-color:#4a1f1f; background:#230d0d; }
+.srow.off.wait .k, .srow.off.wait span:last-child { color:var(--red); }
+.srow.off.soon { opacity:1; border-color:#4a3f16; background:#221c07; }
+.srow.off.soon .k, .srow.off.soon span:last-child { color:var(--amber); }
 #slotNote { position:absolute; bottom:calc(100% + 6px); left:50%;
   transform:translateX(-50%); z-index:11; padding:5px 11px; border-radius:6px;
   background:#2a1607; border:1px solid var(--orange); color:var(--orange);

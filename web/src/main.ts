@@ -664,8 +664,11 @@ function renderSlotMenu(): void {
     }
     const block = aimed ? slotBlock(s.id, i, sec, o.weapons) : null;
     const why = !aimed ? 'no target' : block ? slotBlockText(block, sec) : '';
+    // Red for a wait, yellow for a plan. Same colours the map uses: a shot
+    // already placed is the yellow the tracers are drawn in.
+    const tone = block?.kind === 'after' ? ' wait' : block?.kind === 'before' ? ' soon' : '';
     rows.push(
-      `<div class="srow${why ? ' off' : ''}"${why ? '' : ` data-add="${i}"`}>`
+      `<div class="srow${why ? ' off' : ''}${tone}"${why ? '' : ` data-add="${i}"`}>`
       + `<span class="k">${name}</span>`
       + `<span>${why || `queue &middot; ${(+m.damage.toFixed(1))} dmg`}</span></div>`);
   }
