@@ -15,6 +15,7 @@ import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
+  type Vec3,
   CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
   TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
@@ -58,7 +59,15 @@ let selected = -1;
  * -1 means "whichever enemy is still alive", which is what the whole client
  * used to do in three separate places. Now it is chosen, and chosen once.
  */
-let target = -1;
+/**
+ * Who each of my ships is aiming at, by ship id.
+ *
+ * Per ship, not one pick for the fleet. A frigate on the left flank and one on
+ * the right rarely want the same hostile, and the orders already carry a target
+ * per SHOT, so a single fleet wide pick was a narrower thing than the model
+ * underneath it.
+ */
+const targets = new Map<number, number>();
 /**
  * Which second's fire slot is open, or null.
  *
@@ -102,7 +111,7 @@ function start(): void {
   flightOverride = new Map();
   ships = match.ships();
   selected = ships.find(mine)?.id ?? -1;
-  target = -1;
+  targets.clear();
   openSlot = null;
   playTick = null;
   playing = false;
@@ -131,8 +140,9 @@ const selectedShip = (): ShipState | undefined => ships.find(s => s.id === selec
  * search had grown, which is exactly the divergent path GUIDELINES 5.1 calls a
  * defect.
  */
-function targetShip(): ShipState | undefined {
-  const picked = ships.find(t => t.id === target && !mine(t) && !t.destroyed);
+function targetShip(of = selected): ShipState | undefined {
+  const want = targets.get(of);
+  const picked = ships.find(t => t.id === want && !mine(t) && !t.destroyed);
   return picked ?? ships.find(t => !mine(t) && !t.destroyed);
 }
 
@@ -186,11 +196,20 @@ function renderFleet(): void {
         + `<div class="bar"><i style="width:${hullPct.toFixed(0)}%"></i></div>`
         + `<div class="sub"><span>hull ${s.hull.toFixed(0)}</span><span>${FACTION_NAMES[s.faction] ?? '?'}</span></div>`
         + `<div class="sub"><span>marines ${s.marines}</span><span>${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s</span></div>`
+        // Who this hull is aiming at, on the hull's own row, because targeting
+        // is per ship: one pick for the whole fleet was narrower than the
+        // orders underneath it, which already carry a target per SHOT. For a
+        // hostile it is `aiTarget`, which the core keeps and reports, so the
+        // row says what the enemy is set on rather than guessing.
+        + (s.destroyed ? '' : `<div class="sub aim"><span>${enemy ? 'hunting' : 'target'}</span>`
+          + `<span>${enemy
+            ? (s.aiTarget >= 0 ? nameOf(s.aiTarget) : 'nobody yet')
+            : (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')}</span></div>`)
         + subs;
       div.onclick = () => {
         if (enemy) {
-          if (s.destroyed) return;
-          target = s.id;
+          if (s.destroyed || selected < 0) return;
+          targets.set(selected, s.id);
           refreshAll();
         } else {
           select(s.id);
@@ -436,11 +455,17 @@ function renderSlots(): void {
 }
 
 /**
- * What can be done in the open slot: what is queued there, and what could be.
+ * What each mount can do in the open slot.
  *
- * Queued shots come first and are always removable. Below them every mount,
- * with the reason it cannot fire at this second where there is one, because a
- * disabled row that says why is the difference between a rule and a dead tap.
+ * ONE row per mount, always, in mount order. It used to list the queued shots
+ * first and then every mount, so a mount that had just fired appeared twice at
+ * the same second: once as the shot, and again underneath saying "cooling",
+ * which is the shot's own cooldown reported as though it were a second mount
+ * being refused. The list also changed length as shots went in and came out,
+ * so the row under your finger moved.
+ *
+ * A row is one of three things, and never two: the shot queued here, an offer
+ * to queue, or the reason it cannot be.
  */
 function renderSlotMenu(): void {
   const menu = $('slotMenu');
@@ -455,27 +480,30 @@ function renderSlotMenu(): void {
   const info = match.classInfo(s.cls);
   const aimed = targetShip();
   const rows: string[] = [
-    `<div class="smhead">t+${sec}s`
+    `<div class="smhead">t+${sec}s &middot; ${aimed ? shipName(aimed) : 'no target'}`
     + `<button class="smx" id="smClose" aria-label="Close">&times;</button></div>`,
   ];
-  const queued = o.weapons.filter(w => w.second === sec);
-  for (const w of queued) {
-    const m = match.mount(s.cls, w.weaponIndex);
-    rows.push(
-      `<div class="srow on" data-drop="${w.weaponIndex}">`
-      + `<span class="k">${WEAPON_NAMES[m?.key ?? 0] ?? '?'}</span>`
-      + `<span>at ${nameOf(w.targetShip)} &middot; remove</span></div>`);
-  }
   for (let i = 0; i < info.mountCount; i++) {
     const m = match.mount(s.cls, i);
     if (!m) continue;
+    const here = o.weapons.filter(w => w.weaponIndex === i && w.second === sec);
+    const name = `${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}`;
+    if (here.length) {
+      // Queued here, so this row takes it back. Its own cooldown is not a
+      // reason to refuse anything: it is the consequence of this very shot.
+      const at = nameOf(here[0]!.targetShip);
+      rows.push(
+        `<div class="srow on" data-drop="${i}">`
+        + `<span class="k">${name}</span>`
+        + `<span>at ${at}${here.length > 1 ? ` x${here.length}` : ''} &middot; remove</span></div>`);
+      continue;
+    }
     const why = !aimed ? 'no target'
       : !slotOpen(s.id, i, sec, o.weapons) ? 'cooling'
       : '';
     rows.push(
       `<div class="srow${why ? ' off' : ''}"${why ? '' : ` data-add="${i}"`}>`
-      + `<span class="k">${WEAPON_NAMES[m.key] ?? '?'}`
-      + `${m.batch > 1 ? ` x${m.batch}` : ''}</span>`
+      + `<span class="k">${name}</span>`
       + `<span>${why || `queue &middot; ${(+m.damage.toFixed(1))} dmg`}</span></div>`);
   }
   if (!info.mountCount) rows.push('<div class="hint">no mounts</div>');
@@ -768,6 +796,22 @@ function showPreview(): void {
       : match.preview(s.id, { mode: Mode.Drift, weapons: [] }, 48),
   }));
   view.setPaths(paths);
+
+  // Who is aiming at whom. Ours is the pick for the ship being flown; theirs
+  // is `aiTarget`, which the core keeps on the hull and reports, so a line is
+  // drawn only where the core says there is one.
+  const live = ships.filter(x => !x.destroyed);
+  const posOf = (id: number) => live.find(x => x.id === id)?.pos;
+  const links: { from: Vec3; to: Vec3; mine: boolean }[] = [];
+  const meAt = selectedShip();
+  const myTarget = meAt ? targetShip(meAt.id) : undefined;
+  if (meAt && myTarget) links.push({ from: meAt.pos, to: myTarget.pos, mine: true });
+  for (const e of live) {
+    if (mine(e) || e.aiTarget < 0) continue;
+    const at = posOf(e.aiTarget);
+    if (at) links.push({ from: e.pos, to: at, mine: false });
+  }
+  view.setAiming(links);
   // One readout for both states. It used to be two, and the planning one was
   // an element the footer no longer has, so every preview refresh threw and
   // took the click that asked for it with it.

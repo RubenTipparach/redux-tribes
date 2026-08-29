@@ -163,6 +163,8 @@ export class View {
   #ghostGroup = new THREE.Group();
   /** Every ship's course: ours planned, theirs estimated. */
   #pathGroup = new THREE.Group();
+  /** Who is aiming at whom, drawn hull to hull. */
+  #aimGroup = new THREE.Group();
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -243,6 +245,7 @@ export class View {
     this.#scene.add(this.#wellGroup);
     this.#scene.add(this.#ghostGroup);
     this.#scene.add(this.#pathGroup);
+    this.#scene.add(this.#aimGroup);
     // The silhouette, drawn as the surface seen edge on. Every triangle edge
     // was too much: marching tetrahedra makes thin triangles and the mesh read
     // as wire soup rather than as a shape. The skin carries the volume and the
@@ -500,6 +503,37 @@ export class View {
    * dimmer to say so. It is what the hull does if it does nothing, which is
    * the only honest thing to draw before the turn is released.
    */
+  /**
+   * Who is aiming at whom.
+   *
+   * Ours is dotted red from the hull we are flying to the hull it is pointed
+   * at; theirs is a dimmer orange from each hostile to the ship it is set on.
+   *
+   * Their line is not a guess. `ai_target` is state the core keeps on the
+   * hull and reports over the boundary: it is who that ship retaliated against
+   * and will keep after while it lives. Nothing here decides it, so a line is
+   * drawn only where the core says there is one.
+   */
+  setAiming(links: readonly { from: Vec3; to: Vec3; mine: boolean }[]): void {
+    while (this.#aimGroup.children.length) {
+      const c = this.#aimGroup.children.pop() as THREE.Line;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const l of links) {
+      const geo = new THREE.BufferGeometry().setFromPoints([v(l.from), v(l.to)]);
+      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
+        color: l.mine ? RED : ORANGE,
+        dashSize: l.mine ? 1.6 : 3.4,
+        gapSize: l.mine ? 1.6 : 3.4,
+        transparent: true,
+        opacity: l.mine ? 0.85 : 0.3,
+      }));
+      line.computeLineDistances();
+      this.#aimGroup.add(line);
+    }
+  }
+
   setPaths(paths: readonly { id: number; pts: Vec3[]; estimated: boolean }[]): void {
     while (this.#pathGroup.children.length) {
       const c = this.#pathGroup.children.pop() as THREE.Line;
