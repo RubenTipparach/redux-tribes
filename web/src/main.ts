@@ -105,8 +105,9 @@ function start(): void {
   view.fit();
   view.invalidateEnvelope();
   planTurnEnvelopes();
-  previewTick = 0;
+  previewTick = TICKS_PER_TURN;
   view.setGhosts([]);
+  view.setPaths([]);
   refreshAll();
 }
 
@@ -469,7 +470,9 @@ function renderHeader(): void {
   // control: playback scrubs the turn that was resolved, planning scrubs a
   // preview of the plan. Only the playback one touches playTick, which is the
   // state that used to trap the console.
-  $<HTMLInputElement>('scrub').disabled = playTick === null && !canPlan();
+  const sc = $<HTMLInputElement>('scrub');
+  sc.disabled = playTick === null && !canPlan();
+  if (playTick === null && canPlan()) sc.value = String(previewTick);
 }
 
 function renderHelp(): void {
@@ -518,15 +521,22 @@ function draw(): void {
   if (!s) return;
   const order: PlannedOrder = selected >= 0 ? match.order(selected) : { mode: Mode.MoveAndTurn, weapons: [] };
   view.drawPlan(canPlan() ? s : undefined, order);
+  showPreview();
   envelopeWanted = true;
 }
 
 /**
- * Where the planning scrub is, in ticks. Separate from `playTick` on purpose:
- * this one previews a plan that has not been committed, and must never gate
- * End Turn.
+ * Where the planning preview sits, in ticks.
+ *
+ * Defaults to the END of the turn, so the ghost shows the orientation a plan
+ * arrives with WITHOUT anyone having to scrub for it: where the nose ends up
+ * is the whole point of a slide order, and a preview you have to go looking
+ * for is one nobody sees. Scrubbing moves it; committing resets it.
+ *
+ * Separate from `playTick` on purpose, since this previews a plan that has not
+ * been committed and must never gate End Turn.
  */
-let previewTick = 0;
+let previewTick = TICKS_PER_TURN;
 
 /**
  * Fly the plan and show where the ship would be, nose included.
@@ -539,12 +549,24 @@ let previewTick = 0;
  * preview of the turn.
  */
 function showPreview(): void {
-  if (!canPlan()) { view.setGhosts([]); return; }
+  if (!canPlan()) { view.setGhosts([]); view.setPaths([]); return; }
   const ghosts = ships
     .filter(s => mine(s) && !s.destroyed)
     .map(s => ({ id: s.id, pose: match.previewPose(s.id, match.order(s.id), previewTick) }))
     .filter((g): g is { id: number; pose: Pose } => !!g.pose);
   view.setGhosts(ghosts);
+
+  // Every ship's course, ours planned and theirs estimated. A hostile has no
+  // orders yet, so what is drawn is the course it is already on: honest, and
+  // the same thing the core would fly for it given no order at all.
+  const paths = ships.filter(s => !s.destroyed).map(s => ({
+    id: s.id,
+    estimated: !mine(s),
+    pts: mine(s)
+      ? match.preview(s.id, match.order(s.id), 48)
+      : match.preview(s.id, { mode: Mode.Drift, weapons: [] }, 48),
+  }));
+  view.setPaths(paths);
   $('lPlay').textContent = `${((previewTick / TICKS_PER_TURN) * TURN_SECONDS).toFixed(1)}s`;
 }
 
@@ -582,16 +604,15 @@ function probeEnvelopeIfWanted(): void {
   view.drawPlaneShape(canPlan() ? s : undefined, order, flightOf(s.id));
   $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id))
     + envelopeProgress(s.id);
+  showPreview();
 }
 
 /** Say that the volume is still sharpening, and how far it has got. */
 function envelopeProgress(shipId: number): string {
   const p = view.shellProgress(shipId);
   if (p.done) return '';
-  const pct = p.cells ? Math.round((100 * p.cells) / p.of) : 0;
-  return `<br><span class="rebuild">rebuilding &middot; ${p.cells || '?'}`
-    + `<sup>3</sup> of ${p.of}<sup>3</sup> cells</span>`
-    + `<span class="rbar"><i style="width:${pct}%"></i></span>`;
+  return `<div class="rebuild">rebuilding &middot; ${p.at} of ${p.of} rays</div>`
+    + `<span class="rbar"><i style="width:${Math.round(p.frac * 100)}%"></i></span>`;
 }
 
 function select(id: number): void {
@@ -832,8 +853,9 @@ async function endTurn(): Promise<void> {
   view.setShips(ships);
   playTick = 0;
   playing = true;
-  previewTick = 0;
+  previewTick = TICKS_PER_TURN;
   view.setGhosts([]);
+  view.setPaths([]);
   refreshAll();
 }
 
@@ -1007,6 +1029,8 @@ Object.defineProperty(window, 'ftDebug', {
     scenario: () => launch.scenario,
     shipCount: () => match.shipCount,
     wells: () => match.wells(),
+    paths: () => view.pathStats(),
+    ghosts: () => view.ghostCount(),
     canPlan,
   },
 });

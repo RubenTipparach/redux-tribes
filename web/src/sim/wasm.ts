@@ -38,6 +38,10 @@ interface SimExports {
     fx: number, fy: number, fz: number,
     hr: number, hu: number, hf: number,
   ): number;
+  ft_reach_radii(
+    mode: number, eps: number, steps: number, nu: number, nv: number, iters: number,
+    cx: number, cy: number, cz: number, far: number,
+  ): number;
   ft_octree_ptr(): number;
   ft_octree_len(): number;
   ft_look_basis(fx: number, fy: number, fz: number): number;
@@ -280,6 +284,30 @@ export class Sim {
         i >= 0 && j >= 0 && k >= 0 && i <= size && j <= size && k <= size
         && corner[(i * side + j) * side + k] === 1,
     };
+  }
+
+  /**
+   * The boundary as a radius field, bisected along a lat-long grid of rays
+   * from `anchor`.
+   *
+   * The chart's poles are on world Y inside the core, which is not arbitrary:
+   * X and Z were measured against it and fit worse. It crowds badly at those
+   * poles, and that was measured too. An equal area chart and a six face cube
+   * map are both far more even and both fit WORSE at the same ray budget,
+   * because the crowding is what pays for the resolution at the equator, where
+   * the shape actually varies.
+   */
+  reachRadii(
+    body: Body, flight: Flight, order: FlyOrder,
+    anchor: Vec3, nu: number, nv: number,
+    eps: number, iters = 12, far = 200, steps = PROBE_STEPS,
+  ): Float32Array | null {
+    this.#writeInputs(body, flight, order);
+    const n = this.#ex.ft_reach_radii(
+      order.mode, eps, steps, nu, nv, iters, anchor.x, anchor.y, anchor.z, far,
+    );
+    if (n <= 0) return null;
+    return this.#s.slice(OUT_PATH, OUT_PATH + n);
   }
 
   /**

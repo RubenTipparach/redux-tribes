@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
+import { chartDir, fit, radiusAt } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
   isCommitted, PROBE_STEPS,
@@ -45,9 +46,17 @@ const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
  * frame of 228 ms is a stutter a player feels and a cell of 1.4 u is not
  * something they can see.
  */
-const ENVELOPE_LEVELS = [8, 16, 32] as const;
-/** Cells the traversal starts from before it begins descending. */
-const OCTREE_BASE = 4;
+const ENVELOPE_LEVELS: ReadonlyArray<readonly [number, number]> =
+  [[16, 10], [24, 14], [32, 18], [48, 26]];
+/** Bisections a ray, over a 200 u reach: 0.05 u, well inside the 1.6 u the
+ * predicate itself is fuzzy by. */
+const RAY_STEPS = 12;
+/** How finely the fitted surface is tessellated, as a multiple of the sample
+ * grid. Twice the control density: any less throws away what a fine fit
+ * bought, any more costs triangles for a curve that is already smooth. */
+const TESS = 2;
+/** Horizontal slices cut from the surface for the contour lines. */
+const SLICES = 9;
 
 /** One finished resolution of one ship's envelope. */
 interface BuiltShell {
@@ -58,6 +67,8 @@ interface BuiltShell {
   readonly edges: number;
   readonly entries: number;
   readonly box: { right: number; up: number; forward: number };
+  /** Nearest and furthest the boundary sits from the coast landing. */
+  readonly reach: { min: number; max: number };
 }
 
 /** What is known about one ship's envelope, and how far it has sharpened. */
@@ -68,33 +79,11 @@ interface ShellEntry {
   built: BuiltShell | null;
 }
 /**
- * Bisection steps used to place a surface vertex on the boundary. Four halves
- * the cell four times, which puts the vertex within a sixteenth of a cell of
- * the real surface: about 0.5 units at rest, against half a cell, 5.5 units,
- * for the midpoint it replaces.
- */
-const BISECT_STEPS = 4;
-/** Bisections used to measure how far the lobe runs while fitting the box. */
-const FIT_STEPS = 12;
-/** Slack on the fitted box, since 26 rays can slip between creases. */
-const FIT_PAD = 6;
-/**
  * Bisection steps for sliding the picker onto the boundary. Seven halvings of
  * the drag length, which is finer than a pixel at any sane zoom and costs
- * seven flights, against the roughly 2500 a whole envelope probe costs.
+ * seven flights.
  */
 const SLIDE_STEPS = 7;
-/** Horizontal slices the shell is read out as. */
-const SLICES = 9;
-/** Cube corners, then six tetrahedra sharing the main diagonal 0 to 6. */
-const CUBE: ReadonlyArray<readonly [number, number, number]> = [
-  [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-  [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-];
-const TETS: ReadonlyArray<readonly number[]> = [
-  [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6],
-  [0, 7, 4, 6], [0, 4, 5, 6], [0, 5, 1, 6],
-];
 /** How finely the movable AREA on the working plane is probed. */
 const PLANE_N = 40;
 /**
@@ -154,6 +143,8 @@ export class View {
   #wellGroup = new THREE.Group();
   /** Where our own hulls would be part way through the turn being planned. */
   #ghostGroup = new THREE.Group();
+  /** Every ship's course: ours planned, theirs estimated. */
+  #pathGroup = new THREE.Group();
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -162,10 +153,6 @@ export class View {
    * simulation never knows, which is what lets both seats hash the same.
    */
   mySide = 0;
-  /** Octree entries the last probe returned: straddling leaves plus the
-   * uniform blocks it settled in one test each. */
-  #lastEntries = 0;
-  #lastCells = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
   /** One entry per ship, so selecting a hull shows its envelope at once
    * instead of starting a probe. */
@@ -173,9 +160,6 @@ export class View {
   /** Ships whose envelope is still sharpening, in the order they were asked
    * for. Read by the console to say so. */
   #pending: number[] = [];
-  #shellTris = 0;
-  #shellEdges = 0;
-  #shellBox = { right: 0, up: 0, forward: 0 };
   #planeKey = '';
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
@@ -240,6 +224,7 @@ export class View {
     this.#scene.add(this.#shell);
     this.#scene.add(this.#wellGroup);
     this.#scene.add(this.#ghostGroup);
+    this.#scene.add(this.#pathGroup);
     // The silhouette, drawn as the surface seen edge on. Every triangle edge
     // was too much: marching tetrahedra makes thin triangles and the mesh read
     // as wire soup rather than as a shape. The skin carries the volume and the
@@ -452,6 +437,36 @@ export class View {
    * nose will point. The path comes from the core's own integrator, so this is
    * the executed turn drawn early rather than an approximation of it.
    */
+  /**
+   * Every ship's path, ours planned and theirs estimated.
+   *
+   * Our own come from the order being planned, so they are exactly what the
+   * resolver will fly. A hostile's orders do not exist yet, so its line is the
+   * course it is ALREADY on, coasted forward: an estimate, drawn dashed and
+   * dimmer to say so. It is what the hull does if it does nothing, which is
+   * the only honest thing to draw before the turn is released.
+   */
+  setPaths(paths: readonly { id: number; pts: Vec3[]; estimated: boolean }[]): void {
+    while (this.#pathGroup.children.length) {
+      const c = this.#pathGroup.children.pop() as THREE.Line;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const p of paths) {
+      if (p.pts.length < 2) continue;
+      const geo = new THREE.BufferGeometry().setFromPoints(p.pts.map(v));
+      const line = p.estimated
+        ? new THREE.Line(geo, new THREE.LineDashedMaterial({
+            color: ORANGE, dashSize: 2.5, gapSize: 2.5, transparent: true, opacity: 0.55,
+          }))
+        : new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: CYAN, transparent: true, opacity: 0.45,
+          }));
+      if (p.estimated) line.computeLineDistances();
+      this.#pathGroup.add(line);
+    }
+  }
+
   drawPlan(ship: ShipState | undefined, order: PlannedOrder): void {
     if (!ship || ship.destroyed) {
       this.#planLine.visible = false;
@@ -580,8 +595,8 @@ export class View {
         this.#pending.shift();
         continue;
       }
-      const cells = ENVELOPE_LEVELS[entry.next]!;
-      const built = this.#probeShell(ship, orderOf(id), flightOf(id), cells);
+      const [nu, nv] = ENVELOPE_LEVELS[entry.next]!;
+      const built = this.#probeShell(ship, orderOf(id), flightOf(id), nu, nv);
       if (built) {
         if (entry.built) {
           entry.built.geo.dispose();
@@ -596,15 +611,34 @@ export class View {
     return false;
   }
 
+  /** How many course lines are drawn, and how long each is. Observation only,
+   * for the harness. */
+  pathStats(): { count: number; points: number[] } {
+    return {
+      count: this.#pathGroup.children.length,
+      points: this.#pathGroup.children.map(
+        c => (c as THREE.Line).geometry.getAttribute('position')?.count ?? 0),
+    };
+  }
+
+  /** How many plan ghosts are drawn. */
+  ghostCount(): number { return this.#ghostGroup.children.length; }
+
   /** True while any ship's envelope is still sharpening. */
   get rebuilding(): boolean { return this.#pending.length > 0; }
 
   /** How far the selected ship's envelope has got, for the console to show. */
-  shellProgress(shipId: number): { cells: number; of: number; done: boolean } {
+  shellProgress(shipId: number): { at: string; of: string; frac: number; done: boolean } {
     const e = this.#shells.get(shipId);
-    const built = e?.built?.cells ?? 0;
     const done = !e || e.next >= ENVELOPE_LEVELS.length;
-    return { cells: built, of: ENVELOPE_LEVELS[ENVELOPE_LEVELS.length - 1]!, done };
+    const top = ENVELOPE_LEVELS[ENVELOPE_LEVELS.length - 1]!;
+    const cur = e?.built ? [e.built.cells, e.built.edges / e.built.cells] : null;
+    return {
+      at: cur ? `${cur[0]} x ${cur[1]}` : 'starting',
+      of: `${top[0]} x ${top[1]}`,
+      frac: e ? e.next / ENVELOPE_LEVELS.length : 1,
+      done,
+    };
   }
 
   /** Show the envelope this ship already has, without probing anything. */
@@ -625,264 +659,107 @@ export class View {
     if (this.#shellLines.geometry !== built.wire) this.#shellLines.geometry = built.wire;
     this.#shell.visible = built.tris > 0;
     this.#shellLines.visible = built.tris > 0;
-    this.#shellTris = built.tris;
-    this.#shellEdges = built.edges;
-    this.#shellBox = built.box;
-    this.#lastEntries = built.entries;
-    this.#lastCells = built.cells;
   }
 
+  /**
+   * Fit and tessellate the boundary at one sample density.
+   *
+   * The surface is closed by construction, which the marching build was not:
+   * a spherical grid wraps in theta and pins at both poles, so there is no
+   * seam and no box wall to be clipped against. The contours below are cut
+   * from THIS mesh, so they cannot disagree with the surface they sit on.
+   */
   #probeShell(
-    ship: ShipState, order: PlannedOrder, flight: Flight, cells: number,
+    ship: ShipState, order: PlannedOrder, flight: Flight, nu: number, nv: number,
   ): BuiltShell | null {
-    const GRID_N = cells;
-    const FIELD_N = cells + 1;
-    // Size the box from what the hull can actually cover, plus the ground the
-    // carried velocity will make regardless. maxSpeed alone over-sizes it by
-    // roughly double, and an over-sized box spends its cells on empty space:
-    // the shell comes out coarse and the shape stops being readable, which is
-    // the one thing it exists to show.
-    const half = this.probeHalf(ship, flight);
     const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
     const flyOrder = order.face
       ? { mode: order.mode, face: order.face }
       : { mode: order.mode };
-    // WHERE to look, before how finely. The reachable set leans along the
-    // velocity and at speed it leaves the hull behind: a ship carrying eight
-    // units per second finishes its turn about eighty units away whatever it
-    // does. A cube centred on the hull therefore spends nearly all of itself
-    // on space the ship cannot use, and the cell it can afford grows from 7.9
-    // units at rest to 13.7 at speed, which is backwards.
-    //
-    // So anchor on where the turn actually LANDS with no order given, which is
-    // one flight and lies along the velocity by construction, then measure how
-    // far the lobe runs around it. Same probe count, cells of about 3.8 units
-    // at rest and 2.8 at speed.
-    const landing = this.#sim.flyTurn(body, flight, { mode: order.mode }, PROBE_STEPS, 1).endPos;
-    const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
-    const along = speed > 0.05
-      ? { x: ship.vel.x / speed, y: ship.vel.y / speed, z: ship.vel.z / speed }
-      : this.#match.forward(ship.id);
-    const basis = this.#sim.lookBasis(along);
-    const reachAlong = (dx: number, dy: number, dz: number): number => {
-      let lo = 0;
-      let hi = half * 2.2;
-      const hit = (t: number) => this.#sim.canReach(
-        body, flight, flyOrder,
-        { x: landing.x + dx * t, y: landing.y + dy * t, z: landing.z + dz * t },
-        REACH_EPS, PROBE_STEPS,
-      );
-      if (hit(hi)) return hi;
-      for (let n = 0; n < FIT_STEPS; n++) {
-        const m = (lo + hi) / 2;
-        if (hit(m)) lo = m; else hi = m;
-      }
-      return lo;
-    };
-    // The 26 face, edge and corner directions of a cube, in the box's own
-    // frame, so the extents come back as half sizes along its three axes.
-    let hr = 0;
-    let hu = 0;
-    let hf = 0;
-    for (let a = -1; a <= 1; a++) {
-      for (let b = -1; b <= 1; b++) {
-        for (let c = -1; c <= 1; c++) {
-          if (!a && !b && !c) continue;
-          const l = Math.hypot(a, b, c);
-          const dx = (basis.right.x * a + basis.up.x * b + basis.forward.x * c) / l;
-          const dy = (basis.right.y * a + basis.up.y * b + basis.forward.y * c) / l;
-          const dz = (basis.right.z * a + basis.up.z * b + basis.forward.z * c) / l;
-          const r = reachAlong(dx, dy, dz);
-          hr = Math.max(hr, Math.abs((a / l) * r));
-          hu = Math.max(hu, Math.abs((b / l) * r));
-          hf = Math.max(hf, Math.abs((c / l) * r));
-        }
-      }
-    }
-    // Twenty six rays can slip between the lobes of a shape this creased, so
-    // pad before probing rather than clipping the surface at the box wall.
-    const boxHalf = {
-      right: Math.max(6, hr + FIT_PAD),
-      up: Math.max(6, hu + FIT_PAD),
-      forward: Math.max(6, hf + FIT_PAD),
-    };
-    const grid = this.#sim.reachOctreeAt(
-      body, flight, flyOrder, landing, along, boxHalf,
-      GRID_N, REACH_EPS, OCTREE_BASE, PROBE_STEPS,
+    // Rays are cast from where a plain coast lands, not from the hull: at
+    // speed the hull is outside its own reachable set and cannot see it.
+    const anchor = this.#sim.flyTurn(body, flight, { mode: order.mode }, PROBE_STEPS, 1).endPos;
+    const radii = this.#sim.reachRadii(
+      body, flight, flyOrder, anchor, nu, nv, REACH_EPS, RAY_STEPS, 200, PROBE_STEPS,
     );
+    if (!radii) return null;
+    const fitted = fit(radii, nu, nv);
 
-    // Marching tetrahedra over the sampled field. Six tets per cube sharing
-    // the main diagonal gives sixteen cases and no 256 entry table, and it is
-    // watertight for any topology, which matters here: a ship carrying speed
-    // cannot stop where it already is, so the reachable set has a pocket
-    // around the hull that a ray cast from one centre cannot describe.
-    //
-    // Every vertex is then BISECTED onto the real boundary rather than dropped
-    // at the edge midpoint. A midpoint sits up to half a cell off, which is
-    // what made the old shell look blocky, and the correction is the same
-    // question the router asks: can the ship finish here.
-    // Cell centres in the box's own frame, mapped out through the basis the
-    // core probed with, so a drawn cell is the cell that was asked about.
-    const axis = (i: number, h: number) => -h + i * ((2 * h) / GRID_N);
-    const cell = (i: number, j: number, k: number): Vec3 => {
-      const a = axis(i, boxHalf.right);
-      const b = axis(j, boxHalf.up);
-      const c = axis(k, boxHalf.forward);
-      return {
-        x: landing.x + basis.right.x * a + basis.up.x * b + basis.forward.x * c,
-        y: landing.y + basis.right.y * a + basis.up.y * b + basis.forward.y * c,
-        z: landing.z + basis.right.z * a + basis.up.z * b + basis.forward.z * c,
-      };
-    };
-    const at = (i: number, j: number, k: number) =>
-      i >= 0 && j >= 0 && k >= 0 && i < FIELD_N && j < FIELD_N && k < FIELD_N && grid.at(i, j, k);
-
-    // A crossing edge is shared by several tetrahedra, so solve it once and
-    // key the answer by the edge. Without that the same edge is bisected four
-    // or five times over and the placement looks far dearer than it is.
-    const edge = new Map<number, Vec3>();
-    const edgeKey = (a: number[], b: number[]) => {
-      const ka = (a[0]! * FIELD_N + a[1]!) * FIELD_N + a[2]!;
-      const kb = (b[0]! * FIELD_N + b[1]!) * FIELD_N + b[2]!;
-      return ka < kb ? ka * 1e7 + kb : kb * 1e7 + ka;
-    };
-    const surfacePoint = (ga: number[], gb: number[]): Vec3 => {
-      const k = edgeKey(ga, gb);
-      const hit = edge.get(k);
-      if (hit) return hit;
-      const A = cell(ga[0]!, ga[1]!, ga[2]!);
-      const B = cell(gb[0]!, gb[1]!, gb[2]!);
-      const inside = at(ga[0]!, ga[1]!, ga[2]!);
-      const from = inside ? A : B;
-      const to = inside ? B : A;
-      let lo = 0;
-      let hi = 1;
-      for (let n = 0; n < BISECT_STEPS; n++) {
-        const m = (lo + hi) / 2;
-        const q = {
-          x: from.x + (to.x - from.x) * m,
-          y: from.y + (to.y - from.y) * m,
-          z: from.z + (to.z - from.z) * m,
-        };
-        if (this.#sim.canReach(body, flight, flyOrder, q, REACH_EPS, PROBE_STEPS)) lo = m;
-        else hi = m;
-      }
-      const v: Vec3 = {
-        x: from.x + (to.x - from.x) * lo,
-        y: from.y + (to.y - from.y) * lo,
-        z: from.z + (to.z - from.z) * lo,
-      };
-      edge.set(k, v);
-      return v;
-    };
-
-    const tri: number[] = [];
-    const wire: number[] = [];
-    // Keep an edge only if exactly one triangle owns it. A shared edge lies
-    // inside the skin and drawing it is what turned the shell into wire soup.
-    const seen = new Map<string, [Vec3, Vec3]>();
-    const rim = (a: Vec3, b: Vec3) => {
-      const q = (v: Vec3) => `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}`;
-      const ka = q(a);
-      const kb = q(b);
-      const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-      if (seen.has(k)) seen.delete(k);
-      else seen.set(k, [a, b]);
-    };
-    const push = (a: Vec3, b: Vec3, c: Vec3) => {
-      tri.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-      rim(a, b); rim(b, c); rim(c, a);
-    };
-    for (let i = 0; i < FIELD_N - 1; i++) {
-      for (let j = 0; j < FIELD_N - 1; j++) {
-        for (let k = 0; k < FIELD_N - 1; k++) {
-          const corner = CUBE.map(([dx, dy, dz]) => [i + dx!, j + dy!, k + dz!]);
-          const inside = corner.map((c) => at(c[0]!, c[1]!, c[2]!));
-          let n = 0;
-          for (const b of inside) if (b) n++;
-          if (n === 0 || n === 8) continue;
-          for (const tet of TETS) {
-            const ins = tet.filter((t) => inside[t!]);
-            const outs = tet.filter((t) => !inside[t!]);
-            const g = (t: number) => corner[t]!;
-            if (ins.length === 1) {
-              const a = ins[0]!;
-              push(surfacePoint(g(a), g(outs[0]!)),
-                   surfacePoint(g(a), g(outs[1]!)),
-                   surfacePoint(g(a), g(outs[2]!)));
-            } else if (ins.length === 3) {
-              const o = outs[0]!;
-              push(surfacePoint(g(ins[0]!), g(o)),
-                   surfacePoint(g(ins[1]!), g(o)),
-                   surfacePoint(g(ins[2]!), g(o)));
-            } else if (ins.length === 2) {
-              const [a, b] = ins as [number, number];
-              const [c, d] = outs as [number, number];
-              const v1 = surfacePoint(g(a), g(c));
-              const v2 = surfacePoint(g(a), g(d));
-              const v3 = surfacePoint(g(b), g(d));
-              const v4 = surfacePoint(g(b), g(c));
-              push(v1, v2, v3);
-              push(v1, v3, v4);
-            }
-          }
-        }
+    const RU = nu * TESS;
+    const RV = nv * TESS;
+    const pos: number[] = [];
+    for (let a = 0; a <= RU; a++) {
+      for (let b = 0; b <= RV; b++) {
+        const u = a / RU;
+        const v = b / RV;
+        const d = chartDir(u, v);
+        const r = Math.max(0, radiusAt(fitted, u, v));
+        pos.push(anchor.x + d[0] * r, anchor.y + d[1] * r, anchor.z + d[2] * r);
       }
     }
-
+    const idx: number[] = [];
+    for (let a = 0; a < RU; a++) {
+      for (let b = 0; b < RV; b++) {
+        const i0 = a * (RV + 1) + b;
+        const i1 = (a + 1) * (RV + 1) + b;
+        idx.push(i0, i1, i0 + 1, i1, i1 + 1, i0 + 1);
+      }
+    }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
     geo.computeVertexNormals();
 
-    // Read the surface out as level lines rather than as a skin. Every segment
-    // comes from intersecting a triangle this build already produced with a
-    // horizontal plane, so the contours cost no extra probes and cannot
-    // disagree with the surface they are cut from. Slicing the mesh also keeps
-    // whatever topology it found: where a moving hull leaves a pocket, the
-    // rings simply open around it.
+    // Contours, cut from the surface above rather than from the cells that
+    // produced it, so they follow the same curve the skin does.
     let ylo = Infinity;
     let yhi = -Infinity;
-    for (let n = 1; n < tri.length; n += 3) {
-      if (tri[n]! < ylo) ylo = tri[n]!;
-      if (tri[n]! > yhi) yhi = tri[n]!;
+    for (let i = 1; i < pos.length; i += 3) {
+      const y = pos[i]!;
+      if (y < ylo) ylo = y;
+      if (y > yhi) yhi = y;
     }
-    if (tri.length) {
-      for (let sI = 0; sI < SLICES; sI++) {
-        const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
-        for (let t = 0; t < tri.length; t += 9) {
-          const vx = [tri[t]!, tri[t + 3]!, tri[t + 6]!];
-          const vy = [tri[t + 1]!, tri[t + 4]!, tri[t + 7]!];
-          const vz = [tri[t + 2]!, tri[t + 5]!, tri[t + 8]!];
-          const cut: number[] = [];
-          for (let e = 0; e < 3; e++) {
-            const f = (e + 1) % 3;
-            const a = vy[e]!;
-            const b = vy[f]!;
-            if ((a <= y && b > y) || (b <= y && a > y)) {
-              const u = (y - a) / (b - a);
-              cut.push(vx[e]! + (vx[f]! - vx[e]!) * u, y, vz[e]! + (vz[f]! - vz[e]!) * u);
-            }
+    const wire: number[] = [];
+    const at = (i: number): [number, number, number] =>
+      [pos[i * 3]!, pos[i * 3 + 1]!, pos[i * 3 + 2]!];
+    for (let sI = 0; sI < SLICES; sI++) {
+      const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
+      for (let t = 0; t < idx.length; t += 3) {
+        const p = [at(idx[t]!), at(idx[t + 1]!), at(idx[t + 2]!)];
+        const cut: number[] = [];
+        for (let e = 0; e < 3; e++) {
+          const f = (e + 1) % 3;
+          const a = p[e]![1];
+          const b = p[f]![1];
+          if ((a <= y && b > y) || (b <= y && a > y)) {
+            const w = (y - a) / (b - a);
+            cut.push(
+              p[e]![0] + (p[f]![0] - p[e]![0]) * w, y,
+              p[e]![2] + (p[f]![2] - p[e]![2]) * w,
+            );
           }
-          if (cut.length === 6) wire.push(...cut);
         }
+        if (cut.length === 6) wire.push(...cut);
       }
-    }
-    // And the silhouette, so the shape still reads where the slices are sparse.
-    for (const [a, b] of seen.values()) {
-      wire.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
     const wgeo = new THREE.BufferGeometry();
     wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
+
+    let rmin = Infinity;
+    let rmax = 0;
+    for (const r of radii) { if (r < rmin) rmin = r; if (r > rmax) rmax = r; }
     return {
-      cells,
+      cells: nu,
       geo,
       wire: wgeo,
-      tris: tri.length / 9,
-      edges: edge.size,
-      entries: grid.entries,
-      box: boxHalf,
+      tris: idx.length / 3,
+      edges: nu * nv,
+      entries: radii.length,
+      box: { right: rmax, up: rmax, forward: rmax },
+      reach: { min: rmin, max: rmax },
     };
   }
+
 
   /**
    * Can this ship finish its turn at this exact point?
@@ -1123,14 +1000,17 @@ export class View {
 
   envelopeSummary(ship: ShipState | undefined, _flight: Flight): string {
     if (!ship) return 'no ship selected';
-    const b = this.#shellBox;
-    const n = this.#lastCells || 1;
-    const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (n * n * n));
-    return `${n}<sup>3</sup> cells in a box `
-      + `${(2 * b.right).toFixed(0)} x ${(2 * b.up).toFixed(0)} x ${(2 * b.forward).toFixed(0)} u `
-      + `on the velocity, octree ${this.#lastEntries} entries, `
-      + `${this.#shellTris} triangles from ${this.#shellEdges} bisected edges, `
-      + `cell ${cell.toFixed(1)} u`;
+    const e = this.#shells.get(ship.id);
+    const built = e?.built;
+    if (!built) return 'probing the boundary...';
+    const nv = built.edges / built.cells;
+    // Spacing between neighbouring rays at the widest part of the surface,
+    // which is what actually sets how much detail the fit can carry.
+    const spacing = (built.reach.max * Math.PI) / Math.max(1, nv - 1);
+    return `bicubic surface through ${built.cells} x ${nv} rays `
+      + `(${built.entries} bisected), ${built.tris} triangles, `
+      + `reach ${built.reach.min.toFixed(1)} to ${built.reach.max.toFixed(1)} u, `
+      + `sample spacing ${spacing.toFixed(1)} u`;
   }
 
   /**
