@@ -101,9 +101,43 @@ async function playMatch() {
   await (MOBILE ? foes.first().tap() : foes.first().click());
   await page.waitForTimeout(150);
 
-  // Every living ship of mine fires everything it has.
   const mineRows = page.locator('#fleet .shipRow:not(.gone)');
   const mineCount = await mineRows.count();
+
+  // First give every ship the target and point it at one.
+  //
+  // Whether a mount MAY fire is a cooldown question, so the console will
+  // happily take a shot at a hostile no arc bears on, and this harness used to
+  // sit still and shoot: one run queued 156 shots over 26 turns and killed
+  // nothing, because the last hostile had flown behind a fleet that never
+  // turned. Facing the target is what a player does between turns, and it goes
+  // through the toolbar button rather than ftDebug, which observes and never
+  // drives.
+  //
+  // Targeting is per ship, so the pick has to be made with that ship selected;
+  // aiming and firing are two passes because the button lives on the canvas and
+  // the rows live in a sheet that covers it on a phone.
+  for (let i = 0; i < mineCount; i++) {
+    await sheet(true);
+    const row = page.locator('#fleet .shipRow:not(.gone)').nth(i);
+    if (!(await row.count())) continue;
+    await (MOBILE ? row.tap() : row.click());
+    await page.waitForTimeout(150);
+    if (!(await page.evaluate(() => window.ftDebug.canPlan()))) continue;
+    const foe = page.locator('#hostiles .shipRow:not(.gone)').first();
+    if (await foe.count()) {
+      await (MOBILE ? foe.tap() : foe.click());
+      await page.waitForTimeout(150);
+    }
+    await sheet(false);
+    const face = page.locator('#pFace');
+    if ((await face.count()) && !(await face.isDisabled())) {
+      await (MOBILE ? face.tap() : face.click());
+      await page.waitForTimeout(150);
+    }
+  }
+
+  // Then every living ship of mine fires everything it has.
   let queuedThisTurn = 0;
   for (let i = 0; i < mineCount; i++) {
     await sheet(true);

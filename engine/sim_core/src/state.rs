@@ -137,6 +137,10 @@ pub struct Ship {
     /// destination from wherever the contact left the ship.
     pub plan_target: Option<V3>,
     pub plan_face: Option<V3>,
+    /// The roll this turn was flown with, kept for the same reason as the
+    /// face: resolution re-enters the span after a collision and must fly
+    /// the remainder on the order it started with.
+    pub plan_roll: Option<f32>,
 }
 
 impl Ship {
@@ -191,6 +195,7 @@ impl Ship {
             plan_from_tick: 0,
             plan_target: None,
             plan_face: None,
+            plan_roll: None,
         }
     }
 

@@ -157,7 +157,7 @@ pub struct Flown {
 /// slice. The error is resolved in the BODY frame so the two axes are limited
 /// separately, which is what makes a sluggish nose feel different from a
 /// sluggish pitch rather than just "slow".
-fn rotate_toward(quat: Quat, want: V3, fl: &Flight, dt: f32) -> Quat {
+fn rotate_toward(quat: Quat, want: V3, roll_want: Option<f32>, fl: &Flight, dt: f32) -> Quat {
     let local = quat.inv().rot(want);
     let flat = (local.x * local.x + local.z * local.z).sqrt();
     // Straight up or straight down has no yaw: x and z are both ~0 there and
@@ -176,7 +176,48 @@ fn rotate_toward(quat: Quat, want: V3, fl: &Flight, dt: f32) -> Quat {
     yaw_err = yaw_err.clamp(-max_yaw, max_yaw);
     pitch_err = pitch_err.clamp(-max_pitch, max_pitch);
     let q = quat.mul(Quat::axis_angle(V3::new(0.0, 1.0, 0.0), yaw_err));
-    q.mul(Quat::axis_angle(V3::new(1.0, 0.0, 0.0), pitch_err)).norm()
+    let q = q.mul(Quat::axis_angle(V3::new(1.0, 0.0, 0.0), pitch_err)).norm();
+    match roll_want {
+        Some(r) => roll_toward(q, r, fl, dt),
+        None => q,
+    }
+}
+
+/// The roll the hull is at: the angle its own up sits at about its nose,
+/// measured from wings level, which is world up with the nose direction taken
+/// out of it. Straight up or straight down has no wings level to measure from,
+/// so there the roll is held rather than read off noise.
+pub fn roll_of(quat: Quat) -> Option<f32> {
+    let fwd = quat.forward();
+    let world_up = V3::new(0.0, 1.0, 0.0);
+    let proj = world_up.sub(fwd.scale(world_up.dot(fwd)));
+    if proj.len2() < 1e-6 {
+        return None;
+    }
+    let r = proj.norm();
+    let rr = r.cross(fwd);
+    let up = quat.rot(world_up);
+    Some(datan2(-up.dot(rr), up.dot(r)))
+}
+
+/// Swing the hull about its own nose toward a commanded roll, spending at most
+/// this slice's worth.
+///
+/// Rolls at the yaw rate: a hull's roll authority is not authored separately,
+/// because one more number per class buys little that the game reads.
+///
+/// Roll DOES move the reachable set, which is worth stating because it is easy
+/// to argue that it cannot: x and y are spent against the same lateral cap, so
+/// the budget looks rotationally symmetric. It is not. The cap is a BOX, and a
+/// box has corners: `lat * sqrt(2)` on the diagonal against `lat` on the axis.
+/// Rolling turns that box under the thrust the controller wants, and the
+/// arrival point moves with it, by 7.87 u on a 44 u reach when it was measured.
+/// So a probe carries a roll like any other input.
+fn roll_toward(quat: Quat, want: f32, fl: &Flight, dt: f32) -> Quat {
+    let Some(now) = roll_of(quat) else { return quat };
+    let max = fl.yaw_rate * crate::math::PI / 180.0 * dt;
+    let err = crate::math::wrap_pi(want - now).clamp(-max, max);
+    quat.mul(Quat::axis_angle(V3::new(0.0, 0.0, 1.0), err)).norm()
 }
 
 fn desired_velocity(pos: V3, target: V3, seconds_left: f32, fl: &Flight, mode: Mode) -> V3 {
@@ -200,6 +241,7 @@ fn step_flight(
     mode: Mode,
     face_dir: V3,
     course_dir: V3,
+    roll_want: Option<f32>,
     dt: f32,
     wells: &[Well],
 ) -> Body {
@@ -238,7 +280,7 @@ fn step_flight(
     } else {
         b.quat.forward()
     };
-    let quat = rotate_toward(b.quat, aim_dir, fl, dt);
+    let quat = rotate_toward(b.quat, aim_dir, roll_want, fl, dt);
 
     // Spend thrust in the ship's own frame, one budget per axis.
     let local = quat.inv().rot(dv);
@@ -273,11 +315,12 @@ pub fn fly_turn(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     steps: u32,
     wells: &[Well],
 ) -> Flown {
     let steps = steps.max(1);
-    fly_span(body, target, mode, fl, face, steps, TURN_SECONDS / steps as f32, wells)
+    fly_span(body, target, mode, fl, face, roll, steps, TURN_SECONDS / steps as f32, wells)
 }
 
 /// Fly `steps` slices of `dt` seconds each, from wherever the body is now.
@@ -294,6 +337,7 @@ pub fn fly_span(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     steps: u32,
     dt: f32,
     wells: &[Well],
@@ -328,7 +372,7 @@ pub fn fly_span(
             b.pos = b.pos.add(b.vel.scale(dt));
         } else {
             let seconds_left = (steps - i) as f32 * dt;
-            b = step_flight(b, target, seconds_left, fl, mode, face_dir, course_dir, dt, wells);
+            b = step_flight(b, target, seconds_left, fl, mode, face_dir, course_dir, roll, dt, wells);
         }
         path.push((b.pos, b.quat));
     }
@@ -345,12 +389,13 @@ pub fn can_reach(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     eps: f32,
     steps: u32,
     wells: &[Well],
 ) -> bool {
     let t = if mode.committed() { None } else { Some(target) };
-    fly_turn(body, t, mode, fl, face, steps, wells).end_pos.dist(target) <= eps
+    fly_turn(body, t, mode, fl, face, roll, steps, wells).end_pos.dist(target) <= eps
 }
 
 /// Angle between two directions, in degrees. Used to report how much of a

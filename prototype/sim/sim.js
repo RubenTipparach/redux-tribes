@@ -166,7 +166,7 @@
   // The error is resolved in the BODY frame so the two axes are limited
   // separately, which is what makes a sluggish nose feel different from a
   // sluggish pitch rather than just "slow".
-  function rotateToward(quat, want, fl, dt) {
+  function rotateToward(quat, want, rollWant, fl, dt) {
     const local = Q.rot(Q.inv(quat), want);          // desired forward, body frame
     const flat = Math.sqrt(local.x * local.x + local.z * local.z);
     // Straight up or straight down has no yaw: x and z are both ~0 there and
@@ -186,7 +186,31 @@
     pitchErr = Math.max(-maxPitch, Math.min(maxPitch, pitchErr));
     let q = Q.mul(quat, Q.axisAngle(V.v3(0, 1, 0), yawErr));
     q = Q.mul(q, Q.axisAngle(V.v3(1, 0, 0), pitchErr));
-    return Q.norm(q);
+    q = Q.norm(q);
+    return rollWant === null || rollWant === undefined ? q : rollToward(q, rollWant, fl, dt);
+  }
+
+  // The roll the hull is at: the angle its own up sits at about its nose,
+  // measured from wings level, which is world up with the nose taken out of it.
+  // Vertical has no wings level to measure from, so it reports null.
+  function rollOf(quat) {
+    const fwd = Q.forward(quat);
+    const worldUp = V.v3(0, 1, 0);
+    const proj = V.sub(worldUp, V.scale(fwd, V.dot(worldUp, fwd)));
+    if (V.len(proj) < 1e-3) return null;
+    const r = V.norm(proj);
+    const rr = V.cross(r, fwd);
+    const up = Q.rot(quat, worldUp);
+    return dmath.datan2(-V.dot(up, rr), V.dot(up, r));
+  }
+
+  // Swing about the nose toward a commanded roll, at the yaw rate.
+  function rollToward(quat, want, fl, dt) {
+    const now = rollOf(quat);
+    if (now === null) return quat;
+    const max = fl.yawRate * Math.PI / 180 * dt;
+    const err = Math.max(-max, Math.min(max, dmath.wrapPi(want - now)));
+    return Q.norm(Q.mul(quat, Q.axisAngle(V.v3(0, 0, 1), err)));
   }
 
   // The velocity the controller wants this tick, before the hull gets a say.
@@ -201,7 +225,7 @@
   }
 
   // One tick of flight. Returns the new {pos, vel, quat}.
-  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, dt) {
+  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, rollWant, dt) {
     dt = dt || DT;
     const boosting = mode === "FULL_SPEED";
     const accelFwd = fl.accelFwd * (boosting ? CONST.BOOST_ACCEL_MULT : 1);
@@ -234,7 +258,7 @@
     else if (boosting) aimDir = V.len(vel) > 1e-6 ? V.norm(vel) : Q.forward(quat);
     else if (V.len(dv) > 1e-6) aimDir = V.norm(dv);
     else aimDir = Q.forward(quat);
-    quat = rotateToward(quat, aimDir, fl, dt);
+    quat = rotateToward(quat, aimDir, rollWant, fl, dt);
 
     // Spend thrust in the ship's own frame, one budget per axis.
     const local = Q.rot(Q.inv(quat), dv);
@@ -279,6 +303,7 @@
     // re-enters here after a collision with the same target, so a knocked ship
     // aims at where it is still trying to get to rather than where it was
     // originally pointed.
+    const rollWant = (opts.roll === undefined || opts.roll === null) ? null : opts.roll;
     const course = V.sub(target, pos);
     const courseDir = V.len(course) > 1e-6 ? V.norm(course) : Q.forward(quat);
 
@@ -290,7 +315,7 @@
         pos = V.add(pos, V.scale(vel, dt));
       } else {
         const secondsLeft = (steps - i) * dt;
-        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, dt);
+        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, rollWant, dt);
         pos = r.pos; vel = r.vel; quat = r.quat;
       }
       path.push({ pos: V.clone(pos), quat });
@@ -727,7 +752,7 @@
 
   const api = {
     createSkirmish, makeShip, resolveTurn,
-    previewPath, plannedTarget, canReach, flyTurn,
+    previewPath, plannedTarget, canReach, flyTurn, rollOf,
     raycastShips, CONST,
   };
   global.FT = global.FT || {};

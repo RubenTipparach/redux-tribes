@@ -35,6 +35,10 @@ pub struct Order {
     pub mode: Option<Mode>,
     pub target: Option<V3>,
     pub face: Option<V3>,
+    /// Commanded roll about the nose, in radians from wings level. None holds
+    /// whatever the hull is already at, which is what every order did before
+    /// there was a roll to command.
+    pub roll: Option<f32>,
     pub weapons: Vec<FireOrder>,
     pub board: Option<ShipId>,
     /// The AI's chosen target, carried IN the order rather than written onto
@@ -231,6 +235,7 @@ impl Sim {
 
         let target = order.and_then(|o| o.target);
         let face = order.and_then(|o| o.face);
+        let roll = order.and_then(|o| o.roll);
         let body = ship.body();
         let fl = ship.flight;
         let dead = ship.drift_active;
@@ -238,10 +243,10 @@ impl Sim {
         let flown = if dead {
             // No thrust and no attitude authority: coast, and let fly_span
             // handle it through Drift rather than special casing it here.
-            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN,
+            fly_span(body, None, Mode::Drift, &fl, face, roll, TICKS_PER_TURN,
                      1.0 / TICKS_PER_SECOND as f32, &self.wells)
         } else {
-            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN,
+            fly_span(body, target, mode, &fl, face, roll, TICKS_PER_TURN,
                      1.0 / TICKS_PER_SECOND as f32, &self.wells)
         };
 
@@ -265,6 +270,7 @@ impl Sim {
         ship.plan_from_tick = 0;
         ship.plan_target = target;
         ship.plan_face = face;
+        ship.plan_roll = roll;
     }
 
     /// Re-fly the remainder of the turn after contact changed the velocity.
@@ -281,6 +287,7 @@ impl Sim {
             mode,
             &ship.flight,
             ship.plan_face,
+            ship.plan_roll,
             steps,
             1.0 / TICKS_PER_SECOND as f32,
             &self.wells,

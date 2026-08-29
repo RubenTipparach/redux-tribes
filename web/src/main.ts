@@ -87,6 +87,26 @@ const targets = new Map<number, number>();
 const standingFace = new Map<number, Vec3>();
 
 /**
+ * The roll each ship is trying to come round to, by ship id.
+ *
+ * Standing for the same reason a heading is: a hull rolls at its yaw rate, so
+ * 60 degrees is all it gets in a turn and anything more has to survive the
+ * resolve. Roll does move the reachable set, because the lateral cap is a box
+ * and rolling turns that box under the thrust the controller wants, so the
+ * envelope carries it too.
+ */
+const standingRoll = new Map<number, number>();
+
+/** Set the climb, keeping the compass heading it is already on. */
+function setPitch(id: number, deg: number): void {
+  const cur = standingFace.get(id) ?? match.order(id).face ?? match.forward(id);
+  const a = (Math.max(-80, Math.min(80, deg)) * Math.PI) / 180;
+  const l = Math.hypot(cur.x, cur.z) || 1;
+  const c = Math.cos(a);
+  faceToward(id, { x: (cur.x / l) * c, y: Math.sin(a), z: (cur.z / l) * c });
+}
+
+/**
  * Put a yaw onto the pitch this ship already holds.
  *
  * A heading is one direction, so yaw and pitch live in the same vector: the
@@ -101,19 +121,13 @@ function keepPitch(id: number, flat: Vec3): Vec3 {
   return { x: (flat.x / l) * c, y: rise, z: (flat.z / l) * c };
 }
 
-/** The climb this ship is holding, in degrees, positive up. */
-function pitchOf(id: number): number {
-  const f = standingFace.get(id) ?? match.order(id).face;
-  return f ? Math.round((Math.asin(Math.max(-1, Math.min(1, f.y))) * 180) / Math.PI) : 0;
-}
-
-/** Set the climb, keeping the compass heading it is already on. */
-function setPitch(id: number, deg: number): void {
-  const cur = standingFace.get(id) ?? match.order(id).face ?? match.forward(id);
-  const a = (Math.max(-80, Math.min(80, deg)) * Math.PI) / 180;
-  const l = Math.hypot(cur.x, cur.z) || 1;
-  const c = Math.cos(a);
-  faceToward(id, { x: (cur.x / l) * c, y: Math.sin(a), z: (cur.z / l) * c });
+/** Command a roll about the nose, in degrees from wings level. */
+function rollTo(id: number, deg: number): void {
+  const rad = (((deg + 180) % 360 + 360) % 360 - 180) * Math.PI / 180;
+  const o = match.order(id);
+  o.roll = rad;
+  standingRoll.set(id, rad);
+  if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
 }
 
 /** Command a heading for this ship, which slide mode will hold and keep. */
@@ -143,6 +157,8 @@ function restoreFacing(): void {
     const o = match.order(s.id);
     o.face = want;
     o.mode = Mode.TurnSlide;
+    const r = standingRoll.get(s.id);
+    if (r !== undefined) o.roll = r;
   }
 }
 /**
@@ -189,6 +205,8 @@ function start(): void {
   ships = match.ships();
   selected = ships.find(mine)?.id ?? -1;
   targets.clear();
+  standingFace.clear();
+  standingRoll.clear();
   openSlot = null;
   playTick = null;
   playing = false;
@@ -325,7 +343,9 @@ function renderModes(): void {
         // Move faces its own course, so a commanded heading means nothing in
         // it and is dropped rather than kept to surprise a later slide.
         delete o.face;
+        delete o.roll;
         standingFace.delete(selected);
+        standingRoll.delete(selected);
       }
       refreshAll();
     };
@@ -967,8 +987,8 @@ interface Drag {
   x: number;
   y: number;
   moved: boolean;
-  /** 'plan' issues a move order, 'yaw' drags the ring knob, 'heading' swings
-   * the nose from anywhere on the plane, else camera. */
+  /** 'plan' issues a move order, 'yaw' drags the ring knob on the map,
+   * 'heading' swings the nose from anywhere on the plane, else camera. */
   kind: 'plan' | 'yaw' | 'heading' | 'pan' | 'orbit';
 }
 let drag: Drag | null = null;
@@ -1006,7 +1026,7 @@ canvas.addEventListener('pointerdown', ev => {
     return;
   }
 
-  // The yaw knob is a control sitting in the scene, so it is tested before
+  // The yaw ring is a control sitting in the scene, so it is tested before
   // anything that treats a press as a click on the world.
   if (canPlan() && view.onYawKnob(ev.clientX, ev.clientY)) {
     canvas.classList.add('rotating');
@@ -1295,26 +1315,102 @@ $('cMode').onclick = () => {
     : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
-// Attitude flyout: pitch is live, roll is not, and the panel says which.
-$('atTab').onclick = () => { $('attitude').classList.toggle('shut'); refreshAll(); };
-$<HTMLInputElement>('atPitch').oninput = () => {
-  const s = selectedShip();
-  if (!s || !canPlan()) return;
-  setPitch(s.id, Number($<HTMLInputElement>('atPitch').value));
-  refreshAll();
-};
+/**
+ * The heading dials, over the viewport.
+ *
+ * One control per axis the core can be told about, and both read the SHIP:
+ * the dim needle is where the nose is, the bright one is where it was told to
+ * point, so the gap a hull still has to turn through is the thing on screen
+ * rather than a number to work out. A hull gets 60 degrees of yaw a turn, so
+ * that gap is most of what planning a heading is about.
+ *
+ * Dragging anywhere in a dial sets the angle: a dial is an angle, so the whole
+ * face is the target rather than a knob to catch.
+ */
+function dialDrag(id: string, apply: (deg: number, e: PointerEvent) => void): void {
+  const el = $(id);
+  const set = (e: PointerEvent) => {
+    const r = el.getBoundingClientRect();
+    apply(Math.atan2(e.clientX - (r.left + r.width / 2),
+                     -(e.clientY - (r.top + r.height / 2))) * 180 / Math.PI, e);
+  };
+  el.addEventListener('pointerdown', e => {
+    if (!canPlan() || selected < 0) return;
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ }
+    set(e);
+  });
+  el.addEventListener('pointermove', e => {
+    // Only while held. `buttons` covers mouse and touch alike.
+    if (e.buttons === 0 || !canPlan() || selected < 0) return;
+    set(e);
+  });
+}
 
-/** Show the climb this ship is holding, so the slider reads the ship rather
- * than the ship reading the slider. */
+dialDrag('atRoll', deg => {
+  const s = selectedShip();
+  if (!s) return;
+  rollTo(s.id, deg);
+  refreshAll();
+});
+dialDrag('atPitch', deg => {
+  const s = selectedShip();
+  if (!s) return;
+  // The pitch dial is the right half of a circle, so the pointer angle from
+  // straight up maps to a climb of 90 minus that. Clamped to what the arc
+  // shows, since past vertical the heading has no bearing left to hold.
+  setPitch(s.id, Math.max(-80, Math.min(80, 90 - deg)));
+  refreshAll();
+});
+
+/** Tick marks, drawn once: they never move. */
+(() => {
+  const g = $('atRollTicks');
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const long = i % 3 === 0;
+    const r0 = long ? 36 : 40;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(Math.sin(a) * r0));
+    line.setAttribute('y1', String(-Math.cos(a) * r0));
+    line.setAttribute('x2', String(Math.sin(a) * 45));
+    line.setAttribute('y2', String(-Math.cos(a) * 45));
+    g.appendChild(line);
+  }
+})();
+
+/**
+ * Point both dials at what the ship is doing.
+ *
+ * The needles are set from the SHIP, never from the last drag, so a heading
+ * that came from Face Target or from a standing order left over from an
+ * earlier turn shows up on them like any other.
+ */
 function renderAttitude(): void {
   const s = selectedShip();
   const on = !!s && canPlan();
-  const deg = s ? pitchOf(s.id) : 0;
-  $<HTMLInputElement>('atPitch').disabled = !on;
-  if (document.activeElement !== $('atPitch')) {
-    $<HTMLInputElement>('atPitch').value = String(deg);
-  }
-  $('atPitchV').textContent = `${deg > 0 ? '+' : ''}${deg}`;
+  $('attitude').classList.toggle('off', !s);
+  for (const d of ['atRoll', 'atPitch']) $(d).classList.toggle('numb', !on);
+  if (!s) return;
+  const now = match.forward(s.id);
+  const cmd = standingFace.get(s.id) ?? match.order(s.id).face ?? now;
+  const climb = (v: Vec3) => (Math.asin(Math.max(-1, Math.min(1, v.y))) * 180) / Math.PI;
+  const rollNow = (match.rollOf(s.id) * 180) / Math.PI;
+  const rollCmd = standingRoll.get(s.id) ?? match.order(s.id).roll;
+  const rollDeg = rollCmd === undefined ? rollNow : (rollCmd * 180) / Math.PI;
+
+  $('atRollNow').setAttribute('transform', `rotate(${(-rollNow).toFixed(2)})`);
+  $('atRollCmd').setAttribute('transform', `rotate(${(-rollDeg).toFixed(2)})`);
+  $('atRollV').textContent = `${Math.round(rollDeg)}`;
+  $('atRoll').setAttribute('aria-valuenow', String(Math.round(rollDeg)));
+
+  // The pitch needles start pointing along +X, so a climb rotates them the
+  // other way: on screen up is negative y.
+  $('atPitchNow').setAttribute('transform', `rotate(${(-climb(now)).toFixed(2)})`);
+  $('atPitchCmd').setAttribute('transform', `rotate(${(-climb(cmd)).toFixed(2)})`);
+  const p = Math.round(climb(cmd));
+  $('atPitchV').textContent = `${p > 0 ? '+' : ''}${p}`;
+  $('atPitch').setAttribute('aria-valuenow', String(p));
 }
 
 holdRepeat($('pUp'), 1);
@@ -1436,9 +1532,8 @@ Object.defineProperty(window, 'ftDebug', {
     /** Where the selected hull's nose actually points, for checking that a
      * commanded heading is being turned INTO over several turns. */
     forward: () => (selected < 0 ? null : match.forward(selected)),
-    /** Whether a screen point lands on the yaw knob. Observation only, and the
-     * same test the pointer router runs, so a harness can find the control
-     * without being told where it was drawn. */
+    /** Whether a screen point lands on the map's yaw knob. Observation only,
+     * and the same test the pointer router runs. */
     onYawKnob: (x: number, y: number) => view.onYawKnob(x, y),
     playing: () => playTick,
     side: () => launch.side,

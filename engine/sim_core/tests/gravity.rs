@@ -24,14 +24,11 @@ fn an_empty_field_changes_nothing() {
     let fl = Flight::default();
     for vel in [V3::ZERO, V3::new(0.0, 0.0, 4.0), V3::new(1.0, -2.0, 3.0)] {
         for mode in [Mode::MoveAndTurn, Mode::TurnSlide, Mode::FullSpeed, Mode::Drift] {
-            let a = fly_turn(ship(vel), Some(V3::new(30.0, 10.0, 40.0)), mode, &fl, None, STEPS, &[]);
+            let a = fly_turn(ship(vel), Some(V3::new(30.0, 10.0, 40.0)), mode, &fl, None, None, STEPS, &[]);
             let b = fly_turn(
                 ship(vel),
                 Some(V3::new(30.0, 10.0, 40.0)),
-                mode,
-                &fl,
-                None,
-                STEPS,
+                mode, &fl, None, None, STEPS,
                 &[Well::new(V3::new(0.0, 500.0, 0.0), 0.0, 10.0)],
             );
             assert_eq!(a.end_pos.x.to_bits(), b.end_pos.x.to_bits());
@@ -70,8 +67,8 @@ fn softening_keeps_the_centre_finite() {
 fn a_drifting_hull_falls() {
     let fl = Flight::default();
     let w = [Well::new(V3::new(0.0, -200.0, 0.0), 4000.0, 10.0)];
-    let free = fly_turn(ship(V3::ZERO), None, Mode::Drift, &fl, None, STEPS, &[]);
-    let fell = fly_turn(ship(V3::ZERO), None, Mode::Drift, &fl, None, STEPS, &w);
+    let free = fly_turn(ship(V3::ZERO), None, Mode::Drift, &fl, None, None, STEPS, &[]);
+    let fell = fly_turn(ship(V3::ZERO), None, Mode::Drift, &fl, None, None, STEPS, &w);
     assert!(free.end_pos.y.abs() < 1e-6, "nothing to fall toward");
     assert!(fell.end_pos.y < -1.0, "fell {} units", fell.end_pos.y);
 }
@@ -86,10 +83,10 @@ fn the_field_leans_the_reachable_set() {
     let mut up = 0.0f32;
     for r in 1..200 {
         let d = r as f32;
-        if can_reach(ship(V3::ZERO), V3::new(0.0, -d, 0.0), Mode::MoveAndTurn, &fl, None, 1.6, 60, &w) {
+        if can_reach(ship(V3::ZERO), V3::new(0.0, -d, 0.0), Mode::MoveAndTurn, &fl, None, None, 1.6, 60, &w) {
             down = d;
         }
-        if can_reach(ship(V3::ZERO), V3::new(0.0, d, 0.0), Mode::MoveAndTurn, &fl, None, 1.6, 60, &w) {
+        if can_reach(ship(V3::ZERO), V3::new(0.0, d, 0.0), Mode::MoveAndTurn, &fl, None, None, 1.6, 60, &w) {
             up = d;
         }
     }

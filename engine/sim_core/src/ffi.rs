@@ -17,6 +17,8 @@
 //!       16      1 if a target was given, else 0
 //!       17      1 if a facing was commanded, else 0
 //!       18..23  flight stats: yaw, pitch, fwd, retro, lat, max speed
+//!       24      commanded roll about the nose, radians from wings level
+//!       25      1 if a roll was commanded, else 0
 //!
 //!   OUT 32..34  end position
 //!       35..37  end velocity
@@ -183,7 +185,7 @@ pub extern "C" fn ft_scratch_len() -> u32 {
     SCRATCH_LEN as u32
 }
 
-fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
+fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Option<f32>, Flight) {
     let body = Body {
         pos: V3::new(s[0], s[1], s[2]),
         vel: V3::new(s[3], s[4], s[5]),
@@ -191,6 +193,7 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
     };
     let target = if s[16] != 0.0 { Some(V3::new(s[10], s[11], s[12])) } else { None };
     let face = if s[17] != 0.0 { Some(V3::new(s[13], s[14], s[15])) } else { None };
+    let roll = if s[25] != 0.0 { Some(s[24]) } else { None };
     let fl = Flight {
         yaw_rate: s[18],
         pitch_rate: s[19],
@@ -199,7 +202,7 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
         accel_lat: s[22],
         max_speed: s[23],
     };
-    (body, target, face, fl)
+    (body, target, face, roll, fl)
 }
 
 /// Fly one turn. Returns how many path samples were written from slot 64.
@@ -209,11 +212,11 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
 #[no_mangle]
 pub extern "C" fn ft_fly_turn(mode: u32, steps: u32, sample_stride: u32) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, target, face, fl) = read_inputs(s);
+    let (body, target, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let target = if mode.committed() { None } else { target };
 
-    let flown = fly_turn(body, target, mode, &fl, face, steps, wells());
+    let flown = fly_turn(body, target, mode, &fl, face, roll, steps, wells());
 
     s[32] = flown.end_pos.x;
     s[33] = flown.end_pos.y;
@@ -254,9 +257,9 @@ pub extern "C" fn ft_fly_turn(mode: u32, steps: u32, sample_stride: u32) -> u32 
 #[no_mangle]
 pub extern "C" fn ft_can_reach(mode: u32, eps: f32, steps: u32) -> u32 {
     let s: &[f32] = unsafe { &*(&raw const SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let target = V3::new(s[10], s[11], s[12]);
-    can_reach(body, target, Mode::from_u32(mode), &fl, face, eps, steps, wells()) as u32
+    can_reach(body, target, Mode::from_u32(mode), &fl, face, roll, eps, steps, wells()) as u32
 }
 
 /// Sweep a whole grid of candidate cells in one call, so probing an envelope
@@ -265,7 +268,7 @@ pub extern "C" fn ft_can_reach(mode: u32, eps: f32, steps: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32, cy: f32, cz: f32, half: f32) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.max(1).min(32) as usize;
     let step = 2.0 * half / n as f32;
@@ -284,7 +287,7 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
             let y = cy - half + (j as f32 + 0.5) * step;
             for k in 0..n {
                 let z = cz - half + (k as f32 + 0.5) * step;
-                if can_reach(body, V3::new(x, y, z), mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, V3::new(x, y, z), mode, &fl, face, roll, eps, steps, wells()) {
                     mask[idx / 32] |= 1 << (idx % 32);
                     hits += 1;
                 }
@@ -371,7 +374,7 @@ pub extern "C" fn ft_reach_octree(
     hr: f32, hu: f32, hf: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.clamp(2, 128) as usize;
     if !n.is_power_of_two() {
@@ -404,7 +407,7 @@ pub extern "C" fn ft_reach_octree(
     let mut corner = |i: usize, j: usize, k: usize| -> bool {
         let idx = (i * side + j) * side + k;
         if seen[idx] == 0 {
-            let hit = can_reach(body, at(i, j, k), mode, &fl, face, eps, steps, wells());
+            let hit = can_reach(body, at(i, j, k), mode, &fl, face, roll, eps, steps, wells());
             seen[idx] = if hit { 2 } else { 1 };
         }
         seen[idx] == 2
@@ -505,7 +508,7 @@ pub extern "C" fn ft_reach_radii(
     cx: f32, cy: f32, cz: f32, far: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let nu = nu.clamp(4, 256) as usize;
     let nv = nv.clamp(3, 256) as usize;
@@ -525,13 +528,13 @@ pub extern "C" fn ft_reach_radii(
             let d = V3::new(sp * ct, cp, sp * st);
             let mut lo = 0.0f32;
             let mut hi = far;
-            if can_reach(body, anchor.add(d.scale(hi)), mode, &fl, face, eps, steps, wells()) {
+            if can_reach(body, anchor.add(d.scale(hi)), mode, &fl, face, roll, eps, steps, wells()) {
                 s[64 + u * nv + v] = hi;
                 continue;
             }
             for _ in 0..iters {
                 let m = 0.5 * (lo + hi);
-                if can_reach(body, anchor.add(d.scale(m)), mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, anchor.add(d.scale(m)), mode, &fl, face, roll, eps, steps, wells()) {
                     lo = m;
                 } else {
                     hi = m;
@@ -581,7 +584,7 @@ pub extern "C" fn ft_reach_grid_at(
     hr: f32, hu: f32, hf: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.max(1).min(32) as usize;
     let fwd = V3::new(fx, fy, fz);
@@ -606,7 +609,7 @@ pub extern "C" fn ft_reach_grid_at(
             for k in 0..n {
                 let lz = at(k, hf);
                 let p = centre.add(q.rot(V3::new(lx, ly, lz)));
-                if can_reach(body, p, mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, p, mode, &fl, face, roll, eps, steps, wells()) {
                     mask[idx / 32] |= 1 << (idx % 32);
                     hits += 1;
                 }
@@ -1014,6 +1017,8 @@ pub extern "C" fn ft_set_move(
     fx: f32,
     fy: f32,
     fz: f32,
+    has_roll: u32,
+    roll: f32,
 ) -> u32 {
     let o = orders();
     let Some(slot) = o.get_mut(ship as usize) else { return 0 };
@@ -1021,6 +1026,7 @@ pub extern "C" fn ft_set_move(
     entry.mode = Some(Mode::from_u32(mode));
     entry.target = if has_target != 0 { Some(V3::new(tx, ty, tz)) } else { None };
     entry.face = if has_face != 0 { Some(V3::new(fx, fy, fz)) } else { None };
+    entry.roll = if has_roll != 0 { Some(roll) } else { None };
     1
 }
 
@@ -1205,6 +1211,7 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
         Mode::from_u32(mode),
         &sh.flight,
         sh.plan_face,
+        sh.plan_roll,
         steps,
         1.0 / TICKS_PER_SECOND as f32,
         wells(),
@@ -1309,6 +1316,24 @@ pub extern "C" fn ft_ship_forward(ship: u32) -> u32 {
     s[33] = f.y;
     s[34] = f.z;
     1
+}
+
+/// A ship's roll about its own nose, in radians from wings level, written to
+/// slot 32. Nose vertical has no wings level to measure from, so it reports 0
+/// and says so with a 0 return rather than handing back an angle off noise.
+///
+/// Asked of the core rather than derived in the renderer for the same reason
+/// forward is: which way is level is a convention the client must not hold a
+/// second opinion about.
+#[no_mangle]
+pub extern "C" fn ft_ship_roll(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    let s = scratch();
+    match crate::flight::roll_of(sh.quat) {
+        Some(r) => { s[32] = r; 1 }
+        None => { s[32] = 0.0; 0 }
+    }
 }
 
 // ------------------------------------------------------------- snapshots --

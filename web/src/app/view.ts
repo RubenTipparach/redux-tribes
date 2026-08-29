@@ -756,7 +756,13 @@ export class View {
       ...(order.mode === Mode.TurnSlide
         ? [order.face?.x.toFixed(3) ?? '-',
            order.face?.y.toFixed(3) ?? '-',
-           order.face?.z.toFixed(3) ?? '-']
+           order.face?.z.toFixed(3) ?? '-',
+           // Roll too, and for a reason that is easy to argue away: x and y
+           // are spent against the same lateral cap, so the budget looks
+           // rotationally symmetric about the nose. The cap is a BOX, and a
+           // box has corners, so rolling turns it under the wanted thrust and
+           // the arrival point moves, by 7.87 u on a 44 u reach when measured.
+           order.roll?.toFixed(4) ?? '-']
         : []),
       flight.yawRate, flight.pitchRate, flight.accelFwd,
       flight.accelRetro, flight.accelLat, flight.maxSpeed,

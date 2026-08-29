@@ -98,6 +98,9 @@ pub fn plan_ship(sim: &Sim, si: usize) -> Order {
         mode: Some(Mode::MoveAndTurn),
         target: Some(dest),
         face: Some(face),
+        // The AI flies wings level: it has no reason to roll, and a hull that
+        // rolled for no gain would only confuse what the arcs are doing.
+        roll: None,
         weapons,
         board,
         ai_target: Some(target.id),

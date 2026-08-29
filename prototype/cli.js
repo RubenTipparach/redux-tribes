@@ -160,7 +160,27 @@ function tests() {
     check("a move ends facing the way it went (MOVE_AND_TURN auto-faces travel)",
       worst < 5, "worst " + worst.toFixed(1) + " degrees off course");
 
-    // 7. and the pitch axis is not inverted: a climb ends above the start, not
+    // 7. a commanded roll is flown to, and rate limited like the other axes.
+    //    Roll MOVES the reachable set, which is easy to argue it cannot: x and
+    //    y are spent against the same lateral cap, so the budget looks
+    //    rotationally symmetric about the nose. The cap is a BOX, and a box has
+    //    corners, so rolling turns it under the wanted thrust.
+    const rolled = lone("terran_frigate");
+    const rr = sim.flyTurn(rolled, [0, 0, 20], "TURN_SLIDE", { face: [0, 0, 1], roll: 0.5 });
+    const gotRoll = sim.rollOf(rr.endQuat);
+    check("a commanded roll is flown to (attitude has three axes)",
+      gotRoll !== null && Math.abs(gotRoll - 0.5) < 0.05,
+      "asked 0.5 rad, got " + (gotRoll === null ? "null" : gotRoll.toFixed(3)));
+
+    const levelShip = lone("terran_frigate");
+    const levelEnd = sim.flyTurn(levelShip, [400, 0, 0], "TURN_SLIDE", { face: [0, 0, 1], roll: 0 });
+    const rollShip = lone("terran_frigate");
+    const rollEnd = sim.flyTurn(rollShip, [400, 0, 0], "TURN_SLIDE", { face: [0, 0, 1], roll: Math.PI / 4 });
+    const moved = V.dist(levelEnd.endPos, rollEnd.endPos);
+    check("rolling moves the reachable set (the lateral cap is a box, not a disc)",
+      moved > 1, "rolling moved the arrival point by " + moved.toFixed(2));
+
+    // 8. and the pitch axis is not inverted: a climb ends above the start, not
     //    below it. The sign was flipped, so a nose told to come up went down
     //    and spent its whole pitch authority doing it.
     const climb = lone("terran_frigate");

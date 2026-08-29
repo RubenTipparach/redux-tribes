@@ -51,6 +51,7 @@ export interface MatchExports {
   ft_set_move(
     ship: number, mode: number, hasTarget: number, tx: number, ty: number, tz: number,
     hasFace: number, fx: number, fy: number, fz: number,
+    hasRoll: number, roll: number,
   ): number;
   ft_add_fire(
     ship: number, weaponIndex: number, second: number, targetShip: number, targetSub: number,
@@ -68,6 +69,7 @@ export interface MatchExports {
   ft_can_fire(ship: number, weapon: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
+  ft_ship_roll(ship: number): number;
   ft_snapshot_len(): number;
   ft_snapshot(): number;
   ft_restore(count: number): number;
@@ -306,6 +308,13 @@ export class Match {
     return v3(this.#s, 32);
   }
 
+  /** A ship's roll about its nose, radians from wings level. Which way is
+   * level is the core's convention, so it is asked rather than derived. */
+  rollOf(ship: number): number {
+    this.#ex.ft_ship_roll(ship);
+    return this.#s[32] ?? 0;
+  }
+
   setFlight(ship: number, f: ClassInfo['flight']): void {
     this.#ex.ft_set_flight(
       ship, f.yawRate, f.pitchRate, f.accelFwd, f.accelRetro, f.accelLat, f.maxSpeed,
@@ -438,6 +447,7 @@ export class Match {
       this.#ex.ft_set_move(
         ship, o.mode, t ? 1 : 0, t?.x ?? 0, t?.y ?? 0, t?.z ?? 0,
         f ? 1 : 0, f?.x ?? 0, f?.y ?? 0, f?.z ?? 0,
+        o.roll === undefined ? 0 : 1, o.roll ?? 0,
       );
       this.#ex.ft_clear_fire(ship);
       for (const w of o.weapons) {

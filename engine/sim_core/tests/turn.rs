@@ -501,6 +501,7 @@ fn a_mount_fires_twice_in_one_turn_when_its_cooldown_allows() {
         Some(Order {
             mode: Some(Mode::MoveAndTurn),
             target: None,
+            roll: None,
             face: None,
             ai_target: None,
             weapons: vec![shot(0), shot(gap)],
@@ -533,6 +534,7 @@ fn the_resolver_drops_a_shot_inside_the_cooldown() {
         Some(Order {
             mode: Some(Mode::MoveAndTurn),
             target: None,
+            roll: None,
             face: None,
             ai_target: None,
             weapons: vec![shot(0), shot(1)],

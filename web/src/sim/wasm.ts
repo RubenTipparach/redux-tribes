@@ -50,6 +50,7 @@ interface SimExports {
 // input slots
 const IN_POS = 0, IN_VEL = 3, IN_QUAT = 6, IN_TARGET = 10, IN_FACE = 13;
 const IN_HAS_TARGET = 16, IN_HAS_FACE = 17, IN_FLIGHT = 18;
+const IN_ROLL = 24, IN_HAS_ROLL = 25;
 // output slots
 const OUT_POS = 32, OUT_VEL = 35, OUT_QUAT = 38, OUT_COMMITTED = 42, OUT_PATH = 64;
 
@@ -110,6 +111,12 @@ export class Sim {
     s[IN_FLIGHT + 3] = flight.accelRetro;
     s[IN_FLIGHT + 4] = flight.accelLat;
     s[IN_FLIGHT + 5] = flight.maxSpeed;
+
+    // Roll moves the boundary, so a probe carries it: the lateral cap is a box
+    // and a box has corners, so turning it under the wanted thrust changes what
+    // is available. Measured at 7.87 u on a 44 u reach.
+    s[IN_HAS_ROLL] = order.roll === undefined ? 0 : 1;
+    s[IN_ROLL] = order.roll ?? 0;
   }
 
   /**

@@ -54,6 +54,8 @@ export interface FlyOrder {
   readonly target?: Vec3;
   /** commanded heading. Only TurnSlide honours it. */
   readonly face?: Vec3;
+  /** commanded roll about the nose, radians from wings level. */
+  readonly roll?: number;
 }
 
 export interface Flown {
@@ -270,6 +272,8 @@ export interface PlannedOrder {
   mode: Mode;
   target?: Vec3;
   face?: Vec3;
+  /** Commanded roll about the nose, radians from wings level. */
+  roll?: number;
   weapons: PlannedShot[];
   board?: number;
 }

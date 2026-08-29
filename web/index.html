@@ -222,24 +222,31 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
 #pAlt.zero { display:none; }
 
-/* The attitude flyout. Anchored to the canvas cell so it clears the rails at
-   every size, and shut by default because yaw covers most of what a hull needs. */
-#attitude { grid-column:2; grid-row:2; align-self:start; justify-self:end;
-  z-index:6; margin:10px; display:flex; align-items:flex-start; }
-#attitude #atTab { width:34px; height:34px; padding:0; font-size:14px;
-  border-radius:8px; background:#111823ee; flex:0 0 auto;
+/* The heading dials, over the canvas. Bottom left, which is the one corner no
+   rail, sheet, toolbar or readout uses at any size. */
+#attitude { grid-column:2; grid-row:2; align-self:end; justify-self:start;
+  z-index:6; margin:0 0 12px 12px; display:flex; gap:8px; pointer-events:none; }
+#attitude.off { display:none; }
+.dial { position:relative; width:92px; height:92px; pointer-events:auto;
+  border-radius:50%; background:#111823cc; touch-action:none; cursor:grab;
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
-#attitude.shut #atTab { transform:rotate(90deg); }
-#atBody { width:186px; margin-left:6px; padding:9px 10px; border-radius:9px;
-  background:#111823ee; border:1px solid var(--line);
-  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
-#attitude.shut #atBody { display:none; }
-.atrow { display:flex; justify-content:space-between; align-items:baseline;
-  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
-  letter-spacing:.1em; color:var(--muted); margin-bottom:3px; }
-.atrow b { color:var(--cyan); font-size:13px; }
-#atPitch { margin:0 0 8px; }
-.athint { font-size:10px; line-height:1.4; color:var(--muted); }
+.dial:active { cursor:grabbing; }
+.dial svg { width:100%; height:100%; display:block; overflow:visible; }
+.dial .face { fill:none; stroke:#2b3b50; stroke-width:1.5; }
+.dial .axis { stroke:var(--line); stroke-width:1; }
+.dial .ticks line { stroke:var(--line); stroke-width:1.5; }
+/* Where the nose IS: dim, because it is a reading and not a control. */
+.dial .now { stroke:var(--muted); stroke-width:2.5; opacity:.75; }
+/* Where it was TOLD to point: the thing under the finger. */
+.dial .cmd { stroke:var(--cyan); stroke-width:2.5; }
+.dial .knob { fill:var(--cyan); }
+.dial.numb { opacity:.35; pointer-events:none; }
+.dial .val { position:absolute; left:0; right:0; top:50%; transform:translateY(-58%);
+  text-align:center; font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
+  font-size:15px; color:var(--ink); pointer-events:none; }
+.dial .cap { position:absolute; left:0; right:0; top:50%; transform:translateY(6px);
+  text-align:center; font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
+  font-size:9px; letter-spacing:.14em; color:var(--muted); pointer-events:none; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -281,6 +288,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   /* One column here, so the readout follows the toolbar out of column 2.
      Left behind, it opens an implicit second column and shoves the row. */
   #toolbar, #pAlt, #attitude { grid-column:1; }
+  /* The toolbar owns the bottom of the canvas on a phone and is centred, so
+     the dials cannot share that line at any width: they sit above it. 44px of
+     button plus its 12px margin plus a gap. */
+  #attitude { margin-bottom:66px; }
+  .dial { width:72px; height:72px; }
+  .dial .val { font-size:13px; }
   #pAlt { margin-bottom:56px; }
   button { padding:10px 13px; }
   #timeline { --slotw:22px; }
@@ -314,6 +327,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #left.open, #right.open { transform:none; }
   #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
   #pAlt { grid-column:2; grid-row:2; margin-bottom:52px; }
+  /* Same again in landscape, where the toolbar is 38px tall. */
+  #attitude { grid-column:2; grid-row:2; margin-bottom:54px; }
+  .dial { width:64px; height:64px; }
   #toolbar button { width:38px; height:38px; font-size:13px; }
 }
 
@@ -490,17 +506,39 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <button id="tFit">Fit view</button>
   </div>
 
-  <!-- Pitch, on a flyout rather than in the toolbar: it is the rarer half of a
-       heading, so it costs a tap to open and no width when it is shut. -->
-  <div id="attitude" class="shut">
-    <button id="atTab" aria-label="Attitude">&#9662;</button>
-    <div id="atBody">
-      <div class="atrow"><span>PITCH</span><b id="atPitchV">0</b></div>
-      <input type="range" id="atPitch" min="-80" max="80" step="5" value="0"
-             aria-label="Pitch the nose up or down">
-      <div class="atrow"><span>ROLL</span><b id="atRollV">n/a</b></div>
-      <div class="athint">The core carries no roll: a hull's attitude is a
-        heading, yaw and pitch, so there is nothing for a dial to set yet.</div>
+  <!-- Heading, over the viewport. Two dials, one per axis the core can be
+       told about, sitting on the canvas rather than in a rail: a heading is
+       aimed at something on screen, so the control belongs on screen. -->
+  <div id="attitude" aria-label="Heading">
+    <div class="dial" id="atRoll" role="slider" aria-label="Roll"
+         aria-valuemin="-180" aria-valuemax="180" aria-valuenow="0" tabindex="0">
+      <svg viewBox="-50 -50 100 100" aria-hidden="true">
+        <circle class="face" cx="0" cy="0" r="45"/>
+        <g class="ticks" id="atRollTicks"></g>
+        <!-- A horizon bar, because roll is read against level and not against
+             a compass: the bar tilts, which is what a hull rolling looks like. -->
+        <g id="atRollNow"><line class="now" x1="-30" y1="0" x2="30" y2="0"/></g>
+        <g id="atRollCmd">
+          <line class="cmd" x1="-36" y1="0" x2="36" y2="0"/>
+          <circle class="knob" cx="36" cy="0" r="6.5"/>
+        </g>
+      </svg>
+      <b class="val" id="atRollV">0</b>
+      <span class="cap">ROLL</span>
+    </div>
+    <div class="dial" id="atPitch" role="slider" aria-label="Pitch"
+         aria-valuemin="-80" aria-valuemax="80" aria-valuenow="0" tabindex="0">
+      <svg viewBox="-50 -50 100 100" aria-hidden="true">
+        <path class="face" d="M 0 -45 A 45 45 0 0 1 0 45"/>
+        <line class="axis" x1="0" y1="0" x2="45" y2="0"/>
+        <g id="atPitchNow"><line class="now" x1="0" y1="0" x2="33" y2="0"/></g>
+        <g id="atPitchCmd">
+          <line class="cmd" x1="0" y1="0" x2="38" y2="0"/>
+          <circle class="knob" cx="38" cy="0" r="6.5"/>
+        </g>
+      </svg>
+      <b class="val" id="atPitchV">0</b>
+      <span class="cap">PITCH</span>
     </div>
   </div>
 

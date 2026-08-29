@@ -13,7 +13,7 @@ fn ship(vel: V3) -> Body {
 
 fn reach(dir: V3, mode: Mode, fl: &Flight, face: Option<V3>) -> f32 {
     let b = ship(V3::ZERO);
-    let flown = fly_turn(b, Some(dir.norm().scale(400.0)), mode, fl, face, RESOLUTION_STEPS, &[]);
+    let flown = fly_turn(b, Some(dir.norm().scale(400.0)), mode, fl, face, None, RESOLUTION_STEPS, &[]);
     flown.end_pos.dist(b.pos)
 }
 
@@ -46,11 +46,11 @@ fn an_agile_hull_outreaches_a_sluggish_one() {
 fn momentum_commits_you() {
     let fl = Flight::default();
     assert!(
-        can_reach(ship(V3::ZERO), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS, &[]),
+        can_reach(ship(V3::ZERO), V3::ZERO, Mode::MoveAndTurn, &fl, None, None, 2.0, RESOLUTION_STEPS, &[]),
         "a ship at rest can hold station"
     );
     assert!(
-        !can_reach(ship(V3::new(0.0, 0.0, 6.0)), V3::ZERO, Mode::MoveAndTurn, &fl, None, 2.0, RESOLUTION_STEPS, &[]),
+        !can_reach(ship(V3::new(0.0, 0.0, 6.0)), V3::ZERO, Mode::MoveAndTurn, &fl, None, None, 2.0, RESOLUTION_STEPS, &[]),
         "a ship carrying velocity cannot hold station"
     );
 }
@@ -73,7 +73,7 @@ fn rotation_is_rate_limited() {
     };
     let at = |yaw: f32| {
         let fl = Flight { yaw_rate: yaw, ..Flight::default() };
-        let f = fly_turn(ship(V3::ZERO), None, Mode::TurnSlide, &fl, Some(want), RESOLUTION_STEPS, &[]);
+        let f = fly_turn(ship(V3::ZERO), None, Mode::TurnSlide, &fl, Some(want), None, RESOLUTION_STEPS, &[]);
         bearing(f.end_quat)
     };
     let slow = at(6.0);
@@ -88,8 +88,8 @@ fn rotation_is_rate_limited() {
 fn committed_modes_ignore_the_destination() {
     let fl = Flight::default();
     let b = ship(V3::new(0.0, 0.0, 5.0));
-    let a = fly_turn(b, Some(V3::new(200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS, &[]);
-    let c = fly_turn(b, Some(V3::new(-200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, RESOLUTION_STEPS, &[]);
+    let a = fly_turn(b, Some(V3::new(200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, None, RESOLUTION_STEPS, &[]);
+    let c = fly_turn(b, Some(V3::new(-200.0, 0.0, 0.0)), Mode::FullSpeed, &fl, None, None, RESOLUTION_STEPS, &[]);
     // fly_turn honours what it is handed; the caller drops the target for a
     // committed mode. Assert the mode reports itself as committed so that
     // contract is pinned somewhere.
@@ -107,7 +107,7 @@ fn committed_modes_ignore_the_destination() {
 fn drift_is_an_unpowered_coast() {
     let fl = Flight::default();
     let b = ship(V3::new(0.0, 0.0, 4.0));
-    let f = fly_turn(b, None, Mode::Drift, &fl, None, RESOLUTION_STEPS, &[]);
+    let f = fly_turn(b, None, Mode::Drift, &fl, None, None, RESOLUTION_STEPS, &[]);
     // ten seconds at 4 u/s, with no thrust and no attitude change
     assert!((f.end_pos.z - 40.0).abs() < 0.01, "coasted to {}", f.end_pos.z);
     assert_eq!(f.end_vel.z, 4.0);
@@ -127,8 +127,8 @@ fn a_probe_tracks_the_executed_flight() {
     ] {
         for vel in [V3::ZERO, V3::new(0.0, 0.0, 5.0)] {
             let b = ship(vel);
-            let exact = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, RESOLUTION_STEPS, &[]);
-            let probe = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, 60, &[]);
+            let exact = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, None, RESOLUTION_STEPS, &[]);
+            let probe = fly_turn(b, Some(target), Mode::MoveAndTurn, &fl, None, None, 60, &[]);
             worst = worst.max(exact.end_pos.dist(probe.end_pos));
         }
     }
@@ -153,8 +153,7 @@ fn a_move_ends_facing_the_way_it_went() {
     ] {
         let want = dir.norm();
         let flown = fly_turn(
-            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None,
-            RESOLUTION_STEPS, &[],
+            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None, None, RESOLUTION_STEPS, &[],
         );
         let off = angle_between_deg(flown.end_quat.forward(), want);
         assert!(off < 5.0, "moved along {want:?} but ended {off} degrees off it");
@@ -174,8 +173,7 @@ fn a_move_too_sharp_to_finish_still_ends_nearer_its_course_than_its_reverse() {
     ] {
         let want = dir.norm();
         let flown = fly_turn(
-            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None,
-            RESOLUTION_STEPS, &[],
+            ship(V3::ZERO), Some(want.scale(20.0)), Mode::MoveAndTurn, &fl, None, None, RESOLUTION_STEPS, &[],
         );
         let fwd = flown.end_quat.forward();
         let along = angle_between_deg(fwd, want);
@@ -193,7 +191,7 @@ fn a_move_too_sharp_to_finish_still_ends_nearer_its_course_than_its_reverse() {
 fn a_full_stop_still_swings_retrograde() {
     let fl = Flight::default();
     let vel = V3::new(0.0, 0.0, 6.0);
-    let flown = fly_turn(ship(vel), None, Mode::FullStop, &fl, None, RESOLUTION_STEPS, &[]);
+    let flown = fly_turn(ship(vel), None, Mode::FullStop, &fl, None, None, RESOLUTION_STEPS, &[]);
     let retro = vel.norm().scale(-1.0);
     let off = angle_between_deg(flown.end_quat.forward(), retro);
     assert!(off < 179.0, "a stopping hull must turn toward retrograde, still {off} off");
@@ -201,4 +199,61 @@ fn a_full_stop_still_swings_retrograde() {
         off < angle_between_deg(V3::new(0.0, 0.0, 1.0), retro),
         "it ended no nearer retrograde than it started",
     );
+}
+
+/// A commanded roll is turned INTO, at the same rate a yaw is, and lands on
+/// the angle it was given. Wings level is world up with the nose taken out of
+/// it, so a roll of 90 degrees puts the hull's own up out on its wingtip.
+#[test]
+fn a_commanded_roll_is_flown_to() {
+    let fl = Flight::default();
+    for want_deg in [0.0f32, 30.0, -45.0] {
+        let want = want_deg * std::f32::consts::PI / 180.0;
+        let flown = fly_turn(
+            ship(V3::ZERO), Some(V3::new(0.0, 0.0, 20.0)), Mode::TurnSlide, &fl,
+            Some(V3::new(0.0, 0.0, 1.0)), Some(want), RESOLUTION_STEPS, &[],
+        );
+        let got = sim_core::flight::roll_of(flown.end_quat).expect("nose is not vertical");
+        let off = (got - want).abs() * 180.0 / std::f32::consts::PI;
+        assert!(off < 2.0, "asked {want_deg} degrees of roll, ended {off} off it");
+    }
+}
+
+/// And it is rate limited like the other axes: 60 degrees of authority over a
+/// turn, so a half roll arrives part way round rather than snapping.
+#[test]
+fn a_roll_past_the_rate_arrives_part_way() {
+    let fl = Flight::default();
+    let want = std::f32::consts::PI;
+    let flown = fly_turn(
+        ship(V3::ZERO), Some(V3::new(0.0, 0.0, 20.0)), Mode::TurnSlide, &fl,
+        Some(V3::new(0.0, 0.0, 1.0)), Some(want), RESOLUTION_STEPS, &[],
+    );
+    let got = sim_core::flight::roll_of(flown.end_quat).unwrap().abs() * 180.0
+        / std::f32::consts::PI;
+    assert!(got > 55.0 && got < 65.0, "expected about 60 degrees of roll, got {got}");
+}
+
+/// Roll DOES move the boundary, which is easy to argue it cannot: x and y are
+/// spent against the same lateral cap, so the budget looks rotationally
+/// symmetric about the nose. It is not. The cap is a BOX, and a box has
+/// corners, `lat * sqrt(2)` on the diagonal against `lat` on the axis, so
+/// rolling turns that box under the thrust the controller wants.
+///
+/// This started life asserting the opposite and failed at 7.87 u, which is why
+/// the probe carries a roll rather than skipping one it was argued not to need.
+#[test]
+fn roll_moves_the_reachable_set() {
+    let fl = Flight::default();
+    let mut worst: f32 = 0.0;
+    for dir in [V3::new(0.0, 0.0, 1.0), V3::new(1.0, 0.0, 0.0), V3::new(0.3, 0.7, -0.4)] {
+        let target = dir.norm().scale(400.0);
+        let level = fly_turn(ship(V3::ZERO), Some(target), Mode::TurnSlide, &fl,
+                             Some(V3::new(0.0, 0.0, 1.0)), Some(0.0), RESOLUTION_STEPS, &[]);
+        let rolled = fly_turn(ship(V3::ZERO), Some(target), Mode::TurnSlide, &fl,
+                              Some(V3::new(0.0, 0.0, 1.0)),
+                              Some(std::f32::consts::FRAC_PI_4), RESOLUTION_STEPS, &[]);
+        worst = worst.max(level.end_pos.dist(rolled.end_pos));
+    }
+    assert!(worst > 1.0, "rolling moved the arrival point by only {worst}");
 }
