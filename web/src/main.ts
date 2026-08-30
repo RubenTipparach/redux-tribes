@@ -174,8 +174,25 @@ let openSlot: number | null = null;
 let playTick: number | null = null;
 let playing = false;
 let speed = 1;
-/** null means live; a number means a past turn is being reviewed. */
-let reviewTurn: number | null = null;
+/**
+ * The review panel: watching turns already fought instead of planning one.
+ *
+ * `at` indexes `match.history`. `auto` says whether reaching the end of that
+ * turn runs on to the next recorded one. `live` is the world as it stood when
+ * a past turn was first restored, and is null while the panel is merely OPEN
+ * and aimed: aiming must not move the match, so opening the panel and stepping
+ * the picker leave the plan being written untouched.
+ *
+ * This is one state where there were two. A turn strip in the rail chose which
+ * turn the event log showed, and a Replay button in the footer re-flew the
+ * whole match from turn zero, and neither knew about the other: picking a turn
+ * and then hitting Replay watched something else. One object, one picked turn,
+ * and both buttons aim at it.
+ */
+let review: { at: number; auto: boolean; live: Float32Array | null } | null = null;
+
+/** Watching a past world, as opposed to merely having the panel open. */
+const watching = (): boolean => !!review && review.live !== null;
 /**
  * The selected hull's attitude at the tick on screen, while one is playing
  * back. Null when planning, where the dials read the turn boundary instead.
@@ -189,15 +206,7 @@ let atAttitude: { forward: Vec3; roll: number } | null = null;
  * drag would otherwise re-plan every hostile per pointer event.
  */
 let aiPlans = new Map<number, PlannedOrder & { aiTarget: number }>();
-/**
- * Watching the whole match back, turn by turn.
- *
- * `live` is the world as it stood when the replay started, because playing the
- * battle means restoring and re-resolving each recorded turn IN the core, and a
- * review that left the match somewhere else would be worse than no review. It
- * is put back the moment the replay ends, however it ends.
- */
-let battle: { at: number; live: Float32Array } | null = null;
+
 /**
  * Where hulls have been, by ship id, one entry per turn flown.
  *
@@ -241,13 +250,12 @@ function start(): void {
   standingFace.clear();
   standingRoll.clear();
   trails.clear();
-  battle = null;
+  review = null;
   atAttitude = null;
   aiPlans = new Map();
   openSlot = null;
   playTick = null;
   playing = false;
-  reviewTurn = null;
   view.setShips(ships);
   view.setSelection(selected);
   view.fit();
@@ -301,7 +309,7 @@ const nameOf = (id: number): string => {
 /** Planning is only possible on a live player ship, on the live turn. */
 const canPlan = (): boolean => {
   const s = selectedShip();
-  return reviewTurn === null && playTick === null && !waiting && !!s && mine(s) && !s.destroyed;
+  return !watching() && playTick === null && !waiting && !!s && mine(s) && !s.destroyed;
 };
 
 // ------------------------------------------------------------- panels --
@@ -750,27 +758,86 @@ function renderBoard(): void {
   };
 }
 
+/**
+ * The whole review panel: which turns exist, which one is aimed at, and what
+ * the transport is offering to do with it.
+ *
+ * Drawn only while the panel is open, because when it is shut none of this is
+ * in the document's flow at all.
+ */
+function renderReview(): void {
+  const panel = $('reviewPanel');
+  const open = review !== null;
+  panel.classList.toggle('hidden', !open);
+  const rb = $<HTMLButtonElement>('bReview');
+  rb.classList.toggle('on', open);
+  rb.disabled = !open && match.history.length === 0;
+  rb.title = match.history.length === 0
+    ? 'Nothing to watch yet: fight a turn first'
+    : open ? 'Close the review and return to the live turn'
+    : `Watch turns already fought, all ${match.history.length} of them`;
+  // The controls under it step up by exactly this, measured rather than
+  // guessed: the panel floats over the canvas, and a control it covers is
+  // visible, enabled and swallowing every tap. That is how the fire slots
+  // became unreachable on a phone, and it is not happening twice.
+  document.documentElement.style.setProperty('--lift',
+    open ? `${panel.offsetHeight + 10}px` : '0px');
+  if (!open || !review) return;
+
+  const rec = match.history[review.at];
+  const last = match.history.length - 1;
+  const lastRec = match.history[last];
+  const endName = lastRec ? `T${lastRec.turn}` : '--';
+  panel.classList.toggle('armed', !watching());
+  $('rpTurn').textContent = rec ? `T${rec.turn}` : '--';
+  $<HTMLButtonElement>('rpPrev').disabled = review.at <= 0;
+  $<HTMLButtonElement>('rpNext').disabled = review.at >= last;
+
+  // Watch becomes Pause once it is running, because the button under the
+  // finger has to name what the next press does, not what the last one did.
+  const running = watching() && playing;
+  const wb = $<HTMLButtonElement>('rpWatch');
+  wb.textContent = running && !review.auto ? 'Pause' : 'Watch';
+  wb.classList.toggle('on', watching() && !review.auto);
+  wb.title = 'Play this one turn';
+  const ab = $<HTMLButtonElement>('rpAuto');
+  ab.textContent = running && review.auto ? 'Pause' : 'Auto';
+  ab.classList.toggle('on', watching() && review.auto);
+  ab.title = rec ? `Play from T${rec.turn} through to ${endName}` : '';
+  const lb = $<HTMLButtonElement>('rpLive');
+  lb.disabled = !watching();
+  lb.title = 'Put the live turn back and stop watching';
+
+  const tb = $<HTMLButtonElement>('rpTrail');
+  tb.textContent = trailScope === 'off' ? 'Trails' : trailScope === 'turn' ? 'Trail 1' : 'Trail all';
+  tb.classList.toggle('on', trailScope !== 'off');
+  tb.title = 'Where hulls have been: off, the last turn, or the whole match';
+  $('rpHint').textContent = !watching()
+    ? 'aimed only: the match has not moved'
+    : review.auto ? `auto, running to ${endName}`
+    : playing ? 'watching this turn' : 'paused';
+
+  renderTurnStrip();
+  // The strip has just changed height, so the lift is re-read from the panel
+  // as it now stands rather than as it stood before the chips went in.
+  document.documentElement.style.setProperty('--lift', `${panel.offsetHeight + 10}px`);
+}
+
 function renderTurnStrip(): void {
   const host = $('turns');
   host.innerHTML = '';
-  const mk = (label: string, on: boolean, fn: () => void) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    if (on) b.classList.add('on');
-    b.onclick = fn;
-    host.appendChild(b);
-  };
-  for (const h of match.history) {
-    mk(`T${h.turn}`, reviewTurn === h.turn, () => {
-      endBattle();
-      reviewTurn = h.turn;
-      refreshAll();
-    });
-  }
-  if (match.history.length) {
-    mk('live', reviewTurn === null, () => { reviewTurn = null; refreshAll(); });
-  } else {
+  if (!match.history.length) {
     host.innerHTML = '<span class="hint">no turns resolved yet</span>';
+    return;
+  }
+  for (let i = 0; i < match.history.length; i++) {
+    const h = match.history[i];
+    if (!h) continue;
+    const b = document.createElement('button');
+    b.textContent = `T${h.turn}`;
+    if (review?.at === i) b.classList.add('on');
+    b.onclick = () => aimReview(i);
+    host.appendChild(b);
   }
 }
 
@@ -805,9 +872,9 @@ function describe(e: SimEvent): { text: string; cls: string } | null {
 function renderLog(): void {
   const host = $('log');
   host.innerHTML = '';
-  const entry = reviewTurn !== null
-    ? match.history.find(h => h.turn === reviewTurn)
-    : match.history[match.history.length - 1];
+  // The panel picks which turn the log reads, so the events beside the map are
+  // the events of the turn on the map.
+  const entry = review ? match.history[review.at] : match.history[match.history.length - 1];
   if (!entry) { host.innerHTML = '<div class="hint">plan a turn, then End Turn</div>'; return; }
 
   // The stored hash is a free self check: it was computed by the core at the
@@ -835,23 +902,17 @@ function renderHeader(): void {
   // gameOver reports the winning SIDE, not a verdict: which of those is a
   // victory depends on the seat, and only the client knows the seat.
   const over = match.gameOver;
-  $('hPhase').textContent = battle ? `BATTLE T${battle.at}`
+  // Watching a past turn is the phase that outranks the rest, because the turn
+  // number in the header would otherwise name a turn nobody is looking at.
+  const watched = watching() && review ? match.history[review.at] : undefined;
+  $('hPhase').textContent = watched
+    ? `WATCHING T${watched.turn}${review?.auto ? ' \u00b7 AUTO' : playing ? '' : ' \u00b7 PAUSED'}`
     : over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
-    : reviewTurn !== null ? `REVIEW T${reviewTurn}`
     : waiting ? 'COMMITTED'
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
-  $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
-  const bb = $<HTMLButtonElement>('bBattle');
-  bb.textContent = battle ? 'Stop' : 'Replay';
-  bb.classList.toggle('on', !!battle);
-  bb.disabled = match.history.length === 0;
-  bb.title = battle ? 'Stop the replay and return to the live turn'
-    : `Play the whole battle back, all ${match.history.length} turns`;
-  const tb = $<HTMLButtonElement>('bTrail');
-  tb.textContent = trailScope === 'off' ? 'Trails' : trailScope === 'turn' ? 'Trail 1' : 'Trail all';
-  tb.classList.toggle('on', trailScope !== 'off');
-  tb.title = 'Where hulls have been: off, the last turn, or the whole match';
+  $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || watching();
+  renderReview();
   // Live during playback AND during planning, but they are two states on one
   // control: playback scrubs the turn that was resolved, planning scrubs a
   // preview of the plan. Only the playback one touches playTick, which is the
@@ -887,7 +948,9 @@ function refreshAll(): void {
   renderWeapons();
   renderSlots();
   renderBoard();
-  renderTurnStrip();
+  // The turn strip is the review panel's, and `renderHeader` draws the panel,
+  // so it is not listed here as well: two callers for one widget is how one of
+  // them ends up drawing a state the other has moved on from.
   renderAttitude();
   renderLog();
   renderHeader();
@@ -1374,7 +1437,7 @@ $('bEnd').onclick = () => { void endTurn(); };
  * discover about itself.
  */
 async function endTurn(): Promise<void> {
-  if (match.gameOver >= 0 || playTick !== null || reviewTurn !== null || waiting) return;
+  if (match.gameOver >= 0 || playTick !== null || watching() || waiting) return;
 
   const turn = match.turn;
   const own = new Map(match.orders);
@@ -1608,8 +1671,29 @@ $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' 
 $('pCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
 $('pFace').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
 
-$('bBattle').onclick = startBattle;
-$('bTrail').onclick = () => {
+// The one always visible entry point. Everything else about reviewing lives
+// inside the panel it opens.
+$('bReview').onclick = () => { if (review) closeReview(); else openReview(); };
+$('rpClose').onclick = closeReview;
+$('rpPrev').onclick = () => { if (review) aimReview(review.at - 1); };
+$('rpNext').onclick = () => { if (review) aimReview(review.at + 1); };
+// Watch and Auto are the same act aimed at the same turn, differing only in
+// whether the end of it runs on. Pressing either while it is already running
+// that way pauses, so one button says both what it will do and what it is
+// doing.
+const transport = (auto: boolean) => () => {
+  if (!review) return;
+  if (watching() && review.auto === auto && playing) { playing = false; renderHeader(); return; }
+  if (watching() && review.auto === auto && playTick !== null) {
+    review.auto = auto; playing = true; renderHeader(); return;
+  }
+  watchTurn(review.at, auto);
+  refreshAll();
+};
+$('rpWatch').onclick = transport(false);
+$('rpAuto').onclick = transport(true);
+$('rpLive').onclick = () => { backToLive(); refreshAll(); };
+$('rpTrail').onclick = () => {
   trailScope = trailScope === 'turn' ? 'all' : trailScope === 'all' ? 'off' : 'turn';
   refreshAll();
 };
@@ -1665,10 +1749,11 @@ $('tFit').onclick = () => view.fit();
 
 // ------------------------------------------------------------ playback --
 
-/** The turn whose track and events are on screen: the one being replayed
- * during a battle playback, else the one just resolved. */
+/** The turn whose track and events are on screen: the one being watched in
+ * the review panel, else the one just resolved. */
 function shownRecord(): typeof match.history[number] | undefined {
-  return battle ? match.history[battle.at] : match.history[match.history.length - 1];
+  return watching() && review ? match.history[review.at]
+    : match.history[match.history.length - 1];
 }
 
 function showTick(tick: number): void {
@@ -1764,23 +1849,68 @@ function recordTrails(): void {
  *
  * The live world is stashed first and put back when it ends, however it ends.
  */
-function startBattle(): void {
-  if (battle) { endBattle(); return; }
+/** Open the panel, aimed at the turn just fought, without moving the match. */
+function openReview(): void {
   if (match.history.length === 0) return;
-  const live = match.snapshot();
-  if (!live) return;
-  battle = { at: -1, live };
-  reviewTurn = null;
-  enterBattleTurn(0);
+  // A bottom sheet and this panel both want the bottom of a phone, and the one
+  // that loses is the one whose taps land somewhere else. The sheet goes down.
+  for (const id of ['left', 'right']) $(id).classList.remove('open');
+  for (const id of ['tShips', 'tLog']) {
+    $(id).classList.remove('on');
+    $(id).setAttribute('aria-pressed', 'false');
+  }
+  review = { at: match.history.length - 1, auto: false, live: null };
   refreshAll();
 }
 
-function enterBattleTurn(index: number): void {
+/** Shut the panel. Whatever it was watching, the live turn comes back first. */
+function closeReview(): void {
+  if (!review) return;
+  backToLive();
+  review = null;
+  refreshAll();
+}
+
+/**
+ * Aim the transport at another recorded turn.
+ *
+ * If a turn is already being watched this jumps to that one and keeps playing,
+ * so stepping the picker mid replay does what it looks like it does. If the
+ * panel is only open, it re aims and nothing else: the match has not moved and
+ * the plan being written is still there.
+ */
+function aimReview(index: number): void {
+  if (!review || !match.history[index]) return;
+  const wasWatching = watching();
+  const auto = review.auto;
+  review.at = index;
+  if (wasWatching) watchTurn(index, auto);
+  else refreshAll();
+}
+
+/**
+ * Restore the world to the start of a recorded turn and re-fly it.
+ *
+ * Each turn is restored from the snapshot it began at and resolved again in
+ * place, which is the same thing `replay` does to check a hash, so the track on
+ * screen is the core re-flying the turn rather than a recording of pixels. It
+ * costs one resolve per turn, about half a millisecond each.
+ *
+ * The live world is stashed on the first restore and put back by `backToLive`,
+ * however the watching ends.
+ */
+function watchTurn(index: number, auto: boolean): void {
   const rec = match.history[index];
-  if (!battle || !rec) { endBattle(); return; }
-  if (!match.restore(rec.before)) { endBattle(); return; }
+  if (!review || !rec) { closeReview(); return; }
+  if (review.live === null) {
+    const live = match.snapshot();
+    if (!live) return;
+    review.live = live;
+  }
+  if (!match.restore(rec.before)) { backToLive(); refreshAll(); return; }
   match.resolveInPlace(rec.orders);
-  battle.at = index;
+  review.at = index;
+  review.auto = auto;
   ships = match.ships();
   view.setShips(ships);
   playTick = 0;
@@ -1790,10 +1920,17 @@ function enterBattleTurn(index: number): void {
   renderHeader();
 }
 
-function endBattle(): void {
-  if (!battle) return;
-  match.restore(battle.live);
-  battle = null;
+/**
+ * Put the live world back, leaving the panel open and still aimed where it was.
+ *
+ * Separate from closing on purpose: the common move after watching a turn is to
+ * watch another one, and having to reopen the panel to do it is a tax.
+ */
+function backToLive(): void {
+  if (!review || review.live === null) return;
+  match.restore(review.live);
+  review.live = null;
+  review.auto = false;
   playTick = null;
   playing = false;
   view.setBeams([]);
@@ -1806,14 +1943,13 @@ function endBattle(): void {
   refreshAiPlans();
   view.invalidateEnvelope();
   planTurnEnvelopes();
-  refreshAll();
 }
 
 /** Draw as much of that history as the scope asks for. */
 function renderTrails(): void {
-  const upTo = battle ? battle.at : match.history.length - 1;
+  const upTo = watching() && review ? review.at : match.history.length - 1;
   if (trailScope === 'off' || upTo < 0) { view.setTrails([]); return; }
-  // While the battle is replaying, show only what had happened by the turn on
+  // While a past turn is being watched, show only what had happened by it on
   // screen: a track running ahead of the playback spoils the thing being
   // watched.
   const first = trailScope === 'all' ? 0 : upTo;
@@ -1877,13 +2013,21 @@ function frameBody(): void {
     playTick = Math.min(end, playTick + speed);
     showTick(playTick);
     if (playTick >= end) {
-      // A battle replay runs on to the next recorded turn rather than handing
-      // the console back, and only puts the world down once it runs out.
-      if (battle && battle.at + 1 < match.history.length) {
-        enterBattleTurn(battle.at + 1);
+      // Auto runs on to the next recorded turn rather than handing the console
+      // back, and stops at the last turn actually fought: the one being planned
+      // has no record to fly.
+      if (watching() && review) {
+        if (review.auto && review.at + 1 < match.history.length) {
+          watchTurn(review.at + 1, true);
+          return;
+        }
+        // Watching one turn ends on its last frame rather than snapping back,
+        // so the thing being reviewed is still on screen to look at. The world
+        // is only put down by Live or by closing the panel.
+        playing = false;
+        renderHeader();
         return;
       }
-      if (battle) { endBattle(); return; }
       playing = false;
       playTick = null;
       view.setBeams([]);
@@ -1945,8 +2089,14 @@ Object.defineProperty(window, 'ftDebug', {
     /** What the effects layer is drawing right now, and how far the biggest
      * blast has grown, so "bigger and more visible" is a measurement. */
     fx: () => view.fxStats(),
-    /** Which turn a battle replay is on, or null when it is not running. */
-    battle: () => (battle ? battle.at : null),
+    /** Which recorded turn is being WATCHED, or null when none is: the panel
+     * being open and aimed is not the same thing as a past world being on
+     * screen, and a harness that conflated them would pass on a review that
+     * never played. */
+    battle: () => (watching() && review ? review.at : null),
+    /** The review panel: whether it is open, what it is aimed at, and whether
+     * that turn is actually loaded. */
+    review: () => (review ? { at: review.at, auto: review.auto, watching: watching() } : null),
     /** The selected hull's attitude at the tick on screen while a turn plays,
      * so a harness can watch the dials follow it. */
     attitude: () => atAttitude,

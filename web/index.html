@@ -21,6 +21,10 @@
   /* How tall a phone's bottom sheet is. Named because the canvas controls
      have to step over exactly this much when one is open. */
   --sheeth:min(56dvh, 440px);
+  /* How far the on canvas controls step up to clear the review panel. Set
+     from the panel's measured height while it is open, zero otherwise: a
+     guessed number is a control half covered at some width. */
+  --lift:0px;
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--ground); color:var(--ink);
@@ -115,8 +119,8 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 
 /* What can be done in one second of the turn. Above the footer rather than
    inside it, so eleven of these do not have to fit side by side. */
-#slotMenu { position:absolute; bottom:calc(100% + 6px); left:50%;
-  transform:translateX(-50%); width:min(340px, calc(100vw - 20px));
+#slotMenu { position:absolute; bottom:calc(100% + 6px); left:8px; right:8px;
+  max-width:340px; margin:0 auto;
   max-height:min(46vh, 320px); overflow-y:auto; z-index:12; padding:7px;
   background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
   box-shadow:0 -12px 34px #000c; }
@@ -151,6 +155,32 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
   background:#2a1607; border:1px solid var(--orange); color:var(--orange);
   font-size:11px; white-space:nowrap; }
 .slot.open { border-color:var(--cyan); box-shadow:0 0 0 1px var(--cyan); }
+
+/* The review panel. Same anchor and same z as the slot menu, for the same
+   reason: it has to sit over the canvas and above a bottom sheet, or its
+   controls are visible, enabled and swallowed. */
+#reviewPanel { position:absolute; bottom:calc(100% + 6px); left:8px; right:8px;
+  max-width:390px; margin:0 auto;
+  max-height:min(46vh, 340px); overflow-y:auto; z-index:12; padding:8px;
+  background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
+  box-shadow:0 -12px 34px #000c; }
+#reviewPanel.hidden { display:none; }
+.rprow { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+.rprow:last-child { margin-bottom:0; }
+.rprow button { padding:6px 10px; font-size:11px; }
+.rprow .rpgap { flex:1; }
+/* Which turn the transport is aimed at. Tabular, so stepping through a long
+   match does not shuffle the buttons either side of it. */
+#rpTurn { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; color:var(--ink); min-width:34px; text-align:center;
+  font-variant-numeric:tabular-nums; }
+/* Aimed at a past turn but not yet playing it: the match has not moved. */
+#reviewPanel.armed #rpTurn { color:var(--amber); }
+#reviewPanel .hint { font-size:11px; color:var(--muted); }
+/* Enough rows to see a long match, and it scrolls rather than growing the
+   panel past a phone. */
+#turns { max-height:74px; overflow-y:auto; margin-bottom:7px; }
+#turns button { padding:4px 8px; font-size:11px; }
 
 #log { font-size:12px; line-height:1.5; }
 #log div { padding:1px 0; border-bottom:1px solid #131c29; color:var(--muted); }
@@ -208,8 +238,6 @@ select:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 @media(prefers-reduced-motion:reduce){ .rbar i { transition:none; } }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:0 4px; font-size:11px; }
-#turns { margin-bottom:8px; }
-#turns button { padding:4px 8px; font-size:11px; }
 
 /* --------------------------------------------------------------- mobile --
    Below 900px the three pane console collapses to a canvas first shell: the
@@ -222,7 +250,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    construction rather than by arithmetic. */
 #toolbar { display:flex; align-items:center; gap:6px;
   grid-column:2; grid-row:2; align-self:end; justify-self:center;
-  z-index:6; margin-bottom:12px; pointer-events:none; }
+  z-index:6; margin-bottom:calc(12px + var(--lift)); pointer-events:none; }
 #toolbar button { pointer-events:auto; flex:0 0 auto;
   width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
   background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
@@ -244,7 +272,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    row past the viewport. Hidden at zero, so it appears only once it means
    something. */
 #pAlt { grid-column:2; grid-row:2; align-self:end; justify-self:center;
-  z-index:6; margin-bottom:62px; pointer-events:none;
+  z-index:6; margin-bottom:calc(62px + var(--lift)); pointer-events:none;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
   letter-spacing:.1em; color:var(--green); background:#111823cc; border-radius:9px;
   padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
@@ -253,7 +281,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 /* The heading dials, over the canvas. Bottom left, which is the one corner no
    rail, sheet, toolbar or readout uses at any size. */
 #attitude { grid-column:2; grid-row:2; align-self:end; justify-self:start;
-  z-index:6; margin:0 0 12px 12px; display:flex; gap:8px; pointer-events:none; }
+  z-index:6; margin:0 0 calc(12px + var(--lift)) 12px; display:flex; gap:8px;
+  pointer-events:none; }
 #attitude.off { display:none; }
 .dial { position:relative; width:92px; height:92px; pointer-events:auto;
   border-radius:50%; background:#111823cc; touch-action:none; cursor:grab;
@@ -341,12 +370,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   /* The toolbar owns the bottom of the canvas on a phone and is centred, so
      the dials cannot share that line at any width: they sit above it. 44px of
      button plus its 12px margin plus a gap. */
-  #attitude { margin-bottom:66px; }
+  #attitude { margin-bottom:calc(66px + var(--lift)); }
   .dial { width:72px; height:72px; }
   .glabel b { font-size:12px; }
   /* Above the gauges, which are a readout tall now that the numbers sit under
      the faces rather than across them. */
-  #pAlt { margin-bottom:84px; }
+  #pAlt { margin-bottom:calc(84px + var(--lift)); }
   button { padding:10px 13px; }
   #timeline { --slotw:22px; }
   #slots, .slot { height:26px; }
@@ -406,12 +435,14 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      stepping over one is not possible the way it is in portrait: the canvas
      controls move to the right strip instead, which is the part of the map a
      sheet never covers. */
-  #toolbar { grid-column:2; grid-row:2; margin:0 10px 8px 0; gap:5px;
+  #toolbar { grid-column:2; grid-row:2; margin:0 10px calc(8px + var(--lift)) 0;
+    gap:5px; justify-self:end; }
+  #attitude { grid-column:2; grid-row:2; margin:0 10px calc(54px + var(--lift)) 0;
     justify-self:end; }
-  #attitude { grid-column:2; grid-row:2; margin:0 10px 54px 0; justify-self:end; }
   /* Above the gauges, not across them: both are right aligned here, and a
      gauge is its dial plus the readout under it. */
-  #pAlt { grid-column:2; grid-row:2; margin:0 10px 146px 0; justify-self:end; }
+  #pAlt { grid-column:2; grid-row:2; margin:0 10px calc(146px + var(--lift)) 0;
+    justify-self:end; }
   /* Wraps into the strip the sheet leaves rather than running under it. */
   #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
     max-width:calc(100% - min(330px, 54vw) - 20px); justify-content:flex-end; }
@@ -581,7 +612,6 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   <div id="right">
     <div class="sect">Events</div>
-    <div class="modes" id="turns"></div>
     <div id="log"></div>
   </div>
 
@@ -678,11 +708,39 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
          between them is how queueing a shot became impossible on a phone. -->
     <div id="slotMenu" class="hidden" role="dialog" aria-label="Fire slot"></div>
     <div id="slotNote" class="hidden"></div>
+    <!-- Anchored here for the same reason the slot menu is: over the canvas,
+         above the sheets, and reachable by thumb at 390px. -->
+    <div id="reviewPanel" class="hidden" role="dialog" aria-label="Battle review">
+      <div class="smhead">
+        <span>Battle review</span>
+        <button id="rpClose" class="smx" title="Close and return to the live turn">&#215;</button>
+      </div>
+      <div class="rprow">
+        <button id="rpPrev" title="The turn before">&#9666;</button>
+        <b id="rpTurn">--</b>
+        <button id="rpNext" title="The turn after">&#9656;</button>
+        <span class="rpgap"></span>
+        <button id="rpWatch">Watch</button>
+        <button id="rpAuto">Auto</button>
+        <button id="rpLive">Live</button>
+      </div>
+      <!-- Every recorded turn, so a long match does not have to be stepped
+           through one arrow at a time. -->
+      <div class="modes" id="turns"></div>
+      <div class="rprow">
+        <button id="rpTrail">Trail 1</button>
+        <span class="hint" id="rpHint"></span>
+      </div>
+    </div>
+    <!-- Watching, not planning. One button, because reviewing is a MODE and
+         the transport it needs (which turn, watch it, run on, come back, how
+         much track to leave) is five controls that have no business on screen
+         while a turn is being planned. They live in the panel this opens.
+         The button itself stays, disabled until there is something to watch:
+         a control that only appears once it works is one nobody learns
+         exists. -->
     <button id="bSpeed">1x</button>
-    <!-- Watching, not planning: replay the whole match, and choose how much of
-         where the hulls have been stays on the map. -->
-    <button id="bBattle">Replay</button>
-    <button id="bTrail">Trail 1</button>
+    <button id="bReview">Review</button>
     <!-- One control, not two. The slots ARE the timeline's seconds, so they sit
          under the scrubber at the positions they name rather than in a separate
          strip that happens to count the same thing. -->

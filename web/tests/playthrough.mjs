@@ -101,6 +101,13 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
  */
 async function checkNothingIsBuried() {
   await sheet(true);
+  await assertNothingBuried('an open sheet');
+  await sheet(false);
+}
+
+/** The one implementation, so a second thing that floats over the canvas is
+ * checked the same way the sheets are rather than by its own near copy. */
+async function assertNothingBuried(what) {
   const buried = await page.evaluate(() => {
     const out = [];
     const sel = '#modes button, .dial, #toolbar button, #bEnd, #timeline, footer .slot';
@@ -114,13 +121,67 @@ async function checkNothingIsBuried() {
     }
     return out;
   });
-  await sheet(false);
   if (buried.length) {
-    console.log(`\nFAIL: ${buried.length} control(s) buried under an open sheet:`);
+    console.log(`\nFAIL: ${buried.length} control(s) buried under ${what}:`);
     for (const b of buried) console.log('  ' + b);
     process.exit(1);
   }
-  log('nothing buried under an open sheet');
+  log(`nothing buried under ${what}`);
+}
+
+/**
+ * The review panel: shut unless asked for, and it puts the match back.
+ *
+ * The point of the panel is that watching a turn again is a MODE you enter,
+ * so the two things worth proving are that it is not on screen until you open
+ * it, and that leaving it returns the match bit for bit. Watching restores a
+ * past world into the live core, so a review that left the world anywhere else
+ * would be worse than no review at all, and the state hash is the check the
+ * core already computes for exactly that.
+ */
+async function checkReview() {
+  const read = () => page.evaluate(() => ({
+    hidden: document.getElementById('reviewPanel').classList.contains('hidden'),
+    hash: document.getElementById('hHash').textContent,
+    turn: document.getElementById('hTurn').textContent,
+    phase: document.getElementById('hPhase').textContent,
+    review: window.ftDebug.review(),
+  }));
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+
+  const shut = await read();
+  if (!shut.hidden) fail('the review panel is on screen before it is opened');
+  if (shut.review !== null) fail('review state exists with the panel shut');
+  const live = { hash: shut.hash, turn: shut.turn };
+
+  await tap('#bReview');
+  const open = await read();
+  if (open.hidden) fail('Review did not open the panel');
+  await assertNothingBuried('the review panel');
+  // Aiming must not move the match.
+  await tap('#rpPrev');
+  const aimed = await read();
+  if (aimed.hash !== live.hash || aimed.turn !== live.turn) {
+    fail(`aiming the picker moved the match: ${live.turn}/${live.hash} became ${aimed.turn}/${aimed.hash}`);
+  }
+  if (aimed.review?.watching) fail('aiming the picker started watching');
+
+  await tap('#rpWatch');
+  await page.waitForTimeout(400);
+  const watching = await read();
+  if (!watching.review?.watching) fail('Watch did not load the turn it was aimed at');
+  if (!/WATCHING/.test(watching.phase)) fail(`header says ${watching.phase} while watching`);
+
+  await tap('#rpLive');
+  await page.waitForTimeout(200);
+  const back = await read();
+  if (back.hash !== live.hash || back.turn !== live.turn) {
+    fail(`the review did not put the match back: ${live.turn}/${live.hash} became ${back.turn}/${back.hash}`);
+  }
+  await tap('#rpClose');
+  const closed = await read();
+  if (!closed.hidden) fail('closing the panel left it on screen');
+  log(`review panel opens, aims without moving the match, and restores ${live.turn}/${live.hash}`);
 }
 
 async function playMatch() {
@@ -251,6 +312,7 @@ log('turns played   :', final.turn);
 log('shots queued   :', shotsQueued);
 log('my ships       :', final.mine.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 log('hostiles       :', final.foes.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
+await checkReview();
 log('page errors    :', errors.length ? errors : 'none');
 
 await page.screenshot({ path: MOBILE ? '/tmp/playthrough-mobile.png' : '/tmp/playthrough.png' });
