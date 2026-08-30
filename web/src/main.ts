@@ -1539,10 +1539,13 @@ dialDrag('atPitch', deg => {
 /** Tick marks, drawn once: they never move. */
 (() => {
   const g = $('atRollTicks');
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2;
-    const long = i % 3 === 0;
-    const r0 = long ? 36 : 40;
+  // Eight, not twelve. Twelve marks round a circle is an hour ring, and with a
+  // two part silhouette inside it the whole dial was being read as a clock.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    // Only the quarters are long, so up, down and the two beam ends stand out.
+    const long = i % 2 === 0;
+    const r0 = long ? 38 : 42;
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', String(Math.sin(a) * r0));
     line.setAttribute('y1', String(-Math.cos(a) * r0));

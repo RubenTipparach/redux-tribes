@@ -263,12 +263,20 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dial .face { fill:none; stroke:#2b3b50; stroke-width:1.5; }
 .dial .axis { stroke:var(--line); stroke-width:1; }
 .dial .ticks line { stroke:var(--line); stroke-width:1.5; }
+/* Shorter and dimmer than they were, so the rim stops counting hours. */
+.dial#atRoll .ticks line { stroke-width:1.2; opacity:.7; }
 /* Where the nose IS: dim, because it is a reading and not a control. */
 .dial .now { stroke:var(--muted); stroke-width:2.5; opacity:.75; }
 /* Where it was TOLD to point: the thing under the finger. */
 .dial .cmd { stroke:var(--cyan); stroke-width:2.5; }
 .dial .knob { fill:var(--cyan); }
-.dial.numb { opacity:.35; pointer-events:none; }
+/* Not commandable. The CONTROL parts go quiet, but the hull does not: while a
+   turn plays back the silhouette is the only thing showing the roll being
+   flown, and at 35 percent on a phone it was a smudge. */
+.dial.numb { pointer-events:none; }
+.dial.numb .ticks, .dial.numb .face, .dial.numb .axis,
+.dial.numb .level, .dial.numb .cmd, .dial.numb .knob { opacity:.3; }
+.dial.numb .plane, .dial.numb .now { opacity:.9; }
 /* The readout sits UNDER the face, not in it. Inside, a hull rolled onto its
    wingtip put a wing through the number, and the box a drag measures its angle
    from has to be the circle alone: a label inside it moves the centre. */
@@ -278,8 +286,17 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; line-height:1; }
 .glabel b { font-size:14px; color:var(--ink); }
 .glabel span { font-size:9px; letter-spacing:.14em; color:var(--muted); }
-/* Where the hull IS, so it reads like the dim needle on the other dial. */
-.dial .plane { fill:var(--muted); opacity:.85; }
+/* Where the hull IS. Brighter than the other dial's dim needle because it is
+   a shape rather than a line, and a shape at 40 percent reads as a smudge.
+   Three tones, because one flat tone let the fin and the wings read as a pair
+   of matching hands. */
+.dial .plane .belly { fill:#23303f; }
+.dial .plane .horiz { stroke:#6d88a5; stroke-width:1.8; }
+.dial .plane .wing { fill:#8b9db1; }
+.dial .plane .body { fill:#9fb2c6; }
+.dial .plane .fin { fill:#c3d4e6; }
+.dial .plane .canopy { fill:#141c27; }
+.dial .level { stroke:var(--muted); stroke-width:2; opacity:.5; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -590,14 +607,27 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
         <svg viewBox="-50 -50 100 100" aria-hidden="true">
           <circle class="face" cx="0" cy="0" r="45"/>
           <g class="ticks" id="atRollTicks"></g>
-          <!-- The hull seen head on, tilted by its own roll. A bar through the
-               middle read as a horizon and told you nothing about WHICH way
-               up the ship was; a fin pointing at the hull's own up says it at
-               a glance, which is the whole question roll asks. -->
+          <!-- A fixed level reference. It does not rotate, so the hull is
+               tilted against something rather than floating. -->
+          <g class="level">
+            <line x1="-45" y1="0" x2="-34" y2="0"/>
+            <line x1="34" y1="0" x2="45" y2="0"/>
+          </g>
+          <!-- The hull seen head on, tilted by its own roll, standing on its own
+               horizon: the shaded half is the side the belly is on, and it
+               turns with the ship.
+               The horizon is what makes the reading instant. A silhouette
+               alone was read first as clock hands and then, once it had a
+               fin, as a three blade propeller, because three limbs off a hub
+               is a propeller whatever their tones. A tilted straight edge
+               across the whole face cannot be mistaken for either. -->
           <g id="atRollNow" class="plane">
-            <rect x="-31" y="-1.7" width="62" height="3.4" rx="1.7"/>
-            <rect x="-1.7" y="-17" width="3.4" height="12" rx="1.5"/>
-            <circle cx="0" cy="0" r="5.6"/>
+            <path class="belly" d="M -44 0 A 44 44 0 0 0 44 0 Z"/>
+            <line class="horiz" x1="-44" y1="0" x2="44" y2="0"/>
+            <path class="wing" d="M -37 -1 L -10 -3 L 10 -3 L 37 -1 L 37 6 L 10 5 L -10 5 L -37 6 Z"/>
+            <path class="fin" d="M -3.2 -7 L 3.2 -7 L 1.2 -19 L -1.2 -19 Z"/>
+            <ellipse class="body" cx="0" cy="-0.5" rx="7.4" ry="10.5"/>
+            <circle class="canopy" cx="0" cy="-5" r="2.8"/>
           </g>
           <!-- Zero roll is wings level, where the hull's own up IS world up, so
                the ball sits at the top of the dial and travels round with
