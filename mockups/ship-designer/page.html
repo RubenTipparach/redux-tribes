@@ -170,10 +170,15 @@ h2{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.2em;
    Two core answers side by side. The renderer prints both numbers and never
    subtracts one from the other: a delta worked out here is a rule worked out
    here. */
-#chipbar{grid-area:chip;display:flex;align-items:center;gap:8px;min-width:0;height:34px;
+/* On a desktop it wraps to two lines, because the whole point is to show every
+   stat that moves and a single clipped line shows two of them. On a phone it
+   stays one scrollable line: a bar that changes height mid stroke would shove
+   the grid out from under the finger painting it. */
+#chipbar{grid-area:chip;display:flex;align-items:center;gap:4px 8px;min-width:0;
+  flex-wrap:wrap;min-height:34px;max-height:58px;overflow-y:auto;
   background:var(--panel);border:1px solid var(--line);border-radius:4px;
-  padding:0 9px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;
-  touch-action:pan-x;margin-left:var(--sil);margin-right:var(--sir)}
+  padding:3px 9px;touch-action:pan-y;
+  margin-left:var(--sil);margin-right:var(--sir)}
 #chipbar b{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.09em;
   text-transform:uppercase;color:var(--ink);flex:0 0 auto}
 #chipbar .vd{font-family:var(--lbl);font-weight:700;font-size:10px;letter-spacing:.1em;
@@ -322,7 +327,9 @@ h2{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.2em;
   #deck{grid-area:deck;padding:5px calc(8px + var(--sir)) 3px calc(8px + var(--sil))}
   #lrail{display:none}
   #gridwrap{padding:4px calc(8px + var(--sir)) 0 calc(8px + var(--sil))}
-  #chipbar{margin:0 calc(8px + var(--sir)) 5px calc(8px + var(--sil))}
+  #chipbar{margin:0 calc(8px + var(--sir)) 5px calc(8px + var(--sil));
+    height:34px;max-height:34px;flex-wrap:nowrap;white-space:nowrap;
+    overflow-x:auto;overflow-y:hidden;touch-action:pan-x}
   #grid{gap:5px}
   #edit .axlab{display:none}
 
@@ -1449,7 +1456,8 @@ function renderChip(core, would, act){
       'The core prices the design that WOULD result before the tap is spent.</s>';
     return;
   }
-  var verb=act && act.verb ? act.verb : "place";
+  var VERB={place:"place", replace:"swap to", remove:"take back"};
+  var verb=VERB[act && act.verb ? act.verb : "place"];
   var mn=act && act.m!==undefined ? modUI(act.m).name : modUI(S.kind).name;
   var v=verdictOf(would);
   var head='<b>'+verb+' '+mn+' at '+S.probe.i+','+S.probe.j+','+S.probe.k+'</b>'+
@@ -1470,9 +1478,10 @@ function renderChip(core, would, act){
     var a=core.stats[i], b=would.stat[a.id];
     if(!b || Math.abs(b.v-a.v)<1e-6) continue;
     var uu=statUI(a.id);
-    moved.push(uu.k+" <u>"+a.v.toFixed(uu.dp)+"</u> to <u>"+b.v.toFixed(uu.dp)+"</u>");
+    // One element per stat so a desktop wraps them and never clips a number.
+    moved.push('<s>'+uu.k+" <u>"+a.v.toFixed(uu.dp)+"</u> to <u>"+b.v.toFixed(uu.dp)+"</u></s>");
   }
-  body+='<s>'+(moved.length?moved.join(" &middot; "):"no stat moves")+'</s>';
+  body+=(moved.length?moved.join(""):'<s>no stat moves</s>');
   el.innerHTML=head+body;
 }
 
@@ -1530,10 +1539,32 @@ function mat(col,solid){
 // bounding box the core reported, so a four cube design fills the preview
 // instead of sitting in a corner of an empty wireframe.
 var cam={yaw:0.62, pitch:0.42, zoom:1};
-var fitCentre=new THREE.Vector3(0,0,0), fitR=4.6;
+var fitCentre=new THREE.Vector3(0,0,0);
+var fitBox={hx:2,hy:2,hz:3.5}, fitSphere=0;
+// The hull's own box, PROJECTED on the screen axes the camera currently has,
+// rather than its 3D diagonal. Fitting a diagonal to a viewport 370 wide and
+// 850 tall pushed a 4 x 3 x 7 hull to a quarter of the frame; fitting what is
+// actually on screen keeps it filling the frame at every orbit and at 126px of
+// preview on a phone held sideways. Pure framing, which is the client's job.
 function camDist(){
-  var half=camera.fov*Math.PI/360, d=fitR/Math.tan(half);
-  if(camera.aspect<1) d/=camera.aspect;
+  var cy=Math.cos(cam.yaw), sy=Math.sin(cam.yaw);
+  var cp=Math.cos(cam.pitch), sp=Math.sin(cam.pitch);
+  var dx=sy*cp, dy=sp, dz=cy*cp;          // camera offset direction, unit
+  var rx=cy, rz=-sy;                       // screen right
+  var ux=-sp*sy, uy=cp, uz=-sp*cy;         // screen up
+  var hw=0, hh=0, hd=0, i;
+  for(i=0;i<8;i++){
+    var px=(i&1)?fitBox.hx:-fitBox.hx;
+    var py=(i&2)?fitBox.hy:-fitBox.hy;
+    var pz=(i&4)?fitBox.hz:-fitBox.hz;
+    var w=Math.abs(px*rx+pz*rz), h=Math.abs(px*ux+py*uy+pz*uz), dd=Math.abs(px*dx+py*dy+pz*dz);
+    if(w>hw) hw=w; if(h>hh) hh=h; if(dd>hd) hd=dd;
+  }
+  if(fitSphere>hw) hw=fitSphere;
+  if(fitSphere>hh) hh=fitSphere;
+  if(fitSphere>hd) hd=fitSphere;
+  var tv=Math.tan(camera.fov*Math.PI/360), th=tv*camera.aspect;
+  var d=Math.max(hh/tv, hw/th)+hd*0.55+0.4;
   return d*cam.zoom;
 }
 function camApply(){
@@ -1641,12 +1672,15 @@ function rebuild3D(core, would){
   // Framing, which IS the client's job: how much of the scene to look at.
   fitCentre.set(core.centre[0],core.centre[1],core.centre[2]);
   if(core.cells>0){
-    var ex=core.extent[0]*core.cell, ey=core.extent[1]*core.cell, ez=core.extent[2]*core.cell;
-    fitR=0.5*Math.sqrt(ex*ex+ey*ey+ez*ez)+core.cell*0.6;
-    if(core.radius>fitR) fitR=core.radius+core.cell*0.4;
+    fitBox.hx=core.extent[0]*core.cell/2+core.cell*0.15;
+    fitBox.hy=core.extent[1]*core.cell/2+core.cell*0.15;
+    fitBox.hz=core.extent[2]*core.cell/2+core.cell*0.15;
+    fitSphere=core.radius;
   } else {
-    var bx=BERTH.nx*BERTH.cell, by=BERTH.ny*BERTH.cell, bz=BERTH.nz*BERTH.cell;
-    fitR=0.5*Math.sqrt(bx*bx+by*by+bz*bz);
+    fitBox.hx=BERTH.nx*BERTH.cell/2;
+    fitBox.hy=BERTH.ny*BERTH.cell/2;
+    fitBox.hz=BERTH.nz*BERTH.cell/2;
+    fitSphere=0;
   }
 }
 
