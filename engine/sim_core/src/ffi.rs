@@ -751,9 +751,11 @@ fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
 /// It used to pull 0.192, which is 77 percent of the lateral budget, and the
 /// lean showed it. Probing straight up and straight down from a start:
 ///
-///     no field      14 u up, 14 u down
-///     0.192 u/s^2    5 u up, 23 u down     4.6 to 1
-///     0.096 u/s^2    9 u up, 19 u down     2.1 to 1
+/// ```text
+/// no field      14 u up, 14 u down
+/// 0.192 u/s^2    5 u up, 23 u down     4.6 to 1
+/// 0.096 u/s^2    9 u up, 19 u down     2.1 to 1
+/// ```
 ///
 /// Five units of uphill reach is barely a hull length, so climbing was not a
 /// choice a player could make. At half the pull the field still leans the
