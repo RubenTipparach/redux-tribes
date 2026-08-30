@@ -141,6 +141,20 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
+### And one for the shipyard
+
+```sh
+node web/tests/shipyard.mjs   # 1280x900, 390x844 and 390x560
+```
+
+Same rules, different screen. It opens the designer at all three sizes and
+checks what only a browser can answer: no horizontal scroll, the centre of
+every control hits THAT control and not something drawn over it, all five
+classes legal out of the box, all eight of a faction's swatches actually on
+the hull, both exteriors, and a turret that turns 90 degrees and takes its
+cells with it. Run it after touching `design.ts`, `designer.ts` or the
+designer's markup.
+
 ## The boundary: the core simulates, the client draws
 
 `engine/sim_core` is the whole game. `web/` draws it and collects input. That is

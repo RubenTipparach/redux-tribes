@@ -202,6 +202,39 @@ A frame is a new `&'static FrameDef` table in `data.rs`, one row per `ShipClassI
 
 **The frame is not free scenery.** STR-SPAR/RIB/HP carry structural mass, so the frame is the first line of the budget: 0.024 on the Terran, 0.072 on the Freighter. That matters because both classes sit at 300 hull per unit mass, so a heavy frame is hull they cannot afford. The Terran's frame is the leanest for arithmetic reasons, not taste.
 
+### The hull profile, and the two exteriors
+
+**What was built differs from the draft above on three points, and the differences are the interesting part.**
+
+**A frame is cut to a station curve, not to a box.** Every `FrameDef` carries a `profile`: six stations of `[z, half beam, half depth]` in cells, interpolated between. Rib rings are single cells walked around that ellipse one cell inside the skin, so the skeleton tapers toward the bow and squares up around the drive plate instead of being the same rectangle from end to end. The Terran runs 8x5 at the transom, 11x6.5 at the waist and 3x2 at the nose. That one table is what stops the five classes reading as five bricks of different lengths.
+
+**Armour is laid two ways and the player picks.**
+
+- **CLASS HULL (`wrapped`).** Plate is a shell on the profile: a cell is skin if it is inside the hull line and NOT inside that same line drawn in by that face's layer count, which is a shell of exactly that thickness. Bow and stern layers cap the ends. This is what a premade ship ships with, so a stock hull arrives pre-sculpted with the class silhouette, and pulling a section slider changes its thickness rather than its shape.
+- **FROM SCRATCH (`skin`).** Plate is a dilation of what is actually bolted on, one step per layer per direction, and the class profile is not consulted at all. It starts bare: switching modes zeroes the sections, because carrying a four-layer belt across buried the whole ship in one lump, over budget, with nothing left to read.
+
+The frame is in neither list. It cannot be edited in either mode, which is enforced by first-writer-wins ordering rather than by a rule anyone has to remember: frame, then parts, then plate, so plate can never take a cell the frame is standing in. One exception, and it is a drawing rule rather than an edit: any frame member still bare to the outside once the shell is laid is marked `Skinned`, and draws as plate with the plate on and as frame with it off. Without it the Karisen's dorsal stringer and ventral keel beam ran the whole length of a fully plated hull as two grey planks, 915 bare cells of them, because the shell is an ellipse, a spar is a box, and a box riding a fraction of a cell proud of that ellipse keeps its cell. A skin covers its own ribs. Measured after: **zero bare frame cells on the outside of any of the five**. A skinned cell costs no extra mass: it is the frame wearing the shell, and the shell's own cells are counted where the shell is, so billing the coat as well would charge one volume twice.
+
+**Nothing floats.** Every part cell outboard of the hull line walks a staircase back toward the centreline, taking whichever axis it is furthest out on and filling empty cells until it meets the ship or crosses the hull line. That is what attaches an RCS block ten cells off a hull seven cells wide. The first cut marched a single axis and, for a gun outboard on both, walked its pylon straight past the keel and out of the bottom of the lattice.
+
+**ONE rasterisation, read by everybody.** `rasterise()` builds the grid; `derive()` counts ITS plate cells for mass and hull, and the editor draws the same grid. It used to be two: the editor rasterised and `derive()` costed plate from a box-area formula, so the picture and the mass were two opinions about the same armour and only one could be right (GUIDELINES 5.1). The visible consequence is that "add on to it without exceeding mass limits" now means something: a player who builds their own exterior is charged for the one they built. Measured at 4.0 ms per rasterisation of a stock frigate, cached on a signature of class, mode, placements and sections, so a slider drag pays it once per change rather than twice.
+
+**The densities were refitted for it.** `PLATE_UM 33 -> 93` and `HULL_MILLI 17 -> 40`: a least squares fit of the two constants against the five authored stock masses and hulls over the allowed layer configurations. 6.2% rms, worst case the Rogue at +8.2% on mass, every class legal. A curved shell costs different cells from six rectangles, so the density had to follow it.
+
+### Colour: purpose everywhere, faction on the armour only
+
+Two palettes, and which one a cell takes is decided by one function, `cellColour`.
+
+**PURPOSE, eight jobs and eight hues:** propulsion orange, attitude cyan, gunnery red, ordnance violet, command green, crew amber, boarding orange-tan, structure steel. A Terran thruster and a Karisen thruster are the same orange, because the point of the coding is that propulsion looks like propulsion on anybody's ship. Each part is drawn in three tones of its own hue: the casing is the shadow, the working guts the base, anything lit or trimmed the highlight. `Mat.Case` exists for exactly this: a barbette drum, a gun housing and a bridge shell were all written as `Plate` at first, which let the paint bucket reach inside the ship and turn every mount the faction colour.
+
+**FACTION, eight swatches, and all eight land on the hull.** One swatch on a whole hull is a paint bucket, and a paint bucket makes every ship of a faction the same flat lozenge. The eight are roles: primary, panel, secondary, deep, highlight, marking, trim, stripe. Position decides which one a cell takes, not chance, so the same cell is the same colour on both seats and after a reload: plating panels on a coarse three-way grid, a dark underside, a dorsal spine, a stripe along the waist, a nose flash and a transom band. Picking a swatch sets the primary and the other seven roles hold, so a re-tint does not wreck the scheme. Measured on the visible skin of the five stock ships: **8 of 8 swatches on every one**, and the browser harness fails the build if any drops below eight.
+
+None of it is hashed or sent to the core, so two players who painted differently still agree on the match: the same argument CLAUDE.md already makes for `side`.
+
+### Parts are placeable and rotatable, never editable
+
+A turret is on a swivel, so which way it faces on its ring is the player's. `Placement.rot` is quarter turns about the up axis, 0 to 3, and the CELLS are what turn: the part is re-rasterised at its new orientation, so a turned turret is still one cell per cell and still cannot z-fight with the plate beside it or float a fraction of a cell off its ring. Ninety degrees is not a simplification, it is the only snap a cell grid has that leaves the part the same volume; anything between would resample it and bring back the fractional-cell slop that voxels were adopted to end.
+
 ## The stock designs
 
 **Two builds per class, and the distinction is judge 3's best catch.** A stock design at 100.0000% of budget makes the player's first action: *add a part*: turn the editor red on a 30-component ship with no guidance. So:
@@ -232,14 +265,27 @@ A frame is a new `&'static FrameDef` table in `data.rs`, one row per `ShipClassI
 | **guns** | 3 x WPN-BB1 + 3 x WPN-BM1 | WPN-BB1 + WPN-BM1 + WPN-ML1; **both sponsons empty** | 2 x WPN-BB1 + 2 x WPN-PL1 | 2 x WPN-BB1 + 2 x WPN-CN1 + WPN-ML1; **aft stack empty** | none: no ring exists |
 | **utility** | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, **8 BAR, 6 AIR, 6 CLM** | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, 3 BAR, 4 AIR, **2 CGO** |
 | components | 30 | 25 | 40 | 27 | 22 |
-| **armour sections (layers -> block_pct)** | port/stbd 4 -> **80**; dorsal/ventral 1 -> 50; bow/stern 1 -> 50 | port/stbd 3 -> **75**; dorsal/ventral 3 -> 75; ends 1 -> 50 | all faces 1 -> 50; **citadel 6x6x8 at 9 -> 90** | port/stbd 4 -> **80**; rest 1 -> 50 | port/stbd 2 -> 66.7; rest 1 -> 50 |
+| **armour sections, belt / dorsal-ventral / ends (layers)** | 4 / 2 / 1, belt -> **80** block | 3 / 3 / 2, belt -> **75** | 1 / 1 / 1 -> 50 | 4 / 1 / 1, belt -> **80** | 4 / 4 / 2 -> 80 |
 | armour spheres / total subs | 18 / 48 | 18 / 43 | 11 / 51 | 18 / 45 | 14 / 36 |
-| **stock mass** | 0.8683 (**87%**) | 0.8374 (84%) | 0.7428 (83%) | 0.8348 (83%) | 1.6808 (84%) |
-| stock hull | 302 | 250 | 180 | 253 | 608 |
-| stock accf / accr / accl | 1.037 / 0.403 / 0.288 | 1.135 / 0.418 / 0.299 | 1.333 / 0.606 / 0.485 | 1.018 / 0.419 / 0.264 | 0.535 / 0.214 / 0.119 |
-| stock yaw / pitch | 6.91 / 4.61 | 7.72 / 4.89 | 10.93 / 7.16 | 5.87 / 4.19 | 2.93 / 1.73 |
 | record slots / bytes | 5,660 / 22,640 | 5,630 / 22,520 | 5,720 / 22,880 | 5,642 / 22,568 | 5,612 / 22,448 |
-| bounding r vs class r | 3.398 / 3.5 | 3.170 / 3.5 | 2.318 / 3.2 | 3.017 / 3.5 | 4.479 / 4.5 |
+
+**As built and measured**, from `derive()` over the wrapped exterior. These supersede the projected figures the draft carried: the shell is a curved skin on the profile rather than six rectangles, so it costs different cells, and every number below moves with it.
+
+| | Terran | Karisen | Rogue | Benefactor | Freighter |
+|---|---|---|---|---|---|
+| plate / solid cells | 4,872 / 7,452 | 4,115 / 7,582 | 1,528 / 4,627 | 4,211 / 7,121 | 3,067 / 6,356 |
+| **stock mass** | 0.907 (**91%**) | 0.808 (81%) | 0.804 (89%) | 0.843 (84%) | 1.600 (80%) |
+| stock hull (target) | 290 (302) | 254 (250) | 200 (180) | 263 (253) | 548 (608) |
+| stock accf / accr / accl | 0.992 / 0.331 / 0.221 | 1.175 / 0.371 / 0.247 | 1.231 / 0.435 / 0.298 | 1.009 / 0.356 / 0.237 | 0.563 / 0.188 / 0.125 |
+| top speed | 8.0 = | 8.5 = | 9.5 = | 8.0 = | 5.0 = |
+| stock yaw / pitch | 6.42 / 4.30 | 7.33 / 4.91 | 11.01 / 7.38 | 6.91 / 4.63 | 4.32 / 2.90 |
+| bare frame cells on the outside | 0 | 0 | 0 | 0 | 0 |
+| marines / capacity / reach | 15 / 8 / 20 | 15 / **4** / 20 | 40 / 12 / 40 | 15 / 8 / 20 | 15 / **6** / 10 |
+| extent (cells) | 24 x 20 x 57 | 24 x 20 x 56 | 29 x 20 x 45 | 22 x 22 x 57 | 19 x 17 x 48 |
+| bounding r vs class r | 3.240 / 3.5 | 3.224 / 3.5 | 2.640 / 3.2 | 3.193 / 3.5 | 4.133 / 4.5 |
+| visible faction swatches | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 | 8 / 8 |
+
+Top speed, marines and boarding reach are exact on every class. **Two residuals are stated rather than hidden:** the Karisen and the Freighter land 4 and 6 boarding capacity against an authored 8, because their frames have no free bay left to hang the missing airlocks on, and the Freighter's hull is 8% under its 608. Both are frame authoring, not arithmetic: the fix is a bay socket, not a constant.
 
 **Character, and why each falls out of arithmetic rather than taste.**
 
@@ -259,7 +305,9 @@ Nobody places a cell. Not a fine one: there is no fine occupancy grid any more: 
 
 **3. FIT COMPONENTS.** Click a socket, get the palette filtered to what it accepts: a DRIVE_PLATE seat offers bells, a GUN_RING offers barbettes, a barbette's trunnion offers guns. Place, rotate through four rotations, or clear. Mirroring on by default. You never edit a part and never add a socket: that is "components cannot be modified", enforced by the socket table rather than by a rule anyone has to remember.
 
-**4. SHAPE THE HULL: three tools, in this order.** The earlier draft's toolset could not build its own base designs (judge 2 measured it: section sliders on an 8x4 skeleton give a solid 20x16x56 block, 76% over the mass gate, and the affordable solid is a 1.31 x 0.98 x 6.1 u pencil rattling around the berth). The envelope model needs different tools and they are the ones judge 2 named:
+**4. SHAPE THE HULL.** *As built, this is two exteriors and nine sliders rather than the four tools below: the class hull is a shell on the frame's profile and needs no offset or hollow pass, since the profile already says where inside is. The brush is still unbuilt. The rest of this step is the design it was cut down from.*
+
+**Three tools, in this order.** The earlier draft's toolset could not build its own base designs (judge 2 measured it: section sliders on an 8x4 skeleton give a solid 20x16x56 block, 76% over the mass gate, and the affordable solid is a 1.31 x 0.98 x 6.1 u pencil rattling around the berth). The envelope model needs different tools and they are the ones judge 2 named:
  - **OFFSET**: grow a closed envelope to radius R around the frame. A morphological close; this is what makes a hull rather than a skeleton.
  - **HOLLOW**: the exterior flood fill classifies inside from out. Interior is *derived*, never placed, which is also what deletes the dominated filler material.
  - **SECTION SLIDERS**: nine named sections (bow, three belt bands, stern cap, dorsal, ventral, port, starboard), each one slider of 0-15 plate layers. Nine numbers finishes a ship, and layers *are* the damage model: dragging the mid-belt 3 -> 4 moves block_pct 75 -> 80, readable on the strip as you drag.
@@ -271,7 +319,7 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 
 **6. READ THE GATE STRIP.** Six hard checks, no soft ones: CELLS, THRUST, ARMS, ANCHORED, MASS, **SPHERE**. Sphere is now the *true bounding sphere* of the occupied lattice against the class radius: an exact hard gate, not the longest-half-axis approximation plus a warning, because the envelope is a designed shape inside the berth rather than the berth itself. All five stock designs pass with margin (Terran 3.398 of 3.5). That is what lets the collision wireframe go (page.html:1616-1618, :1668-1670) without losing information: the gate prints the number the wireframe used to draw. Keep the check at :765/:772; delete CK_POWER and CK_HEAT until the core has power and heat.
 
-**7. PAINT.** Sections or faces, 4 bits of palette index per macro cell (32,768 bytes), **entirely in the client file**: never in the core's record, never in the snapshot, never hashed. Two players who built identical hulls in different colours must not read as a desync; same argument CLAUDE.md already makes for `side`. Mechanically an albedo tint: the archive ships a separate emissive mask per hull (`Ship_1_finish_lights.png`, `ship_2_revised_lights.png`, 512^2), so the player colour multiplies albedo and the window-lights channel is added on top unchanged, which keeps an arbitrary paint job readable under the bloom stack. Swatches seed from the five authored faction pairs (#0095E9/#124E89, #FA6A0A/#73172D, #494182/#181425, #1A7A3E/#F9A31B, #FFFFFF/#4F4F4F). `Models/levels/generic_armor.png` (128^2) is the base tile. **IFF never depends on paint**: the side ring, the jump-flood outline and the target reticle stay side-coloured, or a player paints red and reads as the enemy.
+**7. PAINT.** Sections or faces, 4 bits of palette index per macro cell (32,768 bytes), **entirely in the client file**: never in the core's record, never in the snapshot, never hashed. Two players who built identical hulls in different colours must not read as a desync; same argument CLAUDE.md already makes for `side`. Mechanically an albedo tint: the archive ships a separate emissive mask per hull (`Ship_1_finish_lights.png`, `ship_2_revised_lights.png`, 512^2), so the player colour multiplies albedo and the window-lights channel is added on top unchanged, which keeps an arbitrary paint job readable under the bloom stack. As built: the swatch row is a faction's EIGHT, seeded from the archived pairs and extended to a full scheme, and picking one sets the primary while the other seven roles hold their places on the hull. Armour is the only thing that takes them, because a painted drive bell is the thing that made an unfamiliar hull unreadable. `Models/levels/generic_armor.png` (128^2) is the base tile. **IFF never depends on paint**: the side ring, the jump-flood outline and the target reticle stay side-coloured, or a player paints red and reads as the enemy.
 
 **8. SAVE.** 5,612-5,720 slots (22.4-22.9 KB), one design per FFI call.
 
@@ -280,6 +328,8 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
  - **Dirty-chunk remeshing, 8^3 macro chunks.** A full macro remesh is 6.0 ms; a mirrored radius-8 stroke touches 8-16 chunks at 0.038 ms each, so **0.3-0.6 ms per pointer-move**. The draft's "5-15 ms" was for a fine remesh that actually measures 280-430 ms on a fast x86 and 1-2.5 s on a phone: the exact stutter CLAUDE.md already documents and fixed once for the envelope slider.
 
 **MOBILE.** Section sliders and the palette are bottom sheets on the tab bar; socket selection, rotate, mirror and the gate strip are on-canvas, because a control that only exists in a sheet is one nothing on screen says exists: how move mode went wrong before. With a sheet open, the centre of every on-canvas control must hit that control, at 390x844 and 390x560.
+
+**CHECKED IN A BROWSER, not by reading the CSS.** `node web/tests/shipyard.mjs` drives the real screen at 1280x900, 390x844 and 390x560: no horizontal scroll, every control's centre hits that control and not something over it, all five classes legal out of the box and above 70% of their berth, all eight faction swatches on each hull, both exteriors, and a turret that turns 90 degrees and moves cells. It found two defects nothing else could: a chip row reused from the on-canvas overlay was absolutely positioned over the mode buttons and swallowed every tap, and the header ran Close from 333 to 408 in a 390 pixel viewport on a bar with overflow hidden, leaving no way out of the screen at all.
 
 **Deliberately NOT offered:** a free-placement voxel brush at anchor resolution, a way to move a hardpoint, a way to edit a part's stats, and any tool that writes an operation log instead of cells.
 

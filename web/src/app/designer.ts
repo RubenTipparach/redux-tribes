@@ -15,9 +15,10 @@
 import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
+  FACTION_PAINT, PURPOSE, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
-  socketsOf, voxelsOf, Mat, MAT_COLOUR,
-  type Design, type Derived, type SectionKey,
+  socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat,
+  type Design, type Derived, type SectionKey, type ArmourMode,
 } from './design.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -25,15 +26,6 @@ const $ = <T extends HTMLElement>(id: string): T => {
   if (!el) throw new Error(`missing element #${id}`);
   return el as T;
 };
-
-/** Faction paint, from the archived material palette. */
-const PAINTS: ReadonlyArray<readonly [string, number]> = [
-  ['terran', 0x0095E9], ['terran deep', 0x124E89],
-  ['karisen', 0xFA6A0A], ['karisen dark', 0x73172D],
-  ['rogue', 0x494182], ['rogue night', 0x181425],
-  ['benefactor', 0x1A7A3E], ['benefactor gold', 0xF9A31B],
-  ['hull white', 0xD8E2EC], ['gunmetal', 0x4F4F4F],
-];
 
 export class Designer {
   readonly #onClose: () => void;
@@ -52,6 +44,8 @@ export class Designer {
   #cam = { yaw: 0.7, pitch: 0.35, zoom: 1 };
   #raf = 0;
   #voxelCount = 0;
+  #liveryColours = 0;
+  #gridHash = 0;
   #showPlate = true;
   #hist: Record<string, number> = {};
   #geoms: THREE.BufferGeometry[] = [];
@@ -185,12 +179,14 @@ export class Designer {
   }
 
   /**
-   * Rasterise the whole ship into ONE occupancy grid, then draw the cells.
+   * Draw the grid the core would read. It is not built here: `rasterise()` in
+   * design.ts builds it, and `derive()` costs the very same cells, so the
+   * picture and the mass cannot be two opinions about one hull.
    *
-   * Frame, parts and plate all land in the same grid, so a cell belongs to
-   * exactly one of them and two solids can never share a face. That is what
-   * removes the z fighting, and a part anchored on whole cells cannot float a
-   * fraction of a cell off its mounting. The picture is the structure.
+   * The client's whole job in this method is which cells are visible and what
+   * colour they are. Both are presentation: a second client that culled
+   * differently would draw a different picture of the same ship and never
+   * desync.
    */
   #rebuild(): void {
     this.#dispose();
@@ -200,80 +196,21 @@ export class Designer {
 
     const frame = frameFor(this.#design.classKey);
     const cell = RUNG[frame.rung];
-    const d = this.#derived;
-    const grid = new Uint8Array(NX * NY * NZ);
+    const { grid, purp } = rasterise(this.#design);
     const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
-    const inside = (i: number, j: number, k: number) =>
-      i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ;
-    // First writer wins, so the frame is never eaten by plate laid over it and
-    // two parts cannot both claim a cell.
-    const set = (i: number, j: number, k: number, mat: number) => {
-      if (!inside(i, j, k) || !mat) return;
-      const n = idx(i, j, k);
-      if (grid[n] === Mat.Empty) grid[n] = mat;
-    };
 
-    // --- the frame, which the player cannot edit ---------------------------
-    for (const [x, y, z, w, h, l] of frame.spine)
-      for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++)
-        set(Math.round(x) + i, Math.round(y) + j, Math.round(z) + k, Mat.Frame);
-
-    // --- every fitted part, on whole cells ---------------------------------
-    const allSockets = socketsOf(frame, this.#design.parts);
-    for (const p of this.#design.parts) {
-      const sock = allSockets.find(k => k.id === p.socket);
-      const m = moduleById(p.module);
-      if (!sock || !m) continue;
-      const v = voxelsOf(m);
-      const ox = Math.round(sock.at[0] - v.sx / 2);
-      const oy = Math.round(sock.at[1] - v.sy / 2);
-      const oz = Math.round(sock.at[2] - v.sz / 2);
-      for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
-        const mat = v.data[i + j * v.sx + k * v.sx * v.sy];
-        if (mat) set(ox + i, oy + j, oz + k, mat);
-      }
+    // The livery needs the hull's own shape to know where a stripe or an
+    // underside is. Read once per station rather than per cell: it is the same
+    // answer 1024 times over.
+    const prof = frame.profile;
+    const z0 = Math.round(prof[0]![0]), z1 = Math.round(prof[prof.length - 1]![0]);
+    const hwAt = new Float32Array(NZ), hhAt = new Float32Array(NZ);
+    for (let k = 0; k < NZ; k++) {
+      const st = hullAt(prof, k);
+      hwAt[k] = st[0] as number;
+      hhAt[k] = st[1] as number;
     }
-
-    // --- plate, grown OUTWARD from the ship's own surface -----------------
-    // Not a box around the bounding extent: that encases everything and turns
-    // the ship into a featureless brick. Armour is a skin, so it is a
-    // dilation of what is actually there, one step per layer, per direction.
-    const sec = this.#design.sections;
-    const occupied: number[] = [];
-    for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++)
-      if (grid[idx(i, j, k)]) occupied.push(i, j, k);
-
-    // Which section a cell's plating is charged to, so the belt bands still
-    // mean fore, midships and aft.
-    let zLo = NZ, zHi = 0;
-    for (let n = 2; n < occupied.length; n += 3) {
-      const k = occupied[n] as number;
-      if (k < zLo) zLo = k;
-      if (k > zHi) zHi = k;
-    }
-    const band = (k: number): SectionKey => {
-      const t = (k - zLo) / Math.max(1, zHi - zLo);
-      return t > 0.66 ? 'beltFwd' : t > 0.33 ? 'beltMid' : 'beltAft';
-    };
-    const DIRS: ReadonlyArray<readonly [number, number, number, SectionKey | 'belt']> = [
-      [1, 0, 0, 'belt'], [-1, 0, 0, 'belt'],
-      [0, 1, 0, 'dorsal'], [0, -1, 0, 'ventral'],
-      [0, 0, 1, 'bow'], [0, 0, -1, 'stern'],
-    ];
-    for (const [dx, dy, dz, which] of DIRS) {
-      for (let n = 0; n < occupied.length; n += 3) {
-        const i = occupied[n] as number, j = occupied[n + 1] as number, k = occupied[n + 2] as number;
-        const layers = which === 'belt' ? sec[band(k)] : sec[which];
-        for (let t = 1; t <= layers; t++) {
-          const x = i + dx * t, y = j + dy * t, z = k + dz * t;
-          if (!inside(x, y, z)) break;
-          // Stop at the first cell that is already something, so plate never
-          // grows through the ship and out the other side.
-          if (grid[idx(x, y, z)] && grid[idx(x, y, z)] !== Mat.Plate) break;
-          set(x, y, z, Mat.Plate);
-        }
-      }
-    }
+    const sw = paintFor(this.#design.faction).swatches;
 
     // --- draw only what can be seen ---------------------------------------
     // A cell with all six neighbours filled is invisible, and on a plated hull
@@ -283,26 +220,47 @@ export class Designer {
     // just out of the draw call. A part buried under four layers of armour is
     // an interior cell either way, so hiding the plate while still culling
     // against it leaves an empty screen. This is the x ray.
+    // A skinned frame member is plate while the plate is on and frame the
+    // moment it comes off, which is the only way both readings are true.
     const view = this.#showPlate
-      ? grid
-      : grid.map(m => (m === Mat.Plate ? Mat.Empty : m)) as Uint8Array;
+      ? grid.map(m => (m === Mat.Skinned ? Mat.Plate : m)) as Uint8Array
+      : grid.map(m => (m === Mat.Plate ? Mat.Empty : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
 
     const solid: number[] = [], solidCol: number[] = [];
-    const skin: number[] = [];
+    const skin: number[] = [], skinCol: number[] = [];
     for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
-      const mat = view[idx(i, j, k)];
+      const n = idx(i, j, k);
+      const mat = view[n] as number;
       if (!mat) continue;
       const hidden =
         i > 0 && view[idx(i - 1, j, k)] && i < NX - 1 && view[idx(i + 1, j, k)] &&
         j > 0 && view[idx(i, j - 1, k)] && j < NY - 1 && view[idx(i, j + 1, k)] &&
         k > 0 && view[idx(i, j, k - 1)] && k < NZ - 1 && view[idx(i, j, k + 1)];
       if (hidden) continue;
-      if (mat === Mat.Plate) skin.push(i, j, k);
-      else { solid.push(i, j, k); solidCol.push(MAT_COLOUR[mat] ?? 0x9FB2C6); }
+      if (mat === Mat.Plate) {
+        skin.push(i, j, k);
+        skinCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
+          hwAt[k] as number, hhAt[k] as number));
+      } else {
+        solid.push(i, j, k);
+        solidCol.push(cellColour(mat, purp[n] as number, this.#design.paint));
+      }
     }
     this.#voxelCount = solid.length / 3 + skin.length / 3;
+    // How many of the faction's eight actually reached the hull. One means a
+    // paint bucket rather than a livery, which is the thing this replaced.
+    this.#liveryColours = new Set(skinCol).size;
+    // FNV-1a over the occupancy grid. It exists so the harness can OBSERVE
+    // that a rotation moved cells; nothing reads it back into the editor.
+    let hsh = 0x811c9dc5;
+    for (let q = 0; q < grid.length; q++) {
+      hsh ^= grid[q] as number;
+      hsh = Math.imul(hsh, 0x01000193) >>> 0;
+    }
+    this.#gridHash = hsh;
     const hist: Record<number, number> = {};
-    for (let n = 0; n < grid.length; n++) if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
+    for (let n = 0; n < grid.length; n++)
+      if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
     this.#hist = { ...hist, solid: solid.length / 3, skin: skin.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
@@ -325,16 +283,22 @@ export class Designer {
       this.#hull.add(inst);
     };
 
-    // The structure inside, opaque, so parts read as parts.
+    // The structure inside, each cell in its own job's colour: orange is a
+    // drive on anybody's ship, red is a gun, green is the bridge. That is what
+    // makes an unfamiliar hull readable without a legend, and it is why the
+    // paint bucket is not allowed in here.
     place(solid, this.#mat(new THREE.MeshLambertMaterial({})),
       q => solidCol[q] as number);
-    // The plate over it. Opaque, because four layers of see through armour
-    // stacked on itself is mush rather than a window: the way to look inside
-    // a ship is to take the plate off, which is what the toggle does.
-    place(skin, this.#mat(new THREE.MeshLambertMaterial({
-      color: this.#design.paint })), null);
+    // The plate over it, in the faction's whole scheme rather than one colour:
+    // panels, an underside, a dorsal spine, a waist stripe, a nose flash and a
+    // transom band, all eight swatches on the hull at once. Opaque, because
+    // four layers of see through armour stacked on itself is mush rather than
+    // a window: the way to look inside a ship is to take the plate off.
+    place(skin, this.#mat(new THREE.MeshLambertMaterial({})),
+      q => skinCol[q] as number);
 
     // --- sockets, as markers rather than solids ----------------------------
+    const allSockets = socketsOf(frame, this.#design.parts);
     const socketMat = this.#mat(new THREE.MeshBasicMaterial({
       color: 0x35C7FF, transparent: true, opacity: 0.45, wireframe: true }));
     const pickedMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B, wireframe: true }));
@@ -347,7 +311,6 @@ export class Designer {
       mk.position.copy(this.#pos(cell, sock.at[0], sock.at[1], sock.at[2]));
       this.#sockets.add(mk);
     }
-    void d;
   }
 
   // -------------------------------------------------------------- panels --
@@ -359,6 +322,7 @@ export class Designer {
     this.#renderSockets();
     this.#renderPalette();
     this.#renderArmour();
+    this.#renderKey();
     this.#renderStats();
     this.#renderHeader();
   }
@@ -398,13 +362,18 @@ export class Designer {
     const frame = frameFor(this.#design.classKey);
     const host = $('dzSockets');
     host.innerHTML = '';
+    // The frame's own sockets PLUS the ones its parts opened. Listing only the
+    // frame's left every trunnion off the panel, so the stock ships shipped
+    // with guns nobody could reach: the barbette is what carries a gun, and
+    // the barbette is a part.
+    const all = socketsOf(frame, this.#design.parts);
     const order: Array<[string, string]> = [
       ['drive', 'Drive'], ['retro', 'Retro'], ['rcs', 'Manoeuvring'],
-      ['gun', 'Gun rings'], ['missile', 'Missile pads'],
+      ['gun', 'Gun rings'], ['trunnion', 'Trunnions'], ['missile', 'Missile pads'],
       ['bay', 'Bays'], ['clamp', 'Clamps'],
     ];
     for (const [kind, label] of order) {
-      const list = frame.sockets.filter(s => s.kind === kind);
+      const list = all.filter(s => s.kind === kind);
       if (!list.length) continue;
       const h = document.createElement('div');
       h.className = 'dzgrp';
@@ -429,7 +398,7 @@ export class Designer {
     const host = $('dzPalette');
     host.innerHTML = '';
     const frame = frameFor(this.#design.classKey);
-    const sock = frame.sockets.find(s => s.id === this.#socket);
+    const sock = socketsOf(frame, this.#design.parts).find(s => s.id === this.#socket);
     if (!sock) {
       host.innerHTML = '<p class="dznote">Pick a socket to see what fits it. '
         + 'A drive plate offers bells, a gun ring offers a barbette, and a barbette '
@@ -463,6 +432,23 @@ export class Designer {
       host.appendChild(b);
     }
     if (held) {
+      // Which way it faces is the player's. Four positions, because the part
+      // is a volume of cells and four is how many orientations leave it one.
+      const rot = held.rot ?? 0;
+      const turn = document.createElement('div');
+      turn.className = 'dzturn';
+      turn.innerHTML = '<span class="k">Facing</span>';
+      for (const [label, delta] of [['\u21ba 90', 3], ['\u21bb 90', 1]] as const) {
+        const b = document.createElement('button');
+        b.textContent = label;
+        b.onclick = () => { this.#turn(sock.id, delta); };
+        turn.appendChild(b);
+      }
+      const deg = document.createElement('b');
+      deg.textContent = `${rot * 90}\u00b0`;
+      turn.appendChild(deg);
+      host.appendChild(turn);
+
       const c = document.createElement('button');
       c.className = 'dzpart clear';
       c.innerHTML = '<span class="sw" style="background:#2b3d52"></span>'
@@ -473,12 +459,53 @@ export class Designer {
   }
 
   #fit(socket: string, module: string | null): void {
+    const rot = this.#design.parts.find(p => p.socket === socket)?.rot ?? 0;
     this.#design.parts = this.#design.parts.filter(p => p.socket !== socket);
-    if (module) this.#design.parts.push({ socket, module });
+    if (module) this.#design.parts.push({ socket, module, rot });
+    this.#refresh();
+  }
+
+  #turn(socket: string, delta: number): void {
+    this.#design.parts = this.#design.parts.map(p => p.socket === socket
+      ? { socket: p.socket, module: p.module, rot: (((p.rot ?? 0) + delta) % 4 + 4) % 4 }
+      : p);
     this.#refresh();
   }
 
   #renderArmour(): void {
+    // --- which exterior is being edited -----------------------------------
+    // The frame is in neither list. A player works inside its constraints or
+    // adds to what hangs on it, and cannot move a single cell of it.
+    const mode = $('dzMode');
+    mode.innerHTML = '';
+    for (const [key, label, hint] of [
+      ['wrapped', 'Class hull', 'restore the class hull and its authored layers'],
+      ['skin', 'From scratch', 'take the whole exterior off and build your own'],
+    ] as ReadonlyArray<readonly [ArmourMode, string, string]>) {
+      const b = document.createElement('button');
+      b.className = this.#design.armour === key ? 'on' : '';
+      b.textContent = label;
+      b.title = hint;
+      // Each mode lands somewhere a player can work from. Carrying a four
+      // layer belt across into the dilated skin buried the whole ship in one
+      // blue lump, over budget, with nothing left to read.
+      b.onclick = () => {
+        if (this.#design.armour === key) return;
+        this.#design.armour = key;
+        const stockSec = stockFor(this.#design.classKey).sections;
+        for (const k of SECTIONS)
+          this.#design.sections[k] = key === 'wrapped' ? stockSec[k] : 0;
+        this.#refresh();
+      };
+      mode.appendChild(b);
+    }
+    $('dzModeNote').textContent = this.#design.armour === 'wrapped'
+      ? 'The class hull: plate laid on the frame\u2019s own profile, which is what '
+        + 'gives the class its silhouette. What you are changing is its thickness.'
+      : 'Your own exterior: plate grown off the parts themselves and nothing else, '
+        + 'so it follows what you built rather than what the class is. It starts '
+        + 'bare and it still has to fit the mass budget.';
+
     const host = $('dzArmour');
     host.innerHTML = '';
     const names: Record<SectionKey, string> = {
@@ -502,15 +529,47 @@ export class Designer {
       host.appendChild(row);
     }
 
+    // --- paint, which reaches the armour and nothing else -----------------
+    const fac = $('dzFactions');
+    fac.innerHTML = '';
+    for (const f of FACTION_PAINT) {
+      const b = document.createElement('button');
+      b.className = f.key === this.#design.faction ? 'on' : '';
+      b.textContent = f.name;
+      b.onclick = () => {
+        this.#design.faction = f.key;
+        // Land on the scheme's first swatch, because a faction whose colours
+        // are not on the ship is a menu rather than a choice.
+        this.#design.paint = f.swatches[0] as number;
+        this.#refresh();
+      };
+      fac.appendChild(b);
+    }
+
     const paint = $('dzPaint');
     paint.innerHTML = '';
-    for (const [name, col] of PAINTS) {
+    const scheme = paintFor(this.#design.faction);
+    for (const col of scheme.swatches) {
       const b = document.createElement('button');
       b.className = 'dzsw' + (col === this.#design.paint ? ' on' : '');
       b.style.background = `#${col.toString(16).padStart(6, '0')}`;
-      b.title = name;
+      b.title = `#${col.toString(16).padStart(6, '0')}`;
       b.onclick = () => { this.#design.paint = col; this.#refresh(); };
       paint.appendChild(b);
+    }
+  }
+
+  /** The colour key. Eight jobs, eight hues, the same on every faction. */
+  #renderKey(): void {
+    const host = $('dzKey');
+    host.innerHTML = '';
+    for (const key of PURPOSE_ORDER) {
+      const p = PURPOSE[key];
+      const row = document.createElement('span');
+      row.className = 'dzkey';
+      row.innerHTML = `<span class="sw" style="background:#${p.base.toString(16).padStart(6, '0')}"></span>`
+        + `<span class="nm">${p.label}</span>`;
+      host.appendChild(row);
     }
   }
 
@@ -596,6 +655,12 @@ export class Designer {
       for (const k of SECTIONS) this.#design.sections[k] = 0;
       this.#refresh();
     };
+    // Take the plate off and leave the frame and its parts standing. The mode
+    // is left alone: this zeroes whichever exterior is being edited.
+    $('dzBare').onclick = () => {
+      for (const k of SECTIONS) this.#design.sections[k] = 0;
+      this.#refresh();
+    };
     const tab = (id: string, which: 'parts' | 'armour' | 'stats') => {
       $(id).onclick = () => { this.#tab = which; this.#syncTabs(); };
     };
@@ -625,6 +690,11 @@ export class Designer {
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
       showPlate: this.#showPlate,
+      armour: this.#design.armour,
+      livery: this.#liveryColours,
+      gridHash: this.#gridHash,
+      faction: this.#design.faction,
+      paint: this.#design.paint,
       hist: this.#hist,
     };
   }

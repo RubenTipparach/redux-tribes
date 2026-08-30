@@ -39,6 +39,66 @@ export const RUNG = {
 } as const;
 export type RungKey = keyof typeof RUNG;
 
+// -------------------------------------------------------------- colour --
+
+/** What a part is for. Eight jobs, eight hues. */
+export type Purpose =
+  | 'propulsion' | 'attitude' | 'gun' | 'ordnance'
+  | 'command' | 'crew' | 'boarding' | 'structure';
+
+/**
+ * The purpose palette: base, shadow and highlight per job.
+ *
+ * These are NOT the faction colours. A Terran and a Karisen thruster are the
+ * same orange, because the point of the coding is that propulsion looks like
+ * propulsion on anybody's ship. Faction identity lives on the armour, which
+ * is the part a player paints.
+ */
+export const PURPOSE: Record<Purpose, { base: number; dark: number; lit: number; label: string }> = {
+  propulsion: { base: 0xFA6A0A, dark: 0x7A3405, lit: 0xFFC46B, label: 'propulsion' },
+  attitude:   { base: 0x35C7FF, dark: 0x155A75, lit: 0x9EE4FF, label: 'attitude control' },
+  gun:        { base: 0xFF4B4B, dark: 0x7A1F1F, lit: 0xFF9C9C, label: 'gunnery' },
+  ordnance:   { base: 0xA98BFF, dark: 0x4B3A80, lit: 0xD6C8FF, label: 'ordnance' },
+  command:    { base: 0x4CD97B, dark: 0x1E6437, lit: 0xA6F0C0, label: 'command' },
+  crew:       { base: 0xFFD24B, dark: 0x7A6317, lit: 0xFFE9A6, label: 'crew' },
+  boarding:   { base: 0xFF8C3A, dark: 0x7A3C12, lit: 0xFFC49C, label: 'boarding' },
+  structure:  { base: 0x8494A8, dark: 0x3B4757, lit: 0xC3D0DE, label: 'structure' },
+};
+
+/**
+ * Armour paint, eight swatches per faction.
+ *
+ * Seeded from the archived material palette, then extended to a full eight so
+ * a player has a scheme rather than a colour. Armour is the ONLY thing that
+ * takes these: paint a drive bell and you have lost the thing that made an
+ * unfamiliar hull readable.
+ */
+export const FACTION_PAINT: ReadonlyArray<{ key: string; name: string; swatches: readonly number[] }> = [
+  { key: 'terran', name: 'Terran', swatches:
+    [0x0095E9, 0x0B7FC4, 0x124E89, 0x0B2E52, 0x6FB6E8, 0xD8E2EC, 0x37475A, 0xF2A93B] },
+  { key: 'karisen', name: 'Karisen', swatches:
+    [0xFA6A0A, 0xD2560A, 0x73172D, 0x3E0F18, 0xFFA35C, 0xE8D6C0, 0x4A2A1A, 0xFFD24B] },
+  { key: 'rogue', name: 'Rogue', swatches:
+    [0x494182, 0x3A3466, 0x6B5FA8, 0x181425, 0x9A8FD1, 0xC9C4E0, 0x2A2440, 0xE0483C] },
+  { key: 'benefactor', name: 'Benefactor', swatches:
+    [0x1A7A3E, 0x146032, 0x2FA85B, 0x0E4423, 0x7FD9A0, 0xEDE7C8, 0x2F4A38, 0xF9A31B] },
+  { key: 'civil', name: 'Civilian', swatches:
+    [0xD8E2EC, 0xB9C6D4, 0x8C949E, 0x4F4F4F, 0xF2F5F8, 0x2A2E33, 0x6E7680, 0xC0A24A] },
+];
+
+/**
+ * What each of the eight is FOR. A scheme, not a colour: one swatch on a whole
+ * hull is a paint bucket, and a paint bucket makes every ship of a faction the
+ * same flat lozenge.
+ */
+export const PAINT_ROLE = {
+  primary: 0, panel: 1, secondary: 2, deep: 3,
+  highlight: 4, marking: 5, trim: 6, stripe: 7,
+} as const;
+
+export const paintFor = (key: string) =>
+  FACTION_PAINT.find(f => f.key === key) ?? (FACTION_PAINT[0] as typeof FACTION_PAINT[number]);
+
 // ---------------------------------------------------------------- parts --
 
 /** What a socket will accept. A part never fits a socket of another kind. */
@@ -70,6 +130,14 @@ export interface ModuleDef {
   readonly capacity?: number;
   /** Boarding reach added over the class base. */
   readonly reach?: number;
+  /**
+   * What the part is FOR, which is what colours it.
+   *
+   * Only armour wears the faction palette. Everything else is coded by
+   * purpose, so orange is always propulsion, red is always a gun, and a
+   * player can read an unfamiliar hull without a legend.
+   */
+  readonly purpose: Purpose;
   /** How it is drawn. The client owns this and the core never sees it. */
   readonly art: 'bell' | 'nozzle' | 'block' | 'barbette' | 'beamgun' | 'cannon'
     | 'missilecell' | 'bridge' | 'pod' | 'strut';
@@ -92,64 +160,64 @@ export const MODULES: readonly ModuleDef[] = [
   // ------------------------------------------------------------- drive --
   { id: 'DRV-V', name: 'Vernier nozzle', cat: 'drive', fits: 'drive',
     size: [2, 2, 2], mass: 1520, hull: 320, thrust: 5, exhaust: 6.0,
-    art: 'nozzle', colour: 0xFA6A0A },
+    purpose: 'propulsion', art: 'nozzle', colour: 0xFA6A0A },
   { id: 'DRV-N', name: 'Light nozzle', cat: 'drive', fits: 'drive',
     size: [4, 4, 4], mass: 12160, hull: 2560, thrust: 15, exhaust: 8.0,
-    art: 'nozzle', colour: 0xFA6A0A },
+    purpose: 'propulsion', art: 'nozzle', colour: 0xFA6A0A },
   { id: 'DRV-B', name: 'Standard bell', cat: 'drive', fits: 'drive',
     size: [5, 5, 5], mass: 23750, hull: 5000, thrust: 30, exhaust: 8.5,
-    art: 'bell', colour: 0xFA6A0A },
+    purpose: 'propulsion', art: 'bell', colour: 0xFA6A0A },
   { id: 'DRV-BR', name: 'Overclocked bell', cat: 'drive', fits: 'drive',
     size: [5, 5, 6], mass: 28500, hull: 6000, thrust: 33, exhaust: 9.5,
-    art: 'bell', colour: 0xFF8C3A },
+    purpose: 'propulsion', art: 'bell', colour: 0xFF8C3A },
   { id: 'DRV-T', name: 'Tug bell', cat: 'drive', fits: 'drive',
     size: [5, 5, 5], mass: 23750, hull: 5000, thrust: 30, exhaust: 5.0,
-    art: 'bell', colour: 0xC9560A },
+    purpose: 'propulsion', art: 'bell', colour: 0xC9560A },
   { id: 'DRV-H', name: 'Heavy bell', cat: 'drive', fits: 'drive',
     size: [7, 7, 7], mass: 65170, hull: 13720, thrust: 60, exhaust: 7.0,
-    art: 'bell', colour: 0xFA6A0A },
+    purpose: 'propulsion', art: 'bell', colour: 0xFA6A0A },
 
   { id: 'RET-S', name: 'Retro nozzle', cat: 'drive', fits: 'retro',
-    size: [2, 2, 2], mass: 1520, hull: 320, retro: 5, art: 'nozzle', colour: 0xB4531A },
+    size: [2, 2, 2], mass: 1520, hull: 320, retro: 5, purpose: 'propulsion', art: 'nozzle', colour: 0xB4531A },
   { id: 'RET-C', name: 'Retro cluster', cat: 'drive', fits: 'retro',
-    size: [6, 3, 3], mass: 10260, hull: 2160, retro: 15, art: 'nozzle', colour: 0xB4531A },
+    size: [6, 3, 3], mass: 10260, hull: 2160, retro: 15, purpose: 'propulsion', art: 'nozzle', colour: 0xB4531A },
 
   { id: 'RCS-Q', name: 'RCS quad', cat: 'drive', fits: 'rcs',
-    size: [2, 2, 2], mass: 1520, hull: 320, latX: 2, latY: 2, art: 'pod', colour: 0x7C8B9D },
+    size: [2, 2, 2], mass: 1520, hull: 320, latX: 2, latY: 2, purpose: 'attitude', art: 'pod', colour: 0x7C8B9D },
   { id: 'MAN-B', name: 'Manoeuvring block', cat: 'drive', fits: 'rcs',
-    size: [3, 3, 3], mass: 5130, hull: 1080, latX: 5, latY: 5, art: 'block', colour: 0x7C8B9D },
+    size: [3, 3, 3], mass: 5130, hull: 1080, latX: 5, latY: 5, purpose: 'attitude', art: 'block', colour: 0x7C8B9D },
   { id: 'MAN-Y', name: 'Yaw block', cat: 'drive', fits: 'rcs',
-    size: [4, 3, 3], mass: 6840, hull: 1440, latX: 10, art: 'block', colour: 0x93A6BC },
+    size: [4, 3, 3], mass: 6840, hull: 1440, latX: 10, purpose: 'attitude', art: 'block', colour: 0x93A6BC },
   { id: 'MAN-P', name: 'Pitch block', cat: 'drive', fits: 'rcs',
-    size: [3, 4, 3], mass: 6840, hull: 1440, latY: 10, art: 'block', colour: 0x93A6BC },
+    size: [3, 4, 3], mass: 6840, hull: 1440, latY: 10, purpose: 'attitude', art: 'block', colour: 0x93A6BC },
 
   // ------------------------------------------------------------ weapon --
   // The barbette and the gun are separate parts because the archive separates
   // them: Weapon_Base_Cannon.prefab puts its collider and its subsystem proxy
   // on the BASE, not the barrel. The base takes the damage, the barrel turns.
   { id: 'WPN-BB1', name: 'Barbette', cat: 'weapon', fits: 'gun',
-    size: [6, 3, 6], mass: 20520, hull: 4320, art: 'barbette', colour: 0x5B6E85 },
+    size: [6, 3, 6], mass: 20520, hull: 4320, purpose: 'gun', art: 'barbette', colour: 0x5B6E85 },
   { id: 'WPN-BM1', name: 'Beam turret', cat: 'weapon', fits: 'trunnion',
     size: [4, 4, 10], mass: 30400, hull: 6400, weapon: 'beam',
-    art: 'beamgun', colour: 0x4CD97B },
+    purpose: 'gun', art: 'beamgun', colour: 0x4CD97B },
   { id: 'WPN-CN1', name: 'Projectile turret', cat: 'weapon', fits: 'trunnion',
     size: [5, 4, 9], mass: 34200, hull: 7200, weapon: 'projectile',
-    art: 'cannon', colour: 0xFF4B4B },
+    purpose: 'gun', art: 'cannon', colour: 0xFF4B4B },
   { id: 'WPN-ML1', name: 'Missile cell', cat: 'weapon', fits: 'missile',
     size: [5, 5, 7], mass: 33250, hull: 7000, weapon: 'missile',
-    art: 'missilecell', colour: 0xA98BFF },
+    purpose: 'ordnance', art: 'missilecell', colour: 0xA98BFF },
 
   // ----------------------------------------------------------- utility --
   { id: 'UTL-BRG', name: 'Bridge', cat: 'utility', fits: 'bay',
-    size: [6, 5, 6], mass: 34200, hull: 7200, art: 'bridge', colour: 0x35C7FF },
+    size: [6, 5, 6], mass: 34200, hull: 7200, purpose: 'command', art: 'bridge', colour: 0x35C7FF },
   { id: 'UTL-BAR', name: 'Marine barracks', cat: 'utility', fits: 'bay',
-    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, art: 'block', colour: 0xFFD24B },
+    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, purpose: 'crew', art: 'block', colour: 0xFFD24B },
   { id: 'UTL-AIR', name: 'Boarding airlock', cat: 'utility', fits: 'bay',
-    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, art: 'pod', colour: 0xFFD24B },
+    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, purpose: 'boarding', art: 'pod', colour: 0xFFD24B },
   { id: 'UTL-CLM', name: 'Boarding clamp', cat: 'utility', fits: 'clamp',
-    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, art: 'block', colour: 0xFFD24B },
+    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, purpose: 'boarding', art: 'block', colour: 0xFFD24B },
   { id: 'UTL-CGO', name: 'Cargo bay', cat: 'utility', fits: 'bay',
-    size: [10, 8, 13], mass: 197600, hull: 41600, art: 'block', colour: 0x6E7F94 },
+    size: [10, 8, 13], mass: 197600, hull: 41600, purpose: 'structure', art: 'block', colour: 0x6E7F94 },
 
   // --------------------------------------------------------- structure --
   // A strut carries nothing in v1. An autorouted, freely meshed power grid is
@@ -157,7 +225,7 @@ export const MODULES: readonly ModuleDef[] = [
   // that is not already touching the hull. It gains the severance rule on the
   // day power exists.
   { id: 'STR-STRUT', name: 'Strut', cat: 'structure', fits: 'bay',
-    size: [1, 1, 1], mass: 190, hull: 40, art: 'strut', colour: 0x3D5266 },
+    size: [1, 1, 1], mass: 190, hull: 40, purpose: 'structure', art: 'strut', colour: 0x3D5266 },
 ];
 
 export const moduleById = (id: string): ModuleDef | undefined =>
@@ -223,6 +291,8 @@ export interface FrameDef {
   readonly baseMarines: number;
   readonly baseCapacity: number;
   /** Keel and rib runs, as cell boxes. Fixed: the player cannot edit these. */
+  /** The hull's cross section along z, which cuts the ribs and lays the plate. */
+  readonly profile: readonly Station[];
   readonly spine: ReadonlyArray<readonly [number, number, number, number, number, number]>;
   readonly sockets: readonly Socket[];
   readonly note: string;
@@ -235,30 +305,112 @@ const CX = NX / 2, CY = NY / 2;
 const keel = (y: number, z0: number, z1: number, w = 4, h = 3) =>
   [CX - w / 2, y - h / 2, z0, w, h, z1 - z0] as const;
 /**
- * A rib RING at z: four bars, not a solid plate.
+ * A station on the hull profile: z, half beam, half depth, in cells.
  *
- * A frame is a skeleton. Drawn as a filled slab it reads as a bulkhead and
- * fills the ship with material a player never asked for, which both looks
- * wrong and charges hull for it.
+ * The profile is what stops a class being a brick. A frame authored as one
+ * box from transom to nose reads as a brick, and armour wrapped over it reads
+ * as a slightly larger brick, so the silhouette that tells a Terran from a
+ * Benefactor has to live somewhere. It lives here: the ribs are cut to it and
+ * the wrapped armour is laid on it, which is also why the two agree.
  */
-const rib = (z: number, w: number, h: number) => {
-  const x0 = CX - w / 2, y0 = CY - h / 2, t = 1;
-  return [
-    [x0, y0, z, w, t, 1],
-    [x0, y0 + h - t, z, w, t, 1],
-    [x0, y0, z, t, h, 1],
-    [x0 + w - t, y0, z, t, h, 1],
-  ] as ReadonlyArray<readonly [number, number, number, number, number, number]>;
+export type Station = readonly [number, number, number];
+
+/** The hull's half extents at z, interpolated between stations. */
+export function hullAt(profile: readonly Station[], z: number): readonly [number, number] {
+  const first = profile[0] as Station;
+  const last = profile[profile.length - 1] as Station;
+  if (z <= first[0]) return [first[1], first[2]];
+  if (z >= last[0]) return [last[1], last[2]];
+  for (let n = 1; n < profile.length; n++) {
+    const a = profile[n - 1] as Station, b = profile[n] as Station;
+    if (z > b[0]) continue;
+    const t = (z - a[0]) / Math.max(1e-6, b[0] - a[0]);
+    return [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  }
+  return [last[1], last[2]];
+}
+
+/**
+ * Is a cell inside the hull at z, with the surface drawn in by `inset` cells?
+ *
+ * One predicate answers both questions the profile is asked: where the ribs
+ * are cut, and where the wrapped plate stops. Two would drift, and the drift
+ * would look like plate floating off its own frame.
+ */
+export function insideHull(profile: readonly Station[],
+  i: number, j: number, z: number, inset = 0): boolean {
+  const [hw, hh] = hullAt(profile, z);
+  const a = Math.max(0.5, (hw as number) - inset), b = Math.max(0.5, (hh as number) - inset);
+  const dx = i + 0.5 - CX, dy = j + 0.5 - CY;
+  return (dx * dx) / (a * a) + (dy * dy) / (b * b) <= 1;
+}
+
+type Box = readonly [number, number, number, number, number, number];
+
+/**
+ * A rib RING at z: single cells around the profile's ellipse, one cell under
+ * the skin, not four bars around a rectangle.
+ *
+ * A frame is a skeleton, so it is an outline rather than a slab: drawn filled
+ * it reads as a bulkhead and charges hull for material nobody asked for. The
+ * inset is what leaves room for the plate, so the ribs sit under the armour
+ * instead of striping through it.
+ */
+const rib = (profile: readonly Station[], z: number, inset = 1): Box[] => {
+  const [hw0, hh0] = hullAt(profile, z);
+  const hw = Math.max(1, (hw0 as number) - inset), hh = Math.max(1, (hh0 as number) - inset);
+  const seen = new Set<number>();
+  const out: Box[] = [];
+  const put = (i: number, j: number) => {
+    if (i < 0 || j < 0 || i >= NX || j >= NY) return;
+    const key = i * NY + j;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push([i, j, z, 1, 1, 1] as Box);
+  };
+  for (let i = Math.ceil(CX - hw); i <= Math.floor(CX + hw); i++) {
+    const u = (i + 0.5 - CX) / hw;
+    const s = 1 - u * u;
+    if (s < 0) continue;
+    const dy = Math.sqrt(s) * hh;
+    put(i, Math.round(CY + dy - 0.5));
+    put(i, Math.round(CY - dy - 0.5));
+  }
+  for (let j = Math.ceil(CY - hh); j <= Math.floor(CY + hh); j++) {
+    const v = (j + 0.5 - CY) / hh;
+    const s = 1 - v * v;
+    if (s < 0) continue;
+    const dx = Math.sqrt(s) * hw;
+    put(Math.round(CX + dx - 0.5), j);
+    put(Math.round(CX - dx - 0.5), j);
+  }
+  return out;
 };
 
-const ribs = (zs: readonly number[], w: number, h: number) =>
-  zs.flatMap(z => rib(z, w, h));
+const ribs = (profile: readonly Station[], zs: readonly number[]) =>
+  zs.flatMap(z => rib(profile, z));
+
+// The five hull profiles. Half beam and half depth at a handful of stations,
+// read off the archived silhouettes: the Terran's slab waist, the Karisen's
+// long thin body, the Rogue's short wide one, the Benefactor's deep section,
+// and the Freighter's parallel middle body.
+const PROF_TERRAN: readonly Station[] = [
+  [4, 8, 5], [10, 10, 6], [24, 11, 6.5], [38, 10, 6], [50, 7, 4.5], [58, 3, 2]];
+const PROF_KARISEN: readonly Station[] = [
+  [4, 9, 5], [12, 11, 5.5], [28, 11, 6], [42, 9, 5], [52, 6, 3.5], [58, 2.5, 2]];
+const PROF_ROGUE: readonly Station[] = [
+  [9, 8, 5], [18, 12, 6.5], [30, 12, 7], [40, 9, 5.5], [48, 5, 3.5], [52, 2.5, 2]];
+const PROF_BENEFACTOR: readonly Station[] = [
+  [4, 7, 8], [18, 8, 10], [32, 8, 9], [46, 7, 7], [54, 4, 4], [58, 2, 2]];
+const PROF_FREIGHTER: readonly Station[] = [
+  [8, 6, 5], [16, 8, 7], [30, 8, 7], [42, 7, 6], [50, 4, 3.5], [54, 2, 1.5]];
 
 export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_frigate', name: 'Terran Frigate', rung: 'frigate',
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    spine: [keel(CY, 6, 56), ...ribs([10, 17, 24, 31, 38, 45, 52], 20, 12)],
+    profile: PROF_TERRAN,
+    spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
     sockets: [
       { id: 'd0', kind: 'drive', at: [CX - 5, CY - 2, 4], label: 'drive, port lower' },
       { id: 'd1', kind: 'drive', at: [CX, CY - 2, 4], label: 'drive, centre lower' },
@@ -299,8 +451,9 @@ export const FRAMES: readonly FrameDef[] = [
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
+    profile: PROF_KARISEN,
     spine: [keel(CY, 8, 54), keel(CY + 5, 12, 50, 8, 2), keel(CY - 5, 4, 58, 5, 3),
-      ...ribs([12, 19, 26, 33, 40, 47], 22, 11)],
+      ...ribs(PROF_KARISEN, [12, 19, 26, 33, 40, 47])],
     sockets: [
       { id: 'd0', kind: 'drive', at: [CX - 6, CY - 1, 5], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY - 1, 5], label: 'drive, centre' },
@@ -333,8 +486,9 @@ export const FRAMES: readonly FrameDef[] = [
     radius: 3.2, massMax: 0.9, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
-    spine: [keel(CY, 14, 48), [CX - 13, CY - 2, 26, 26, 4, 5] as const,
-      ...ribs([18, 24, 30, 36, 42], 24, 13)],
+    profile: PROF_ROGUE,
+    spine: [keel(CY, 14, 48), [CX - 11, CY - 2, 26, 22, 4, 5] as const,
+      ...ribs(PROF_ROGUE, [18, 24, 30, 36, 42])],
     sockets: [
       { id: 'd0', kind: 'drive', at: [CX - 6, CY, 11], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY, 11], label: 'drive, centre' },
@@ -351,28 +505,28 @@ export const FRAMES: readonly FrameDef[] = [
       { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 36], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 36], label: 'rcs, ventral' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 4, 40], label: 'bay, bridge' },
-      { id: 'b1', kind: 'bay', at: [CX - 9, CY, 28], label: 'gallery bay, port outer' },
+      { id: 'b1', kind: 'bay', at: [CX - 8, CY, 28], label: 'gallery bay, port outer' },
       { id: 'b2', kind: 'bay', at: [CX - 4, CY, 28], label: 'gallery bay, port inner' },
       { id: 'b3', kind: 'bay', at: [CX + 4, CY, 28], label: 'gallery bay, starboard inner' },
-      { id: 'b4', kind: 'bay', at: [CX + 9, CY, 28], label: 'gallery bay, starboard outer' },
+      { id: 'b4', kind: 'bay', at: [CX + 8, CY, 28], label: 'gallery bay, starboard outer' },
       { id: 'b5', kind: 'bay', at: [CX - 7, CY, 22], label: 'gallery bay, port aft' },
       { id: 'b6', kind: 'bay', at: [CX + 7, CY, 22], label: 'gallery bay, starboard aft' },
       { id: 'b7', kind: 'bay', at: [CX, CY - 4, 22], label: 'bay, ventral' },
-      { id: 'b8', kind: 'bay', at: [CX - 12, CY + 2, 26], label: 'collar, port' },
-      { id: 'b9', kind: 'bay', at: [CX + 12, CY + 2, 26], label: 'collar, starboard' },
-      { id: 'c0', kind: 'clamp', at: [CX - 14, CY, 30], label: 'clamp, port forward' },
-      { id: 'c1', kind: 'clamp', at: [CX + 14, CY, 30], label: 'clamp, starboard forward' },
-      { id: 'c2', kind: 'clamp', at: [CX - 14, CY, 24], label: 'clamp, port aft' },
-      { id: 'c3', kind: 'clamp', at: [CX + 14, CY, 24], label: 'clamp, starboard aft' },
-      { id: 'a0', kind: 'bay', at: [CX - 12, CY - 4, 30], label: 'collar, port forward' },
-      { id: 'a1', kind: 'bay', at: [CX + 12, CY - 4, 30], label: 'collar, starboard forward' },
-      { id: 'a2', kind: 'bay', at: [CX - 12, CY - 4, 24], label: 'collar, port aft' },
-      { id: 'a3', kind: 'bay', at: [CX + 12, CY - 4, 24], label: 'collar, starboard aft' },
+      { id: 'b8', kind: 'bay', at: [CX - 10, CY + 2, 26], label: 'collar, port' },
+      { id: 'b9', kind: 'bay', at: [CX + 10, CY + 2, 26], label: 'collar, starboard' },
+      { id: 'c0', kind: 'clamp', at: [CX - 12, CY, 30], label: 'clamp, port forward' },
+      { id: 'c1', kind: 'clamp', at: [CX + 12, CY, 30], label: 'clamp, starboard forward' },
+      { id: 'c2', kind: 'clamp', at: [CX - 12, CY, 24], label: 'clamp, port aft' },
+      { id: 'c3', kind: 'clamp', at: [CX + 12, CY, 24], label: 'clamp, starboard aft' },
+      { id: 'a0', kind: 'bay', at: [CX - 10, CY - 4, 30], label: 'collar, port forward' },
+      { id: 'a1', kind: 'bay', at: [CX + 10, CY - 4, 30], label: 'collar, starboard forward' },
+      { id: 'a2', kind: 'bay', at: [CX - 10, CY - 4, 24], label: 'collar, port aft' },
+      { id: 'a3', kind: 'bay', at: [CX + 10, CY - 4, 24], label: 'collar, starboard aft' },
       { id: 'a4', kind: 'bay', at: [CX, CY - 6, 27], label: 'collar, ventral' },
       { id: 'b10', kind: 'bay', at: [CX - 4, CY + 4, 36], label: 'bay, spare port' },
       { id: 'b11', kind: 'bay', at: [CX + 4, CY + 4, 36], label: 'bay, spare starboard' },
-      { id: 'c4', kind: 'clamp', at: [CX - 14, CY + 4, 27], label: 'clamp, port upper' },
-      { id: 'c5', kind: 'clamp', at: [CX + 14, CY + 4, 27], label: 'clamp, starboard upper' },
+      { id: 'c4', kind: 'clamp', at: [CX - 12, CY + 4, 27], label: 'clamp, port upper' },
+      { id: 'c5', kind: 'clamp', at: [CX + 12, CY + 4, 27], label: 'clamp, starboard upper' },
     ],
     note: 'Short and wide, with a boarding gallery across its waist. The gear that '
       + 'makes it a raider is roughly a third of its mass, which is also why it has '
@@ -383,8 +537,9 @@ export const FRAMES: readonly FrameDef[] = [
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
+    profile: PROF_BENEFACTOR,
     spine: [keel(CY, 14, 56), keel(CY - 7, 4, 20, 5, 4), keel(CY + 6, 4, 20, 5, 3),
-      ...ribs([18, 25, 32, 39, 46, 52], 16, 20)],
+      ...ribs(PROF_BENEFACTOR, [18, 25, 32, 39, 46, 52])],
     sockets: [
       { id: 'd0', kind: 'drive', at: [CX, CY - 3, 5], label: 'drive, main' },
       { id: 'd1', kind: 'drive', at: [CX + 6, CY - 3, 6], label: 'drive, starboard' },
@@ -418,7 +573,9 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'freighter', name: 'Freighter', rung: 'escort',
     radius: 4.5, massMax: 2.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1), ...ribs([18, 26, 34, 40], 14, 12)],
+    profile: PROF_FREIGHTER,
+    spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
+      ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
     // No gun ring anywhere. Every gun needs a barbette and every barbette needs
     // a ring, so the authored empty mount table becomes geometry rather than a
     // convention. No clamp seat either: its short reach is an absence.
@@ -491,13 +648,43 @@ export const zeroSections = (): Sections =>
 export interface Placement {
   readonly socket: string;
   readonly module: string;
+  /**
+   * Quarter turns about the ship's up axis, 0 to 3.
+   *
+   * A turret is on a swivel, so which way it faces on its ring is the
+   * player's, not the frame's. It snaps to 90 degrees because the part is a
+   * volume of cells and a cell grid has four orientations that are still the
+   * same volume: anything between them would have to resample the part, and a
+   * resampled part is back to fractions of a cell and the slop that came with
+   * them. Placeable and rotatable, never editable.
+   */
+  readonly rot?: number;
 }
+
+/**
+ * How the exterior is built.
+ *
+ * `wrapped` is the class hull: plate laid on the frame's own profile, which
+ * is what a premade ship ships with and what a player is modifying when they
+ * pull a section slider.
+ *
+ * `skin` is the exterior redone from scratch: plate hugging whatever is
+ * actually bolted on, and nothing else. It is lighter, it is uglier, and it
+ * leaves the gaps between parts open, which is the trade a player is making.
+ *
+ * The frame is not in either list. It cannot be edited in either mode.
+ */
+export type ArmourMode = 'wrapped' | 'skin';
 
 export interface Design {
   classKey: string;
   /** One entry per filled socket. A socket holds at most one part. */
   parts: Placement[];
   sections: Sections;
+  /** Which exterior the plate sliders are building. */
+  armour: ArmourMode;
+  /** Which faction's swatches the paint bucket offers. */
+  faction: string;
   /** Armour tint. Cosmetic only: never hashed, never sent to the core. */
   paint: number;
 }
@@ -555,8 +742,17 @@ export interface Derived {
   readonly parts: number;
 }
 
-/** Mass in uM per cell of plate, and hull in milli HP per enclosed cell. */
-const PLATE_UM = 33, HULL_MILLI = 17;
+/**
+ * Mass in uM per cell of plate, and hull in milli HP per cell of plate.
+ *
+ * Refitted when plate stopped being a box area formula and started being the
+ * cells actually laid: the wrapped shell is a curved skin rather than six
+ * rectangles, so it costs different cells and the density had to follow. The
+ * pair is a least squares fit against the five authored stock masses and
+ * hulls over the allowed layer configurations: 6.2 percent rms, worst case
+ * the Rogue at 8.2 percent on mass, and every class still legal.
+ */
+const PLATE_UM = 93, HULL_MILLI = 40;
 /** How much bigger this rung's cell is than a frigate's, cubed. Plate is a
  *  volume of material, so it scales; a part is a machine, so it does not. */
 const rungVol = (rung: RungKey): number => (RUNG[rung] / RUNG.frigate) ** 3;
@@ -565,21 +761,275 @@ const rungVol = (rung: RungKey): number => (RUNG[rung] / RUNG.frigate) ** 3;
 const TURN_SECONDS = 10;
 
 /**
- * How many cells a section's plating costs, per layer.
+ * The whole ship as one occupancy grid: frame, parts and plate.
  *
- * The envelope is a box of the frame's own extent, so a face's area is the
- * product of the two axes it spans. Belt bands are thirds of the two flanks,
- * which is what lets a player armour the middle and leave the ends thin.
+ * ONE rasterisation, read by everybody. It used to be two: the editor drew a
+ * grid and `derive()` costed plate from a box area formula, so the picture and
+ * the mass were two opinions about the same armour and only one of them could
+ * be right. Divergent paths for like functionality are a defect (GUIDELINES
+ * 5.1), and the defect here is that a player who rebuilds an exterior would be
+ * charged for one they did not build.
+ *
+ * First writer wins, in this order: frame, then parts, then plate. That is
+ * what makes the frame impossible to edit and what stops two solids sharing a
+ * cell, which is what removed the z fighting.
  */
-function sectionArea(ext: readonly [number, number, number]): Record<SectionKey, number> {
-  const [x, y, z] = ext;
-  const flank = Math.round((y * z) / 3);
-  return {
-    bow: x * y, stern: x * y,
-    port: 0, starboard: 0,
-    dorsal: x * z, ventral: x * z,
-    beltFwd: flank * 2, beltMid: flank * 2, beltAft: flank * 2,
+export interface Raster {
+  /** One material per cell, x fastest then y then z. */
+  readonly grid: Uint8Array;
+  /** One purpose code per cell, which is what colours it. */
+  readonly purp: Uint8Array;
+  readonly plateCells: number;
+  readonly solidCells: number;
+  readonly extent: readonly [number, number, number];
+  /** The true bounding sphere, in cells, about the hull's own centre.
+   *  A box diagonal is not one: it measures corners a long thin ship has
+   *  nothing in, and it failed every frigate on a gate they actually pass. */
+  readonly radiusCells: number;
+}
+
+const idx3 = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
+
+const rasterSig = (d: Design): string =>
+  d.classKey + '|' + d.armour + '|'
+  + d.parts.map(p => p.socket + ':' + p.module + ':' + (p.rot ?? 0)).sort().join(',') + '|'
+  + SECTIONS.map(k => d.sections[k]).join(',');
+
+/** A cache of one. `derive()` and the renderer ask for the same design back to
+ *  back, and rasterising it twice per keystroke is the whole cost. */
+let rasterCache: { sig: string; raster: Raster } | null = null;
+
+export function rasterise(d: Design): Raster {
+  const sig = rasterSig(d);
+  if (rasterCache && rasterCache.sig === sig) return rasterCache.raster;
+
+  const frame = frameFor(d.classKey);
+  const prof = frame.profile;
+  const grid = new Uint8Array(CELLS);
+  const purp = new Uint8Array(CELLS);
+  const inBounds = (i: number, j: number, k: number) =>
+    i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ;
+  const set = (i: number, j: number, k: number, mat: number, code: number) => {
+    if (!mat || !inBounds(i, j, k)) return;
+    const n = idx3(i, j, k);
+    if (grid[n]) return;
+    grid[n] = mat;
+    purp[n] = code;
   };
+
+  const STRUCT = purposeCode('structure');
+
+  // --- the frame, which the player cannot edit --------------------------
+  for (const [x, y, z, w, h, l] of frame.spine)
+    for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++)
+      set(Math.round(x) + i, Math.round(y) + j, Math.round(z) + k, Mat.Frame, STRUCT);
+
+  // --- every fitted part, on whole cells, carrying its purpose ----------
+  const allSockets = socketsOf(frame, d.parts);
+  // Cells of a part that stand outboard of the hull line. They get a pylon
+  // back to it below, because a pod hanging in space beside its own ship is
+  // exactly the slop that voxels were supposed to end.
+  const outboard: number[] = [];
+  for (const p of d.parts) {
+    const sock = allSockets.find(k => k.id === p.socket);
+    const m = moduleById(p.module);
+    if (!sock || !m) continue;
+    const v = rotatedVoxels(m, p.rot ?? 0);
+    const code = purposeCode(m.purpose);
+    const ox = Math.round((sock.at[0] as number) - v.sx / 2);
+    const oy = Math.round((sock.at[1] as number) - v.sy / 2);
+    const oz = Math.round((sock.at[2] as number) - v.sz / 2);
+    for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
+      const mat = v.data[i + j * v.sx + k * v.sx * v.sy] as number;
+      if (!mat) continue;
+      const x = ox + i, y = oy + j, z = oz + k;
+      set(x, y, z, mat, code);
+      if (inBounds(x, y, z) && !insideHull(prof, x, y, z)) outboard.push(x, y, z);
+    }
+  }
+
+  // --- plate --------------------------------------------------------------
+  const sec = d.sections;
+  const z0 = Math.max(0, Math.round((prof[0] as Station)[0]));
+  const z1 = Math.min(NZ - 1, Math.round((prof[prof.length - 1] as Station)[0]));
+  /** Which belt band a station falls in, so fore, midships and aft still mean
+   *  something once the hull is a curve rather than a box. */
+  const band = (k: number): SectionKey => {
+    const t = (k - z0) / Math.max(1, z1 - z0);
+    return t > 0.66 ? 'beltFwd' : t > 0.33 ? 'beltMid' : 'beltAft';
+  };
+
+  if (d.armour === 'wrapped') {
+    // The class hull: plate laid on the frame's own profile, so a premade ship
+    // has a silhouette rather than a bounding box. A cell is skin if it is
+    // inside the hull line and NOT inside the same line drawn in by that
+    // face's layer count, which is a shell of exactly that thickness.
+    // The station's half extents are read once per k and the ellipse tested
+    // inline, because reading them per cell is 55,000 profile walks a frame
+    // and a slider fires on every pixel of a drag.
+    for (let k = z0; k <= z1; k++) {
+      const st = hullAt(prof, k);
+      const hw = st[0] as number, hh = st[1] as number;
+      const band_k = band(k);
+      const i0 = Math.max(0, Math.ceil(CX - hw)), i1 = Math.min(NX - 1, Math.floor(CX + hw));
+      const j0 = Math.max(0, Math.ceil(CY - hh)), j1 = Math.min(NY - 1, Math.floor(CY + hh));
+      for (let j = j0; j <= j1; j++) {
+        const dy = (j + 0.5 - CY) / hh;
+        for (let i = i0; i <= i1; i++) {
+          const dx = (i + 0.5 - CX) / hw;
+          if (dx * dx + dy * dy > 1) continue;
+          const side: SectionKey = Math.abs(dy) > Math.abs(dx)
+            ? (dy > 0 ? 'dorsal' : 'ventral') : band_k;
+          const L = sec[side] ?? 0;
+          if (L <= 0) continue;
+          const a = Math.max(0.5, hw - L), b = Math.max(0.5, hh - L);
+          const ux = (i + 0.5 - CX) / a, uy = (j + 0.5 - CY) / b;
+          if (ux * ux + uy * uy <= 1) continue;
+          const n = idx3(i, j, k);
+          if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
+          else set(i, j, k, Mat.Plate, STRUCT);
+        }
+      }
+    }
+    // The caps. Without them the hull is a tube open at both ends, and the
+    // stern is where the drive plate lives.
+    const cap = (k: number) => {
+      if (k < 0 || k >= NZ) return;
+      const st = hullAt(prof, k);
+      const hw = st[0] as number, hh = st[1] as number;
+      const i0 = Math.max(0, Math.ceil(CX - hw)), i1 = Math.min(NX - 1, Math.floor(CX + hw));
+      const j0 = Math.max(0, Math.ceil(CY - hh)), j1 = Math.min(NY - 1, Math.floor(CY + hh));
+      for (let j = j0; j <= j1; j++) {
+        const dy = (j + 0.5 - CY) / hh;
+        for (let i = i0; i <= i1; i++) {
+          const dx = (i + 0.5 - CX) / hw;
+          if (dx * dx + dy * dy > 1) continue;
+          const n = idx3(i, j, k);
+          if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
+          else set(i, j, k, Mat.Plate, STRUCT);
+        }
+      }
+    };
+    for (let t = 0; t < (sec.stern ?? 0); t++) cap(z0 + t);
+    for (let t = 0; t < (sec.bow ?? 0); t++) cap(z1 - t);
+
+    // And cover whatever frame is still bare to the outside.
+    //
+    // The shell is an ellipse and a spar is a box, so a stringer riding a
+    // fraction of a cell proud of that ellipse is outside it and keeps the
+    // cell: the Karisen's dorsal stringer and ventral keel beam ran the whole
+    // length of a fully plated hull as two grey planks, 915 bare cells of
+    // them. A skin covers its own ribs, including the ones that stick out.
+    for (let n = 0; n < CELLS; n++) {
+      if (grid[n] !== Mat.Frame) continue;
+      const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+      const exposed =
+        i === 0 || !grid[n - 1] || i === NX - 1 || !grid[n + 1] ||
+        j === 0 || !grid[n - NX] || j === NY - 1 || !grid[n + NX] ||
+        k === 0 || !grid[n - NX * NY] || k === NZ - 1 || !grid[n + NX * NY];
+      if (!exposed) continue;
+      const st = hullAt(prof, k);
+      const dx = (i + 0.5 - CX) / (st[0] as number), dy = (j + 0.5 - CY) / (st[1] as number);
+      const side: SectionKey = Math.abs(dy) > Math.abs(dx)
+        ? (dy > 0 ? 'dorsal' : 'ventral') : band(k);
+      if ((sec[side] ?? 0) > 0) grid[n] = Mat.Skinned;
+    }
+  } else {
+    // The exterior rebuilt from scratch: plate hugging what is actually
+    // bolted on, one step per layer per direction. It follows the parts
+    // instead of the class, which is the point of choosing it.
+    const seed: number[] = [];
+    for (let n = 0; n < CELLS; n++)
+      if (grid[n]) seed.push(n % NX, ((n / NX) | 0) % NY, (n / (NX * NY)) | 0);
+    const DIRS: ReadonlyArray<readonly [number, number, number, SectionKey | 'belt']> = [
+      [1, 0, 0, 'belt'], [-1, 0, 0, 'belt'],
+      [0, 1, 0, 'dorsal'], [0, -1, 0, 'ventral'],
+      [0, 0, 1, 'bow'], [0, 0, -1, 'stern'],
+    ];
+    for (const [dx, dy, dz, which] of DIRS) {
+      for (let n = 0; n < seed.length; n += 3) {
+        const i = seed[n] as number, j = seed[n + 1] as number, k = seed[n + 2] as number;
+        const layers = which === 'belt' ? (sec[band(k)] ?? 0) : (sec[which] ?? 0);
+        for (let t = 1; t <= layers; t++) {
+          const x = i + dx * t, y = j + dy * t, z = k + dz * t;
+          if (!inBounds(x, y, z)) break;
+          const at = grid[idx3(x, y, z)] as number;
+          if (at && at !== Mat.Plate) break;
+          set(x, y, z, Mat.Plate, STRUCT);
+        }
+      }
+    }
+  }
+
+  // --- pylons, so nothing floats ----------------------------------------
+  // Every outboard cell walks back toward the axis on whichever side it is
+  // furthest out, filling empty cells until it meets the ship. An RCS block
+  // ten cells off the centreline on a hull seven cells wide is attached to
+  // something now, in both modes and whatever the layer counts are.
+  for (let n = 0; n < outboard.length; n += 3) {
+    const i = outboard[n] as number, j = outboard[n + 1] as number, k = outboard[n + 2] as number;
+    if (k < z0 || k > z1) continue;
+    const st = hullAt(prof, k);
+    const hw = st[0] as number, hh = st[1] as number;
+    // A staircase toward the centreline, taking whichever axis is furthest
+    // out. Marching one axis only never arrives when the cell is outboard on
+    // BOTH: a gun overhanging the Rogue's bow walked its pylon straight down
+    // past the keel and out of the bottom of the lattice, because no cell on
+    // that column was ever inside the ellipse.
+    let x = i, y = j;
+    for (let t = 0; t < NX + NY; t++) {
+      const ux = (x + 0.5 - CX) / hw, uy = (y + 0.5 - CY) / hh;
+      if (Math.abs(ux) >= Math.abs(uy)) x += ux > 0 ? -1 : 1;
+      else y += uy > 0 ? -1 : 1;
+      if (!inBounds(x, y, k)) break;
+      if (grid[idx3(x, y, k)]) break;          // met the ship: attached
+      set(x, y, k, Mat.Plate, STRUCT);
+      const vx = (x + 0.5 - CX) / hw, vy = (y + 0.5 - CY) / hh;
+      if (vx * vx + vy * vy <= 1) break;       // reached the hull line
+    }
+  }
+
+  // --- what came out ------------------------------------------------------
+  let plateCells = 0;
+  let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
+  const cells: number[] = [];
+  // Walked linearly and unpacked only where a cell is filled. Indexing three
+  // nested loops through idx3 cost most of the pass, and a slider drag pays
+  // for this one on every pixel.
+  for (let n = 0; n < CELLS; n++) {
+    const mat = grid[n] as number;
+    if (!mat) continue;
+    const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+    cells.push(i, j, k);
+    // A skinned frame member is the FRAME wearing the shell, not another cell
+    // of armour. The shell's own cells are counted where the shell is; charging
+    // the coat as well would bill one volume twice, and it billed the Rogue
+    // hardest, which is the class with the least plate to hide it in.
+    if (mat === Mat.Plate) plateCells++;
+    if (i < loX) loX = i; if (i > hiX) hiX = i;
+    if (j < loY) loY = j; if (j > hiY) hiY = j;
+    if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
+  }
+  const extent = [
+    Math.max(1, hiX - loX + 1), Math.max(1, hiY - loY + 1), Math.max(1, hiZ - loZ + 1),
+  ] as [number, number, number];
+
+  // The sphere the collision gate actually asks about: furthest cell corner
+  // from the hull's own centre, not the diagonal of a box drawn round it.
+  const mx = (loX + hiX + 1) / 2, my = (loY + hiY + 1) / 2, mz = (loZ + hiZ + 1) / 2;
+  let r2 = 0;
+  for (let n = 0; n < cells.length; n += 3) {
+    const dx = Math.abs((cells[n] as number) + 0.5 - mx) + 0.5;
+    const dy = Math.abs((cells[n + 1] as number) + 0.5 - my) + 0.5;
+    const dz = Math.abs((cells[n + 2] as number) + 0.5 - mz) + 0.5;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 > r2) r2 = d2;
+  }
+
+  const raster: Raster = { grid, purp, plateCells, solidCells: cells.length / 3, extent,
+    radiusCells: Math.sqrt(r2) };
+  rasterCache = { sig, raster };
+  return raster;
 }
 
 export function derive(d: Design): Derived {
@@ -614,33 +1064,10 @@ export function derive(d: Design): Derived {
     }
   }
 
-  // --- the envelope, from the frame's own extent -------------------------
-  let lo = [NX, NY, NZ], hi = [-1, -1, -1];
-  for (const [x, y, z, w, h, l] of frame.spine) {
-    lo = [Math.min(lo[0] ?? 0, x), Math.min(lo[1] ?? 0, y), Math.min(lo[2] ?? 0, z)];
-    hi = [Math.max(hi[0] ?? 0, x + w), Math.max(hi[1] ?? 0, y + h), Math.max(hi[2] ?? 0, z + l)];
-  }
-  const allSockets = socketsOf(frame, d.parts);
-  for (const p of d.parts) {
-    const s = allSockets.find(k => k.id === p.socket);
-    const m = moduleById(p.module);
-    if (!s || !m) continue;
-    for (let a = 0; a < 3; a++) {
-      const half = (m.size[a] ?? 1) / 2;
-      lo[a] = Math.min(lo[a] ?? 0, Math.round((s.at[a] ?? 0) - half));
-      hi[a] = Math.max(hi[a] ?? 0, Math.round((s.at[a] ?? 0) + half));
-    }
-  }
-  const ext = [
-    Math.max(1, (hi[0] ?? 1) - (lo[0] ?? 0)),
-    Math.max(1, (hi[1] ?? 1) - (lo[1] ?? 0)),
-    Math.max(1, (hi[2] ?? 1) - (lo[2] ?? 0)),
-  ] as [number, number, number];
-
-  // --- plate, and what it costs -----------------------------------------
-  const area = sectionArea(ext);
-  let plateCells = 0;
-  for (const k of SECTIONS) plateCells += (area[k] ?? 0) * (d.sections[k] ?? 0);
+  // --- the hull as built, counted rather than estimated -------------------
+  const raster = rasterise(d);
+  const ext = raster.extent as [number, number, number];
+  const plateCells = raster.plateCells;
   const enclosed = ext[0] * ext[1] * ext[2];
 
   const vol = rungVol(frame.rung);
@@ -675,7 +1102,7 @@ export function derive(d: Design): Derived {
   const reachU = 0.5 * accelFwd * tAccel * tAccel + maxSpeed * (TURN_SECONDS - tAccel);
 
   // --- the true bounding sphere, which is the gate the wireframe used to be
-  const radius = Math.sqrt(ext[0] ** 2 + ext[1] ** 2 + ext[2] ** 2) * cell / 2;
+  const radius = raster.radiusCells * cell;
 
   // --- the belt a shot actually meets ------------------------------------
   const belt = Math.max(d.sections.beltFwd, d.sections.beltMid, d.sections.beltAft);
@@ -723,8 +1150,9 @@ export function derive(d: Design): Derived {
 /** The ship a player is handed, at about 85 percent of budget so their first
  *  action is not turning the editor red. */
 function stock(classKey: string, parts: Placement[], sections: Partial<Sections>,
-  paint: number): Design {
-  return { classKey, parts, sections: { ...zeroSections(), ...sections }, paint };
+  faction: string, paint: number): Design {
+  return { classKey, parts, sections: { ...zeroSections(), ...sections },
+    armour: 'wrapped', faction, paint };
 }
 
 const P = (socket: string, module: string): Placement => ({ socket, module });
@@ -743,8 +1171,8 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b5', 'UTL-BAR'),
     P('b3', 'UTL-AIR'), P('b4', 'UTL-AIR'), P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
-  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
-    0x0095E9),
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
+    'terran', 0x0095E9),
 
   // Three bells in a row and a ventral rack. Plate on all four long faces
   // rather than a belt, which is the stacked silhouette read from the inside.
@@ -757,8 +1185,8 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b4', 'UTL-BAR'),
     P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
-  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
-    0xFA6A0A),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'karisen', 0xFA6A0A),
 
   // Its boarding gear is roughly a third of its mass, which is why it is short,
   // why it has the least hull, and why it turns better than anything else.
@@ -778,7 +1206,7 @@ export const STOCK: readonly Design[] = [
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'),
     P('c3', 'UTL-CLM'), P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'),
   ], { beltFwd: 1, beltMid: 1, beltAft: 1, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
-    0x494182),
+    'rogue', 0x494182),
 
   // One heavy bell does the pushing but caps top speed at 7.0, so the light
   // nozzle beside it exists purely to raise the ceiling. Two cannon at pen 2
@@ -793,7 +1221,7 @@ export const STOCK: readonly Design[] = [
     P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('a0', 'UTL-AIR'), P('a1', 'UTL-AIR'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
-    0x1A7A3E),
+    'benefactor', 0x1A7A3E),
 
   // A hold and a skin. Two holds are most of what it has, and no gun ring
   // exists on the frame at all.
@@ -804,14 +1232,14 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('h0', 'UTL-CGO'), P('h1', 'UTL-CGO'),
     P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
     P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
-  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
-    0xD8E2EC),
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 4, ventral: 4, bow: 2, stern: 2 },
+    'civil', 0xD8E2EC),
 ];
 
 export const stockFor = (classKey: string): Design => {
   const s = STOCK.find(d => d.classKey === classKey) ?? (STOCK[0] as Design);
   return { classKey: s.classKey, parts: s.parts.map(p => ({ ...p })),
-    sections: { ...s.sections }, paint: s.paint };
+    sections: { ...s.sections }, armour: s.armour, faction: s.faction, paint: s.paint };
 };
 
 // ============================================================== VOXELS ==
@@ -840,16 +1268,90 @@ export const stockFor = (classKey: string): Design => {
  * plate toggle empty the screen.
  */
 export const Mat = {
-  Empty: 0, Plate: 1, Frame: 2, Machine: 3, Glow: 4, Accent: 5,
+  Empty: 0, Plate: 1, Frame: 2, Machine: 3, Glow: 4, Accent: 5, Case: 6, Skinned: 7,
 } as const;
 
-export const MAT_COLOUR: Record<number, number> = {
-  [Mat.Plate]: 0x9FB2C6,
-  [Mat.Frame]: 0x6E829B,
-  [Mat.Machine]: 0x39485C,
-  [Mat.Glow]: 0xFA6A0A,
-  [Mat.Accent]: 0x35C7FF,
-};
+/**
+ * `Skinned` is a frame member lying where the armour shell wants to be.
+ *
+ * First writer wins, so the frame owns the cell, and the Karisen's dorsal
+ * stringer and ventral keel beam therefore ran as two bare grey slabs straight
+ * down the outside of a plated hull. A skin covers its own ribs. So the shell
+ * marks those cells instead of skipping them: they draw and cost as plate with
+ * the plate on, and go back to being frame the moment it comes off, which is
+ * what the x ray is for.
+ */
+
+/**
+ * `Case` exists so a part's own casing is not armour.
+ *
+ * A barbette drum, a gun housing and a bridge shell all used to be written as
+ * `Plate`, which meant the paint bucket reached inside the ship and turned
+ * every mount the faction colour. Armour is the only thing a player paints,
+ * so armour is the only thing that carries `Plate`.
+ */
+
+/** Purpose in one byte, so a whole grid can carry it beside the material. */
+export const PURPOSE_ORDER: readonly Purpose[] = [
+  'propulsion', 'attitude', 'gun', 'ordnance',
+  'command', 'crew', 'boarding', 'structure',
+];
+export const purposeCode = (p: Purpose): number => PURPOSE_ORDER.indexOf(p) + 1;
+export const purposeAt = (code: number): Purpose =>
+  PURPOSE_ORDER[Math.max(0, code - 1)] ?? 'structure';
+
+/**
+ * The colour of one cell, and the ONLY place that decision is made.
+ *
+ * Armour takes the paint. Everything else takes its purpose hue, in one of
+ * three tones: the casing is the shadow, the working guts are the base, and
+ * anything lit or trimmed is the highlight. That is why an unfamiliar hull is
+ * readable: orange is a drive on anybody's ship, red is a gun, and the only
+ * thing that changes between factions is the skin over them.
+ */
+export function cellColour(mat: number, code: number, paint: number): number {
+  if (mat === Mat.Plate) return paint;   // callers that want the livery use armourColour
+  if (mat === Mat.Frame || mat === Mat.Skinned) return PURPOSE.structure.base;
+  const p = PURPOSE[purposeAt(code)];
+  switch (mat) {
+    case Mat.Case: return p.dark;
+    case Mat.Glow:
+    case Mat.Accent: return p.lit;
+    default: return p.base;
+  }
+}
+
+/**
+ * Where each of a faction's eight lands on the hull.
+ *
+ * Position decides, not chance: the same cell is the same colour on both
+ * seats and on a reload, which matters because a livery that reshuffled would
+ * read as the ship having changed. Nothing here is hashed or sent to the core,
+ * so two players who painted differently still agree on the match.
+ *
+ * `primary` is the swatch the player picked. The other seven roles stay where
+ * the faction authored them, so picking a different primary re-tints the hull
+ * without wrecking the scheme: the underside stays dark, the markings stay
+ * legible, the stripe stays the stripe.
+ */
+export function armourColour(sw: readonly number[], primary: number,
+  i: number, j: number, k: number,
+  z0: number, z1: number, hw: number, hh: number): number {
+  const P = (n: number) => (sw[n] ?? primary) as number;
+  const dx = (i + 0.5 - CX) / Math.max(1, hw);
+  const dy = (j + 0.5 - CY) / Math.max(1, hh);
+  const t = (k - z0) / Math.max(1, z1 - z0);        // 0 at the transom, 1 at the nose
+  if (t > 0.94) return P(PAINT_ROLE.marking);        // nose flash
+  if (t < 0.05) return P(PAINT_ROLE.trim);           // transom band
+  if (t > 0.70 && t < 0.78 && Math.abs(dy) < 0.6) return P(PAINT_ROLE.marking);
+  if (Math.abs(dy) <= 0.15) return P(PAINT_ROLE.stripe);   // the waist stripe
+  if (dy < -0.58) return P(PAINT_ROLE.deep);         // underside
+  if (dy > 0.70 && Math.abs(dx) < 0.42) return P(PAINT_ROLE.highlight);
+  // Plating panels, coarse enough to read at ship scale.
+  const panel = (((k / 7) | 0) + ((i / 5) | 0) + ((j / 5) | 0)) % 3;
+  return panel === 0 ? primary
+    : panel === 1 ? P(PAINT_ROLE.panel) : P(PAINT_ROLE.secondary);
+}
 
 export interface VoxelModel {
   readonly sx: number; readonly sy: number; readonly sz: number;
@@ -859,6 +1361,36 @@ export interface VoxelModel {
 }
 
 const voxCache = new Map<string, VoxelModel>();
+const rotCache = new Map<string, VoxelModel>();
+
+/**
+ * The same part, turned a quarter at a time about the up axis.
+ *
+ * Rotating the CELLS rather than the drawn mesh is what keeps a turned turret
+ * on the grid: it stays one cell per cell, so it still cannot z fight with the
+ * plate beside it or float a fraction of a cell off its ring.
+ */
+export function rotatedVoxels(m: ModuleDef, rot: number): VoxelModel {
+  const r = ((rot % 4) + 4) % 4;
+  if (r === 0) return voxelsOf(m);
+  const key = m.id + '/' + r;
+  const hit = rotCache.get(key);
+  if (hit) return hit;
+  let cur = voxelsOf(m);
+  for (let n = 0; n < r; n++) {
+    // (x, z) -> (sz - 1 - z, x): one quarter turn, exact on integers.
+    const sx = cur.sz, sy = cur.sy, sz = cur.sx;
+    const data = new Uint8Array(sx * sy * sz);
+    for (let z = 0; z < cur.sz; z++) for (let y = 0; y < cur.sy; y++) for (let x = 0; x < cur.sx; x++) {
+      const v = cur.data[x + y * cur.sx + z * cur.sx * cur.sy] as number;
+      if (!v) continue;
+      data[(cur.sz - 1 - z) + y * sx + x * sx * sy] = v;
+    }
+    cur = { sx, sy, sz, data, filled: cur.filled };
+  }
+  rotCache.set(key, cur);
+  return cur;
+}
 
 /**
  * Rasterise a part into cells.
@@ -907,7 +1439,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       const r = Math.min(sx, sz) / 2;
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
         const d = Math.hypot(x - cx, z - (sz - 1) / 2);
-        if (d <= r) put(x, y, z, y === sy - 1 && d > r - 1.2 ? Mat.Accent : Mat.Plate);
+        if (d <= r) put(x, y, z, y === sy - 1 && d > r - 1.2 ? Mat.Accent : Mat.Case);
       }
       break;
     }
@@ -917,7 +1449,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       const housing = Math.round(sz * (m.art === 'cannon' ? 0.45 : 0.36));
       const rBarrel = m.art === 'cannon' ? 1.6 : 1.05;
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
-        if (z < housing) { put(x, y, z, Mat.Plate); continue; }
+        if (z < housing) { put(x, y, z, Mat.Case); continue; }
         if (rad(x, y) <= rBarrel) put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Machine);
       }
       break;
@@ -925,7 +1457,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
     case 'missilecell': {
       // A block with tubes bored forward through it.
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
-        put(x, y, z, Mat.Plate);
+        put(x, y, z, Mat.Case);
       const qx = [Math.floor(sx * 0.28), Math.floor(sx * 0.72)];
       const qy = [Math.floor(sy * 0.28), Math.floor(sy * 0.72)];
       for (const x of qx) for (const y of qy) for (let z = Math.floor(sz * 0.35); z < sz; z++)
@@ -934,7 +1466,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
     }
     case 'bridge': {
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
-        put(x, y, z, Mat.Plate);
+        put(x, y, z, Mat.Case);
       // A lit band across the front of the top deck.
       for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 1, Mat.Accent);
       for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 2, Mat.Accent);
@@ -953,7 +1485,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
     default:
       // A plain block, with a machined face so it is not a featureless brick.
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
-        put(x, y, z, y === sy - 1 ? Mat.Machine : Mat.Plate);
+        put(x, y, z, y === sy - 1 ? Mat.Machine : Mat.Case);
   }
 
   let filled = 0;

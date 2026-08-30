@@ -493,6 +493,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   background:#111823dd; border-radius:6px;
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
 .dzclasses button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+/* The same chips, in the flow of a panel rather than floating over the canvas.
+   Reusing .dzclasses here put an absolutely positioned row on top of the one
+   above it, and the buried row still swallowed every tap. */
+.dzchips { display:flex; flex-wrap:wrap; gap:5px; margin:2px 0 6px; }
+.dzchips button { padding:7px 11px; font-size:11px; background:#111823dd; border-radius:6px; }
+.dzchips button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
 #dzHint { position:absolute; left:10px; bottom:9px; z-index:3; font-size:10px;
   color:var(--muted); pointer-events:none; }
 
@@ -545,6 +551,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+.dzturn { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
+.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
+.dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
+.dzturn b { font-size:12px; color:var(--cyan); min-width:34px; }
+.dzkeys { display:flex; flex-wrap:wrap; gap:5px 10px; margin:2px 0 4px; }
+.dzkey { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--dim); }
+.dzkey .sw { width:11px; height:11px; border-radius:2px; display:inline-block; }
 
 .dzseam { border:1px solid #1d4a5f; background:#0a1a22; border-radius:4px;
   padding:8px 10px; margin-bottom:11px; }
@@ -590,6 +603,18 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #designer button { padding:9px 12px; }
   .dzsock { padding:8px 10px; }
   .dzfoot { padding-bottom:calc(9px + var(--safe)); }
+}
+
+/* At a phone's width the header ran past its own right edge and took Close
+   with it: 333 to 408 in a 390 viewport, on a bar with overflow hidden, so
+   the only way out of the shipyard was off screen. The stats are the part
+   that gives way, because the verdict and the way out are not optional. */
+@media (max-width: 460px) {
+  #dzHead { gap:7px; padding:0 8px; }
+  #dzHead h2 { display:none; }
+  #dzHullWrap { display:none; }
+  #designer #dzHead button { padding:6px 9px; font-size:10px; }
+  .dzv { padding:4px 7px; font-size:10px; }
 }
 @media (max-width: 900px) and (max-height: 600px) {
   #designer { grid-template-rows:38px 150px minmax(0,1fr); }
@@ -647,7 +672,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   <header id="dzHead">
     <h2>Shipyard</h2>
     <span class="dzstat">mass <b id="dzMass">0</b></span>
-    <span class="dzstat">hull <b id="dzHull">0</b></span>
+    <span class="dzstat" id="dzHullWrap">hull <b id="dzHull">0</b></span>
     <span class="dzstat" id="dzPartsWrap">parts <b id="dzParts">0</b></span>
     <span class="dzgap"></span>
     <span class="dzv" id="dzVerdict">no hull</span>
@@ -677,14 +702,28 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     </div>
 
     <div id="dzPaneArmour" class="dzpane hidden">
+      <div class="dzgrp">Exterior</div>
+      <div id="dzMode" class="dzchips"></div>
+      <p class="dznote" id="dzModeNote"></p>
+      <div class="dzgrp">Layers</div>
       <p class="dznote">Plate is authored one face at a time. Layers set what a
       face absorbs, and a gun with penetration is scored against fewer of them,
-      so a belt that stops a beam is porous to a shell.</p>
+      so a belt that stops a beam is porous to a shell. The frame under it is
+      not editable in either mode.</p>
       <div id="dzArmour"></div>
       <div class="dzgrp">Paint</div>
-      <p class="dznote">Cosmetic only. Never hashed, never sent to the core, so two
-      players who built the same hull in different colours cannot read as a desync.</p>
+      <p class="dznote">Armour only, and all eight of a faction's swatches are on
+      the hull at once: plating panels, a dark underside, a dorsal spine, a stripe
+      along the waist, a nose flash and a transom band. Picking a swatch sets the
+      primary; the other seven roles hold, so the scheme survives a re-tint.
+      Everything else on the ship is coloured by what it does, so a drive is orange
+      and a gun is red whoever built them. Cosmetic either way: never hashed, never
+      sent to the core, so two players who painted the same hull differently cannot
+      read as a desync.</p>
+      <div id="dzFactions" class="dzchips"></div>
       <div id="dzPaint" class="dzpaint"></div>
+      <div class="dzgrp">Colour key</div>
+      <div id="dzKey" class="dzkeys"></div>
     </div>
 
     <div id="dzPaneStats" class="dzpane hidden">
@@ -699,6 +738,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
     <div class="dzfoot">
       <button id="dzReset">Reset to stock</button>
+      <button id="dzBare">Strip armour</button>
       <button id="dzStrip">Strip bare</button>
     </div>
   </aside>
