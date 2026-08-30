@@ -161,3 +161,60 @@ fn replaying_without_the_field_parts() {
     without.resolve_turn(&mut [None, None]);
     assert_ne!(with.hash_state(), without.hash_state());
 }
+
+/// Fly into a world and you are part of it.
+///
+/// The well's softening radius is the body's own radius, so crossing it is the
+/// surface rather than a near miss. Checked both ways round in one fixture,
+/// because a rule that kills everything near a planet would pass a test that
+/// only looked for the death.
+#[test]
+fn a_hull_that_reaches_a_world_dies_on_it() {
+    use sim_core::turn::{EventKind, Order};
+    let build = |target: V3| {
+        let mut sim = Sim::new_skirmish(
+            "impact-seed",
+            &[SpawnSpec {
+                class: ShipClassId::TerranFrigate,
+                pos: V3::new(0.0, 0.0, -40.0),
+                facing: V3::new(0.0, 0.0, 1.0),
+            }],
+            &[SpawnSpec {
+                class: ShipClassId::TerranFrigate,
+                pos: V3::new(300.0, 0.0, 0.0),
+                facing: V3::new(-1.0, 0.0, 0.0),
+            }],
+            Faction::Terran,
+            3,
+        );
+        // A small dead world with no pull at all, so what kills is the surface
+        // and not a field dragging the hull in.
+        sim.wells = vec![Well::new(V3::ZERO, 0.0, 12.0)];
+        let mut orders = vec![
+            Some(Order { mode: Some(Mode::MoveAndTurn), target: Some(target), ..Default::default() }),
+            None,
+        ];
+        let res = sim.resolve_turn(&mut orders);
+        (sim, res)
+    };
+
+    // Straight at the middle of it.
+    let (sim, res) = build(V3::ZERO);
+    assert!(sim.ships[0].destroyed, "flew into a world and lived");
+    let boom = res
+        .events
+        .iter()
+        .find(|e| e.kind == EventKind::ShipDestroyed && e.ship == 0)
+        .expect("no wreck reported");
+    let r = sim.ships[0].class_def().radius;
+    let reach = 12.0 + r;
+    assert!(
+        boom.pos.len() <= reach + 1.0,
+        "died {} from the centre, but the surface is at {reach}", boom.pos.len(),
+    );
+    assert!(boom.tick > 0 && boom.tick <= 600, "died at tick {}", boom.tick);
+
+    // And a course that stops short of the surface is simply a close pass.
+    let (near, _) = build(V3::new(0.0, 0.0, -22.0));
+    assert!(!near.ships[0].destroyed, "a near miss should not be a wreck");
+}

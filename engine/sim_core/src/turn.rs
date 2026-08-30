@@ -277,6 +277,43 @@ impl Sim {
         ship.plan_roll = roll;
     }
 
+    /// Fly into a world and you are part of it.
+    ///
+    /// A well's softening radius is not a fudge factor, it is the body's own
+    /// radius: the distance inside which the field stops growing because you
+    /// are inside the mass. So crossing it is not a near miss, it is the
+    /// surface, and a hull that reaches it is gone.
+    ///
+    /// Straight after kinematics and before contact, because a hull that is
+    /// inside a planet should not go on to bump into anything else this tick.
+    /// Killed through `apply_damage` like everything else, so the wreck, the
+    /// event and its position all come out of the one pipeline rather than a
+    /// second way for a ship to die.
+    fn resolve_impacts(&mut self, tick: i32, events: &mut Vec<Event>) {
+        // Gathered first, because the loop reads the wells while the kill
+        // writes to the ships.
+        let mut hit: Vec<usize> = Vec::new();
+        for (si, ship) in self.ships.iter().enumerate() {
+            if ship.destroyed {
+                continue;
+            }
+            let r = ship.class_def().radius;
+            for w in &self.wells {
+                let reach = w.soft + r;
+                if ship.pos.sub(w.pos).len2() <= reach * reach {
+                    hit.push(si);
+                    break;
+                }
+            }
+        }
+        for si in hit {
+            // Exactly enough to finish it, so the damage event carries a real
+            // number rather than an infinity the console would have to print.
+            let left = self.ships[si].hull.max(0.0) + 1.0;
+            self.apply_damage(si, None, left, None, events, tick);
+        }
+    }
+
     /// Re-fly the remainder of the turn after contact changed the velocity.
     /// The order still stands, so the ship keeps trying for the same
     /// destination from wherever it was left.
@@ -886,11 +923,13 @@ impl Sim {
                     self.ships[si].quat = q;
                 }
             }
-            // 2. projectiles
+            // 2. the ground
+            self.resolve_impacts(tick, &mut events);
+            // 3. projectiles
             self.step_projectiles(tick, &mut events);
-            // 3. contact
+            // 4. contact
             self.resolve_collisions(tick, &mut events, &mut pair_cooldowns, &prev_positions);
-            // 4. whatever the second boundary schedules
+            // 5. whatever the second boundary schedules
             if tick % TICKS_PER_SECOND as i32 == 0 {
                 let second = tick / TICKS_PER_SECOND as i32;
                 if second == 0 {
@@ -911,7 +950,7 @@ impl Sim {
                     self.boarding_second(tick, &mut events);
                 }
             }
-            // 5. record the frame for playback
+            // 6. record the frame for playback
             if self.record {
                 self.tracks.push(crate::state::TrackFrame {
                     ships: self.ships.iter().map(|s| (s.pos, s.quat, s.destroyed)).collect(),

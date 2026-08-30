@@ -744,10 +744,20 @@ fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
     )
 }
 
-/// Fought over something heavy. The well pulls at about a quarter of the main
-/// drive, which is enough to lean the reachable set hard without taking the
-/// match away from the players: downhill reach beats uphill by about six to one
-/// out of identical stats.
+/// Fought over something heavy. The well pulls at 0.096 u/s^2 at the start
+/// line, which is a ninth of the main drive and about a third of the lateral
+/// thrusters: enough to lean the reachable set without outgunning the RCS.
+///
+/// It used to pull 0.192, which is 77 percent of the lateral budget, and the
+/// lean showed it. Probing straight up and straight down from a start:
+///
+///     no field      14 u up, 14 u down
+///     0.192 u/s^2    5 u up, 23 u down     4.6 to 1
+///     0.096 u/s^2    9 u up, 19 u down     2.1 to 1
+///
+/// Five units of uphill reach is barely a hull length, so climbing was not a
+/// choice a player could make. At half the pull the field still leans the
+/// envelope two to one and a hull can still fly out of it.
 ///
 /// The field is on the MATCH, so it is in the state hash and in the snapshot,
 /// and both seats get it from the scenario id rather than from a client that
@@ -767,7 +777,7 @@ fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
         Faction::Karisen,
         human_sides,
     );
-    sim.wells.push(Well::new(V3::new(0.0, -300.0, 0.0), 20000.0, 20.0));
+    sim.wells.push(Well::new(V3::new(0.0, -300.0, 0.0), 10000.0, 20.0));
     sim
 }
 
@@ -775,6 +785,11 @@ fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
 /// further out, so a single number at the hull says nothing: sitting between
 /// them the field reads zero while the envelope is stretched along the axis
 /// joining them and squeezed across it.
+///
+/// 0.104 u/s^2 net at the start line, down from 0.255. That figure is the one
+/// that made this scenario unflyable rather than tense: the lateral thrusters
+/// are 0.25, so the field was taking a hull sideways faster than it could push
+/// back.
 fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
     let mut sim = Sim::new_skirmish(
@@ -784,14 +799,14 @@ fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
         Faction::Karisen,
         human_sides,
     );
-    sim.wells.push(Well::new(V3::new(-160.0, 0.0, 0.0), 16000.0, 20.0));
-    sim.wells.push(Well::new(V3::new(160.0, 0.0, 0.0), 16000.0, 20.0));
+    sim.wells.push(Well::new(V3::new(-160.0, 0.0, 0.0), 6500.0, 20.0));
+    sim.wells.push(Well::new(V3::new(160.0, 0.0, 0.0), 6500.0, 20.0));
     sim
 }
 
-/// A well close enough to matter, off the line the two sides start on. At 0.15
-/// u/s^2 against a 0.9 drive it perturbs rather than dominates, which is the
-/// interesting band: 1.03 was measured and empties the reachable set entirely.
+/// A well close enough to matter, off the line the two sides start on. At 0.09
+/// u/s^2 it perturbs rather than dominates, which is the interesting band: 1.03
+/// was measured and empties the reachable set entirely.
 fn scenario_slingshot(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
     let mut sim = Sim::new_skirmish(
@@ -804,7 +819,7 @@ fn scenario_slingshot(seed: &str, human_sides: u8) -> Sim {
         Faction::Karisen,
         human_sides,
     );
-    sim.wells.push(Well::new(V3::new(0.0, 0.0, 60.0), 1750.0, 15.0));
+    sim.wells.push(Well::new(V3::new(0.0, 0.0, 60.0), 1000.0, 15.0));
     sim
 }
 
