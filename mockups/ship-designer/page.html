@@ -1,0 +1,1828 @@
+<title>Slice Yard</title>
+<meta name="description" content="The ship designer: a hull built one Z slice at a time on a flat tap grid, a live 3D preview, five real hull classes as a lever, and every derived number arriving from the core over a flat f32 buffer.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
+<script src="../vendor/three.global.js"></script>
+<style>
+/* Tokens copied from web/index.html so the yard reads as the same console.
+   The three shipped faces (Michroma, Exo 2, Rajdhani) are named first and fall
+   back to system UI: a mockup takes no network, so no remote font is loaded.
+   Two colours are added beyond the console's eleven, --violet and --steel,
+   because eight cube kinds need eight hues and reusing one would make two
+   kinds look alike on a phone. */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --amber:#FFD24B; --violet:#A98BFF; --steel:#93A6BC;
+  --tabh:52px;
+  /* Safe area insets are read once into variables so every edge that has to
+     dodge a notch or a home bar reads the SAME number, and so a harness can
+     override them on a desktop browser, which never reports one. */
+  --safe:env(safe-area-inset-bottom, 0px);
+  --sil:env(safe-area-inset-left, 0px);
+  --sir:env(safe-area-inset-right, 0px);
+  --disp:Michroma,"Rajdhani",system-ui,sans-serif;
+  --ui:"Exo 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --lbl:Rajdhani,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:14px;
+  overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+
+/* minmax(0,1fr) on every flexible track: a bare 1fr carries a min content
+   minimum, and one wide child would then push the layout off a phone. */
+#app{display:grid;
+  grid-template-columns:230px minmax(0,1fr) minmax(0,1fr) 322px;
+  grid-template-rows:48px minmax(0,1fr);
+  grid-template-areas:"h h h h" "rail edit view core";
+  height:100vh;height:100dvh;min-width:0}
+
+header{grid-area:h;display:flex;align-items:center;gap:9px;min-width:0;overflow:hidden;
+  padding:0 calc(12px + var(--sir)) 0 calc(12px + var(--sil));
+  background:var(--panel2);border-bottom:1px solid var(--line);
+  -webkit-user-select:none;user-select:none}
+header h1{font-family:var(--disp);font-size:12px;font-weight:400;letter-spacing:.12em;
+  margin:0;color:var(--cyan);white-space:nowrap}
+.hgap{flex:1;min-width:0}
+.stat{font-family:var(--lbl);font-weight:600;font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.stat b{color:var(--ink);font-weight:700}
+
+/* The verdict is a live control on a phone: it opens the panel that explains
+   it. So it is sized as a control (32px tall, past the 26px floor this repo
+   works to) and it declares touch-action, because the one element left on
+   `auto` is the one a double tap page zooms on a real device. */
+#hVerdict{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;border:1px solid var(--line);border-radius:4px;
+  padding:0 11px;min-height:30px;display:inline-flex;align-items:center;
+  white-space:nowrap;background:var(--panel);color:var(--muted);
+  touch-action:manipulation;cursor:pointer}
+#hVerdict.ok{color:var(--green);border-color:#1f6b40;background:#0c1d16}
+#hVerdict.warn{color:var(--amber);border-color:#5a4713;background:#1b1607}
+#hVerdict.bad{color:var(--red);border-color:#6b2020;background:#1d0f0f}
+
+button,select{font-family:var(--lbl);font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  font-size:12px;touch-action:manipulation;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:6px 11px;min-height:30px;cursor:pointer}
+button:hover,select:hover{border-color:var(--cyan);color:var(--cyan)}
+button:disabled{opacity:.32;cursor:default}
+button:disabled:hover{border-color:var(--line);color:var(--ink)}
+button.on{border-color:var(--cyan);color:var(--cyan);background:#0d2231}
+button:focus-visible,select:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+select{text-transform:none;letter-spacing:.02em;font-weight:600;padding:5px 7px;max-width:150px}
+
+aside,section{min-width:0;min-height:0}
+#rail{grid-area:rail;background:var(--panel2);border-right:1px solid var(--line);
+  padding:10px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+#core{grid-area:core;background:var(--panel2);border-left:1px solid var(--line);
+  padding:10px;overflow-y:auto}
+#edit{grid-area:edit;padding:8px 10px 10px;display:flex;flex-direction:column;
+  gap:8px;min-height:0;background:var(--ground)}
+#view{grid-area:view;position:relative;min-height:0;border-left:1px solid var(--line);
+  border-right:1px solid var(--line);background:#070a0f}
+
+h2{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+.note{font-size:11px;line-height:1.45;color:var(--muted);margin:6px 0 0}
+.note b{color:var(--ink)}
+.tag{font-family:var(--lbl);font-weight:700;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;border:1px solid var(--line);border-radius:3px;
+  padding:1px 5px;color:var(--muted);white-space:nowrap}
+.tag.warn{color:var(--amber);border-color:#5a4713}
+
+/* ------------------------------------------------------------- palette -- */
+#palette{display:grid;grid-template-columns:1fr;gap:5px}
+.chip{display:flex;align-items:center;gap:8px;padding:6px 8px;min-height:32px;
+  background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer;
+  text-align:left;font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink);width:100%;touch-action:manipulation}
+.chip .sw{width:20px;height:20px;border-radius:3px;flex:0 0 auto;display:grid;
+  place-items:center;font-size:11px;font-weight:700;color:#06090e;
+  font-family:var(--mono);border:1px solid #0006}
+.chip .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .num{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:0}
+.chip.on{border-color:var(--cyan);background:#0d2231}
+.chip.on .nm{color:var(--cyan)}
+.chip:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
+/* ------------------------------------------------------------ the deck --
+   Everything the hand reaches for between two cubes lives here, on canvas,
+   never in a sheet: previous slice, next slice, and UNDO. A control that is
+   only in a panel is a control nothing on screen says exists. */
+#deck{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;
+  padding-left:var(--sil);padding-right:var(--sir)}
+#deck .lname{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+#deck .lname b{color:var(--cyan)}
+.step{width:42px;height:34px;padding:0;font-size:15px;flex:0 0 auto}
+#bUndo{height:34px;padding:0 12px;flex:0 0 auto}
+#lrail{display:flex;gap:4px;flex:1 0 100%;min-width:0;order:9}
+.lz{flex:1;min-width:26px;height:30px;padding:0;position:relative;overflow:hidden;
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  display:flex;align-items:flex-end;justify-content:center;cursor:pointer}
+.lz .bar{position:absolute;left:0;right:0;bottom:0;background:#1c3448}
+.lz .n{position:relative;font-family:var(--mono);font-size:10px;color:var(--muted);
+  line-height:1;padding-bottom:3px}
+.lz.on{border-color:var(--cyan)}
+.lz.on .bar{background:#12405c}
+.lz.on .n{color:var(--cyan)}
+
+/* ---------------------------------------------------------- slice grid -- */
+/* overflow:hidden is a guard, not a layout: a grid that outgrew this box
+   would be drawn ON TOP of the palette below it and would eat those taps
+   while still looking enabled. Clipped is wrong and visible; covering a
+   control is wrong and invisible. */
+#gridwrap{grid-area:edit;flex:1;min-height:0;display:grid;place-items:center;overflow:hidden;
+  padding-left:var(--sil);padding-right:var(--sir)}
+/* The size is set in JS from the box it sits in, not from a vh guess. */
+#grid{width:100%;max-width:100%;aspect-ratio:1;display:grid;
+  grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:6px;
+  touch-action:none;-webkit-user-select:none;user-select:none;position:relative}
+.cell{position:relative;padding:0;border-radius:5px;background:#0c1118;
+  border:1px solid var(--line);overflow:hidden;cursor:pointer;
+  display:grid;place-items:center;min-width:0;min-height:0}
+.cell:hover{border-color:#2f4258}
+.cell .gl{font-family:var(--mono);font-size:clamp(11px,3.4vh,20px);font-weight:700;
+  color:#06090e;line-height:1;position:relative;z-index:2}
+.cell .gh{position:absolute;inset:14%;border-radius:4px;border:1px dashed currentColor;
+  opacity:.42;z-index:1}
+.cell .tk{position:absolute;left:0;right:0;bottom:0;height:7px;display:flex;gap:1px;
+  padding:0 2px 2px;z-index:3}
+.cell .tk i{flex:1;background:#1b2634;border-radius:1px}
+.cell .tk i.f{background:var(--steel)}
+.cell .tk i.here{outline:1px solid var(--cyan);outline-offset:-1px}
+.cell.filled{border-color:#2b3d52}
+.cell.orphan{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset}
+/* The probe tint. Its colour is the CORE's answer for the design this cell
+   would produce, asked before the tap is spent, never a client guess. */
+.cell .pr{position:absolute;inset:0;z-index:4;border-radius:4px;pointer-events:none;
+  border:2px solid transparent}
+.cell.pgood .pr{border-color:var(--green);background:#4cd97b22}
+.cell.pwarn .pr{border-color:var(--amber);background:#ffd24b22}
+.cell.pbad  .pr{border-color:var(--red);background:#ff4b4b26}
+.cell:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.axlab{display:flex;justify-content:space-between;font-family:var(--lbl);font-weight:700;
+  font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+/* --------------------------------------------------------- pending chip --
+   Two core answers side by side. The renderer prints both numbers and never
+   subtracts one from the other: a delta worked out here is a rule worked out
+   here. */
+#chipbar{grid-area:chip;display:flex;align-items:center;gap:8px;min-width:0;height:34px;
+  background:var(--panel);border:1px solid var(--line);border-radius:4px;
+  padding:0 9px;overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+  touch-action:pan-x;margin-left:var(--sil);margin-right:var(--sir)}
+#chipbar b{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink);flex:0 0 auto}
+#chipbar .vd{font-family:var(--lbl);font-weight:700;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;flex:0 0 auto;border-radius:3px;padding:2px 6px;
+  border:1px solid var(--line);color:var(--muted)}
+#chipbar .vd.ok{color:var(--green);border-color:#1f6b40}
+#chipbar .vd.warn{color:var(--amber);border-color:#5a4713}
+#chipbar .vd.bad{color:var(--red);border-color:#6b2020}
+#chipbar s{font-family:var(--mono);font-size:10.5px;color:var(--muted);
+  text-decoration:none;flex:0 0 auto}
+#chipbar s u{text-decoration:none;color:var(--ink)}
+
+/* ------------------------------------------------------------ filmstrip -- */
+#film{display:flex;gap:5px;min-width:0}
+.mini{flex:1;min-width:44px;background:var(--panel);border:1px solid var(--line);
+  border-radius:4px;padding:4px 3px 3px;cursor:pointer;touch-action:manipulation}
+.mini.on{border-color:var(--cyan);background:#0d2231}
+.mini .mg{display:grid;grid-template-columns:repeat(4,1fr);gap:1px}
+.mini .mg i{aspect-ratio:1;background:#141d29;border-radius:1px}
+.mini .lb{font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;
+  margin-top:2px;line-height:1}
+.mini.on .lb{color:var(--cyan)}
+/* Two flattened views of the whole hull, because a slice editor's one real
+   risk is building seven good cross sections that add up to a bad silhouette. */
+#proj{display:flex;gap:10px;margin-top:8px}
+.pv{flex:1;min-width:0}
+.pl{display:block;font-family:var(--lbl);font-weight:700;font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.pg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.pg i{aspect-ratio:1;background:#141d29;border-radius:2px}
+.pg i.here{outline:1px solid var(--cyan);outline-offset:-1px}
+
+/* ------------------------------------------------------------- 3d view -- */
+#cv{display:block;width:100%;height:100%;touch-action:none;
+  -webkit-user-select:none;user-select:none;background:#070a0f}
+#viewbtns{position:absolute;top:8px;right:calc(8px + var(--sir));display:flex;gap:5px;z-index:4}
+#viewbtns button{padding:0;width:44px;height:32px;font-size:10px;letter-spacing:.04em;
+  background:#0d131de6}
+#viewtag{position:absolute;left:calc(8px + var(--sil));bottom:8px;z-index:4;font-family:var(--lbl);
+  font-weight:700;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);background:#0d131de6;border:1px solid var(--line);
+  border-radius:4px;padding:4px 7px;pointer-events:none}
+#viewtag b{color:var(--cyan)}
+/* Refusals arrive as sentences. pointer-events:none so the sentence can never
+   become the thing that ate the next tap. */
+#hint{position:absolute;left:calc(8px + var(--sil));right:calc(8px + var(--sir));top:46px;z-index:5;
+  font-size:11px;line-height:1.4;color:var(--amber);background:#160f04ee;
+  border:1px solid #5a4713;border-radius:4px;padding:6px 8px;pointer-events:none;
+  opacity:0;transition:opacity .16s}
+#hint.show{opacity:1}
+
+/* -------------------------------------------------------- core readout -- */
+.coremark{border:1px solid #1d4a5f;background:#0a1a22;border-radius:4px;padding:7px 8px;
+  margin-bottom:9px}
+.coremark .t{font-family:var(--lbl);font-weight:700;font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--cyan);margin-bottom:3px}
+.coremark p{margin:0;font-size:11px;line-height:1.45;color:var(--muted)}
+.coremark code{font-family:var(--mono);color:var(--ink);font-size:10px}
+#core.bad .coremark{border-color:#6b2020;background:#1a0e0e}
+#core.bad .coremark .t{color:var(--red)}
+#core.warn .coremark{border-color:#5a4713;background:#1a1407}
+#core.warn .coremark .t{color:var(--amber)}
+.rows{display:flex;flex-direction:column;gap:2px;margin-bottom:9px}
+.r{display:flex;align-items:baseline;gap:6px;padding:3px 5px;border-radius:3px;
+  background:#0e141d}
+.r .k{font-family:var(--lbl);font-weight:600;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);flex:1;min-width:0}
+.r .v{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap}
+.r .d{font-family:var(--mono);font-size:10px;width:58px;text-align:right;color:var(--muted)}
+.r .d.up{color:var(--green)}
+.r .d.dn{color:var(--orange)}
+.r.zero .v{color:var(--red)}
+.checks{display:flex;flex-direction:column;gap:4px}
+.ck{display:flex;gap:7px;padding:5px 6px;border-radius:4px;background:#0e141d;
+  border-left:2px solid var(--green)}
+.ck.no{border-left-color:var(--red);background:#170e12}
+.ck.soft{border-left-color:var(--amber);background:#171207}
+.ck .mk{font-family:var(--mono);font-size:12px;color:var(--green);line-height:1.3}
+.ck.no .mk{color:var(--red)}
+.ck.soft .mk{color:var(--amber)}
+.ck .bd{min-width:0;flex:1}
+.ck .h{display:block;font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink)}
+.ck.no .h{color:var(--red)}
+.ck.soft .h{color:var(--amber)}
+.ck .s{display:block;font-size:10.5px;color:var(--muted);line-height:1.4;margin-top:1px}
+.wrow{display:flex;align-items:center;gap:7px;padding:5px 6px;background:#0e141d;
+  border-radius:3px;margin-bottom:3px}
+.wrow .k{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;flex:0 0 auto}
+.wrow .m{font-family:var(--mono);font-size:10px;color:var(--muted);flex:1;min-width:0;
+  text-align:right;letter-spacing:-.01em}
+
+#tabbar{display:none}
+.closebar{display:none}
+#presets{display:flex;flex-wrap:wrap;gap:5px}
+#presets button{padding:6px 9px}
+
+/* ------------------------------------------------------------ mid width --
+   The core readout drops under the two editing columns rather than being
+   squeezed to nothing beside them. */
+@media (max-width:1180px) and (min-width:901px){
+  #app{grid-template-columns:206px minmax(0,1fr) minmax(0,1fr);
+    grid-template-rows:48px minmax(0,1fr) 210px;
+    grid-template-areas:"h h h" "rail edit view" "core core core"}
+  #core{border-left:0;border-top:1px solid var(--line);
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start}
+  #core .coremark{grid-column:1/4;margin-bottom:0}
+  .chip .num{display:none}
+}
+
+/* ---------------------------------------------------------------- phone --
+   The rail stops being a column and becomes a strip of chips under the grid,
+   because the palette is the one control you use between every other tap.
+
+   A panel covers the SLICE GRID and nothing else. It is opaque, it is in the
+   grid's own row rather than a fixed overlay, and it is display:none when
+   shut, so it can neither hide a control nor sit invisible on top of one. The
+   deck (prev, next, undo), the palette, the pending chip, the view buttons
+   and the verdict all stay on canvas with a panel open: this repo has shipped
+   the buried control three times and the fix is structural, not a z-index. */
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr);
+    grid-template-rows:44px auto auto minmax(0,1fr) auto auto calc(var(--tabh) + var(--safe));
+    grid-template-areas:"h" "view" "deck" "edit" "chip" "pal" "tabs"}
+  header{gap:7px;padding:0 calc(9px + var(--sir)) 0 calc(9px + var(--sil))}
+  header h1{font-size:10px;letter-spacing:.08em}
+  #hCellsWrap,#hHullWrap,#hMassWrap{display:none}
+  #hVerdict{font-size:10px;min-height:32px;padding:0 9px}
+  select{font-size:11px;min-height:32px;max-width:124px}
+  #rail{display:contents}
+  #edit{display:contents}
+  /* display:contents hands the palette and the deck straight to the page grid,
+     so each lands in its own row instead of in a sheet nobody would think to
+     open between one cube and the next. */
+  #paletteBox{grid-area:pal;min-width:0;background:var(--panel2);
+    border-top:1px solid var(--line);padding:5px calc(6px + var(--sir)) 5px calc(6px + var(--sil))}
+  #paletteBox h2{display:none}
+  #palette{grid-template-columns:repeat(5,1fr);gap:4px}
+  .chip{flex-direction:column;gap:2px;padding:4px 2px;font-size:9px;letter-spacing:.02em;
+    align-items:center;text-align:center;min-height:34px}
+  .chip .sw{width:17px;height:17px;font-size:10px}
+  .chip .num{display:none}
+  #view{grid-area:view;height:232px;border-left:0;border-right:0;
+    border-bottom:1px solid var(--line)}
+  #deck{grid-area:deck;padding:5px calc(8px + var(--sir)) 3px calc(8px + var(--sil))}
+  #lrail{display:none}
+  #gridwrap{padding:4px calc(8px + var(--sir)) 0 calc(8px + var(--sil))}
+  #chipbar{margin:0 calc(8px + var(--sir)) 5px calc(8px + var(--sil))}
+  #grid{gap:5px}
+  #edit .axlab{display:none}
+
+  #core,#panelPresets,#panelFilm{grid-area:edit;z-index:20;position:relative;
+    background:var(--panel2);border:0;border-top:1px solid var(--line);
+    padding:9px calc(11px + var(--sir)) 14px calc(11px + var(--sil));
+    overflow-y:auto;display:none}
+  #core.open,#panelPresets.open,#panelFilm.open{display:block}
+  #panelFilm #film{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+  .closebar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .closebar h2{margin:0;flex:1}
+  #tabbar{display:flex;grid-area:tabs;z-index:21;background:var(--panel2);
+    border-top:1px solid var(--line);height:calc(var(--tabh) + var(--safe));
+    padding:0 var(--sir) var(--safe) var(--sil)}
+  #tabbar button{flex:1;height:100%;padding:0;border:0;border-radius:0;min-height:46px;
+    background:transparent;color:var(--muted);font-size:10px;letter-spacing:.08em}
+  #tabbar button.on{color:var(--cyan);background:#0d2231;box-shadow:inset 0 2px 0 var(--cyan)}
+}
+
+/* Phone held sideways, or any short window: about 560px of height and the
+   preview has to give most of it back. */
+@media (max-width:900px) and (max-height:600px){
+  /* 47 and not 46: the bar carries a 1px top border, and the buttons keep the
+     46px they need, so the row has to be one pixel taller than the control. */
+  #app{grid-template-rows:38px auto auto minmax(0,1fr) auto auto calc(47px + var(--safe))}
+  header{gap:6px}
+  #view{height:118px}
+  #tabbar{height:calc(47px + var(--safe))}
+  #grid{gap:4px}
+  .step{width:40px;height:30px;font-size:14px}
+  #bUndo{height:30px;padding:0 10px;font-size:11px}
+  #chipbar{height:30px}
+  .chip{min-height:32px;font-size:8px}
+  .chip .sw{width:15px;height:15px;font-size:9px}
+  #viewbtns button{width:38px;height:28px;font-size:9px}
+  #hint{top:40px;font-size:10px;padding:5px 7px}
+}
+</style>
+
+<div id="app">
+  <header>
+    <h1>Slice Yard</h1>
+    <select id="clsSel" aria-label="hull class"></select>
+    <span class="stat" id="hCellsWrap">cubes <b id="hCells">0</b></span>
+    <span class="stat" id="hMassWrap">mass <b id="hMass">0.000</b></span>
+    <span class="stat" id="hHullWrap">hull <b id="hHull">0</b></span>
+    <span class="hgap"></span>
+    <button id="hVerdict" type="button">no hull</button>
+  </header>
+
+  <aside id="rail">
+    <div id="paletteBox">
+      <h2>Palette</h2>
+      <div id="palette"></div>
+    </div>
+    <div id="panelPresets">
+      <div class="closebar"><h2>States</h2><button id="bClosePresets">close</button></div>
+      <h2 class="deskonly">States</h2>
+      <div id="presets"></div>
+      <p class="note" id="presetNote"></p>
+      <h2 style="margin-top:12px">Edit</h2>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button id="bClearLayer">clear slice</button>
+        <button id="bClearAll">clear all</button>
+      </div>
+      <p class="note"><b>Undo</b> is on canvas, next to the slice steppers, not in here.
+      A control that lives only in a panel is a control nothing on screen says exists.</p>
+      <p class="note">Tap an empty cell to place the selected kind. Tap a filled cell of the
+      same kind to take it back, so correcting one mistap costs one tap. <b>Erase</b> and
+      <b>Probe</b> are their own chips, so no tap ever means two things. Drag across the
+      grid to paint a run; the stroke is walked between samples, so a fast flick paints
+      every cell on the path rather than the two ends.</p>
+      <p class="note">The 3D view takes orbit only and never a placement, which is the whole
+      point of the variant: a flat cell cannot be picked by accident the way a cube behind
+      another cube can.</p>
+      <p class="note">The only arithmetic outside <b>askTheCore</b> is framing: how many
+      pixels the grid gets, where a cube sits in the scene, how tall a bar in the slice
+      rail is drawn. Nothing that decides an outcome.</p>
+    </div>
+  </aside>
+
+  <section id="edit">
+    <div id="deck">
+      <button class="step" id="bPrev" aria-label="previous slice">&lt;</button>
+      <span class="lname">slice <b id="lNow">1</b>/<span id="lOf">7</span></span>
+      <button class="step" id="bNext" aria-label="next slice">&gt;</button>
+      <button id="bUndo">undo</button>
+      <div id="lrail"></div>
+    </div>
+    <div class="axlab"><span>port, X0</span><span id="axZ">aft</span><span>starboard, X3</span></div>
+    <div id="gridwrap"><div id="grid"></div></div>
+    <div id="chipbar"></div>
+    <div id="panelFilm">
+      <div class="closebar"><h2>All slices</h2><button id="bCloseFilm">close</button></div>
+      <div id="film"></div>
+      <div id="proj">
+        <div class="pv"><span class="pl">side, bow right</span><div class="pg" id="pgSide"></div></div>
+        <div class="pv"><span class="pl">plan, bow right</span><div class="pg" id="pgPlan"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view">
+    <canvas id="cv"></canvas>
+    <div id="viewtag">slice <b id="vTag">1</b></div>
+    <div id="hint"></div>
+    <div id="viewbtns">
+      <button id="bSolid" title="solid or ghosted hull">solid</button>
+      <button id="bBow" title="bow on">bow on</button>
+      <button id="bIso" title="iso">iso</button>
+      <button id="bIn" aria-label="zoom in">+</button>
+      <button id="bOut" aria-label="zoom out">&minus;</button>
+    </div>
+  </section>
+
+  <aside id="core">
+    <div class="closebar"><h2>From the core</h2><button id="bCloseCore">close</button></div>
+    <div class="coremark">
+      <div class="t" id="cmT">every number below comes from the core</div>
+      <p>One call, <code>askTheCore(IN, OUT)</code>, standing in for
+      <code>ft_read_design()</code>. Two flat <code>Float32Array</code>s cross, nothing
+      else: no strings, no objects, no colours. Mass, hull, thrust, legality, the module
+      table, the class table: the client does not work any of them out, it prints what
+      came back and owns the words.</p>
+    </div>
+    <div id="coreBody"></div>
+  </aside>
+
+  <nav id="tabbar">
+    <button id="tCore">core</button>
+    <button id="tFilm">slices</button>
+    <button id="tPresets">states</button>
+  </nav>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// Numbers from the real project (GUIDELINES.md rule 2.1):
+//   engine/sim_core/src/data.rs - the five ShipClass rows verbatim (hull, radius,
+//     mass, Flight, armour block_pct off frigate_subs, and the authored mount
+//     lists TERRAN_MOUNTS / KARISEN_MOUNTS / ROGUE_MOUNTS / BENEFACTOR_MOUNTS /
+//     FREIGHTER_MOUNTS); W_BEAM 5.0 x 5.5 at 300 u, cooldown 3.0 s, arc 110 / 60;
+//     W_CANNON 5.0 x 5.5 at 200 u, 4.0 s, 90 / 60; W_MISSILE 25.0 x 1.0 at 250 u,
+//     6.0 s, full sphere, batch 2. Plasma is not its own stat block.
+//   prototype/sim/data.js - TURN_SECONDS 10, nominalReach().
+//   ship_1.fbx measures 6.9 x 3.4 x 4.0 u (docs/DESIGN.md asset inventory), which
+//     is what sets the berth: 4 x 4 x 7 cells of 0.98 u is 3.92 x 3.92 x 6.86.
+
+// ===========================================================================
+// THE BOUNDARY, AND ITS SHAPE.
+//
+// engine/sim_core/src/ffi.rs is a C ABI over a flat f32 scratch buffer: no
+// wasm-bindgen, no marshalling, "everything is f32 and little endian on both
+// sides". So this stand in is shaped the same way. askTheCore takes a
+// Float32Array IN and writes a Float32Array OUT. NOTHING that cannot survive
+// that trip is allowed to cross:
+//
+//   * modules come back as INDICES with their numbers, never labels, hex
+//     colours or glyph characters
+//   * checks come back as an ID, two flags and three numeric operands, never
+//     an English sentence
+//   * orphans come back as flat CELL INDICES, k*ny*nx + j*nx + i, never
+//     "i,j,k" strings
+//   * counts come back as one f32 per module row, indexed by module index,
+//     never an object keyed by a kind name
+//
+// The words, the colours and the glyphs are the CLIENT's, keyed off those
+// numeric ids. Presentation inside the core is the mirror of the defect this
+// file exists to guard against.
+//
+// The real ffi.rs pages IN and OUT through ONE static scratch array. Two
+// arrays here only because a mockup reads better when the two layouts do not
+// have to dodge each other; the contract, fixed offsets and fixed strides, is
+// the same either way.
+// ===========================================================================
+
+// ---- IN, f32 slots -------------------------------------------------------
+//   0      class index, into the class table (data.rs ALL_CLASSES order)
+//   1..3   berth cell counts nx, ny, nz
+//   4      berth cell size, world units
+//   5      placement count
+//   16..   placement records, STRIDE 4: i, j, k, module index
+//
+// THE BERTH IS AN INPUT, pushed across on every call. It is authored on the
+// client, like the flight sliders the console already ships, and it is inert
+// there: the core is what decides that nz sets the reference length for
+// agility and that the longest axis sets the collision radius. Nothing in this
+// file closes over it (CLAUDE.md: "configs may live in the client, logic may
+// not", and over a real FFI there is no closure to read).
+var IN_CLASS=0, IN_NX=1, IN_NY=2, IN_NZ=3, IN_CELL=4, IN_COUNT=5;
+var IN_PLACE=16, PLACE_STRIDE=4;
+var IN_LEN=512;
+
+// ---- OUT, f32 slots ------------------------------------------------------
+//   0   legal, 1 or 0. HARD checks only.
+//   1   cube count            9..11  extent i, j, k, in cells
+//   2   module row count      12..14 hull centre x, y, z, world units
+//   3   stat row count        15     collision radius, world units
+//   4   check row count       16     class index echoed
+//   5   mount row count       17     class mass budget
+//   6   orphan count          18     class collision radius
+//   7   connected groups      19..21 berth nx, ny, nz echoed
+//   8   soft warnings         22     berth cell size echoed
+//                             23     class row count
+var O_LEGAL=0, O_CELLS=1, O_MODULES=2, O_STATS=3, O_CHECKS=4, O_MOUNTS=5,
+    O_ORPHANS=6, O_GROUPS=7, O_WARNS=8, O_EXT_I=9, O_EXT_J=10, O_EXT_K=11,
+    O_CX=12, O_CY=13, O_CZ=14, O_RADIUS=15, O_CLASS=16, O_MASSMAX=17,
+    O_CLSRAD=18, O_NX=19, O_NY=20, O_NZ=21, O_CELL=22, O_CLASSN=23;
+
+// Records, each a fixed stride from a fixed base. Same discipline as
+// SHIP_STRIDE / EVENT_STRIDE / POSE_STRIDE / PROJ_STRIDE in ffi.rs.
+var MODULE_BASE=64,  MODULE_STRIDE=8;   //  8 rows ->  64..127
+var COUNT_BASE=128;                      //  1 f32 per module row -> 128..135
+var STAT_BASE=192,   STAT_STRIDE=6;     // 20 rows -> 192..311
+var CHECK_BASE=320,  CHECK_STRIDE=6;    //  8 rows -> 320..367
+var MOUNT_BASE=384,  MOUNT_STRIDE=9;    //  3 rows -> 384..410
+var CLASS_BASE=448,  CLASS_STRIDE=15;   //  5 rows -> 448..522
+var ORPHAN_BASE=576;                     // up to nx*ny*nz cell indices
+var OUT_LEN=1024;
+
+// MODULE row, stride 8:
+//   0 module index                       4 heat sink capacity
+//   1 mass                               5 flags, see below
+//   2 hull points                        6 weapon row, or -1
+//   3 power delta, + supplies, - draws   7 heat produced
+// Inside the core the same row is held one slot narrower, without the leading
+// index, so M_* below are the authored table's columns and the OUT slots are
+// those plus one.
+var MF_THRUST=1, MF_PLATE=2, MF_MOUNT=4;
+var M_MASS=0, M_HULL=1, M_POWER=2, M_SINK=3, M_FLAGS=4, M_WEAP=5, M_HEAT=6;
+
+// STAT row, stride 6: id, value, stock, delta, POLARITY, hasStock.
+// POLARITY IS THE CORE'S. "Heavier is worse" is per stat semantics that lives
+// beside the number, not a sign flip the renderer remembers to apply to two
+// rows out of twenty. +1 higher is better, -1 lower is better, 0 no opinion.
+var ST_CUBES=0, ST_HULL=1, ST_MASS=2, ST_RADIUS=3, ST_ACC_F=4, ST_ACC_R=5,
+    ST_ACC_L=6, ST_YAW=7, ST_PITCH=8, ST_SPEED=9, ST_REACH=10, ST_PLATES=11,
+    ST_BLOCK=12, ST_DPT=13, ST_PSUP=14, ST_PDRAW=15, ST_PMARG=16,
+    ST_HCAP=17, ST_HLOAD=18, ST_HMARG=19;
+
+// CHECK row, stride 6: id, ok, SOFT, opA, opB, opC.
+// SOFT means the core has no such system yet. A soft check warns and NEVER
+// gates legality: a design cannot be refused by a system sim_core does not
+// have. opC is the shortfall, precomputed here so no caller has to subtract
+// one operand from another to write the sentence.
+var CK_CELLS=0, CK_THRUST=1, CK_ARMS=2, CK_JOINED=3, CK_MASS=4, CK_SPHERE=5,
+    CK_POWER=6, CK_HEAT=7;
+
+// MOUNT row, stride 9: module index, count, damage per shot, range, cooldown,
+// arc h, arc v, batch, shots available in a turn.
+// CLASS row, stride 15: index, hull, radius, mass budget, yaw, pitch, fwd,
+// retro, lat, max speed, armour block pct, authored beam / cannon / missile
+// mounts, mounts required.
+
+function askTheCore(IN, OUT){
+
+  // ---- would be data.rs: MODULE_DEFS, one row per cube kind --------------
+  // mass is in ShipClass mass units (terran_frigate mass = 1.0).
+  // hull feeds the hull pool (terran_frigate hull = 300.0).
+  // power and heat describe systems the core does NOT have yet. The rows are
+  // the argument for building them, not a claim that they are there.
+  //     mass  hull  power  sink  flags      weapon  heat
+  var MOD=[
+    [0.012,  6,    0,     0,   0,          -1,     0],  // 0 hull, plain structure
+    [0.030,  8,   -7,     0,   MF_THRUST,  -1,     9],  // 1 engine
+    [0.034,  9,   42,     0,   0,          -1,     6],  // 2 reactor
+    [0.018,  6,   -1,    60,   0,          -1,     0],  // 3 heatsink
+    [0.021,  7,    0,     0,   MF_PLATE,   -1,     0],  // 4 armor
+    [0.024,  6,   -8,     0,   MF_MOUNT,    0,    28],  // 5 turret beam
+    [0.026,  7,   -5,     0,   MF_MOUNT,    1,    18],  // 6 turret projectile
+    [0.022,  6,   -3,     0,   MF_MOUNT,    2,    11]   // 7 turret missile
+  ];
+  // data.rs:97-131 verbatim: dmg, mult, range, cooldown, arc h, arc v, batch.
+  var WEP=[
+    [ 5.0, 5.5, 300, 3.0, 110,  60, 1],
+    [ 5.0, 5.5, 200, 4.0,  90,  60, 1],
+    [25.0, 1.0, 250, 6.0, 360, 360, 2]
+  ];
+  // data.rs ALL_CLASSES order: hull, radius, mass, yaw, pitch, fwd, retro,
+  // lat, max speed, armour block pct, authored beam / cannon / missile mounts,
+  // mounts required. Plasma counts as cannon, as the core counts it.
+  var CLS=[
+    [300, 3.5, 1.0, 6.0, 4.0, 0.90, 0.35, 0.25, 8.0, 80, 3, 0, 0, 1],
+    [250, 3.5, 1.0, 6.5, 4.0, 0.95, 0.35, 0.25, 8.5, 75, 1, 0, 1, 1],
+    [180, 3.2, 0.9, 9.0, 6.0, 1.10, 0.50, 0.40, 9.5, 90, 0, 2, 0, 1],
+    [250, 3.5, 1.0, 5.0, 3.5, 0.85, 0.35, 0.22, 8.0, 80, 0, 2, 1, 1],
+    [600, 4.5, 2.0, 2.5, 1.5, 0.45, 0.18, 0.10, 5.0,  0, 0, 0, 0, 0]
+  ];
+  var TURN_SECONDS=10;      // data.rs CONST
+  var FIRE_SLOTS=11;        // seconds 0..10 inclusive, the turn's fire slots
+  var ENGINES_REF=4;        // the drive block a stock frigate is calibrated on
+  var ACC_CAP=3.0;          // mockups/ship-movement-3d tops its thrust slider here
+  var AGILITY_CAP=4.0;      // as a multiple of the class rate, never an absolute
+
+  var ci=IN[IN_CLASS]|0; if(ci<0) ci=0; if(ci>=CLS.length) ci=CLS.length-1;
+  var C=CLS[ci];
+  var nx=IN[IN_NX]|0, ny=IN[IN_NY]|0, nz=IN[IN_NZ]|0, cell=IN[IN_CELL];
+  var n=IN[IN_COUNT]|0;
+  var i,j,k,a,b,m,row;
+
+  for(i=0;i<OUT_LEN;i++) OUT[i]=0;
+
+  // ---- composition ------------------------------------------------------
+  var counts=[], mass=0, hullPts=0, supply=0, draw=0, heatLoad=0, heatCap=0;
+  var engines=0, plates=0, mounts=[0,0,0], turrets=0;
+  for(m=0;m<MOD.length;m++) counts[m]=0;
+  for(i=0;i<n;i++){
+    m=IN[IN_PLACE+i*PLACE_STRIDE+3]|0;
+    if(m<0||m>=MOD.length) continue;
+    row=MOD[m]; counts[m]++;
+    mass+=row[M_MASS]; hullPts+=row[M_HULL];
+    if(row[M_POWER]>0) supply+=row[M_POWER]; else draw+=-row[M_POWER];
+    heatCap+=row[M_SINK]; heatLoad+=row[M_HEAT];
+    if(row[M_FLAGS]&MF_THRUST) engines++;
+    if(row[M_FLAGS]&MF_PLATE) plates++;
+    if(row[M_FLAGS]&MF_MOUNT){ turrets++; mounts[row[M_WEAP]]++; }
+  }
+  mass=Math.round(mass*1e6)/1e6;
+
+  // ---- extent, hull centre and the sphere the contact solver is handed ---
+  // The berth arrived in IN. What its cell size MEANS, a collision radius of
+  // half the longest axis, is decided here.
+  var lo=[1e9,1e9,1e9], hi=[-1e9,-1e9,-1e9], ext=[0,0,0], radius=0, ctr=[0,0,0];
+  if(n>0){
+    for(i=0;i<n;i++) for(a=0;a<3;a++){
+      var v=IN[IN_PLACE+i*PLACE_STRIDE+a];
+      if(v<lo[a]) lo[a]=v;
+      if(v>hi[a]) hi[a]=v;
+    }
+    for(a=0;a<3;a++) ext[a]=hi[a]-lo[a]+1;
+    radius=Math.max(ext[0],Math.max(ext[1],ext[2]))*cell/2;
+    var dim=[nx,ny,nz];
+    for(a=0;a<3;a++) ctr[a]=((lo[a]+hi[a])/2-(dim[a]-1)/2)*cell;
+  }
+
+  // ---- flight -----------------------------------------------------------
+  // Thrusters do BOTH jobs. The core already zeroes 100 percent of thrust when
+  // the last live Thruster dies, and a hull with no thruster has no torque
+  // either: attitude authority is engines/ENGINES_REF exactly as linear accel
+  // is, so a hull with no drive reads 0.0 deg/s and not a healthy green 7.8.
+  var mEff=mass>0?mass:1;
+  var drive=engines/ENGINES_REF;
+  var massRatio=C[2]/mEff;
+  var accF=C[5]*drive*massRatio, accR=C[6]*drive*massRatio, accL=C[7]*drive*massRatio;
+  if(accF>ACC_CAP){ var sc=ACC_CAP/accF; accF*=sc; accR*=sc; accL*=sc; }
+  var speed=accF>0?Math.min(C[8]*1.5, C[8]*Math.sqrt(accF/C[5])):0;
+  var lenZ=ext[2]>0?ext[2]:nz;
+  var agility=drive*massRatio*(nz/lenZ);
+  if(agility>AGILITY_CAP) agility=AGILITY_CAP;
+  var yaw=C[3]*agility, pitch=C[4]*agility;
+  // prototype/sim/data.js nominalReach(fl), verbatim, and used for the STOCK
+  // figure too rather than a literal that the same function could derive.
+  function reachOf(af,ms){
+    if(af<=0) return 0;
+    var tA=Math.min(TURN_SECONDS, ms/af);
+    return 0.5*af*tA*tA + ms*(TURN_SECONDS-tA);
+  }
+  var reach=reachOf(accF,speed);
+
+  // ---- guns -------------------------------------------------------------
+  // A mount is free at second 0 and every cooldown after it, which is why
+  // W_BEAM's own comment says a beam is free on four of a turn's eleven slots.
+  function shotsOf(cd){ return Math.floor((FIRE_SLOTS-1)/cd)+1; }
+  var dpt=0, mrows=0;
+  for(m=0;m<MOD.length;m++){
+    if(!(MOD[m][M_FLAGS]&MF_MOUNT) || counts[m]===0) continue;
+    var w=WEP[MOD[m][M_WEAP]], sh=shotsOf(w[3]);
+    dpt+=counts[m]*sh*w[6]*(w[0]*w[1]);
+    var mb=MOUNT_BASE+mrows*MOUNT_STRIDE;
+    OUT[mb]=m; OUT[mb+1]=counts[m]; OUT[mb+2]=w[0]*w[1]; OUT[mb+3]=w[2];
+    OUT[mb+4]=w[3]; OUT[mb+5]=w[4]; OUT[mb+6]=w[5]; OUT[mb+7]=w[6]; OUT[mb+8]=sh;
+    mrows++;
+  }
+  var stockDpt=0;
+  for(a=0;a<3;a++){
+    if(C[10+a]===0) continue;
+    var sw=WEP[a];
+    stockDpt+=C[10+a]*shotsOf(sw[3])*sw[6]*(sw[0]*sw[1]);
+  }
+
+  // ---- connectivity: face adjacency, flood fill from the first cube ------
+  // Cells are addressed by a single flat index, k*ny*nx + j*nx + i, which is
+  // also exactly what an orphan is reported as. No string keys: they cannot
+  // cross an f32 buffer and their iteration order is not a thing to depend on.
+  var span=nx*ny*nz, at=new Int32Array(span>0?span:1), groups=0, orphans=0;
+  for(i=0;i<at.length;i++) at[i]=-1;
+  function idxOf(x,y,z){ return (z*ny+y)*nx+x; }
+  var cellIdx=new Int32Array(n>0?n:1);
+  for(i=0;i<n;i++){
+    var px=IN[IN_PLACE+i*PLACE_STRIDE]|0, py=IN[IN_PLACE+i*PLACE_STRIDE+1]|0,
+        pz=IN[IN_PLACE+i*PLACE_STRIDE+2]|0;
+    cellIdx[i]=idxOf(px,py,pz); at[cellIdx[i]]=i;
+  }
+  var group=new Int32Array(n>0?n:1), stack=[], head, sizes=[];
+  for(i=0;i<n;i++) group[i]=-1;
+  var NB=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  for(i=0;i<n;i++){
+    if(group[i]>=0) continue;
+    var g=groups++; sizes[g]=0;
+    stack=[i]; group[i]=g;
+    for(head=0;head<stack.length;head++){
+      var q=stack[head]; sizes[g]++;
+      var qx=IN[IN_PLACE+q*PLACE_STRIDE]|0, qy=IN[IN_PLACE+q*PLACE_STRIDE+1]|0,
+          qz=IN[IN_PLACE+q*PLACE_STRIDE+2]|0;
+      for(j=0;j<6;j++){
+        var bx=qx+NB[j][0], by=qy+NB[j][1], bz=qz+NB[j][2];
+        if(bx<0||by<0||bz<0||bx>=nx||by>=ny||bz>=nz) continue;
+        var t=at[idxOf(bx,by,bz)];
+        if(t>=0 && group[t]<0){ group[t]=g; stack.push(t); }
+      }
+    }
+  }
+  // The biggest group is the ship, everything else is an orphan. Ties go to
+  // the group found first, so the answer never depends on iteration order.
+  if(groups>1){
+    var best=0;
+    for(g=1;g<groups;g++) if(sizes[g]>sizes[best]) best=g;
+    for(i=0;i<n;i++) if(group[i]!==best){ OUT[ORPHAN_BASE+orphans]=cellIdx[i]; orphans++; }
+  }
+
+  // ---- checks -----------------------------------------------------------
+  var checks=0, warns=0, legal=1;
+  function ck(id,ok,soft,oa,ob,oc){
+    var cb=CHECK_BASE+checks*CHECK_STRIDE;
+    OUT[cb]=id; OUT[cb+1]=ok?1:0; OUT[cb+2]=soft?1:0;
+    OUT[cb+3]=oa||0; OUT[cb+4]=ob||0; OUT[cb+5]=oc||0;
+    checks++;
+    if(!ok){ if(soft) warns++; else legal=0; }
+  }
+  var massOver=mass>C[2]?mass-C[2]:0;
+  var sphereOver=radius>C[1]?radius-C[1]:0;
+  var pMargin=supply-draw, hMargin=heatCap-heatLoad;
+  ck(CK_CELLS, n>0, 0, n,0,0);
+  ck(CK_THRUST, engines>0, 0, engines,0,0);
+  ck(CK_ARMS, turrets>0 || C[13]===0, 0, turrets, C[13], 0);
+  ck(CK_JOINED, groups<=1, 0, orphans, groups>0?groups-1:0, 0);
+  ck(CK_MASS, massOver<=1e-6, 0, mass, C[2], massOver);
+  ck(CK_SPHERE, sphereOver<=1e-6, 0, radius, C[1], sphereOver);
+  ck(CK_POWER, pMargin>=0, 1, supply, draw, pMargin<0?-pMargin:0);
+  ck(CK_HEAT, hMargin>=0, 1, heatCap, heatLoad, hMargin<0?-hMargin:0);
+
+  // ---- stats ------------------------------------------------------------
+  var stats=0;
+  function st(id,v,stock,pol,has){
+    var sb=STAT_BASE+stats*STAT_STRIDE;
+    OUT[sb]=id; OUT[sb+1]=v; OUT[sb+2]=has?stock:0;
+    OUT[sb+3]=has?v-stock:0; OUT[sb+4]=pol; OUT[sb+5]=has?1:0;
+    stats++;
+  }
+  st(ST_CUBES, n, 0, 0, 0);
+  st(ST_HULL, hullPts, C[0], 1, 1);
+  st(ST_MASS, mass, C[2], -1, 1);
+  // A smaller collision sphere is harder to hit and easier to fit a class
+  // berth, so lower is better. This opinion belongs here, not in a renderer.
+  st(ST_RADIUS, radius, C[1], -1, 1);
+  st(ST_ACC_F, accF, C[5], 1, 1);
+  st(ST_ACC_R, accR, C[6], 1, 1);
+  st(ST_ACC_L, accL, C[7], 1, 1);
+  st(ST_YAW, yaw, C[3], 1, 1);
+  st(ST_PITCH, pitch, C[4], 1, 1);
+  st(ST_SPEED, speed, C[8], 1, 1);
+  st(ST_REACH, reach, reachOf(C[5],C[8]), 1, 1);
+  st(ST_PLATES, plates, 0, 1, 0);
+  // block_pct is a per volume property of the CLASS, not something plates add
+  // up to. It is its own row so nothing can read as "26 plates at 80 percent".
+  st(ST_BLOCK, C[9], 0, 0, 0);
+  st(ST_DPT, dpt, stockDpt, 1, 1);
+  st(ST_PSUP, supply, 0, 1, 0);
+  st(ST_PDRAW, draw, 0, -1, 0);
+  st(ST_PMARG, pMargin, 0, 1, 0);
+  st(ST_HCAP, heatCap, 0, 1, 0);
+  st(ST_HLOAD, heatLoad, 0, -1, 0);
+  st(ST_HMARG, hMargin, 0, 1, 0);
+
+  // ---- module and class tables, so the client never keeps a second roster
+  for(m=0;m<MOD.length;m++){
+    var mb2=MODULE_BASE+m*MODULE_STRIDE, r=MOD[m];
+    OUT[mb2]=m; OUT[mb2+1]=r[0]; OUT[mb2+2]=r[1]; OUT[mb2+3]=r[2];
+    OUT[mb2+4]=r[3]; OUT[mb2+5]=r[4]; OUT[mb2+6]=r[5]; OUT[mb2+7]=r[6];
+    OUT[COUNT_BASE+m]=counts[m];
+  }
+  for(a=0;a<CLS.length;a++){
+    var cb2=CLASS_BASE+a*CLASS_STRIDE;
+    OUT[cb2]=a;
+    for(j=0;j<14;j++) OUT[cb2+1+j]=CLS[a][j];
+  }
+
+  OUT[O_LEGAL]=legal; OUT[O_CELLS]=n; OUT[O_MODULES]=MOD.length;
+  OUT[O_STATS]=stats; OUT[O_CHECKS]=checks; OUT[O_MOUNTS]=mrows;
+  OUT[O_ORPHANS]=orphans; OUT[O_GROUPS]=groups; OUT[O_WARNS]=warns;
+  OUT[O_EXT_I]=ext[0]; OUT[O_EXT_J]=ext[1]; OUT[O_EXT_K]=ext[2];
+  OUT[O_CX]=ctr[0]; OUT[O_CY]=ctr[1]; OUT[O_CZ]=ctr[2];
+  OUT[O_RADIUS]=radius; OUT[O_CLASS]=ci; OUT[O_MASSMAX]=C[2]; OUT[O_CLSRAD]=C[1];
+  OUT[O_NX]=nx; OUT[O_NY]=ny; OUT[O_NZ]=nz; OUT[O_CELL]=cell;
+  OUT[O_CLASSN]=CLS.length;
+}
+// ======================= end of the boundary ===============================
+
+// ===========================================================================
+// THE CLIENT. Everything below reads that buffer, owns every word, colour and
+// glyph on screen, and computes nothing that decides an outcome.
+// ===========================================================================
+
+// The berth. A client config, exactly like the flight sliders: authored here,
+// inert here, pushed across on every call and interpreted only in the core.
+var BERTH={nx:4, ny:4, nz:7, cell:0.98};
+
+var IN=new Float32Array(IN_LEN), OUT=new Float32Array(OUT_LEN);
+var WOUT=new Float32Array(OUT_LEN);
+
+// Presentation for a module row, indexed by MODULE INDEX. If the core's table
+// ever grows a row this client has no entry for, the chip still appears with a
+// generated hue and a placeholder name rather than vanishing, because the
+// palette loop runs over what the core returned and not over a list kept here.
+var MOD_UI=[
+  {name:"hull",              short:"hull", col:"#4C6079", ch:"#"},
+  {name:"engine",            short:"eng",  col:"#FA6A0A", ch:"E"},
+  {name:"reactor",           short:"reac", col:"#FFD24B", ch:"R"},
+  {name:"heatsink",          short:"sink", col:"#35C7FF", ch:"H"},
+  {name:"armor",             short:"armr", col:"#93A6BC", ch:"A"},
+  {name:"turret beam",       short:"beam", col:"#4CD97B", ch:"B"},
+  {name:"turret projectile", short:"proj", col:"#FF4B4B", ch:"C"},
+  {name:"turret missile",    short:"mssl", col:"#A98BFF", ch:"M"}
+];
+function modUI(m){
+  if(MOD_UI[m]) return MOD_UI[m];
+  return {name:"module "+m, short:"m"+m, col:"hsl("+((m*61)%360)+",55%,62%)", ch:"?"};
+}
+var CLASS_UI=["Terran Frigate","Karisen Frigate","Rogue Frigate",
+              "Benefactor Frigate","Freighter"];
+function className(c){ return CLASS_UI[c]||("class "+c); }
+
+// Stat presentation, keyed by the numeric stat id. Units, decimals and the
+// decision to shout a zero in red are all the client's.
+var STAT_UI={};
+STAT_UI[ST_CUBES]={k:"cubes",dp:0,zero:1};
+STAT_UI[ST_HULL]={k:"hull",dp:0};
+STAT_UI[ST_MASS]={k:"mass",dp:3};
+STAT_UI[ST_RADIUS]={k:"hull sphere",dp:2,u:" u"};
+STAT_UI[ST_ACC_F]={k:"accel fwd",dp:2,u:" u/s2",zero:1};
+STAT_UI[ST_ACC_R]={k:"accel retro",dp:2,u:" u/s2",zero:1};
+STAT_UI[ST_ACC_L]={k:"accel lat",dp:2,u:" u/s2",zero:1};
+STAT_UI[ST_YAW]={k:"yaw",dp:1,u:" deg/s",zero:1};
+STAT_UI[ST_PITCH]={k:"pitch",dp:1,u:" deg/s",zero:1};
+STAT_UI[ST_SPEED]={k:"max speed",dp:1,u:" u/s",zero:1};
+STAT_UI[ST_REACH]={k:"reach, 10 s",dp:1,u:" u",zero:1};
+STAT_UI[ST_PLATES]={k:"armour plates",dp:0};
+STAT_UI[ST_BLOCK]={k:"block per plate",dp:0,u:"%"};
+STAT_UI[ST_DPT]={k:"damage per turn",dp:0};
+STAT_UI[ST_PSUP]={k:"power supply",dp:0};
+STAT_UI[ST_PDRAW]={k:"power draw",dp:0};
+STAT_UI[ST_PMARG]={k:"power margin",dp:0,sign:1,neg:1};
+STAT_UI[ST_HCAP]={k:"heat capacity",dp:0};
+STAT_UI[ST_HLOAD]={k:"heat load",dp:0};
+STAT_UI[ST_HMARG]={k:"heat margin",dp:0,sign:1,neg:1};
+function statUI(id){ return STAT_UI[id]||{k:"stat "+id,dp:2}; }
+
+// Check prose, keyed by the numeric check id, WITH THE FIX NAMED. The core
+// sent an id and three numbers; every word here is the client's.
+var CHECK_UI={};
+CHECK_UI[CK_CELLS]={h:"hull has cubes",
+  ok:function(a){ return a+" cubes placed."; },
+  no:function(){ return "Nothing placed. Tap the slice grid to lay the first cube."; }};
+CHECK_UI[CK_THRUST]={h:"at least one engine",
+  ok:function(a){ return a+" x SubKind::Thruster. Losing the last live one costs 100 percent of thrust."; },
+  no:function(){ return "No ENGINE cube. The core zeroes all thrust when the last live Thruster dies, so this hull can neither move nor turn. Place one aft."; }};
+CHECK_UI[CK_ARMS]={h:"at least one turret",
+  ok:function(a,b){ return b===0
+      ? "This class carries no authored mounts, so none is required."
+      : a+" mount"+(a===1?"":"s")+" placed."; },
+  no:function(){ return "No turret. Place a BEAM, PROJECTILE or MISSILE cube. FREIGHTER_MOUNTS is the one authored hull with an empty list."; }};
+CHECK_UI[CK_JOINED]={h:"one solid piece",
+  ok:function(){ return "Single connected group."; },
+  no:function(a,b){ return a+" cube"+(a===1?"":"s")+" in "+b+" detached group"+(b===1?"":"s")+
+      ". Bridge the gap with HULL cubes or erase the floater, ringed red on the slice."; }};
+CHECK_UI[CK_MASS]={h:"inside the class mass budget",
+  ok:function(a,b){ return a.toFixed(3)+" of "+b.toFixed(3)+" mass units."; },
+  no:function(a,b,c){ return "Mass "+c.toFixed(3)+" over the "+b.toFixed(3)+" budget this class carries. Swap ARMOR cubes for HULL cubes, which weigh less than half as much."; }};
+CHECK_UI[CK_SPHERE]={h:"inside the class collision sphere",
+  ok:function(a,b){ return a.toFixed(2)+" u inside the "+b.toFixed(2)+" u sphere the contact solver uses."; },
+  no:function(a,b,c){ return "Hull sphere "+a.toFixed(2)+" u is "+c.toFixed(2)+" u wider than the "+b.toFixed(2)+" u this class collides with. Shorten the longest axis by a slice."; }};
+CHECK_UI[CK_POWER]={h:"reactors cover the draw", soft:1,
+  ok:function(a,b){ return a+" supplied against "+b+" drawn."; },
+  no:function(a,b,c){ return "Power deficit "+c+". Add a REACTOR or drop a draw."; }};
+CHECK_UI[CK_HEAT]={h:"sinks cover the load", soft:1,
+  ok:function(a,b){ return a+" capacity against "+b+" load."; },
+  no:function(a,b,c){ return "Heat over by "+c+". Add a HEATSINK or drop a turret."; }};
+function checkUI(id){ return CHECK_UI[id]||{h:"check "+id,
+  ok:function(){return "ok";}, no:function(){return "failed";}}; }
+
+var WEP_UI=["beam","cannon","missile"];
+
+// ---- calling the core ----------------------------------------------------
+// One place packs IN, calls, and unpacks OUT. Nothing else in the file touches
+// a slot number.
+function decode(buf){
+  var r={legal:buf[O_LEGAL]===1, cells:buf[O_CELLS], groups:buf[O_GROUPS],
+    warns:buf[O_WARNS], extent:[buf[O_EXT_I],buf[O_EXT_J],buf[O_EXT_K]],
+    centre:[buf[O_CX],buf[O_CY],buf[O_CZ]], radius:buf[O_RADIUS],
+    classIndex:buf[O_CLASS]|0, massMax:buf[O_MASSMAX], classRadius:buf[O_CLSRAD],
+    nx:buf[O_NX]|0, ny:buf[O_NY]|0, nz:buf[O_NZ]|0, cell:buf[O_CELL],
+    modules:[], counts:[], stats:[], stat:{}, checks:[], mounts:[], orphans:[],
+    classes:[]};
+  var i,b;
+  for(i=0;i<(buf[O_MODULES]|0);i++){
+    b=MODULE_BASE+i*MODULE_STRIDE;
+    r.modules.push({index:buf[b]|0, mass:buf[b+1], hull:buf[b+2], power:buf[b+3],
+      sink:buf[b+4], flags:buf[b+5]|0, weapon:buf[b+6]|0, heat:buf[b+7]});
+    r.counts.push(buf[COUNT_BASE+i]);
+  }
+  for(i=0;i<(buf[O_STATS]|0);i++){
+    b=STAT_BASE+i*STAT_STRIDE;
+    var s={id:buf[b]|0, v:buf[b+1], stock:buf[b+2], delta:buf[b+3],
+      pol:buf[b+4], hasStock:buf[b+5]===1};
+    r.stats.push(s); r.stat[s.id]=s;
+  }
+  for(i=0;i<(buf[O_CHECKS]|0);i++){
+    b=CHECK_BASE+i*CHECK_STRIDE;
+    r.checks.push({id:buf[b]|0, ok:buf[b+1]===1, soft:buf[b+2]===1,
+      a:buf[b+3], b:buf[b+4], c:buf[b+5]});
+  }
+  for(i=0;i<(buf[O_MOUNTS]|0);i++){
+    b=MOUNT_BASE+i*MOUNT_STRIDE;
+    r.mounts.push({module:buf[b]|0, n:buf[b+1], dmg:buf[b+2], range:buf[b+3],
+      cd:buf[b+4], arcH:buf[b+5], arcV:buf[b+6], batch:buf[b+7], shots:buf[b+8]});
+  }
+  for(i=0;i<(buf[O_ORPHANS]|0);i++) r.orphans.push(buf[ORPHAN_BASE+i]|0);
+  for(i=0;i<(buf[O_CLASSN]|0);i++){
+    b=CLASS_BASE+i*CLASS_STRIDE;
+    r.classes.push({index:buf[b]|0, hull:buf[b+1], radius:buf[b+2], mass:buf[b+3],
+      mountsRequired:buf[b+14]===1});
+  }
+  return r;
+}
+function readCore(list, classIndex, buf){
+  var i;
+  buf=buf||OUT;
+  for(i=0;i<IN_PLACE;i++) IN[i]=0;
+  IN[IN_CLASS]=classIndex; IN[IN_NX]=BERTH.nx; IN[IN_NY]=BERTH.ny;
+  IN[IN_NZ]=BERTH.nz; IN[IN_CELL]=BERTH.cell; IN[IN_COUNT]=list.length;
+  for(i=0;i<list.length;i++){
+    var o=IN_PLACE+i*PLACE_STRIDE;
+    IN[o]=list[i].i; IN[o+1]=list[i].j; IN[o+2]=list[i].k; IN[o+3]=list[i].m;
+  }
+  askTheCore(IN, buf);
+  // TEST SEAM. A harness may install window.ftDesigner.poison to mutate the
+  // OUT buffer before the page decodes it. It exists to PROVE the boundary: if
+  // a number on screen does not move when the buffer moves, that number was
+  // worked out here and does not belong here. The page never sets it.
+  if(window.ftDesigner && typeof window.ftDesigner.poison==="function")
+    window.ftDesigner.poison(buf);
+  return decode(buf);
+}
+
+// ---- state ---------------------------------------------------------------
+var S={cells:{}, kind:4, mode:"build", layer:0, panel:null, preset:"frigate",
+  cls:0, solid:true, probe:null};
+var undoStack=[], lastCore=null, lastWould=null;
+
+function ck(i,j,k){ return i+","+j+","+k; }
+function cellIndex(i,j,k){ return (k*BERTH.ny+j)*BERTH.nx+i; }
+function placements(cells){
+  var out=[], key;
+  cells=cells||S.cells;
+  for(key in cells) if(cells.hasOwnProperty(key)){
+    var p=key.split(",");
+    out.push({i:+p[0], j:+p[1], k:+p[2], m:cells[key], key:key});
+  }
+  // Sorted so the order handed across the boundary is the order the core would
+  // have built it in, never the order the object happens to enumerate.
+  out.sort(function(a,b){ return (a.k-b.k)||(a.j-b.j)||(a.i-b.i); });
+  return out;
+}
+
+// ---- the states worth showing -------------------------------------------
+// Rows are written top row first, j=3 down to j=0, and each character IS the
+// MODULE INDEX the core priced. There is no second roster to fall out of step:
+// add a row to MOD and the digit for it works here the same day.
+function lit(rows){ return rows; }
+var FRIGATE=[
+  ["....",".11.",".11.","...."],
+  ["....","4334","0220","...."],
+  [".00.","4334","0770","...."],
+  [".00.","4004","4004","...."],
+  [".55.","4004","4664","...."],
+  ["....",".00.",".00.","...."],
+  ["....",".55.",".44.","...."]
+];
+var MIDEDIT=[
+  ["....",".11.",".11.","...."],
+  ["....","4334","0220","...."],
+  [".00.","4334","0000","...."],
+  ["....","4004","4004","...."],
+  ["....","....","....","...."],
+  ["....","....","....","...."],
+  ["....","....","....","...."]
+];
+function fromLiteral(l){
+  var cells={},k,row,i,c;
+  for(k=0;k<l.length;k++) for(row=0;row<4;row++) for(i=0;i<4;i++){
+    c=l[k][row].charAt(i);
+    if(c>="0"&&c<="9") cells[ck(i,3-row,k)]=+c;
+  }
+  return cells;
+}
+var PRESETS=[
+  {id:"empty", label:"empty", layer:0, build:function(){ return {}; },
+   note:"Nothing placed. The core still answers, it just answers with zeros, and every hard check that can fail is failing."},
+  {id:"frigate", label:"legal", layer:3, build:function(){ return fromLiteral(FRIGATE); },
+   note:"A Terran pattern frigate: four engines aft, two reactors and four sinks amidships, an armour belt on a plain HULL keel, four beam mounts and two projectile mounts. Hull and mass land next to the stock terran_frigate on purpose."},
+  {id:"midedit", label:"mid edit", layer:3, build:function(){ return fromLiteral(MIDEDIT); },
+   note:"Half built. The keel and the drive are in, the armour belt stops at slice 4 and no mount has been placed yet, so the design is legal in every way except that it cannot shoot."},
+  {id:"warned", label:"soft warning", layer:1,
+   build:function(){
+     var c=fromLiteral(FRIGATE), key;
+     for(key in c) if(c.hasOwnProperty(key) && c[key]===2) c[key]=4;  // reactors to armour
+     return c;
+   },
+   note:"The same frigate with both reactors swapped for armour. Every HARD check still passes, so the design is LEGAL, and the power row warns in amber. sim_core has no power system, and a design cannot be refused by a system that does not exist."},
+  {id:"orphan", label:"illegal", layer:6,
+   build:function(){
+     var c=fromLiteral(FRIGATE), key;
+     for(key in c) if(c.hasOwnProperty(key) && c[key]===1) delete c[key];  // the drive
+     c[ck(2,1,1)]=4;                 // one reactor pulled to save mass
+     c[ck(0,3,6)]=4;                 // floating, no face neighbour
+     c[ck(0,2,4)]=5; c[ck(3,2,4)]=5; // two more beams on a halved supply
+     return c;
+   },
+   note:"Three things at once: the drive block was deleted, a cube was left floating off the bow with no face touching the hull, and a reactor was pulled while two more beams were hung on. Two hard refusals and one amber warning, and the panel says which is which."}
+];
+function setPreset(id){
+  var p,i;
+  for(i=0;i<PRESETS.length;i++) if(PRESETS[i].id===id) p=PRESETS[i];
+  if(!p) return;
+  pushUndo();
+  S.cells=p.build(); S.preset=id; S.layer=Math.min(p.layer,BERTH.nz-1);
+  refresh();
+}
+function pushUndo(){
+  undoStack.push(JSON.stringify(S.cells));
+  if(undoStack.length>50) undoStack.shift();
+}
+
+// ---- refusals as sentences ----------------------------------------------
+var hintEl=document.getElementById("hint"), hintT=0;
+function hint(msg){
+  hintEl.textContent=msg||"";
+  hintEl.className=msg?"show":"";
+  clearTimeout(hintT);
+  if(msg) hintT=setTimeout(function(){ hintEl.className=""; }, 2800);
+}
+
+// ---- palette -------------------------------------------------------------
+// The loop runs over the module rows the CORE returned. An eighth row added to
+// MOD becomes an eighth chip with no edit here.
+function buildPalette(core){
+  var wrap=document.getElementById("palette"), i;
+  wrap.innerHTML="";
+  function chip(id,label,short,colour,glyph,num){
+    var b=document.createElement("button");
+    b.className="chip"; b.dataset.pick=id; b.type="button";
+    b.innerHTML='<span class="sw" style="background:'+colour+'">'+glyph+'</span>'+
+      '<span class="nm"><span class="lg">'+label+'</span></span>'+
+      (num?'<span class="num">'+num+'</span>':'');
+    b.title=label;
+    b.onclick=function(){
+      if(id==="erase"){ S.mode="erase"; }
+      else if(id==="probe"){ S.mode="probe"; hint("Probe mode: a tap prices a cell and places nothing."); }
+      else { S.mode="build"; S.kind=+id; }
+      syncPalette(); refresh();
+    };
+    wrap.appendChild(b);
+    return b;
+  }
+  for(i=0;i<core.modules.length;i++){
+    var u=modUI(core.modules[i].index);
+    var el=chip(String(core.modules[i].index), u.name, u.short, u.col, u.ch,
+      core.modules[i].mass.toFixed(3));
+    el.querySelector(".lg").dataset.long=u.name;
+    el.querySelector(".lg").dataset.short=u.short;
+  }
+  chip("erase","erase","erase","#2b3d52","x","");
+  chip("probe","probe","probe","#1d4a5f","?","");
+  syncLabels();
+}
+function syncLabels(){
+  var narrow=window.matchMedia("(max-width:900px)").matches;
+  var spans=document.querySelectorAll("#palette .lg"), i;
+  for(i=0;i<spans.length;i++){
+    var d=spans[i].dataset;
+    if(d.long) spans[i].textContent=narrow?d.short:d.long;
+  }
+}
+function syncPalette(){
+  var b=document.getElementById("palette").children,i;
+  for(i=0;i<b.length;i++){
+    var p=b[i].dataset.pick, on;
+    if(p==="erase") on=(S.mode==="erase");
+    else if(p==="probe") on=(S.mode==="probe");
+    else on=(S.mode==="build" && +p===S.kind);
+    b[i].className="chip"+(on?" on":"");
+  }
+}
+
+// ---- the slice grid ------------------------------------------------------
+var gridEl=document.getElementById("grid");
+function buildGrid(){
+  var row,i,b;
+  gridEl.innerHTML="";
+  gridEl.style.gridTemplateColumns="repeat("+BERTH.nx+",1fr)";
+  gridEl.style.gridTemplateRows="repeat("+BERTH.ny+",1fr)";
+  for(row=0;row<BERTH.ny;row++) for(i=0;i<BERTH.nx;i++){
+    var j=BERTH.ny-1-row;
+    b=document.createElement("button");
+    b.className="cell"; b.type="button"; b.dataset.i=i; b.dataset.j=j;
+    b.innerHTML='<span class="gh"></span><span class="gl"></span>'+
+      '<span class="tk"></span><span class="pr"></span>';
+    gridEl.appendChild(b);
+  }
+}
+function paintGrid(core, would){
+  var kids=gridEl.children, n, orph={}, x;
+  for(x=0;x<core.orphans.length;x++) orph[core.orphans[x]]=1;
+  var pv=would?verdictOf(would):null;
+  for(n=0;n<kids.length;n++){
+    var el=kids[n], i=+el.dataset.i, j=+el.dataset.j;
+    var key=ck(i,j,S.layer), m=S.cells[key];
+    var gh=el.querySelector(".gh"), gl=el.querySelector(".gl"), tk=el.querySelector(".tk");
+    var cls="cell"+(m!==undefined?" filled":"")+(orph[cellIndex(i,j,S.layer)]?" orphan":"");
+    if(S.probe && S.probe.i===i && S.probe.j===j && S.probe.k===S.layer && pv)
+      cls+=" p"+pv;
+    el.className=cls;
+    if(m!==undefined){ el.style.background=modUI(m).col; gl.textContent=modUI(m).ch; }
+    else { el.style.background=""; gl.textContent=""; }
+    var below=S.layer>0?S.cells[ck(i,j,S.layer-1)]:undefined;
+    if(below!==undefined && m===undefined){ gh.style.display="block"; gh.style.color=modUI(below).col; }
+    else gh.style.display="none";
+    var html="",z;
+    for(z=0;z<BERTH.nz;z++){
+      var f=S.cells[ck(i,j,z)]!==undefined;
+      html+='<i class="'+(f?"f":"")+(z===S.layer?" here":"")+'"></i>';
+    }
+    tk.innerHTML=html;
+  }
+}
+// verdict of an answer: good, warn or bad. Reads flags, decides nothing.
+function verdictOf(c){
+  if(!c.legal) return "bad";
+  if(c.warns>0) return "warn";
+  return "good";
+}
+
+// Placement. The client owns exactly this: which cell a finger landed on and
+// what the chosen mode does there.
+function actOn(cells,i,j,k){
+  var key=ck(i,j,k), before=cells[key], out={};
+  for(var q in cells) if(cells.hasOwnProperty(q)) out[q]=cells[q];
+  if(S.mode==="erase"){
+    if(before===undefined) return {cells:out, changed:false, why:"nothing there to erase"};
+    delete out[key];
+    return {cells:out, changed:true, verb:"remove", m:before};
+  }
+  // Same kind on a filled cell takes it back, so correcting one mistap costs
+  // one tap and not three.
+  if(before===S.kind){ delete out[key]; return {cells:out, changed:true, verb:"remove", m:before}; }
+  out[key]=S.kind;
+  return {cells:out, changed:true, verb:(before===undefined?"place":"replace"), m:S.kind};
+}
+
+// ---- geometry: which cell a point is in ----------------------------------
+// Computed from the grid's own box, never from elementFromPoint. The 5px gaps
+// between cells are drawing, not a hit region: a swipe that starts in a gutter
+// used to be inert for its WHOLE length, because the miss happened before
+// painting was armed. Now every point inside the grid resolves to the nearest
+// cell and the stroke is armed regardless.
+function cellFromPoint(x,y){
+  var r=gridEl.getBoundingClientRect();
+  if(r.width<=0||r.height<=0) return null;
+  if(x<r.left||x>r.right||y<r.top||y>r.bottom) return null;
+  var i=Math.floor((x-r.left)/r.width*BERTH.nx);
+  var row=Math.floor((y-r.top)/r.height*BERTH.ny);
+  if(i<0) i=0; if(i>BERTH.nx-1) i=BERTH.nx-1;
+  if(row<0) row=0; if(row>BERTH.ny-1) row=BERTH.ny-1;
+  return {i:i, j:BERTH.ny-1-row, k:S.layer};
+}
+
+var painting=false, changedStroke=false, lastPt=null, lastCell=null;
+function applyAt(c){
+  if(!c) return;
+  if(S.mode==="probe"){
+    if(!S.probe || S.probe.i!==c.i || S.probe.j!==c.j || S.probe.k!==c.k){
+      S.probe=c; refresh();
+    }
+    return;
+  }
+  if(lastCell && lastCell.i===c.i && lastCell.j===c.j && lastCell.k===c.k) return;
+  lastCell=c;
+  var res=actOn(S.cells,c.i,c.j,c.k);
+  S.probe=c;
+  if(!res.changed){ hint(res.why); refresh(); return; }
+  S.cells=res.cells; S.preset="custom"; changedStroke=true;
+  refresh();
+}
+gridEl.addEventListener("pointerdown",function(e){
+  e.preventDefault();
+  var c=cellFromPoint(e.clientX,e.clientY);
+  // Armed FIRST and unconditionally. Whether this exact pixel resolved to a
+  // cell is not allowed to decide whether the rest of the stroke paints.
+  painting=true; changedStroke=false; lastPt={x:e.clientX,y:e.clientY}; lastCell=null;
+  pushUndo();
+  if(gridEl.setPointerCapture){ try{ gridEl.setPointerCapture(e.pointerId); }catch(err){} }
+  if(S.mode==="probe"){ hint("Probe mode: pricing only, nothing placed. Pick a cube chip to build."); }
+  S.probe=c;
+  applyAt(c);
+});
+gridEl.addEventListener("pointermove",function(e){
+  if(!painting){
+    // Hover on a desktop asks the core BEFORE the tap is spent.
+    if(e.pointerType==="mouse"){
+      var h=cellFromPoint(e.clientX,e.clientY);
+      if(h && (!S.probe || S.probe.i!==h.i || S.probe.j!==h.j || S.probe.k!==h.k)){
+        S.probe=h; refresh();
+      }
+    }
+    return;
+  }
+  // Walk the segment between samples. A fast flick delivers four pointermove
+  // events across a whole grid; without this it painted the two ends and
+  // nothing between them.
+  var r=gridEl.getBoundingClientRect(), pitch=r.width/BERTH.nx;
+  var x0=lastPt?lastPt.x:e.clientX, y0=lastPt?lastPt.y:e.clientY;
+  var dx=e.clientX-x0, dy=e.clientY-y0;
+  var d=Math.sqrt(dx*dx+dy*dy);
+  var steps=Math.max(1, Math.ceil(d/Math.max(2,pitch/3)));
+  for(var s=1;s<=steps;s++) applyAt(cellFromPoint(x0+dx*s/steps, y0+dy*s/steps));
+  lastPt={x:e.clientX,y:e.clientY};
+});
+gridEl.addEventListener("pointerleave",function(e){
+  if(!painting && e.pointerType==="mouse" && S.probe){ S.probe=null; refresh(); }
+});
+function endStroke(){
+  if(!painting) return;
+  painting=false; lastPt=null; lastCell=null;
+  if(!changedStroke) undoStack.pop();
+}
+gridEl.addEventListener("pointerup",endStroke);
+gridEl.addEventListener("pointercancel",endStroke);
+window.addEventListener("pointerup",endStroke);
+
+// ---- layer rail and filmstrip -------------------------------------------
+function buildLayerRail(){
+  var rail=document.getElementById("lrail"), film=document.getElementById("film"), z;
+  rail.innerHTML=""; film.innerHTML="";
+  document.getElementById("lOf").textContent=BERTH.nz;
+  for(z=0;z<BERTH.nz;z++)(function(zz){
+    var b=document.createElement("button");
+    b.className="lz"; b.type="button"; b.dataset.z=zz;
+    b.innerHTML='<span class="bar"></span><span class="n">'+(zz+1)+'</span>';
+    b.onclick=function(){ S.layer=zz; refresh(); };
+    rail.appendChild(b);
+    var m=document.createElement("button");
+    m.className="mini"; m.type="button"; m.dataset.z=zz;
+    m.innerHTML='<span class="mg"></span><span class="lb">Z'+(zz+1)+'</span>';
+    m.onclick=function(){ S.layer=zz; if(S.panel==="film") openPanel("film"); refresh(); };
+    film.appendChild(m);
+  })(z);
+  var pgs=document.getElementById("pgSide"), pgp=document.getElementById("pgPlan");
+  pgs.style.gridTemplateColumns="repeat("+BERTH.nz+",1fr)";
+  pgp.style.gridTemplateColumns="repeat("+BERTH.nz+",1fr)";
+}
+function paintProjections(){
+  var side="", plan="", i,j,k,found;
+  for(j=BERTH.ny-1;j>=0;j--) for(k=0;k<BERTH.nz;k++){
+    found=undefined;
+    for(i=0;i<BERTH.nx && found===undefined;i++) found=S.cells[ck(i,j,k)];
+    side+='<i class="'+(k===S.layer?"here":"")+'" style="background:'+
+      (found!==undefined?modUI(found).col:"#141d29")+'"></i>';
+  }
+  for(i=BERTH.nx-1;i>=0;i--) for(k=0;k<BERTH.nz;k++){
+    found=undefined;
+    for(j=BERTH.ny-1;j>=0 && found===undefined;j--) found=S.cells[ck(i,j,k)];
+    plan+='<i class="'+(k===S.layer?"here":"")+'" style="background:'+
+      (found!==undefined?modUI(found).col:"#141d29")+'"></i>';
+  }
+  document.getElementById("pgSide").innerHTML=side;
+  document.getElementById("pgPlan").innerHTML=plan;
+}
+function syncLayers(){
+  paintProjections();
+  var rail=document.getElementById("lrail").children;
+  var film=document.getElementById("film").children, z,i,row,count;
+  for(z=0;z<BERTH.nz;z++){
+    count=0;
+    for(i=0;i<BERTH.nx;i++) for(row=0;row<BERTH.ny;row++) if(S.cells[ck(i,row,z)]!==undefined) count++;
+    rail[z].className="lz"+(z===S.layer?" on":"");
+    rail[z].querySelector(".bar").style.height=Math.round(100*count/(BERTH.nx*BERTH.ny))+"%";
+    var mg=film[z].querySelector(".mg"), html="";
+    for(row=BERTH.ny-1;row>=0;row--) for(i=0;i<BERTH.nx;i++){
+      var m=S.cells[ck(i,row,z)];
+      html+='<i style="background:'+(m!==undefined?modUI(m).col:"#141d29")+'"></i>';
+    }
+    mg.innerHTML=html;
+    film[z].className="mini"+(z===S.layer?" on":"");
+  }
+  document.getElementById("lNow").textContent=(S.layer+1);
+  document.getElementById("vTag").textContent=(S.layer+1);
+  document.getElementById("axZ").textContent=
+    S.layer===0?"aft, Z1":(S.layer===BERTH.nz-1?"bow, Z"+BERTH.nz:"Z"+(S.layer+1));
+  document.getElementById("bPrev").disabled=(S.layer<=0);
+  document.getElementById("bNext").disabled=(S.layer>=BERTH.nz-1);
+}
+
+// ---- the core readout ----------------------------------------------------
+function statRow(core,id,extra){
+  var s=core.stat[id]; if(!s) return "";
+  var u=statUI(id);
+  var txt=(u.sign&&s.v>0?"+":"")+s.v.toFixed(u.dp)+(u.u||"");
+  var good=s.pol===0?0:(s.delta>1e-6?s.pol:(s.delta<-1e-6?-s.pol:0));
+  var cls=good>0?"up":(good<0?"dn":"");
+  var d=s.hasStock?((s.delta>0?"+":"")+s.delta.toFixed(u.dp)):"";
+  var zero=(u.zero&&s.v===0)||(u.neg&&s.v<0)||extra;
+  return '<div class="r'+(zero?" zero":"")+'"><span class="k">'+u.k+'</span>'+
+    '<span class="v">'+txt+'</span><span class="d '+cls+'">'+d+'</span></div>';
+}
+function renderCore(core){
+  var h="",i,c,u;
+  h+='<h2>Checks</h2><div class="checks">';
+  for(i=0;i<core.checks.length;i++){
+    c=core.checks[i]; u=checkUI(c.id);
+    var cls=c.ok?"":(c.soft?" soft":" no");
+    var mk=c.ok?"+":(c.soft?"!":"x");
+    h+='<div class="ck'+cls+'"><span class="mk">'+mk+'</span>'+
+      '<span class="bd"><span class="h">'+u.h+
+      (c.soft?' <span class="tag warn">warns only, no such system in the core</span>':'')+
+      '</span><span class="s">'+(c.ok?u.ok(c.a,c.b,c.c):u.no(c.a,c.b,c.c))+
+      '</span></span></div>';
+  }
+  h+='</div>';
+
+  h+='<h2 style="margin-top:12px">Hull, as a '+className(core.classIndex)+'</h2><div class="rows">';
+  h+=statRow(core,ST_CUBES);
+  h+=statRow(core,ST_HULL);
+  h+=statRow(core,ST_MASS);
+  h+=statRow(core,ST_RADIUS);
+  h+='<div class="r"><span class="k">extent xyz</span><span class="v">'+
+     core.extent[0]+" x "+core.extent[1]+" x "+core.extent[2]+
+     '</span><span class="d"></span></div>';
+  h+=statRow(core,ST_PLATES);
+  h+=statRow(core,ST_BLOCK);
+  h+='</div>';
+
+  h+='<h2>Flight</h2><div class="rows">';
+  h+=statRow(core,ST_ACC_F)+statRow(core,ST_ACC_R)+statRow(core,ST_ACC_L);
+  h+=statRow(core,ST_YAW)+statRow(core,ST_PITCH)+statRow(core,ST_SPEED)+statRow(core,ST_REACH);
+  h+='</div>';
+
+  h+='<h2>Mounts</h2><div class="rows">'+statRow(core,ST_DPT)+'</div>';
+  if(core.mounts.length===0)
+    h+='<p class="note">No mount placed. FREIGHTER_MOUNTS is the one class in data.rs with an empty mount table.</p>';
+  for(i=0;i<core.mounts.length;i++){
+    var m=core.mounts[i];
+    h+='<div class="wrow"><span class="k" style="color:'+modUI(m.module).col+'">'+
+      m.n+' x '+modUI(m.module).name+'</span><span class="m">'+
+      m.dmg.toFixed(1)+' dmg &middot; '+m.range+' u &middot; '+m.cd.toFixed(1)+' s &middot; '+
+      m.shots+' shots/turn &middot; arc '+
+      (m.arcH>=360?"full":"&plusmn;"+m.arcH+" / &plusmn;"+m.arcV)+
+      (m.batch>1?" &middot; batch "+m.batch:"")+'</span></div>';
+  }
+
+  h+='<h2 style="margin-top:12px">Power and heat <span class="tag warn">proposed, warns only</span></h2><div class="rows">';
+  h+=statRow(core,ST_PSUP)+statRow(core,ST_PDRAW)+statRow(core,ST_PMARG);
+  h+=statRow(core,ST_HCAP)+statRow(core,ST_HLOAD)+statRow(core,ST_HMARG);
+  h+='</div>';
+  h+='<p class="note">These two rows are why a REACTOR and a HEATSINK cube exist at all: '+
+     'nothing in <b>sim_core</b> reads them today. They warn in amber and they never make '+
+     'a design illegal, because a design cannot be refused by a system the core does not '+
+     'have. If they are built they are built in Rust like everything else here.</p>';
+  document.getElementById("coreBody").innerHTML=h;
+  var v=verdictOf(core);
+  document.getElementById("core").className=(v==="bad"?"bad":(v==="warn"?"warn":""));
+  document.getElementById("cmT").textContent=
+    v==="bad" ? "the core refuses this design"
+    : (v==="warn" ? "legal, with a warning from a system that does not exist yet"
+                  : "every number below comes from the core");
+}
+
+// ---- header --------------------------------------------------------------
+function renderHeader(core){
+  document.getElementById("hCells").textContent=core.stat[ST_CUBES].v.toFixed(0);
+  document.getElementById("hMass").textContent=core.stat[ST_MASS].v.toFixed(3);
+  document.getElementById("hHull").textContent=core.stat[ST_HULL].v.toFixed(0);
+  var v=document.getElementById("hVerdict"), bad=0, warn=0, i;
+  for(i=0;i<core.checks.length;i++){
+    if(core.checks[i].ok) continue;
+    if(core.checks[i].soft) warn++; else bad++;
+  }
+  if(core.cells===0){ v.className=""; v.textContent="no hull"; }
+  else if(bad>0){ v.className="bad"; v.textContent="illegal, "+bad+" failed"; }
+  else if(warn>0){ v.className="warn"; v.textContent="legal, "+warn+" warning"+(warn===1?"":"s"); }
+  else { v.className="ok"; v.textContent="legal"; }
+}
+
+// ---- the pending chip ----------------------------------------------------
+// TWO CORE ANSWERS SIDE BY SIDE. The renderer prints "now" and "would" and
+// never subtracts one from the other, because a delta worked out here is a
+// rule worked out here.
+function renderChip(core, would, act){
+  var el=document.getElementById("chipbar");
+  if(!S.probe || !would){
+    el.innerHTML='<b>no cell probed</b><s>hover a cell on a desktop, or press one here. '+
+      'The core prices the design that WOULD result before the tap is spent.</s>';
+    return;
+  }
+  var verb=act && act.verb ? act.verb : "place";
+  var mn=act && act.m!==undefined ? modUI(act.m).name : modUI(S.kind).name;
+  var v=verdictOf(would);
+  var head='<b>'+verb+' '+mn+' at '+S.probe.i+','+S.probe.j+','+S.probe.k+'</b>'+
+    '<span class="vd '+(v==="good"?"ok":v)+'">'+
+    (v==="good"?"legal":(v==="warn"?"legal, warned":"illegal"))+'</span>';
+  var body="", i;
+  if(v!=="good"){
+    for(i=0;i<would.checks.length;i++){
+      var c=would.checks[i];
+      if(c.ok) continue;
+      body+='<s>'+checkUI(c.id).no(c.a,c.b,c.c)+'</s>';
+      break;
+    }
+  }
+  // Every stat that MOVES, not the two somebody remembered.
+  var moved=[];
+  for(i=0;i<core.stats.length;i++){
+    var a=core.stats[i], b=would.stat[a.id];
+    if(!b || Math.abs(b.v-a.v)<1e-6) continue;
+    var uu=statUI(a.id);
+    moved.push(uu.k+" <u>"+a.v.toFixed(uu.dp)+"</u> to <u>"+b.v.toFixed(uu.dp)+"</u>");
+  }
+  body+='<s>'+(moved.length?moved.join(" &middot; "):"no stat moves")+'</s>';
+  el.innerHTML=head+body;
+}
+
+// ---- presets -------------------------------------------------------------
+// The note under the chips is derived, never a caption that outlives the edit
+// that invalidated it.
+function syncPresets(core){
+  var b=document.getElementById("presets").children,i,p,note="";
+  for(i=0;i<b.length;i++) b[i].className=(b[i].dataset.id===S.preset)?"on":"";
+  for(i=0;i<PRESETS.length;i++) if(PRESETS[i].id===S.preset) p=PRESETS[i];
+  if(p) note=p.note;
+  else {
+    var pass=0,bad=0,warn=0;
+    for(i=0;i<core.checks.length;i++){
+      if(core.checks[i].ok) pass++;
+      else if(core.checks[i].soft) warn++;
+      else bad++;
+    }
+    note="Edited by hand as a "+className(core.classIndex)+". "+pass+" of "+
+      core.checks.length+" checks pass"+
+      (bad?", "+bad+" hard refusal"+(bad===1?"":"s"):"")+
+      (warn?", "+warn+" amber warning"+(warn===1?"":"s"):"")+
+      ". Every number in the panel is the core's answer for exactly these cubes.";
+  }
+  document.getElementById("presetNote").textContent=note;
+}
+
+// ---- 3D preview ----------------------------------------------------------
+var view=document.getElementById("view"), cv=document.getElementById("cv");
+var renderer=new THREE.WebGLRenderer({canvas:cv, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x070a0f);
+var camera=new THREE.PerspectiveCamera(42,1,0.1,400);
+scene.add(new THREE.AmbientLight(0x8fa6bd,0.75));
+var keyL=new THREE.DirectionalLight(0xffffff,0.9); keyL.position.set(4,7,6); scene.add(keyL);
+var fillL=new THREE.DirectionalLight(0x35C7FF,0.35); fillL.position.set(-5,-2,-4); scene.add(fillL);
+var shipGroup=new THREE.Group(); scene.add(shipGroup);
+var ghostGroup=new THREE.Group(); scene.add(ghostGroup);
+var boxGeo=new THREE.BoxGeometry(BERTH.cell*0.92,BERTH.cell*0.92,BERTH.cell*0.92);
+var edgeGeo=new THREE.EdgesGeometry(boxGeo);
+var solidMat={}, ghostMat={};
+function mat(col,solid){
+  var cache=solid?solidMat:ghostMat, m=cache[col];
+  if(!m){
+    m=solid? new THREE.MeshLambertMaterial({color:col})
+           : new THREE.MeshLambertMaterial({color:col,transparent:true,opacity:0.3,depthWrite:false});
+    cache[col]=m;
+  }
+  return m;
+}
+// Camera at +Z looking back at the ship is exactly the frame the flat grid is
+// drawn in: screen right is +X, screen up is +Y.
+// The camera FRAMES THE HULL, not the berth: distance is derived from the
+// bounding box the core reported, so a four cube design fills the preview
+// instead of sitting in a corner of an empty wireframe.
+var cam={yaw:0.62, pitch:0.42, zoom:1};
+var fitCentre=new THREE.Vector3(0,0,0), fitR=4.6;
+function camDist(){
+  var half=camera.fov*Math.PI/360, d=fitR/Math.tan(half);
+  if(camera.aspect<1) d/=camera.aspect;
+  return d*cam.zoom;
+}
+function camApply(){
+  var cp=Math.cos(cam.pitch), dist=camDist();
+  camera.position.set(
+    fitCentre.x+Math.sin(cam.yaw)*cp*dist,
+    fitCentre.y+Math.sin(cam.pitch)*dist,
+    fitCentre.z+Math.cos(cam.yaw)*cp*dist);
+  camera.lookAt(fitCentre);
+}
+function zoomBy(f){ cam.zoom=Math.max(0.45,Math.min(2.6,cam.zoom*f)); }
+function cellPos(i,j,k){
+  return [ (i-(BERTH.nx-1)/2)*BERTH.cell,
+           (j-(BERTH.ny-1)/2)*BERTH.cell,
+           (k-(BERTH.nz-1)/2)*BERTH.cell ];
+}
+function lattice(){
+  var pts=[], x1=BERTH.nx*BERTH.cell/2, y1=BERTH.ny*BERTH.cell/2, z1=BERTH.nz*BERTH.cell/2;
+  var c=[[-x1,-y1,-z1],[x1,-y1,-z1],[x1,y1,-z1],[-x1,y1,-z1],
+         [-x1,-y1,z1],[x1,-y1,z1],[x1,y1,z1],[-x1,y1,z1]];
+  var e=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  for(var i=0;i<e.length;i++){
+    var a=c[e[i][0]], b=c[e[i][1]];
+    pts.push(a[0],a[1],a[2],b[0],b[1],b[2]);
+  }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  return new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x1E2A3A}));
+}
+scene.add(lattice());
+// The bow marker. It was a solid cone on the +Z axis, which in BOW ON, the one
+// view the whole variant rests on, sat a disc a quarter of the hull's width
+// over the middle of the ship. A RING at the frame edge says the same thing
+// and can never cover the subject.
+(function(){
+  var pts=[], n=48, r=Math.max(BERTH.nx,BERTH.ny)*BERTH.cell*0.72;
+  var z=BERTH.nz*BERTH.cell/2+0.35;
+  for(var i=0;i<=n;i++){
+    var t=i/n*Math.PI*2;
+    pts.push(Math.cos(t)*r, Math.sin(t)*r, z);
+  }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  scene.add(new THREE.Line(g,new THREE.LineBasicMaterial({color:0x35C7FF})));
+})();
+// The collision sphere the core hands the contact solver, drawn faint and AT
+// THE HULL'S OWN CENTRE. Drawn at the berth origin it hung in empty space next
+// to a small ship and read as a rendering fault.
+var sphere=new THREE.Mesh(new THREE.SphereGeometry(1,18,12),
+  new THREE.MeshBasicMaterial({color:0x13303f,wireframe:true,transparent:true,opacity:0.34}));
+scene.add(sphere);
+var slicePlane=new THREE.LineSegments(new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({color:0x35C7FF,transparent:true,opacity:0.9}));
+scene.add(slicePlane);
+function buildSlicePlane(){
+  var pts=[], z=cellPos(0,0,S.layer)[2];
+  var x0=-BERTH.nx*BERTH.cell/2, x1=-x0, y0=-BERTH.ny*BERTH.cell/2, y1=-y0, t;
+  for(t=0;t<=BERTH.nx;t++){ var x=x0+t*BERTH.cell; pts.push(x,y0,z, x,y1,z); }
+  for(t=0;t<=BERTH.ny;t++){ var y=y0+t*BERTH.cell; pts.push(x0,y,z, x1,y,z); }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  slicePlane.geometry.dispose(); slicePlane.geometry=g;
+}
+function clearGroup(g){
+  while(g.children.length){
+    var ch=g.children.pop();
+    if(ch.geometry && ch.geometry!==boxGeo && ch.geometry!==edgeGeo) ch.geometry.dispose();
+  }
+}
+function rebuild3D(core, would){
+  var i,p;
+  clearGroup(shipGroup); clearGroup(ghostGroup);
+  var pl=placements(), orph={};
+  for(i=0;i<core.orphans.length;i++) orph[core.orphans[i]]=1;
+  for(i=0;i<pl.length;i++){
+    p=pl[i];
+    var onSlice=(p.k===S.layer);
+    // SOLID is the default. Forty of forty four cubes drawn at 0.3 opacity
+    // with depthWrite off meant the finished ship was never actually visible.
+    var m=new THREE.Mesh(boxGeo, mat(modUI(p.m).col, S.solid||onSlice));
+    var q=cellPos(p.i,p.j,p.k); m.position.set(q[0],q[1],q[2]);
+    shipGroup.add(m);
+    if(onSlice||orph[cellIndex(p.i,p.j,p.k)]){
+      var e=new THREE.LineSegments(edgeGeo,new THREE.LineBasicMaterial({
+        color: orph[cellIndex(p.i,p.j,p.k)]?0xFF4B4B:0x35C7FF,
+        transparent:true, opacity: orph[cellIndex(p.i,p.j,p.k)]?1:0.75}));
+      e.position.set(q[0],q[1],q[2]); shipGroup.add(e);
+    }
+  }
+  // The ghost, tinted by what the CORE said of the design that would result.
+  if(S.probe && would){
+    var v=verdictOf(would);
+    var col=v==="good"?0x4CD97B:(v==="warn"?0xFFD24B:0xFF4B4B);
+    var gm=new THREE.Mesh(boxGeo,new THREE.MeshLambertMaterial({
+      color:col, transparent:true, opacity:0.45, depthWrite:false}));
+    var gq=cellPos(S.probe.i,S.probe.j,S.probe.k);
+    gm.position.set(gq[0],gq[1],gq[2]); ghostGroup.add(gm);
+    var ge=new THREE.LineSegments(edgeGeo,new THREE.LineBasicMaterial({color:col}));
+    ge.position.set(gq[0],gq[1],gq[2]); ge.scale.set(1.06,1.06,1.06); ghostGroup.add(ge);
+  }
+  sphere.position.set(core.centre[0],core.centre[1],core.centre[2]);
+  sphere.scale.setScalar(core.radius>0?core.radius:0.001);
+  sphere.visible=core.radius>0;
+  buildSlicePlane();
+  // Framing, which IS the client's job: how much of the scene to look at.
+  fitCentre.set(core.centre[0],core.centre[1],core.centre[2]);
+  if(core.cells>0){
+    var ex=core.extent[0]*core.cell, ey=core.extent[1]*core.cell, ez=core.extent[2]*core.cell;
+    fitR=0.5*Math.sqrt(ex*ex+ey*ey+ez*ez)+core.cell*0.6;
+    if(core.radius>fitR) fitR=core.radius+core.cell*0.4;
+  } else {
+    var bx=BERTH.nx*BERTH.cell, by=BERTH.ny*BERTH.cell, bz=BERTH.nz*BERTH.cell;
+    fitR=0.5*Math.sqrt(bx*bx+by*by+bz*bz);
+  }
+}
+
+// Framing: how big to draw the grid in the box it was given. Measured rather
+// than guessed, and re-measured on every resize.
+var gridWrap=document.getElementById("gridwrap");
+function fitGrid(){
+  var w=gridWrap.clientWidth, h=gridWrap.clientHeight;
+  if(w<=0||h<=0) return;
+  gridEl.style.width=Math.max(120,Math.min(w,h))+"px";
+}
+if(window.ResizeObserver) new ResizeObserver(fitGrid).observe(gridWrap);
+function resize(){
+  fitGrid(); syncLabels();
+  var w=view.clientWidth||300, h=view.clientHeight||200;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+if(window.ResizeObserver) new ResizeObserver(resize).observe(view);
+window.addEventListener("resize",resize);
+
+// Orbit. One finger drags on a phone, two fingers pinch to zoom, and the
+// buttons do the same job for anyone who would rather tap than drag.
+var drag=null, pinch=null, pts={};
+cv.addEventListener("pointerdown",function(e){
+  cv.setPointerCapture(e.pointerId); pts[e.pointerId]={x:e.clientX,y:e.clientY};
+  var ids=Object.keys(pts);
+  if(ids.length===1) drag={x:e.clientX,y:e.clientY};
+  else if(ids.length===2){ drag=null; pinch=dist2(); }
+  e.preventDefault();
+});
+function dist2(){
+  var ids=Object.keys(pts); if(ids.length<2) return 0;
+  var a=pts[ids[0]], b=pts[ids[1]];
+  return Math.sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+cv.addEventListener("pointermove",function(e){
+  if(!pts[e.pointerId]) return;
+  pts[e.pointerId]={x:e.clientX,y:e.clientY};
+  var ids=Object.keys(pts);
+  if(ids.length>=2){
+    var d=dist2();
+    if(pinch&&d>0){ zoomBy(pinch/d); pinch=d; }
+    return;
+  }
+  if(!drag) return;
+  cam.yaw-=(e.clientX-drag.x)*0.008;
+  cam.pitch=Math.max(-1.35,Math.min(1.35,cam.pitch+(e.clientY-drag.y)*0.008));
+  drag={x:e.clientX,y:e.clientY};
+});
+function upP(e){ delete pts[e.pointerId]; if(Object.keys(pts).length<2) pinch=null;
+  if(Object.keys(pts).length===0) drag=null; }
+cv.addEventListener("pointerup",upP);
+cv.addEventListener("pointercancel",upP);
+cv.addEventListener("wheel",function(e){
+  e.preventDefault(); zoomBy(e.deltaY>0?1.09:0.92);
+},{passive:false});
+
+// ---- refresh -------------------------------------------------------------
+function refresh(){
+  var pl=placements();
+  var core=readCore(pl, S.cls, OUT);
+  // A SECOND core call for the preview, never a client side delta.
+  var would=null, act=null;
+  if(S.probe){
+    act=actOn(S.cells,S.probe.i,S.probe.j,S.probe.k);
+    if(act.changed) would=readCore(placements(act.cells), S.cls, WOUT);
+    else if(S.mode==="probe"||S.mode==="build") would=readCore(pl, S.cls, WOUT);
+  }
+  lastCore=core; lastWould=would;
+  paintGrid(core, would);
+  syncLayers();
+  renderHeader(core);
+  renderCore(core);
+  renderChip(core, would, act);
+  rebuild3D(core, would);
+  syncPalette();
+  syncPresets(core);
+}
+
+// ---- controls ------------------------------------------------------------
+document.getElementById("bPrev").onclick=function(){
+  if(S.layer>0){ S.layer--; S.probe=null; refresh(); } else hint("already at the aft slice");
+};
+document.getElementById("bNext").onclick=function(){
+  if(S.layer<BERTH.nz-1){ S.layer++; S.probe=null; refresh(); } else hint("already at the bow slice");
+};
+document.getElementById("bUndo").onclick=function(){
+  if(!undoStack.length){ hint("nothing to undo"); return; }
+  S.cells=JSON.parse(undoStack.pop()); S.preset="custom"; refresh();
+};
+document.getElementById("bClearLayer").onclick=function(){
+  pushUndo();
+  var i,j; for(i=0;i<BERTH.nx;i++) for(j=0;j<BERTH.ny;j++) delete S.cells[ck(i,j,S.layer)];
+  S.preset="custom"; refresh();
+};
+document.getElementById("bClearAll").onclick=function(){
+  pushUndo(); S.cells={}; S.preset="custom"; refresh();
+};
+document.getElementById("bBow").onclick=function(){ cam.yaw=0; cam.pitch=0; cam.zoom=0.95; };
+document.getElementById("bIso").onclick=function(){ cam.yaw=0.62; cam.pitch=0.42; cam.zoom=1; };
+document.getElementById("bIn").onclick=function(){ zoomBy(0.85); };
+document.getElementById("bOut").onclick=function(){ zoomBy(1.18); };
+document.getElementById("bSolid").onclick=function(){
+  S.solid=!S.solid;
+  this.textContent=S.solid?"solid":"ghost";
+  this.className=S.solid?"on":"";
+  refresh();
+};
+
+// ---- panels --------------------------------------------------------------
+// Only one is ever open, the tab that opened it closes it, and a panel covers
+// the SLICE GRID and nothing else, so no control is ever underneath one.
+function openPanel(id){
+  S.panel=(S.panel===id)?null:id;
+  var map={core:"core", film:"panelFilm", presets:"panelPresets"};
+  var tabs={core:"tCore", film:"tFilm", presets:"tPresets"}, k;
+  for(k in map) if(map.hasOwnProperty(k)){
+    document.getElementById(map[k]).classList.toggle("open", S.panel===k);
+    document.getElementById(tabs[k]).className=(S.panel===k)?"on":"";
+  }
+  resize();
+}
+document.getElementById("tCore").onclick=function(){ openPanel("core"); };
+document.getElementById("tFilm").onclick=function(){ openPanel("film"); };
+document.getElementById("tPresets").onclick=function(){ openPanel("presets"); };
+document.getElementById("bCloseCore").onclick=function(){ openPanel("core"); };
+document.getElementById("bCloseFilm").onclick=function(){ openPanel("film"); };
+document.getElementById("bClosePresets").onclick=function(){ openPanel("presets"); };
+document.getElementById("hVerdict").onclick=function(){
+  if(window.matchMedia("(max-width:900px)").matches) openPanel("core");
+};
+
+// Keyboard is a convenience on a desktop and never the only route: every one
+// of these has a button on screen.
+window.addEventListener("keydown",function(e){
+  if(e.key==="ArrowLeft"||e.key==="["){ if(S.layer>0){ S.layer--; refresh(); } }
+  else if(e.key==="ArrowRight"||e.key==="]"){ if(S.layer<BERTH.nz-1){ S.layer++; refresh(); } }
+});
+
+function frame(){ requestAnimationFrame(frame); camApply(); renderer.render(scene,camera); }
+
+// ---- boot ----------------------------------------------------------------
+// The class list, the module list and the berth dimensions all come back from
+// the core's first answer. Nothing here keeps a second copy of any of them.
+var boot=readCore([], S.cls, OUT);
+(function(){
+  var sel=document.getElementById("clsSel"), i;
+  for(i=0;i<boot.classes.length;i++){
+    var o=document.createElement("option");
+    o.value=String(boot.classes[i].index);
+    o.textContent=className(boot.classes[i].index);
+    sel.appendChild(o);
+  }
+  sel.value=String(S.cls);
+  sel.onchange=function(){
+    S.cls=+sel.value;
+    hint("Reading the same cubes as a "+className(S.cls)+".");
+    refresh();
+  };
+})();
+(function(){
+  var wrap=document.getElementById("presets"),i;
+  for(i=0;i<PRESETS.length;i++)(function(p){
+    var b=document.createElement("button");
+    b.textContent=p.label; b.dataset.id=p.id; b.type="button";
+    b.onclick=function(){ setPreset(p.id); };
+    wrap.appendChild(b);
+  })(PRESETS[i]);
+})();
+buildPalette(boot); buildGrid(); buildLayerRail();
+document.getElementById("bSolid").className="on";
+setPreset("frigate");
+resize(); frame();
+
+// Read only, for a harness. It observes and never drives, except for the
+// declared poison seam above, whose whole purpose is to prove that the numbers
+// on screen came from the buffer.
+window.ftDesigner={
+  poison:null,
+  state:function(){ return {cells:JSON.parse(JSON.stringify(S.cells)), layer:S.layer,
+    kind:S.kind, mode:S.mode, panel:S.panel, cls:S.cls, solid:S.solid,
+    probe:S.probe?{i:S.probe.i,j:S.probe.j,k:S.probe.k}:null}; },
+  berth:function(){ return {nx:BERTH.nx, ny:BERTH.ny, nz:BERTH.nz, cell:BERTH.cell}; },
+  core:function(){ return lastCore; },
+  would:function(){ return lastWould; },
+  refresh:refresh
+};
+})();
+</script>
