@@ -1118,14 +1118,25 @@ function syncLabels(){
     if(d.long) spans[i].textContent=narrow?d.short:d.long;
   }
 }
-function syncPalette(){
-  var b=document.getElementById("palette").children,i;
+// Rebuilt whenever the core's table changes shape, and its numbers re-read on
+// EVERY answer. Read once at boot they were still the core's, but they would
+// not follow it, and a number that cannot follow the buffer is a number that
+// has quietly stopped being the core's.
+function syncPalette(core){
+  var wrap=document.getElementById("palette");
+  if(core && wrap.children.length!==core.modules.length+2) buildPalette(core);
+  var b=wrap.children,i,q;
   for(i=0;i<b.length;i++){
     var p=b[i].dataset.pick, on;
     if(p==="erase") on=(S.mode==="erase");
     else if(p==="probe") on=(S.mode==="probe");
     else on=(S.mode==="build" && +p===S.kind);
     b[i].className="chip"+(on?" on":"");
+    var num=b[i].querySelector(".num");
+    if(num && core && p!=="erase" && p!=="probe"){
+      for(q=0;q<core.modules.length;q++)
+        if(core.modules[q].index===+p) num.textContent=core.modules[q].mass.toFixed(3);
+    }
   }
 }
 
@@ -1712,7 +1723,7 @@ function refresh(){
   renderCore(core);
   renderChip(core, would, act);
   rebuild3D(core, would);
-  syncPalette();
+  syncPalette(core);
   syncPresets(core);
 }
 
