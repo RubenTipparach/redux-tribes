@@ -106,7 +106,75 @@ async function checkShips(page) {
     // The whole point of eight swatches is that eight of them are on the ship.
     if (d.livery < 8) fail(`${name}: only ${d.livery} of 8 swatches reach the hull`);
     else ok(`${name}: all 8 ${d.faction} swatches on the hull`);
+    // Mounts live inside the frame. Only drives, retros, attitude jets, gun
+    // rings and trunnions are allowed to stand proud of the hull.
+    if (d.enclosedOutside > 0)
+      fail(`${name}: ${d.enclosedOutside} cells of enclosed parts are outside the hull`);
+    else ok(`${name}: every enclosed mount is inside the hull`);
   }
+}
+
+/** Ghost armour, and a tap that names what it landed on. */
+async function checkGhostAndPicking(page) {
+  await (await page.$$('#dzClasses button'))[0].click();
+  await page.waitForTimeout(450);
+
+  const states = [];
+  for (let n = 0; n < 3; n++) {
+    await page.click('#dzPlate');
+    await page.waitForTimeout(500);
+    states.push(await page.evaluate(() => {
+      const d = window.ftDebug.designer();
+      return { plate: d.plate, ghost: d.hist.ghost ?? 0, solid: d.hist.solid, skin: d.hist.skin };
+    }));
+  }
+  const seq = states.map(s => s.plate).join(' -> ');
+  if (seq !== 'ghost -> off -> on') fail(`the plate toggle cycles ${seq}, not ghost -> off -> on`);
+  else ok('the plate toggle cycles on, ghost, off');
+  const g = states[0];
+  if (!g.ghost) fail('ghost mode draws no armour at all');
+  else if (g.skin) fail('ghost mode still draws solid armour as well');
+  else ok(`ghost draws ${g.ghost} cells of see through skin over ${g.solid} of structure`);
+
+  // A tap on the model has to name what it hit. It is the only gesture a
+  // phone has for this: no second button, no hover.
+  await page.click('#dzPlate');           // back to ghost, where parts are visible
+  await page.waitForTimeout(500);
+  const box = await (await page.$('#dzCanvas')).boundingBox();
+  let named = null;
+  for (const [fx, fy] of [[0.5, 0.5], [0.42, 0.52], [0.58, 0.48], [0.5, 0.44]]) {
+    await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
+    await page.waitForTimeout(350);
+    const d = await page.evaluate(() => {
+      const el = document.getElementById('dzPick');
+      return { hidden: el.classList.contains('hidden'), text: el.textContent.trim(),
+        socket: window.ftDebug.designer().socket, marks: window.ftDebug.designer().marks };
+    });
+    if (d.hidden) { fail('a tap on the hull said nothing at all'); return; }
+    if (d.socket) { named = d; break; }
+    named = named ?? d;
+  }
+  ok(`a tap on the model opens a card: "${named.text.split('\n')[0].slice(0, 48)}"`);
+
+  // Selecting from the menu has to outline the part on the model.
+  await page.click('#dzTabParts');
+  await page.waitForTimeout(250);
+  for (const sk of await page.$$('#dzSockets .dzsock')) {
+    if ((await sk.textContent()) === 'UTL-BRG') { await sk.click(); break; }
+  }
+  await page.waitForTimeout(450);
+  const sel = await page.evaluate(() => {
+    const el = document.getElementById('dzPick');
+    const d = window.ftDebug.designer();
+    return { marks: d.marks, socket: d.socket, text: el.textContent.trim(),
+      hidden: el.classList.contains('hidden') };
+  });
+  if (!sel.marks) fail('selecting a part from the menu draws no outline on the model');
+  else if (sel.hidden) fail('selecting a part from the menu opens no card');
+  else ok('selecting from the menu outlines the part and names it');
+
+  await page.click('#dzPlate');
+  await page.waitForTimeout(400);
 }
 
 async function checkModesAndRotation(page) {
@@ -169,7 +237,22 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   console.log(label);
   await openShipyard(page);
   await checkLayout(page, label);
-  if (w > 800) { await checkShips(page); await checkModesAndRotation(page); }
+  if (w > 800) {
+    await checkShips(page);
+    await checkGhostAndPicking(page);
+    await checkModesAndRotation(page);
+  } else {
+    // With the card open, the controls drawn over the map still have to take
+    // a tap. The fire slots went that way once and the heading dials after.
+    const box = await (await page.$('#dzCanvas')).boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(450);
+    const open = await page.evaluate(() =>
+      !document.getElementById('dzPick').classList.contains('hidden'));
+    if (!open) fail(`${label}: a tap on the model said nothing`);
+    else ok(`${label}: a tap on the model opens the card`);
+    await checkLayout(page, label + ' with the card open');
+  }
   if (errs.length) { for (const e of errs.slice(0, 4)) fail(`page error: ${e}`); }
   else ok('no page errors');
   await ctx.close();

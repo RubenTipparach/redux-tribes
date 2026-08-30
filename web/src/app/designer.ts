@@ -15,11 +15,14 @@
 import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
-  FACTION_PAINT, PURPOSE, PURPOSE_ORDER,
+  FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
-  socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat,
+  socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   type Design, type Derived, type SectionKey, type ArmourMode,
 } from './design.js';
+
+/** What the plate is doing: solid, see through, or off. */
+type PlateView = 'on' | 'ghost' | 'off';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -46,7 +49,12 @@ export class Designer {
   #voxelCount = 0;
   #liveryColours = 0;
   #gridHash = 0;
-  #showPlate = true;
+  #plate: PlateView = 'on';
+  /** Cells behind each drawn mesh, so a click can be turned back into a part. */
+  #pickable: Array<{ mesh: THREE.InstancedMesh; cells: number[] }> = [];
+  #ray = new THREE.Raycaster();
+  #note: string | null = null;
+  #marks = new THREE.Group();
   #hist: Record<string, number> = {};
   #geoms: THREE.BufferGeometry[] = [];
   #mats: THREE.Material[] = [];
@@ -83,7 +91,7 @@ export class Designer {
     key.position.set(5, 8, 6); this.#scene.add(key);
     const fill = new THREE.DirectionalLight(0x35C7FF, 0.32);
     fill.position.set(-6, -3, -5); this.#scene.add(fill);
-    this.#scene.add(this.#hull, this.#rig, this.#sockets);
+    this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks);
 
     // Orbit. One finger drags, two pinch, and the buttons do the same job for
     // anyone who would rather tap. There is no second mouse button on a phone.
@@ -94,11 +102,19 @@ export class Designer {
       const a = v[0], b = v[1];
       return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
     };
+    // A tap picks and a drag orbits, told apart by how far the pointer moved.
+    // There is no second mouse button on a phone and no hover either, so the
+    // only gesture that can name a part is the one that also turns the camera.
+    let downAt: { x: number; y: number; t: number } | null = null;
+    let moved = 0;
     cv.addEventListener('pointerdown', e => {
       cv.setPointerCapture(e.pointerId);
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size === 1) drag = { x: e.clientX, y: e.clientY };
-      else { drag = null; pinch = gap(); }
+      if (pts.size === 1) {
+        drag = { x: e.clientX, y: e.clientY };
+        downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
+        moved = 0;
+      } else { drag = null; pinch = gap(); downAt = null; }
       e.preventDefault();
     });
     cv.addEventListener('pointermove', e => {
@@ -110,14 +126,18 @@ export class Designer {
         return;
       }
       if (!drag) return;
+      moved += Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y);
       this.#cam.yaw -= (e.clientX - drag.x) * 0.008;
       this.#cam.pitch = Math.max(-1.35, Math.min(1.35, this.#cam.pitch + (e.clientY - drag.y) * 0.008));
       drag = { x: e.clientX, y: e.clientY };
     });
     const up = (e: PointerEvent) => {
+      const tap = downAt && pts.size === 1 && moved < 6
+        && performance.now() - downAt.t < 700;
       pts.delete(e.pointerId);
       if (pts.size < 2) pinch = 0;
-      if (pts.size === 0) drag = null;
+      if (pts.size === 0) { drag = null; downAt = null; }
+      if (tap) this.#pickAt(e.clientX, e.clientY);
     };
     cv.addEventListener('pointerup', up);
     cv.addEventListener('pointercancel', up);
@@ -193,10 +213,12 @@ export class Designer {
     this.#clear(this.#hull);
     this.#clear(this.#rig);
     this.#clear(this.#sockets);
+    this.#clear(this.#marks);
+    this.#pickable = [];
 
     const frame = frameFor(this.#design.classKey);
     const cell = RUNG[frame.rung];
-    const { grid, purp } = rasterise(this.#design);
+    const { grid, purp, own } = rasterise(this.#design);
     const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
     // The livery needs the hull's own shape to know where a stripe or an
@@ -220,22 +242,28 @@ export class Designer {
     // just out of the draw call. A part buried under four layers of armour is
     // an interior cell either way, so hiding the plate while still culling
     // against it leaves an empty screen. This is the x ray.
-    // A skinned frame member is plate while the plate is on and frame the
-    // moment it comes off, which is the only way both readings are true.
-    const view = this.#showPlate
+    //
+    // Ghost is the same x ray with the armour still drawn, one layer of it,
+    // see through and not writing depth. Only the OUTER surface: four courses
+    // of translucent plate stacked on themselves is mush, which is why the
+    // toggle used to be on or off and nothing in between.
+    const solidView = this.#plate === 'on'
       ? grid.map(m => (m === Mat.Skinned ? Mat.Plate : m)) as Uint8Array
-      : grid.map(m => (m === Mat.Plate ? Mat.Empty : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
+      : grid.map(m => (m === Mat.Plate ? Mat.Empty
+        : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
+    const isPlate = (m: number) => m === Mat.Plate || m === Mat.Skinned;
 
     const solid: number[] = [], solidCol: number[] = [];
     const skin: number[] = [], skinCol: number[] = [];
+    const shown = (n: number) => solidView[n] as number;
     for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
       const n = idx(i, j, k);
-      const mat = view[n] as number;
+      const mat = shown(n);
       if (!mat) continue;
       const hidden =
-        i > 0 && view[idx(i - 1, j, k)] && i < NX - 1 && view[idx(i + 1, j, k)] &&
-        j > 0 && view[idx(i, j - 1, k)] && j < NY - 1 && view[idx(i, j + 1, k)] &&
-        k > 0 && view[idx(i, j, k - 1)] && k < NZ - 1 && view[idx(i, j, k + 1)];
+        i > 0 && shown(idx(i - 1, j, k)) && i < NX - 1 && shown(idx(i + 1, j, k)) &&
+        j > 0 && shown(idx(i, j - 1, k)) && j < NY - 1 && shown(idx(i, j + 1, k)) &&
+        k > 0 && shown(idx(i, j, k - 1)) && k < NZ - 1 && shown(idx(i, j, k + 1));
       if (hidden) continue;
       if (mat === Mat.Plate) {
         skin.push(i, j, k);
@@ -246,10 +274,28 @@ export class Designer {
         solidCol.push(cellColour(mat, purp[n] as number, this.#design.paint));
       }
     }
-    this.#voxelCount = solid.length / 3 + skin.length / 3;
+
+    // The ghost skin: the hull's outermost course only, read off the full grid.
+    const ghost: number[] = [], ghostCol: number[] = [];
+    if (this.#plate === 'ghost') {
+      for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const n = idx(i, j, k);
+        if (!isPlate(grid[n] as number)) continue;
+        const open =
+          i === 0 || !grid[n - 1] || i === NX - 1 || !grid[n + 1] ||
+          j === 0 || !grid[n - NX] || j === NY - 1 || !grid[n + NX] ||
+          k === 0 || !grid[n - NX * NY] || k === NZ - 1 || !grid[n + NX * NY];
+        if (!open) continue;
+        ghost.push(i, j, k);
+        ghostCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
+          hwAt[k] as number, hhAt[k] as number));
+      }
+    }
+
+    this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3;
     // How many of the faction's eight actually reached the hull. One means a
     // paint bucket rather than a livery, which is the thing this replaced.
-    this.#liveryColours = new Set(skinCol).size;
+    this.#liveryColours = new Set(skinCol.length ? skinCol : ghostCol).size;
     // FNV-1a over the occupancy grid. It exists so the harness can OBSERVE
     // that a rotation moved cells; nothing reads it back into the editor.
     let hsh = 0x811c9dc5;
@@ -261,10 +307,11 @@ export class Designer {
     const hist: Record<number, number> = {};
     for (let n = 0; n < grid.length; n++)
       if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
-    this.#hist = { ...hist, solid: solid.length / 3, skin: skin.length / 3 };
+    this.#hist = { ...hist, solid: solid.length / 3, skin: skin.length / 3,
+      ghost: ghost.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
-      colourAt: ((n: number) => number) | null) => {
+      colourAt: ((n: number) => number) | null, pick = true) => {
       const n = cells.length / 3;
       if (!n) return;
       const geo = this.#geo(new THREE.BoxGeometry(cell, cell, cell));
@@ -281,6 +328,7 @@ export class Designer {
       inst.instanceMatrix.needsUpdate = true;
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
       this.#hull.add(inst);
+      if (pick) this.#pickable.push({ mesh: inst, cells });
     };
 
     // The structure inside, each cell in its own job's colour: orange is a
@@ -291,11 +339,54 @@ export class Designer {
       q => solidCol[q] as number);
     // The plate over it, in the faction's whole scheme rather than one colour:
     // panels, an underside, a dorsal spine, a waist stripe, a nose flash and a
-    // transom band, all eight swatches on the hull at once. Opaque, because
-    // four layers of see through armour stacked on itself is mush rather than
-    // a window: the way to look inside a ship is to take the plate off.
+    // transom band, all eight swatches on the hull at once.
     place(skin, this.#mat(new THREE.MeshLambertMaterial({})),
       q => skinCol[q] as number);
+    // Ghosted armour draws last and never into the depth buffer, so what is
+    // under it stays readable rather than fighting it. It is not pickable:
+    // a click through the ghost should reach the part you can see.
+    place(ghost, this.#mat(new THREE.MeshLambertMaterial({
+      transparent: true, opacity: 0.3, depthWrite: false })),
+      q => ghostCol[q] as number, false);
+
+    // --- the selected part, outlined over the top of everything ------------
+    // A wireframe on its own surface cells rather than a box round its
+    // extent: a clamp is a pair of jaws and a cargo hold is a crate, and the
+    // point of picking one is to see WHICH shape lit up. depthTest off so it
+    // reads through the plate that is standing in front of it.
+    const held = this.#socket
+      ? this.#design.parts.findIndex(p => p.socket === this.#socket) : -1;
+    if (held >= 0) {
+      const want = held + 1;
+      const mark: number[] = [];
+      for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const n = idx(i, j, k);
+        if (own[n] !== want) continue;
+        const face =
+          i === 0 || own[n - 1] !== want || i === NX - 1 || own[n + 1] !== want ||
+          j === 0 || own[n - NX] !== want || j === NY - 1 || own[n + NX] !== want ||
+          k === 0 || own[n - NX * NY] !== want || k === NZ - 1 || own[n + NX * NY] !== want;
+        if (face) mark.push(i, j, k);
+      }
+      if (mark.length) {
+        let lo = [NX, NY, NZ], hi = [-1, -1, -1];
+        for (let q = 0; q < mark.length; q += 3) for (let a = 0; a < 3; a++) {
+          const v = mark[q + a] as number;
+          if (v < (lo[a] as number)) lo[a] = v;
+          if (v > (hi[a] as number)) hi[a] = v;
+        }
+        const sizeOf = (a: number) => ((hi[a] as number) - (lo[a] as number) + 1) * cell;
+        const midOf = (a: number, n: number) =>
+          (((lo[a] as number) + (hi[a] as number) + 1) / 2 - n / 2) * cell;
+        const box = new THREE.LineSegments(
+          this.#geo(new THREE.EdgesGeometry(
+            new THREE.BoxGeometry(sizeOf(0) * 1.06, sizeOf(1) * 1.06, sizeOf(2) * 1.06))),
+          this.#mat(new THREE.LineBasicMaterial({ color: 0xFFD24B, depthTest: false })));
+        box.position.set(midOf(0, NX), midOf(1, NY), midOf(2, NZ));
+        box.renderOrder = 10;
+        this.#marks.add(box);
+      }
+    }
 
     // --- sockets, as markers rather than solids ----------------------------
     const allSockets = socketsOf(frame, this.#design.parts);
@@ -313,6 +404,102 @@ export class Designer {
     }
   }
 
+  /**
+   * Turn a tap into a part.
+   *
+   * The instance index the raycast returns is the index into the cell list
+   * that built the mesh, so it converts straight back to a lattice cell, and
+   * `own` says which placement is standing in it. That is the whole trick:
+   * the picture IS the grid, so what you clicked on is not a guess.
+   */
+  #pickAt(clientX: number, clientY: number): void {
+    if (!this.#renderer || !this.#pickable.length) return;
+    const cv = $<HTMLCanvasElement>('dzCanvas');
+    const r = cv.getBoundingClientRect();
+    this.#ray.setFromCamera(new THREE.Vector2(
+      ((clientX - r.left) / r.width) * 2 - 1,
+      -((clientY - r.top) / r.height) * 2 + 1), this.#camera);
+    const hits = this.#ray.intersectObjects(this.#pickable.map(p => p.mesh), false);
+    const hit = hits[0];
+    if (!hit || hit.instanceId === undefined) {
+      this.#socket = null; this.#note = null; this.#refresh(); return;
+    }
+    const entry = this.#pickable.find(p => p.mesh === hit.object);
+    if (!entry) return;
+    const q = hit.instanceId * 3;
+    const i = entry.cells[q] as number, j = entry.cells[q + 1] as number,
+      k = entry.cells[q + 2] as number;
+    const { own, grid } = rasterise(this.#design);
+    const n = i + j * NX + k * NX * NY;
+    const owner = own[n] as number;
+    if (owner > 0) {
+      const p = this.#design.parts[owner - 1];
+      this.#socket = p ? p.socket : null;
+      this.#note = null;
+      if (p) this.#tab = 'parts';
+    } else {
+      this.#socket = null;
+      const mat = grid[n] as number;
+      this.#note = mat === Mat.Plate
+        ? 'Armour plating. Its thickness is on the Armour tab, and it is the '
+          + 'only thing on the ship that wears the faction paint.'
+        : mat === Mat.Skinned
+          ? 'A frame member under the skin. The plate covers it, so it wears the '
+            + 'paint, but it is frame and it is not editable.'
+          : 'The frame. It is the class, not the design: it cannot be moved, cut '
+            + 'or painted, and everything you fit hangs inside it.';
+    }
+    this.#refresh();
+  }
+
+  /** The card that says what you just tapped, or what the menu just selected. */
+  #renderPick(): void {
+    const card = $('dzPick');
+    const frame = frameFor(this.#design.classKey);
+    const sock = socketsOf(frame, this.#design.parts).find(s => s.id === this.#socket);
+    const held = sock ? this.#design.parts.find(p => p.socket === sock.id) : undefined;
+    const m = held ? moduleById(held.module) : undefined;
+
+    if (!sock && !this.#note) { card.classList.add('hidden'); card.innerHTML = ''; return; }
+    card.classList.remove('hidden');
+
+    if (!sock) {
+      card.innerHTML = `<div class="hd"><span class="nm">Hull</span>`
+        + `<button class="x" id="dzPickX">close</button></div>`
+        + `<p class="sub">${this.#note ?? ''}</p>`;
+    } else if (!m) {
+      card.innerHTML = `<div class="hd"><span class="nm">${sock.label}</span>`
+        + `<button class="x" id="dzPickX">close</button></div>`
+        + `<p class="sub">Empty ${sock.kind} socket. The palette on the Parts tab `
+        + `lists what fits it.</p>`;
+    } else {
+      const pu = PURPOSE[m.purpose];
+      const gun = m.weapon ? GUNS.find(g => g.key === m.weapon) : undefined;
+      const bits: string[] = [];
+      if (m.thrust) bits.push(`thrust ${m.thrust}, exhaust ${m.exhaust?.toFixed(1)}`);
+      if (m.retro) bits.push(`retro ${m.retro}`);
+      if (m.latX || m.latY) bits.push(`lateral ${m.latX ?? 0} by ${m.latY ?? 0}`);
+      if (gun) bits.push(`${gun.dmg} dmg${gun.batch > 1 ? ` x${gun.batch}` : ''}, `
+        + `${gun.range} u, ${gun.cooldown}s, pen ${gun.pen}`);
+      if (m.marines) bits.push(`${m.marines} marines`);
+      if (m.capacity) bits.push(`capacity ${m.capacity}`);
+      if (m.reach) bits.push(`reach +${m.reach} u`);
+      bits.push(`${m.size[0]} x ${m.size[1]} x ${m.size[2]} cells`);
+      bits.push(`mass ${(m.mass / 1e6).toFixed(3)}, hull ${(m.hull / 1000).toFixed(1)}`);
+      card.innerHTML = `<div class="hd">`
+        + `<span class="dot" style="background:#${pu.base.toString(16).padStart(6, '0')}"></span>`
+        + `<span class="nm">${m.name}</span><span class="id">${m.id}</span>`
+        + `<button class="x" id="dzPickX">close</button></div>`
+        + `<p class="sub"><b>${pu.label}</b> &middot; ${sock.label}`
+        + (held?.rot ? ` &middot; facing ${(held.rot ?? 0) * 90}\u00b0` : '') + `</p>`
+        + `<p class="sub">${bits.join(' &middot; ')}</p>`;
+    }
+    const x = document.getElementById('dzPickX');
+    if (x) (x as HTMLButtonElement).onclick = () => {
+      this.#socket = null; this.#note = null; this.#refresh();
+    };
+  }
+
   // -------------------------------------------------------------- panels --
 
   #refresh(): void {
@@ -322,6 +509,7 @@ export class Designer {
     this.#renderSockets();
     this.#renderPalette();
     this.#renderArmour();
+    this.#renderPick();
     this.#renderKey();
     this.#renderStats();
     this.#renderHeader();
@@ -351,6 +539,7 @@ export class Designer {
         if (f.classKey === this.#design.classKey) return;
         this.#design = stockFor(f.classKey);
         this.#socket = null;
+        this.#note = null;
         this.#refresh();
       };
       host.appendChild(b);
@@ -387,7 +576,11 @@ export class Designer {
         b.className = 'dzsock' + (this.#socket === s.id ? ' on' : '') + (held ? ' full' : '');
         b.title = s.label;
         b.textContent = held ? (moduleById(held.module)?.id ?? '?') : 'empty';
-        b.onclick = () => { this.#socket = this.#socket === s.id ? null : s.id; this.#refresh(); };
+        b.onclick = () => {
+          this.#socket = this.#socket === s.id ? null : s.id;
+          this.#note = null;
+          this.#refresh();
+        };
         row.appendChild(b);
       }
       host.appendChild(row);
@@ -642,12 +835,15 @@ export class Designer {
     $('dzReset').onclick = () => {
       this.#design = stockFor(this.#design.classKey);
       this.#socket = null;
+      this.#note = null;
       this.#refresh();
     };
+    // Three states, not two. Ghost is the one a player actually wants while
+    // fitting: the mounts live inside the hull now, so plate on hides them and
+    // plate off loses the shape they have to fit inside.
     $('dzPlate').onclick = () => {
-      this.#showPlate = !this.#showPlate;
-      $('dzPlate').className = this.#showPlate ? 'on' : '';
-      $('dzPlate').textContent = this.#showPlate ? 'Plate on' : 'Plate off';
+      this.#plate = this.#plate === 'on' ? 'ghost' : this.#plate === 'ghost' ? 'off' : 'on';
+      this.#syncPlateButton();
       this.#refresh();
     };
     $('dzStrip').onclick = () => {
@@ -666,6 +862,13 @@ export class Designer {
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
     this.#syncTabs();
+  }
+
+  #syncPlateButton(): void {
+    const b = $('dzPlate');
+    b.className = this.#plate === 'off' ? '' : this.#plate === 'ghost' ? 'ghost' : 'on';
+    b.textContent = this.#plate === 'on' ? 'Plate on'
+      : this.#plate === 'ghost' ? 'Plate ghost' : 'Plate off';
   }
 
   #syncTabs(): void {
@@ -689,9 +892,13 @@ export class Designer {
       derived: this.#derived,
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
-      showPlate: this.#showPlate,
+      plate: this.#plate,
+      showPlate: this.#plate === 'on',
       armour: this.#design.armour,
       livery: this.#liveryColours,
+      enclosedOutside: rasterise(this.#design).enclosedOutside,
+      marks: this.#marks.children.length,
+      note: this.#note,
       gridHash: this.#gridHash,
       faction: this.#design.faction,
       paint: this.#design.paint,

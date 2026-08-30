@@ -151,7 +151,9 @@ Same rules, different screen. It opens the designer at all three sizes and
 checks what only a browser can answer: no horizontal scroll, the centre of
 every control hits THAT control and not something drawn over it, all five
 classes legal out of the box, all eight of a faction's swatches actually on
-the hull, both exteriors, and a turret that turns 90 degrees and takes its
+the hull, every enclosed mount inside the hull, both exteriors, the plate
+toggle cycling on / ghost / off, a tap that names the part it landed on, a
+selection that outlines it, and a turret that turns 90 degrees and takes its
 cells with it. Run it after touching `design.ts`, `designer.ts` or the
 designer's markup.
 

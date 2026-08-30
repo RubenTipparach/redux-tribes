@@ -555,6 +555,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
 .dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
 .dzturn b { font-size:12px; color:var(--cyan); min-width:34px; }
+#dzPick { position:absolute; left:9px; bottom:26px; z-index:4;
+  max-width:min(380px, calc(100% - 140px)); padding:8px 10px; border-radius:7px;
+  background:#0d141dee; border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+#dzPick.hidden { display:none; }
+#dzPick .hd { display:flex; align-items:center; gap:7px; }
+#dzPick .dot { width:11px; height:11px; border-radius:3px; flex:0 0 auto; }
+#dzPick .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--ink); }
+#dzPick .id { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); }
+#dzPick .x { margin-left:auto; padding:3px 7px; font-size:10px; border-radius:4px; }
+#dzPick .sub { margin:4px 0 0; font-size:11px; line-height:1.45; color:var(--muted); }
+#dzPick .sub b { color:var(--cyan); font-weight:700; }
+#dzPlate.ghost { border-color:var(--amber); color:var(--amber); background:#221c07ee; }
 .dzkeys { display:flex; flex-wrap:wrap; gap:5px 10px; margin:2px 0 4px; }
 .dzkey { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--dim); }
 .dzkey .sw { width:11px; height:11px; border-radius:2px; display:inline-block; }
@@ -603,6 +618,20 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #designer button { padding:9px 12px; }
   .dzsock { padding:8px 10px; }
   .dzfoot { padding-bottom:calc(9px + var(--safe)); }
+  /* Above the button row, not across it: full width at 390 the card sat on
+     top of the plate toggle and swallowed every tap on it. */
+  /* Above the button row, not across it: full width at 390 the card sat on
+     top of the plate toggle and swallowed every tap on it. And compact,
+     because the canvas band is 240 pixels and the card was eating most of it. */
+  #dzPick { max-width:none; right:9px; bottom:48px; padding:5px 7px; }
+  #dzPick .nm { font-size:11px; }
+  #dzPick .id { font-size:9px; }
+  #dzPick .x { padding:2px 6px; font-size:9px; }
+  #dzPick .sub { font-size:10px; line-height:1.35; margin-top:2px; }
+  /* One row of class chips rather than two, at every phone width. */
+  .dzclasses { gap:4px; }
+  .dzclasses button { padding:5px 8px; font-size:10px; }
+  #dzHint { font-size:9px; }
 }
 
 /* At a phone's width the header ran past its own right edge and took Close
@@ -617,7 +646,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   .dzv { padding:4px 7px; font-size:10px; }
 }
 @media (max-width: 900px) and (max-height: 600px) {
-  #designer { grid-template-rows:38px 150px minmax(0,1fr); }
+  #designer { grid-template-rows:38px 176px minmax(0,1fr); }
+  /* At 390x560 the wrapped chip row ate most of a 150 pixel viewport and the
+     ship drew in the sliver underneath, so a tap at the centre of the canvas
+     hit nothing at all. */
+  .dzclasses button { padding:4px 6px; font-size:9px; }
+  #dzPick { bottom:42px; padding:4px 6px; }
 }
 
 #lobby { position:fixed; inset:0; z-index:20; background:var(--ground);
@@ -685,7 +719,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <!-- On canvas, not in a sheet: taking the plate off to see what is under
          it is the single most used action in a voxel editor. -->
     <div id="dzTools" class="dzclasses"><button id="dzPlate" class="on">Plate on</button></div>
-    <div id="dzHint">drag to orbit &middot; pinch or wheel to zoom</div>
+    <!-- What you just tapped. On canvas because that is where you tapped, and
+         because a card that only lives in a sheet is one nothing says exists. -->
+    <div id="dzPick" class="hidden"></div>
+    <div id="dzHint">tap a part to name it &middot; drag to orbit &middot; pinch or wheel to zoom</div>
   </section>
 
   <aside id="dzSide">

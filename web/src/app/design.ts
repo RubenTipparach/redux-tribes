@@ -54,15 +54,16 @@ export type Purpose =
  * propulsion on anybody's ship. Faction identity lives on the armour, which
  * is the part a player paints.
  */
-export const PURPOSE: Record<Purpose, { base: number; dark: number; lit: number; label: string }> = {
-  propulsion: { base: 0xFA6A0A, dark: 0x7A3405, lit: 0xFFC46B, label: 'propulsion' },
-  attitude:   { base: 0x35C7FF, dark: 0x155A75, lit: 0x9EE4FF, label: 'attitude control' },
-  gun:        { base: 0xFF4B4B, dark: 0x7A1F1F, lit: 0xFF9C9C, label: 'gunnery' },
-  ordnance:   { base: 0xA98BFF, dark: 0x4B3A80, lit: 0xD6C8FF, label: 'ordnance' },
-  command:    { base: 0x4CD97B, dark: 0x1E6437, lit: 0xA6F0C0, label: 'command' },
-  crew:       { base: 0xFFD24B, dark: 0x7A6317, lit: 0xFFE9A6, label: 'crew' },
-  boarding:   { base: 0xFF8C3A, dark: 0x7A3C12, lit: 0xFFC49C, label: 'boarding' },
-  structure:  { base: 0x8494A8, dark: 0x3B4757, lit: 0xC3D0DE, label: 'structure' },
+export const PURPOSE: Record<Purpose,
+  { base: number; dark: number; mid: number; lit: number; label: string }> = {
+  propulsion: { base: 0xFF7A18, dark: 0x6B2D04, mid: 0xFFA85C, lit: 0xFFE0BC, label: 'propulsion' },
+  attitude:   { base: 0x2FD6E8, dark: 0x0C4E58, mid: 0x7FE8F4, lit: 0xD6F8FC, label: 'attitude control' },
+  gun:        { base: 0xF03B3B, dark: 0x5E1010, mid: 0xFF8080, lit: 0xFFD0D0, label: 'gunnery' },
+  ordnance:   { base: 0xA574FF, dark: 0x3C2470, mid: 0xC7ABFF, lit: 0xE9DEFF, label: 'ordnance' },
+  command:    { base: 0x3FD97C, dark: 0x0F5228, mid: 0x8AECB2, lit: 0xD2F9E2, label: 'command' },
+  crew:       { base: 0xFFC93C, dark: 0x6B4C03, mid: 0xFFDF8A, lit: 0xFFF2CC, label: 'crew' },
+  boarding:   { base: 0xFF5FA8, dark: 0x6B1439, mid: 0xFF9ECA, lit: 0xFFD6E9, label: 'boarding' },
+  structure:  { base: 0x8494A8, dark: 0x333E4C, mid: 0xB0BDCB, lit: 0xDCE4EC, label: 'structure' },
 };
 
 /**
@@ -140,7 +141,8 @@ export interface ModuleDef {
   readonly purpose: Purpose;
   /** How it is drawn. The client owns this and the core never sees it. */
   readonly art: 'bell' | 'nozzle' | 'block' | 'barbette' | 'beamgun' | 'cannon'
-    | 'missilecell' | 'bridge' | 'pod' | 'strut';
+    | 'missilecell' | 'bridge' | 'pod' | 'strut'
+    | 'rcs' | 'barracks' | 'airlock' | 'clamp' | 'cargo';
   readonly colour: number;
 }
 
@@ -183,41 +185,41 @@ export const MODULES: readonly ModuleDef[] = [
     size: [6, 3, 3], mass: 10260, hull: 2160, retro: 15, purpose: 'propulsion', art: 'nozzle', colour: 0xB4531A },
 
   { id: 'RCS-Q', name: 'RCS quad', cat: 'drive', fits: 'rcs',
-    size: [2, 2, 2], mass: 1520, hull: 320, latX: 2, latY: 2, purpose: 'attitude', art: 'pod', colour: 0x7C8B9D },
+    size: [2, 2, 2], mass: 1520, hull: 320, latX: 2, latY: 2, purpose: 'attitude', art: 'rcs', colour: 0x2FD6E8 },
   { id: 'MAN-B', name: 'Manoeuvring block', cat: 'drive', fits: 'rcs',
-    size: [3, 3, 3], mass: 5130, hull: 1080, latX: 5, latY: 5, purpose: 'attitude', art: 'block', colour: 0x7C8B9D },
+    size: [3, 3, 3], mass: 5130, hull: 1080, latX: 5, latY: 5, purpose: 'attitude', art: 'rcs', colour: 0x2FD6E8 },
   { id: 'MAN-Y', name: 'Yaw block', cat: 'drive', fits: 'rcs',
-    size: [4, 3, 3], mass: 6840, hull: 1440, latX: 10, purpose: 'attitude', art: 'block', colour: 0x93A6BC },
+    size: [4, 3, 3], mass: 6840, hull: 1440, latX: 10, purpose: 'attitude', art: 'rcs', colour: 0x2FD6E8 },
   { id: 'MAN-P', name: 'Pitch block', cat: 'drive', fits: 'rcs',
-    size: [3, 4, 3], mass: 6840, hull: 1440, latY: 10, purpose: 'attitude', art: 'block', colour: 0x93A6BC },
+    size: [3, 4, 3], mass: 6840, hull: 1440, latY: 10, purpose: 'attitude', art: 'rcs', colour: 0x2FD6E8 },
 
   // ------------------------------------------------------------ weapon --
   // The barbette and the gun are separate parts because the archive separates
   // them: Weapon_Base_Cannon.prefab puts its collider and its subsystem proxy
   // on the BASE, not the barrel. The base takes the damage, the barrel turns.
   { id: 'WPN-BB1', name: 'Barbette', cat: 'weapon', fits: 'gun',
-    size: [6, 3, 6], mass: 20520, hull: 4320, purpose: 'gun', art: 'barbette', colour: 0x5B6E85 },
+    size: [6, 3, 6], mass: 20520, hull: 4320, purpose: 'gun', art: 'barbette', colour: 0xF03B3B },
   { id: 'WPN-BM1', name: 'Beam turret', cat: 'weapon', fits: 'trunnion',
     size: [4, 4, 10], mass: 30400, hull: 6400, weapon: 'beam',
-    purpose: 'gun', art: 'beamgun', colour: 0x4CD97B },
+    purpose: 'gun', art: 'beamgun', colour: 0xFF8080 },
   { id: 'WPN-CN1', name: 'Projectile turret', cat: 'weapon', fits: 'trunnion',
     size: [5, 4, 9], mass: 34200, hull: 7200, weapon: 'projectile',
-    purpose: 'gun', art: 'cannon', colour: 0xFF4B4B },
+    purpose: 'gun', art: 'cannon', colour: 0xF03B3B },
   { id: 'WPN-ML1', name: 'Missile cell', cat: 'weapon', fits: 'missile',
     size: [5, 5, 7], mass: 33250, hull: 7000, weapon: 'missile',
-    purpose: 'ordnance', art: 'missilecell', colour: 0xA98BFF },
+    purpose: 'ordnance', art: 'missilecell', colour: 0xA574FF },
 
   // ----------------------------------------------------------- utility --
   { id: 'UTL-BRG', name: 'Bridge', cat: 'utility', fits: 'bay',
-    size: [6, 5, 6], mass: 34200, hull: 7200, purpose: 'command', art: 'bridge', colour: 0x35C7FF },
+    size: [6, 5, 6], mass: 34200, hull: 7200, purpose: 'command', art: 'bridge', colour: 0x3FD97C },
   { id: 'UTL-BAR', name: 'Marine barracks', cat: 'utility', fits: 'bay',
-    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, purpose: 'crew', art: 'block', colour: 0xFFD24B },
+    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, purpose: 'crew', art: 'barracks', colour: 0xFFC93C },
   { id: 'UTL-AIR', name: 'Boarding airlock', cat: 'utility', fits: 'bay',
-    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, purpose: 'boarding', art: 'pod', colour: 0xFFD24B },
+    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, purpose: 'boarding', art: 'airlock', colour: 0xFF5FA8 },
   { id: 'UTL-CLM', name: 'Boarding clamp', cat: 'utility', fits: 'clamp',
-    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, purpose: 'boarding', art: 'block', colour: 0xFFD24B },
+    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, purpose: 'boarding', art: 'clamp', colour: 0xFF5FA8 },
   { id: 'UTL-CGO', name: 'Cargo bay', cat: 'utility', fits: 'bay',
-    size: [10, 8, 13], mass: 197600, hull: 41600, purpose: 'structure', art: 'block', colour: 0x6E7F94 },
+    size: [10, 8, 13], mass: 197600, hull: 41600, purpose: 'structure', art: 'cargo', colour: 0x8494A8 },
 
   // --------------------------------------------------------- structure --
   // A strut carries nothing in v1. An autorouted, freely meshed power grid is
@@ -225,7 +227,7 @@ export const MODULES: readonly ModuleDef[] = [
   // that is not already touching the hull. It gains the severance rule on the
   // day power exists.
   { id: 'STR-STRUT', name: 'Strut', cat: 'structure', fits: 'bay',
-    size: [1, 1, 1], mass: 190, hull: 40, purpose: 'structure', art: 'strut', colour: 0x3D5266 },
+    size: [1, 1, 1], mass: 190, hull: 40, purpose: 'structure', art: 'strut', colour: 0x8494A8 },
 ];
 
 export const moduleById = (id: string): ModuleDef | undefined =>
@@ -279,6 +281,24 @@ export interface Socket {
   readonly mirror?: boolean;
   readonly label: string;
 }
+
+/**
+ * Which socket kinds may stand PROUD of the hull.
+ *
+ * A drive has to see vacuum, a gun has to see its target, and attitude jets
+ * have to push on something that is not the ship. Everything else lives
+ * inside: berths, magazines, holds, airlocks and stowed boarding clamps are
+ * volume, not fittings, and a ship with its barracks bolted to the outside
+ * reads as a scaffold rather than a hull.
+ *
+ * Sensors would belong here too. There is no sensor part, because `sim_core`
+ * has no detection, and a part that can only ever raise a warning teaches
+ * players to ignore warnings.
+ */
+export const EXPOSED_KINDS: ReadonlyArray<SocketKind> =
+  ['drive', 'retro', 'rcs', 'gun', 'trunnion'];
+
+export const isExposed = (k: SocketKind): boolean => EXPOSED_KINDS.indexOf(k) >= 0;
 
 export interface FrameDef {
   readonly classKey: string;
@@ -607,8 +627,80 @@ export const FRAMES: readonly FrameDef[] = [
   },
 ];
 
-export const frameFor = (classKey: string): FrameDef =>
-  FRAMES.find(f => f.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+/**
+ * Seat a part inside the hull.
+ *
+ * Enclosed kinds are pulled toward the centreline until the part's own box is
+ * inside the profile with a cell to spare for the plate over it. Exposed kinds
+ * are left exactly where the frame put them.
+ *
+ * It is sized on the part actually being placed, not on the biggest part the
+ * socket could take. Seating every bay as though it held a cargo hold pinned
+ * all of them to the axis and stacked them: three of the Rogue's eight
+ * barracks lost every one of their 140 cells to a bay already standing there.
+ */
+/**
+ * Would a box of these half extents sit inside the hull at z?
+ *
+ * The corners are what has to be inside, not the centre. Testing the centre
+ * let the nudge search walk a bay half out through the side of the ship and
+ * still call it seated.
+ */
+export function boxInside(prof: readonly Station[], x: number, y: number, z: number,
+  hx: number, hy: number, hz: number): boolean {
+  let hw = Infinity, hh = Infinity;
+  for (let k = Math.round(z - hz); k <= Math.round(z + hz); k++) {
+    const st = hullAt(prof, k);
+    hw = Math.min(hw, st[0] as number);
+    hh = Math.min(hh, st[1] as number);
+  }
+  const a = Math.max(1, hw - 1), b = Math.max(1, hh - 1);
+  const dx = (Math.abs(x - CX) + hx) / a, dy = (Math.abs(y - CY) + hy) / b;
+  return dx * dx + dy * dy <= 1;
+}
+
+export function seatOf(frame: FrameDef, sock: Socket,
+  v: { sx: number; sy: number; sz: number }): readonly [number, number, number] {
+  const cx = sock.at[0] as number, cy = sock.at[1] as number, cz = sock.at[2] as number;
+  if (isExposed(sock.kind)) return [cx, cy, cz];
+  const prof = frame.profile;
+  const hx = v.sx / 2, hy = v.sy / 2, hz = v.sz / 2;
+  const z0 = Math.round((prof[0] as Station)[0]);
+  const z1 = Math.round((prof[prof.length - 1] as Station)[0]);
+  const k = Math.max(z0 + Math.ceil(hz), Math.min(z1 - Math.ceil(hz), Math.round(cz)));
+  // The narrowest station the part spans, so a bay near the bow is judged on
+  // the bow rather than on its own midpoint.
+  let hw = Infinity, hh = Infinity;
+  for (let z = Math.round(k - hz); z <= Math.round(k + hz); z++) {
+    const st = hullAt(prof, z);
+    hw = Math.min(hw, st[0] as number);
+    hh = Math.min(hh, st[1] as number);
+  }
+  const a = Math.max(1, hw - 1), b = Math.max(1, hh - 1);
+  let x = cx, y = cy;
+  const outside = () => {
+    const dx = (Math.abs(x - CX) + hx) / a, dy = (Math.abs(y - CY) + hy) / b;
+    return dx * dx + dy * dy > 1;
+  };
+  for (let n = 0; n < 64 && outside(); n++) {
+    const dx = (Math.abs(x - CX) + hx) / a, dy = (Math.abs(y - CY) + hy) / b;
+    const atX = Math.abs(x - CX) < 1, atY = Math.abs(y - CY) < 1;
+    if (atX && atY) break;
+    if ((dx >= dy && !atX) || atY) x += x > CX ? -1 : 1;
+    else y += y > CY ? -1 : 1;
+  }
+  return [x, y, k];
+}
+
+const seated = new Map<string, FrameDef>();
+
+export const frameFor = (classKey: string): FrameDef => {
+  const hit = seated.get(classKey);
+  if (hit) return hit;
+  const f = FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+  seated.set(classKey, f);
+  return f;
+};
 
 /**
  * The sockets a design actually offers, which is the frame's own plus one
@@ -749,10 +841,10 @@ export interface Derived {
  * cells actually laid: the wrapped shell is a curved skin rather than six
  * rectangles, so it costs different cells and the density had to follow. The
  * pair is a least squares fit against the five authored stock masses and
- * hulls over the allowed layer configurations: 6.2 percent rms, worst case
- * the Rogue at 8.2 percent on mass, and every class still legal.
+ * hulls over the allowed layer configurations: 5.7 percent rms, worst case
+ * the Rogue at 8.8 percent on mass, and every class still legal.
  */
-const PLATE_UM = 93, HULL_MILLI = 40;
+const PLATE_UM = 78, HULL_MILLI = 34;
 /** How much bigger this rung's cell is than a frigate's, cubed. Plate is a
  *  volume of material, so it scales; a part is a machine, so it does not. */
 const rungVol = (rung: RungKey): number => (RUNG[rung] / RUNG.frigate) ** 3;
@@ -779,8 +871,14 @@ export interface Raster {
   readonly grid: Uint8Array;
   /** One purpose code per cell, which is what colours it. */
   readonly purp: Uint8Array;
+  /** Which placement owns a cell, one based. Zero is frame or plate. */
+  readonly own: Int16Array;
   readonly plateCells: number;
   readonly solidCells: number;
+  /** Cells of an ENCLOSED part that ended up outside the hull line. Should be
+   *  zero: mounts live inside the frame, and only drives, retros, attitude
+   *  jets, gun rings and trunnions are allowed to stand proud of it. */
+  readonly enclosedOutside: number;
   readonly extent: readonly [number, number, number];
   /** The true bounding sphere, in cells, about the hull's own centre.
    *  A box diagonal is not one: it measures corners a long thin ship has
@@ -799,6 +897,29 @@ const rasterSig = (d: Design): string =>
  *  back, and rasterising it twice per keystroke is the whole cost. */
 let rasterCache: { sig: string; raster: Raster } | null = null;
 
+/**
+ * Where to look for room, in order, when a seated part lands on another one.
+ *
+ * Nearest first by city block distance, then a fixed tiebreak, so the search
+ * is the same search on both seats and the same after a reload. Bounded at
+ * six cells: past that the part is not near its socket any more and the honest
+ * answer is that the frame is full.
+ */
+const NUDGE: ReadonlyArray<readonly [number, number, number]> = (() => {
+  const out: Array<readonly [number, number, number]> = [];
+  for (let dz = -6; dz <= 6; dz++) for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
+    const d = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+    if (d === 0 || d > 6) continue;
+    out.push([dx, dy, dz] as const);
+  }
+  out.sort((a, b) => {
+    const da = Math.abs(a[0]) + Math.abs(a[1]) + Math.abs(a[2]);
+    const db = Math.abs(b[0]) + Math.abs(b[1]) + Math.abs(b[2]);
+    return da - db || a[2] - b[2] || a[1] - b[1] || a[0] - b[0];
+  });
+  return out;
+})();
+
 export function rasterise(d: Design): Raster {
   const sig = rasterSig(d);
   if (rasterCache && rasterCache.sig === sig) return rasterCache.raster;
@@ -807,14 +928,20 @@ export function rasterise(d: Design): Raster {
   const prof = frame.profile;
   const grid = new Uint8Array(CELLS);
   const purp = new Uint8Array(CELLS);
+  // Which placement owns a cell, one based, so a click on the picture can name
+  // the part it landed on. Zero is frame or plate.
+  const own = new Int16Array(CELLS);
   const inBounds = (i: number, j: number, k: number) =>
     i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ;
-  const set = (i: number, j: number, k: number, mat: number, code: number) => {
-    if (!mat || !inBounds(i, j, k)) return;
+  /** Writes the cell if it is free. Returns whether it took it, because the
+   *  owner map must never claim a cell another part is already standing in. */
+  const set = (i: number, j: number, k: number, mat: number, code: number): boolean => {
+    if (!mat || !inBounds(i, j, k)) return false;
     const n = idx3(i, j, k);
-    if (grid[n]) return;
+    if (grid[n]) return false;
     grid[n] = mat;
     purp[n] = code;
+    return true;
   };
 
   const STRUCT = purposeCode('structure');
@@ -830,21 +957,68 @@ export function rasterise(d: Design): Raster {
   // back to it below, because a pod hanging in space beside its own ship is
   // exactly the slop that voxels were supposed to end.
   const outboard: number[] = [];
-  for (const p of d.parts) {
+  let enclosedOutside = 0;
+  for (let pi = 0; pi < d.parts.length; pi++) {
+    const p = d.parts[pi] as Placement;
     const sock = allSockets.find(k => k.id === p.socket);
     const m = moduleById(p.module);
     if (!sock || !m) continue;
     const v = rotatedVoxels(m, p.rot ?? 0);
     const code = purposeCode(m.purpose);
-    const ox = Math.round((sock.at[0] as number) - v.sx / 2);
-    const oy = Math.round((sock.at[1] as number) - v.sy / 2);
-    const oz = Math.round((sock.at[2] as number) - v.sz / 2);
+    const seat = seatOf(frame, sock, v);
+    const bx = Math.round((seat[0] as number) - v.sx / 2);
+    const by = Math.round((seat[1] as number) - v.sy / 2);
+    const bz = Math.round((seat[2] as number) - v.sz / 2);
+
+    // How many of the part's cells another part is already standing in.
+    const lossAt = (ox: number, oy: number, oz: number): number => {
+      let lost = 0;
+      for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
+        if (!v.data[i + j * v.sx + k * v.sx * v.sy]) continue;
+        const x = ox + i, y = oy + j, z = oz + k;
+        if (!inBounds(x, y, z)) { lost++; continue; }
+        const at = grid[idx3(x, y, z)] as number;
+        if (at && at !== Mat.Frame) lost++;
+      }
+      return lost;
+    };
+
+    // Nudge until it actually fits. Seating pulls parts toward the centreline,
+    // and a frame that authored six clamps along a flank pulls all six onto
+    // the same cells: five of the Rogue's lost every cell they had and the
+    // ship claimed boarding gear it did not visibly carry. The search is
+    // bounded and ordered, so it is the same nudge on both seats.
+    let ox = bx, oy = by, oz = bz, best = lossAt(bx, by, bz);
+    if (best > 0) {
+      for (const [dx, dy, dz] of NUDGE) {
+        const tx = bx + dx, ty = by + dy, tz = bz + dz;
+        if (!isExposed(sock.kind) && !boxInside(prof,
+          tx + v.sx / 2, ty + v.sy / 2, tz + v.sz / 2, v.sx / 2, v.sy / 2, v.sz / 2)) continue;
+        const lost = lossAt(tx, ty, tz);
+        if (lost < best) { best = lost; ox = tx; oy = ty; oz = tz; }
+        if (best === 0) break;
+      }
+    }
+
+    // A part mounts THROUGH the frame, so it takes a rib cell if it needs one.
+    // Strict first writer wins ate whole parts here: a two cell RCS quad
+    // landing on the Rogue's rib ring wrote nothing at all and the ship showed
+    // no attitude jets on that quarter. It still never takes another part's
+    // cell, which is what the nudge above is for.
     for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
       const mat = v.data[i + j * v.sx + k * v.sx * v.sy] as number;
       if (!mat) continue;
       const x = ox + i, y = oy + j, z = oz + k;
-      set(x, y, z, mat, code);
-      if (inBounds(x, y, z) && !insideHull(prof, x, y, z)) outboard.push(x, y, z);
+      if (!inBounds(x, y, z)) continue;
+      const n = idx3(x, y, z);
+      if (grid[n] && grid[n] !== Mat.Frame) continue;
+      grid[n] = mat;
+      purp[n] = code;
+      own[n] = pi + 1;
+      if (!insideHull(prof, x, y, z)) {
+        outboard.push(x, y, z);
+        if (!isExposed(sock.kind)) enclosedOutside++;
+      }
     }
   }
 
@@ -1026,8 +1200,8 @@ export function rasterise(d: Design): Raster {
     if (d2 > r2) r2 = d2;
   }
 
-  const raster: Raster = { grid, purp, plateCells, solidCells: cells.length / 3, extent,
-    radiusCells: Math.sqrt(r2) };
+  const raster: Raster = { grid, purp, own, plateCells, solidCells: cells.length / 3,
+    enclosedOutside, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
   return raster;
 }
@@ -1171,7 +1345,7 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b5', 'UTL-BAR'),
     P('b3', 'UTL-AIR'), P('b4', 'UTL-AIR'), P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
-  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
     'terran', 0x0095E9),
 
   // Three bells in a row and a ventral rack. Plate on all four long faces
@@ -1232,7 +1406,7 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('h0', 'UTL-CGO'), P('h1', 'UTL-CGO'),
     P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
     P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
-  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 4, ventral: 4, bow: 2, stern: 2 },
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 4, ventral: 4, bow: 1, stern: 1 },
     'civil', 0xD8E2EC),
 ];
 
@@ -1315,8 +1489,8 @@ export function cellColour(mat: number, code: number, paint: number): number {
   const p = PURPOSE[purposeAt(code)];
   switch (mat) {
     case Mat.Case: return p.dark;
-    case Mat.Glow:
-    case Mat.Accent: return p.lit;
+    case Mat.Accent: return p.mid;
+    case Mat.Glow: return p.lit;
     default: return p.base;
   }
 }
@@ -1409,9 +1583,15 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
     if (x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz) return;
     data[at(x, y, z)] = mat;
   };
-  const cx = (sx - 1) / 2, cy = (sy - 1) / 2;
+  const fill = (mat: number) => {
+    for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+      put(x, y, z, mat);
+  };
+  const cx = (sx - 1) / 2, cy = (sy - 1) / 2, cz = (sz - 1) / 2;
   // Distance from the part's own long axis, used by everything round.
   const rad = (x: number, y: number) => Math.hypot(x - cx, y - cy);
+  const shell = (x: number, y: number, z: number) =>
+    x === 0 || y === 0 || z === 0 || x === sx - 1 || y === sy - 1 || z === sz - 1;
 
   switch (m.art) {
     case 'bell':
@@ -1426,57 +1606,154 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
           const d = rad(x, y);
           if (d > r) continue;
           // Hollow through the flare, solid at the forward plug, and a lit
-          // ring at the very back where the exhaust leaves.
-          if (t > 0.72) put(x, y, z, Mat.Machine);
-          else if (d > r - 1.35) put(x, y, z, z === 0 ? Mat.Glow : Mat.Machine);
+          // ring at the very back where the exhaust leaves. Every second
+          // course of the flare is banded, which is what tells one bell from
+          // another once they are all the same orange.
+          if (t > 0.72) put(x, y, z, Mat.Case);
+          else if (d > r - 1.35) put(x, y, z, z === 0 ? Mat.Glow : (z % 2 ? Mat.Accent : Mat.Machine));
         }
       }
       break;
     }
-    case 'barbette': {
-      // A drum. The base is what takes the damage, which is why it is a part
-      // in its own right and not decoration on the gun.
-      const r = Math.min(sx, sz) / 2;
-      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
-        const d = Math.hypot(x - cx, z - (sz - 1) / 2);
-        if (d <= r) put(x, y, z, y === sy - 1 && d > r - 1.2 ? Mat.Accent : Mat.Case);
+    case 'rcs': {
+      // A box of jets. Four glow nozzles looking out along the flanks, which
+      // reads at two cells a side, where a hollow shell reads as nothing:
+      // the RCS quad is 2x2x2 and the old rule drew literally zero cells.
+      fill(Mat.Machine);
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) {
+        put(0, y, z, y === 0 || y === sy - 1 ? Mat.Case : Mat.Accent);
+        put(sx - 1, y, z, y === 0 || y === sy - 1 ? Mat.Case : Mat.Accent);
+      }
+      for (let z = 0; z < sz; z++) {
+        put(0, Math.round(cy), z, Mat.Glow);
+        put(sx - 1, Math.round(cy), z, Mat.Glow);
       }
       break;
     }
-    case 'beamgun':
-    case 'cannon': {
-      // A housing at the back and a barrel down the middle, both on cells.
-      const housing = Math.round(sz * (m.art === 'cannon' ? 0.45 : 0.36));
-      const rBarrel = m.art === 'cannon' ? 1.6 : 1.05;
+    case 'barbette': {
+      // A drum with a toothed ring on top. The base is what takes the damage,
+      // which is why it is a part in its own right and not decoration.
+      const r = Math.min(sx, sz) / 2;
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
-        if (z < housing) { put(x, y, z, Mat.Case); continue; }
-        if (rad(x, y) <= rBarrel) put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Machine);
+        const d = Math.hypot(x - cx, z - cz);
+        if (d > r) continue;
+        if (y === sy - 1 && d > r - 1.2) put(x, y, z, (x + z) % 2 ? Mat.Accent : Mat.Glow);
+        else put(x, y, z, d > r - 1.2 ? Mat.Case : Mat.Machine);
+      }
+      break;
+    }
+    case 'beamgun': {
+      // A slim emitter: short housing, thin barrel, a lit muzzle and a collar
+      // ring where the barrel leaves the housing.
+      const housing = Math.max(2, Math.round(sz * 0.36));
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (z < housing) { put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine); continue; }
+        if (z === housing) { if (rad(x, y) <= 1.9) put(x, y, z, Mat.Accent); continue; }
+        if (rad(x, y) <= 1.05) put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Machine);
+      }
+      break;
+    }
+    case 'cannon': {
+      // A fat stepped barrel, so it is a different silhouette from the beam
+      // rather than a different number in a tooltip.
+      const housing = Math.max(2, Math.round(sz * 0.45));
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (z < housing) { put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine); continue; }
+        const step = z > housing + (sz - housing) * 0.55 ? 1.15 : 1.75;
+        if (rad(x, y) <= step) put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Machine);
+        else if (rad(x, y) <= step + 0.9 && z < housing + 2) put(x, y, z, Mat.Accent);
       }
       break;
     }
     case 'missilecell': {
-      // A block with tubes bored forward through it.
+      // A block with tubes bored forward through it, and a band round the
+      // waist so a magazine does not read as a barracks.
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
-        put(x, y, z, Mat.Case);
+        put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine);
+      for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        if (shell(x, y, Math.round(cz))) put(x, y, Math.round(cz), Mat.Accent);
       const qx = [Math.floor(sx * 0.28), Math.floor(sx * 0.72)];
       const qy = [Math.floor(sy * 0.28), Math.floor(sy * 0.72)];
       for (const x of qx) for (const y of qy) for (let z = Math.floor(sz * 0.35); z < sz; z++)
-        put(x, y, z, z === sz - 1 ? Mat.Accent : Mat.Empty);
+        put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Empty);
       break;
     }
     case 'bridge': {
+      // A stepped superstructure with a lit window band right round the top
+      // deck. It is the one part a player should find in a second.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        const inset = y >= sy - 1 ? 1 : 0;      // the top deck steps in
+        if (x < inset || x >= sx - inset || z < inset || z >= sz - inset) continue;
+        put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine);
+      }
+      const top = sy - 1;
+      for (let z = 0; z < sz; z++) for (let x = 0; x < sx; x++)
+        if (data[at(x, top, z)] && shell(x, top, z)) put(x, top, z, Mat.Glow);
+      for (let x = 1; x < sx - 1; x++) put(x, top - 1, sz - 1, Mat.Accent);
+      break;
+    }
+    case 'barracks': {
+      // Berth decks: every other course banded, so it reads as stacked bunks
+      // rather than as a crate.
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine);
+      for (let y = 1; y < sy - 1; y += 2) for (let z = 0; z < sz; z++) {
+        put(0, y, z, Mat.Accent);
+        put(sx - 1, y, z, Mat.Accent);
+      }
+      for (let y = 1; y < sy - 1; y += 2) put(Math.round(cx), y, sz - 1, Mat.Glow);
+      break;
+    }
+    case 'airlock': {
+      // A collar with a hatch iris. Small, so the pattern has to survive three
+      // cells a side: a ring of casing round a lit centre.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        const d = Math.hypot(x - cx, z - cz);
+        if (d > Math.min(sx, sz) / 2) continue;
         put(x, y, z, Mat.Case);
-      // A lit band across the front of the top deck.
-      for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 1, Mat.Accent);
-      for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 2, Mat.Accent);
+      }
+      const yTop = sy - 1;
+      for (let z = 0; z < sz; z++) for (let x = 0; x < sx; x++) {
+        if (!data[at(x, yTop, z)]) continue;
+        const d = Math.hypot(x - cx, z - cz);
+        put(x, yTop, z, d <= 0.75 ? Mat.Glow : Mat.Accent);
+      }
+      break;
+    }
+    case 'clamp': {
+      // Two jaws with a gap between them and lit tips: a grapple, not a box.
+      const jaw = Math.max(1, Math.round(sy * 0.35));
+      for (let z = 0; z < sz; z++) for (let x = 0; x < sx; x++) {
+        for (let y = 0; y < jaw; y++) put(x, y, z, Mat.Machine);
+        for (let y = sy - jaw; y < sy; y++) put(x, y, z, Mat.Machine);
+      }
+      for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        if (data[at(x, y, sz - 1)]) put(x, y, sz - 1, x === 0 || x === sx - 1 ? Mat.Glow : Mat.Accent);
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++)
+        if (data[at(Math.round(cx), y, z)]) put(Math.round(cx), y, z, Mat.Case);
+      break;
+    }
+    case 'cargo': {
+      // A crate: braced edges and bare panels, which is the cheapest way to
+      // read "volume" at any size.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (!shell(x, y, z)) continue;
+        const edges = (x === 0 || x === sx - 1 ? 1 : 0) + (y === 0 || y === sy - 1 ? 1 : 0)
+          + (z === 0 || z === sz - 1 ? 1 : 0);
+        put(x, y, z, edges >= 2 ? Mat.Accent : Mat.Case);
+      }
+      for (let y = 1; y < sy - 1; y++) put(Math.round(cx), y, sz - 1, Mat.Glow);
       break;
     }
     case 'pod': {
+      // A rounded canister with a lit cap, for the small fittings.
       for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
-        const edge = (x === 0 || x === sx - 1) && (y === 0 || y === sy - 1);
-        if (!edge) put(x, y, z, Mat.Machine);
+        const corner = (x === 0 || x === sx - 1) && (y === 0 || y === sy - 1)
+          && (z === 0 || z === sz - 1) && sx > 2 && sy > 2;
+        if (corner) continue;
+        put(x, y, z, shell(x, y, z) ? Mat.Case : Mat.Machine);
       }
+      for (let x = 0; x < sx; x++) put(x, sy - 1, Math.round(cz), Mat.Glow);
       break;
     }
     case 'strut':

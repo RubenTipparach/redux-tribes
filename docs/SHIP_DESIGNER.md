@@ -219,13 +219,35 @@ The frame is in neither list. It cannot be edited in either mode, which is enfor
 
 **ONE rasterisation, read by everybody.** `rasterise()` builds the grid; `derive()` counts ITS plate cells for mass and hull, and the editor draws the same grid. It used to be two: the editor rasterised and `derive()` costed plate from a box-area formula, so the picture and the mass were two opinions about the same armour and only one could be right (GUIDELINES 5.1). The visible consequence is that "add on to it without exceeding mass limits" now means something: a player who builds their own exterior is charged for the one they built. Measured at 4.0 ms per rasterisation of a stock frigate, cached on a signature of class, mode, placements and sections, so a slider drag pays it once per change rather than twice.
 
-**The densities were refitted for it.** `PLATE_UM 33 -> 93` and `HULL_MILLI 17 -> 40`: a least squares fit of the two constants against the five authored stock masses and hulls over the allowed layer configurations. 6.2% rms, worst case the Rogue at +8.2% on mass, every class legal. A curved shell costs different cells from six rectangles, so the density had to follow it.
+**The densities were refitted for it.** `PLATE_UM 33 -> 78` and `HULL_MILLI 17 -> 34`: a least squares fit of the two constants against the five authored stock masses and hulls over the allowed layer configurations. 5.7% rms, worst case the Rogue at +8.8% on mass, every class legal. A curved shell costs different cells from six rectangles, so the density had to follow it.
+
+### Mounts live inside the frame
+
+Only five socket kinds may stand proud of the hull: **drive, retro, rcs, gun ring, trunnion**. A drive has to see vacuum, a gun has to see its target, and attitude jets have to push on something that is not the ship. Berths, magazines, holds, airlocks and stowed boarding clamps are volume, not fittings, and a ship with its barracks bolted to the outside reads as a scaffold. Sensors would belong on the exposed list too; there is no sensor part, because `sim_core` has no detection and a part that can only ever raise a warning teaches players to ignore warnings.
+
+Enclosure is a rule applied once, not 120 hand edited coordinates. `seatOf()` pulls an enclosed socket toward the centreline until the part's own box is inside the profile with a cell to spare for the plate. Three things had to be got right and each of them was found by measuring, not by looking:
+
+- **Seat on the part, not on the socket.** Sizing every bay as though it held a cargo hold (the biggest thing a bay takes) pinned all of them to the axis and stacked them: three of the Rogue's eight barracks lost every one of their 140 cells to a bay already standing there.
+- **Nudge until it fits.** A frame that authored six clamps along one flank still pulls all six onto the same cells. A bounded, ordered search (nearest first by city block distance, six cells out) finds room; it is the same search on both seats, so the ship is the same ship. Five of the Rogue's six clamps were invisible before it.
+- **Judge the corners, not the centre.** The nudge originally tested whether the part's centre was inside the hull, which let it walk a bay half out through the side and still call it seated: 96 cells of the Rogue's boarding gear, 55 of the Freighter's, hanging outside a hull that was supposed to enclose them.
+
+Two more first-writer-wins rules changed with it. A part now mounts THROUGH the frame, taking a rib cell if it needs one: strict ordering meant a two cell RCS quad landing on the Rogue's rib ring wrote nothing at all and that quarter of the ship showed no attitude jets. It still never takes another part's cell, which is what the nudge is for. Measured after all of it: **every part of all five stock ships is visible in the grid, and zero cells of any enclosed part are outside the hull.**
+
+### Ghost armour, and picking a part off the model
+
+The plate toggle has three states, because enclosing the mounts made two states useless: plate on hides everything a player is fitting, and plate off loses the shape they have to fit inside. **Ghost** draws the hull's outermost course only, translucent and not writing depth, over a full x ray of the structure. Outermost course matters: four translucent courses stacked on themselves is mush, which is why the toggle used to be a boolean.
+
+**A tap names a part.** The raycast returns an instance index, that index is the position in the cell list that built the mesh, and `Raster.own` says which placement is standing in that cell, so the answer is a lookup rather than a guess: the picture IS the grid. A tap is told from a drag by distance (under 6 pixels) and time, because a phone has no second button and no hover, so the gesture that names a part is the same one that turns the camera. Tapping armour or frame says which it is and that the frame is not editable.
+
+**Selecting outlines it.** From the menu or from the model, the selected part gets an amber wireframe box round its extent with `depthTest` off, so it reads through the plate standing in front of it. A per cell wireframe was tried first and at ship scale 160 wire cubes is a solid amber blob, not an outline.
 
 ### Colour: purpose everywhere, faction on the armour only
 
 Two palettes, and which one a cell takes is decided by one function, `cellColour`.
 
-**PURPOSE, eight jobs and eight hues:** propulsion orange, attitude cyan, gunnery red, ordnance violet, command green, crew amber, boarding orange-tan, structure steel. A Terran thruster and a Karisen thruster are the same orange, because the point of the coding is that propulsion looks like propulsion on anybody's ship. Each part is drawn in three tones of its own hue: the casing is the shadow, the working guts the base, anything lit or trimmed the highlight. `Mat.Case` exists for exactly this: a barbette drum, a gun housing and a bridge shell were all written as `Plate` at first, which let the paint bucket reach inside the ship and turn every mount the faction colour.
+**PURPOSE, eight jobs and eight hues:** propulsion orange, attitude cyan, gunnery red, ordnance violet, command green, crew yellow, boarding pink, structure steel. Boarding was orange-tan and sat too close to propulsion to tell apart on a hull; it is pink now. A Terran thruster and a Karisen thruster are the same orange, because the point of the coding is that propulsion looks like propulsion on anybody's ship. Each part is drawn in FOUR tones of its own hue, which is what gives it a pattern rather than a shade: casing is the shadow, the working guts the base, trim the mid, anything lit the highlight.
+
+**And a silhouette each.** Colour alone does not separate a barracks from a hold when both are boxes, so every part is a different shape rule: bells band every second course, RCS blocks show four lit jets, barbettes carry a toothed ring, the beam is a slim emitter with a collar and the cannon a fat stepped barrel, magazines are banded blocks with lit tube mouths, the bridge is a stepped superstructure with a window band right round the top deck, barracks are banded berth decks, airlocks are collars with a lit iris, clamps are two jaws with a gap and lit tips, and a hold is a braced crate. One of these was not cosmetic: the old shared `pod` rule hollowed a part by removing its corner cells, and on a 2x2x2 RCS quad every cell is a corner, so the part drew literally nothing. `Mat.Case` exists for exactly this: a barbette drum, a gun housing and a bridge shell were all written as `Plate` at first, which let the paint bucket reach inside the ship and turn every mount the faction colour.
 
 **FACTION, eight swatches, and all eight land on the hull.** One swatch on a whole hull is a paint bucket, and a paint bucket makes every ship of a faction the same flat lozenge. The eight are roles: primary, panel, secondary, deep, highlight, marking, trim, stripe. Position decides which one a cell takes, not chance, so the same cell is the same colour on both seats and after a reload: plating panels on a coarse three-way grid, a dark underside, a dorsal spine, a stripe along the waist, a nose flash and a transom band. Picking a swatch sets the primary and the other seven roles hold, so a re-tint does not wreck the scheme. Measured on the visible skin of the five stock ships: **8 of 8 swatches on every one**, and the browser harness fails the build if any drops below eight.
 
@@ -265,7 +287,7 @@ A turret is on a swivel, so which way it faces on its ring is the player's. `Pla
 | **guns** | 3 x WPN-BB1 + 3 x WPN-BM1 | WPN-BB1 + WPN-BM1 + WPN-ML1; **both sponsons empty** | 2 x WPN-BB1 + 2 x WPN-PL1 | 2 x WPN-BB1 + 2 x WPN-CN1 + WPN-ML1; **aft stack empty** | none: no ring exists |
 | **utility** | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, **8 BAR, 6 AIR, 6 CLM** | BRG, 3 BAR, 4 AIR, 2 CLM | BRG, 3 BAR, 4 AIR, **2 CGO** |
 | components | 30 | 25 | 40 | 27 | 22 |
-| **armour sections, belt / dorsal-ventral / ends (layers)** | 4 / 2 / 1, belt -> **80** block | 3 / 3 / 2, belt -> **75** | 1 / 1 / 1 -> 50 | 4 / 1 / 1, belt -> **80** | 4 / 4 / 2 -> 80 |
+| **armour sections, belt / dorsal-ventral / ends (layers)** | 4 / 2 / 2, belt -> **80** block | 3 / 3 / 2, belt -> **75** | 1 / 1 / 1 -> 50 | 4 / 1 / 1, belt -> **80** | 4 / 4 / 1 -> 80 |
 | armour spheres / total subs | 18 / 48 | 18 / 43 | 11 / 51 | 18 / 45 | 14 / 36 |
 | record slots / bytes | 5,660 / 22,640 | 5,630 / 22,520 | 5,720 / 22,880 | 5,642 / 22,568 | 5,612 / 22,448 |
 
@@ -273,13 +295,15 @@ A turret is on a swivel, so which way it faces on its ring is the player's. `Pla
 
 | | Terran | Karisen | Rogue | Benefactor | Freighter |
 |---|---|---|---|---|---|
-| plate / solid cells | 4,872 / 7,452 | 4,115 / 7,582 | 1,528 / 4,627 | 4,211 / 7,121 | 3,067 / 6,356 |
-| **stock mass** | 0.907 (**91%**) | 0.808 (81%) | 0.804 (89%) | 0.843 (84%) | 1.600 (80%) |
-| stock hull (target) | 290 (302) | 254 (250) | 200 (180) | 263 (253) | 548 (608) |
-| stock accf / accr / accl | 0.992 / 0.331 / 0.221 | 1.175 / 0.371 / 0.247 | 1.231 / 0.435 / 0.298 | 1.009 / 0.356 / 0.237 | 0.563 / 0.188 / 0.125 |
+| plate / solid cells | 5,122 / 7,609 | 4,306 / 7,841 | 1,721 / 4,694 | 4,380 / 7,257 | 3,614 / 5,996 |
+| **stock mass** | 0.853 (**85%**) | 0.761 (76%) | 0.796 (88%) | 0.793 (79%) | 1.588 (79%) |
+| stock hull (target) | 270 (302) | 236 (250) | 198 (180) | 244 (253) | 549 (608) |
+| stock accf / accr / accl | 1.055 / 0.352 / 0.234 | 1.248 / 0.394 / 0.263 | 1.243 / 0.440 / 0.301 | 1.072 / 0.378 / 0.252 | 0.567 / 0.189 / 0.126 |
 | top speed | 8.0 = | 8.5 = | 9.5 = | 8.0 = | 5.0 = |
-| stock yaw / pitch | 6.42 / 4.30 | 7.33 / 4.91 | 11.01 / 7.38 | 6.91 / 4.63 | 4.32 / 2.90 |
+| stock yaw / pitch | 6.83 / 4.57 | 7.79 / 5.22 | 11.12 / 7.45 | 7.35 / 4.92 | 4.35 / 2.92 |
 | bare frame cells on the outside | 0 | 0 | 0 | 0 | 0 |
+| enclosed part cells outside the hull | 0 | 0 | 0 | 0 | 0 |
+| parts visible in the grid | 28/28 | 23/23 | 37/37 | 25/25 | 18/18 |
 | marines / capacity / reach | 15 / 8 / 20 | 15 / **4** / 20 | 40 / 12 / 40 | 15 / 8 / 20 | 15 / **6** / 10 |
 | extent (cells) | 24 x 20 x 57 | 24 x 20 x 56 | 29 x 20 x 45 | 22 x 22 x 57 | 19 x 17 x 48 |
 | bounding r vs class r | 3.240 / 3.5 | 3.224 / 3.5 | 2.640 / 3.2 | 3.193 / 3.5 | 4.133 / 4.5 |
@@ -329,7 +353,7 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 
 **MOBILE.** Section sliders and the palette are bottom sheets on the tab bar; socket selection, rotate, mirror and the gate strip are on-canvas, because a control that only exists in a sheet is one nothing on screen says exists: how move mode went wrong before. With a sheet open, the centre of every on-canvas control must hit that control, at 390x844 and 390x560.
 
-**CHECKED IN A BROWSER, not by reading the CSS.** `node web/tests/shipyard.mjs` drives the real screen at 1280x900, 390x844 and 390x560: no horizontal scroll, every control's centre hits that control and not something over it, all five classes legal out of the box and above 70% of their berth, all eight faction swatches on each hull, both exteriors, and a turret that turns 90 degrees and moves cells. It found two defects nothing else could: a chip row reused from the on-canvas overlay was absolutely positioned over the mode buttons and swallowed every tap, and the header ran Close from 333 to 408 in a 390 pixel viewport on a bar with overflow hidden, leaving no way out of the screen at all.
+**CHECKED IN A BROWSER, not by reading the CSS.** `node web/tests/shipyard.mjs` drives the real screen at 1280x900, 390x844 and 390x560: no horizontal scroll, every control's centre hits that control and not something over it, all five classes legal out of the box and above 70% of their berth, all eight faction swatches on each hull, every enclosed mount inside the hull, both exteriors, the plate toggle cycling on/ghost/off with ghost drawing skin over structure, a tap naming what it hit, a selection outlining it, and a turret that turns 90 degrees and moves cells. It has found five defects nothing else could: a chip row reused from the on-canvas overlay was absolutely positioned over the mode buttons and swallowed every tap; the header ran Close from 333 to 408 in a 390 pixel viewport on a bar with overflow hidden, leaving no way out of the screen; the pick card at full width sat on top of the plate toggle and swallowed every tap on it; at 390x560 the wrapped class chip row ate most of a 150 pixel canvas band, so a tap at its centre hit nothing at all; and the trunnion sockets were never listed, so the stock ships carried guns nobody could reach.
 
 **Deliberately NOT offered:** a free-placement voxel brush at anchor resolution, a way to move a hardpoint, a way to edit a part's stats, and any tool that writes an operation log instead of cells.
 
