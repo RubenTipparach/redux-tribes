@@ -55,6 +55,10 @@ export class Designer {
   #ray = new THREE.Raycaster();
   #note: string | null = null;
   #marks = new THREE.Group();
+  /** Where the hull actually is in the lattice, so the camera looks at it. */
+  #centre = new THREE.Vector3();
+  /** Half extents of the drawn hull, for framing it rather than its sphere. */
+  #half = new THREE.Vector3(1, 1, 1);
   #hist: Record<string, number> = {};
   #geoms: THREE.BufferGeometry[] = [];
   #mats: THREE.Material[] = [];
@@ -164,16 +168,46 @@ export class Designer {
     if (!this.#renderer) return;
     // Framed on the hull's own extent, not on an empty berth, so a small ship
     // does not sit in the corner of a void.
-    const cell = RUNG[frameFor(this.#design.classKey).rung];
-    const e = this.#derived.extent;
-    const fit = Math.max(e[0], e[1], e[2]) * cell * 0.72;
-    const dist = (fit / Math.tan(this.#camera.fov * Math.PI / 360)) * this.#cam.zoom;
+    // Frame the hull's BOX as it actually projects, not its sphere.
+    //
+    // A frigate is six units long and three across, so its sphere is mostly
+    // empty: fitting the sphere left a third of a phone's screen as margin the
+    // ship was never going to reach. This projects the eight corners onto the
+    // camera's own right and up axes and solves for the distance that just
+    // contains them, in both angles, so the ship fills whatever shape the
+    // viewport happens to be.
+    const fovV = this.#camera.fov * Math.PI / 180;
+    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * Math.max(0.05, this.#camera.aspect));
+    const cp0 = Math.cos(this.#cam.pitch), sp0 = Math.sin(this.#cam.pitch);
+    const cy0 = Math.cos(this.#cam.yaw), sy0 = Math.sin(this.#cam.yaw);
+    const fwd = new THREE.Vector3(-sy0 * cp0, -sp0, -cy0 * cp0);   // camera looks in
+    const right = new THREE.Vector3(-cy0, 0, sy0);
+    const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
+    const h = this.#half;
+    // Solve the eight corners exactly. A corner at offset c sits at depth
+    // D + c.fwd, so it stays in frame when D >= |c.right| / tanH - c.fwd, and
+    // likewise vertically; the answer is the largest of those sixteen bounds.
+    // Allowing for the box's whole depth instead pushed the camera back far
+    // enough for its NEAREST face, which on a six unit ship was a third of the
+    // screen given away as margin.
+    const tanH = Math.tan(fovH / 2), tanV = Math.tan(fovV / 2);
+    let need = 0;
+    for (let sx = -1; sx <= 1; sx += 2) for (let sy = -1; sy <= 1; sy += 2)
+      for (let sz = -1; sz <= 1; sz += 2) {
+        const ox = sx * h.x, oy = sy * h.y, oz = sz * h.z;
+        const u = Math.abs(ox * right.x + oy * right.y + oz * right.z);
+        const v = Math.abs(ox * up.x + oy * up.y + oz * up.z);
+        const w = ox * fwd.x + oy * fwd.y + oz * fwd.z;
+        need = Math.max(need, u / tanH - w, v / tanV - w);
+      }
+    const dist = Math.max(0.4, need * 1.05) * this.#cam.zoom;
+    const c = this.#centre;
     const cp = Math.cos(this.#cam.pitch);
     this.#camera.position.set(
-      Math.sin(this.#cam.yaw) * cp * dist,
-      Math.sin(this.#cam.pitch) * dist,
-      Math.cos(this.#cam.yaw) * cp * dist);
-    this.#camera.lookAt(0, 0, 0);
+      c.x + Math.sin(this.#cam.yaw) * cp * dist,
+      c.y + Math.sin(this.#cam.pitch) * dist,
+      c.z + Math.cos(this.#cam.yaw) * cp * dist);
+    this.#camera.lookAt(c);
     this.#renderer.render(this.#scene, this.#camera);
   };
 
@@ -290,6 +324,24 @@ export class Designer {
         ghostCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
           hwAt[k] as number, hhAt[k] as number));
       }
+    }
+
+    let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
+    for (const list of [solid, skin, ghost]) {
+      for (let q = 0; q < list.length; q += 3) {
+        const x = list[q] as number, y = list[q + 1] as number, z = list[q + 2] as number;
+        if (x < loX) loX = x; if (x > hiX) hiX = x;
+        if (y < loY) loY = y; if (y > hiY) hiY = y;
+        if (z < loZ) loZ = z; if (z > hiZ) hiZ = z;
+      }
+    }
+    if (hiX >= 0) {
+      this.#centre.set(
+        ((loX + hiX + 1) / 2 - NX / 2) * cell,
+        ((loY + hiY + 1) / 2 - NY / 2) * cell,
+        ((loZ + hiZ + 1) / 2 - NZ / 2) * cell);
+      this.#half.set((hiX - loX + 1) * cell / 2, (hiY - loY + 1) * cell / 2,
+        (hiZ - loZ + 1) * cell / 2);
     }
 
     this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3;
@@ -858,9 +910,24 @@ export class Designer {
       this.#refresh();
     };
     const tab = (id: string, which: 'parts' | 'armour' | 'stats') => {
-      $(id).onclick = () => { this.#tab = which; this.#syncTabs(); };
+      $(id).onclick = () => {
+        this.#tab = which;
+        // A tab tapped while the sheet is collapsed opens it, because
+        // otherwise the tab looks broken.
+        $('designer').classList.remove('wide');
+        $('dzGrow').innerHTML = '\u25B2';
+        this.#syncTabs();
+      };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
+    // Collapse the sheet so the model has the screen. A phone control: at desk
+    // widths the panel is beside the view and takes none of it.
+    $('dzGrow').onclick = () => {
+      $('designer').classList.toggle('wide');
+      $('dzGrow').innerHTML = $('designer').classList.contains('wide')
+        ? '\u25BC' : '\u25B2';
+      this.#resize();
+    };
     this.#syncTabs();
   }
 

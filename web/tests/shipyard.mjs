@@ -26,6 +26,8 @@ const ok = (msg) => console.log('  ok   ' + msg);
 /** Every control a player needs, and the tap has to ARRIVE at it. */
 const REACHABLE = ['dzClose', 'dzPlate', 'dzTabParts', 'dzTabArmour', 'dzTabStats',
   'dzReset', 'dzBare', 'dzStrip'];
+/** Phone only: the desk layout has the panel beside the view and hides it. */
+const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
 async function openShipyard(page) {
   await page.goto(BASE, { waitUntil: 'networkidle' });
@@ -34,7 +36,25 @@ async function openShipyard(page) {
   await page.waitForTimeout(1100);
 }
 
+/**
+ * How much of the screen the model actually gets.
+ *
+ * The panel used to be a fixed 240 pixel sheet under a fixed 240 pixel view,
+ * which gave the thing being edited 28 percent of a phone and the tool the
+ * rest. The numbers here are the floor, not the target.
+ */
+async function checkViewport(page, label, floor) {
+  const m = await page.evaluate(() => {
+    const v = document.getElementById('dzView').getBoundingClientRect();
+    return { h: Math.round(v.height), pct: Math.round(100 * v.height / innerHeight) };
+  });
+  if (m.pct < floor) fail(`${label}: the model gets only ${m.pct}% of the screen (${m.h}px)`);
+  else ok(`${label}: the model gets ${m.pct}% of the screen (${m.h}px)`);
+  return m;
+}
+
 async function checkLayout(page, label) {
+  const innerWidthIsPhone = await page.evaluate(() => innerWidth <= 900);
   const over = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   if (over > 0) fail(`${label}: ${over}px of horizontal scroll`);
@@ -59,7 +79,7 @@ async function checkLayout(page, label) {
           out.push(`${id} buried under ${hit ? (hit.id || hit.className || hit.tagName) : 'nothing'}`);
       }
       return out;
-    }, REACHABLE);
+    }, innerWidthIsPhone ? REACHABLE_PHONE : REACHABLE);
     for (const b of buried) fail(`${label} [${tab}]: ${b}`);
     if (!buried.length) ok(`${label} [${tab}]: every control reachable`);
   }
@@ -237,11 +257,30 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   console.log(label);
   await openShipyard(page);
   await checkLayout(page, label);
+  if (w > 800) await checkViewport(page, label, 85);
   if (w > 800) {
     await checkShips(page);
     await checkGhostAndPicking(page);
     await checkModesAndRotation(page);
   } else {
+    await checkViewport(page, label, 38);
+    // One tap gives the model the screen, and a tab tapped after it brings the
+    // sheet back rather than looking broken.
+    await page.click('#dzGrow');
+    await page.waitForTimeout(400);
+    const wide = await checkViewport(page, label + ' collapsed', 80);
+    void wide;
+    await page.click('#dzTabArmour');
+    await page.waitForTimeout(400);
+    const back = await page.evaluate(() => ({
+      wide: document.getElementById('designer').classList.contains('wide'),
+      armour: !document.getElementById('dzPaneArmour').classList.contains('hidden'),
+    }));
+    if (back.wide || !back.armour) fail(`${label}: a tab tapped while collapsed did not reopen the sheet`);
+    else ok(`${label}: a tab reopens the collapsed sheet`);
+    await page.click('#dzTabParts');
+    await page.waitForTimeout(300);
+
     // With the card open, the controls drawn over the map still have to take
     // a tap. The fire slots went that way once and the heading dials after.
     const box = await (await page.$('#dzCanvas')).boundingBox();
