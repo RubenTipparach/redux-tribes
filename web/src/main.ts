@@ -12,6 +12,7 @@ import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
+import { Designer } from './app/designer.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
@@ -2140,6 +2141,8 @@ Object.defineProperty(window, 'ftDebug', {
      * that letting go finishes the ladder. */
     envelope: () => (selected < 0 ? null : view.shellProgress(selected)),
     canPlan,
+    /** The shipyard, read only. */
+    designer: () => (designer.visible ? designer.debug() : null),
   },
 });
 
@@ -2149,6 +2152,11 @@ const lobby = new Lobby(api, (l: Launch) => {
   seed = l.seed;
   start();
 });
+
+// The shipyard sits over the lobby rather than replacing it, so closing it
+// puts the player back where they opened it from.
+const designer = new Designer(() => { if (!lobby.visible) lobby.show(); });
+$('bShipyard').onclick = () => designer.show();
 
 renderHelp();
 frame();
