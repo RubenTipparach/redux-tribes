@@ -1619,6 +1619,28 @@ dialDrag('atPitch', deg => {
 })();
 
 /**
+ * The pitch scale, drawn once.
+ *
+ * Marked in the units it reports rather than in even slices of a circle: every
+ * 20 degrees of climb, long at the multiples of 40, so the ends of the arc are
+ * the clamp the dial actually enforces and the middle one is level.
+ */
+(() => {
+  const g = $('atPitchTicks');
+  for (let p = -80; p <= 80; p += 20) {
+    const a = (p * Math.PI) / 180;
+    const long = p % 40 === 0;
+    const r0 = long ? 38 : 42;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(Math.cos(a) * r0));
+    line.setAttribute('y1', String(-Math.sin(a) * r0));
+    line.setAttribute('x2', String(Math.cos(a) * 45));
+    line.setAttribute('y2', String(-Math.sin(a) * 45));
+    g.appendChild(line);
+  }
+})();
+
+/**
  * Point both dials at what the ship is doing.
  *
  * The needles are set from the SHIP, never from the last drag, so a heading
@@ -1656,8 +1678,8 @@ function renderAttitude(): void {
   $('atRollV').textContent = `${Math.round(rollDeg)}`;
   $('atRoll').setAttribute('aria-valuenow', String(Math.round(rollDeg)));
 
-  // The pitch needles start pointing along +X, so a climb rotates them the
-  // other way: on screen up is negative y.
+  // The pitch hull and its needle start pointing along +X, so a climb rotates
+  // them the other way: on screen up is negative y.
   $('atPitchNow').setAttribute('transform', `rotate(${(-climb(now)).toFixed(2)})`);
   $('atPitchCmd').setAttribute('transform', `rotate(${(-climb(cmd)).toFixed(2)})`);
   const p = Math.round(climb(cmd));

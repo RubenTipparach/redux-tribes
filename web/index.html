@@ -290,12 +290,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dial:active { cursor:grabbing; }
 .dial svg { width:100%; height:100%; display:block; overflow:visible; }
 .dial .face { fill:none; stroke:#2b3b50; stroke-width:1.5; }
-.dial .axis { stroke:var(--line); stroke-width:1; }
+.dial .arc { fill:none; stroke:#3d5266; stroke-width:2.5; }
 .dial .ticks line { stroke:var(--line); stroke-width:1.5; }
 /* Shorter and dimmer than they were, so the rim stops counting hours. */
 .dial#atRoll .ticks line { stroke-width:1.2; opacity:.7; }
-/* Where the nose IS: dim, because it is a reading and not a control. */
-.dial .now { stroke:var(--muted); stroke-width:2.5; opacity:.75; }
 /* Where it was TOLD to point: the thing under the finger. */
 .dial .cmd { stroke:var(--cyan); stroke-width:2.5; }
 .dial .knob { fill:var(--cyan); }
@@ -303,9 +301,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    turn plays back the silhouette is the only thing showing the roll being
    flown, and at 35 percent on a phone it was a smudge. */
 .dial.numb { pointer-events:none; }
-.dial.numb .ticks, .dial.numb .face, .dial.numb .axis,
+.dial.numb .ticks, .dial.numb .face, .dial.numb .arc,
 .dial.numb .level, .dial.numb .cmd, .dial.numb .knob { opacity:.3; }
-.dial.numb .plane, .dial.numb .now { opacity:.9; }
+.dial.numb .plane { opacity:.9; }
 /* The readout sits UNDER the face, not in it. Inside, a hull rolled onto its
    wingtip put a wing through the number, and the box a drag measures its angle
    from has to be the circle alone: a label inside it moves the centre. */
@@ -323,6 +321,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dial .plane .horiz { stroke:#6d88a5; stroke-width:1.8; }
 .dial .plane .wing { fill:#8b9db1; }
 .dial .plane .body { fill:#9fb2c6; }
+/* Only the roll dial's rim counts all the way round; the pitch scale is a
+   half and its marks are the pitch they stand for. */
+.dial#atPitch .ticks line { stroke-width:1.2; opacity:.7; }
 .dial .plane .fin { fill:#c3d4e6; }
 .dial .plane .canopy { fill:#141c27; }
 .dial .level { stroke:var(--muted); stroke-width:2; opacity:.5; }
@@ -676,9 +677,28 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       <div class="dial" id="atPitch" role="slider" aria-label="Pitch"
            aria-valuemin="-80" aria-valuemax="80" aria-valuenow="0" tabindex="0">
         <svg viewBox="-50 -50 100 100" aria-hidden="true">
-          <path class="face" d="M 0 -45 A 45 45 0 0 1 0 45"/>
-          <line class="axis" x1="0" y1="0" x2="45" y2="0"/>
-          <g id="atPitchNow"><line class="now" x1="0" y1="0" x2="33" y2="0"/></g>
+          <circle class="face" cx="0" cy="0" r="45"/>
+          <!-- The half the pitch order can point into. Heavier than the rim it
+               sits on, because it is the scale and the rim is only an edge. -->
+          <path class="arc" d="M 0 -45 A 45 45 0 0 1 0 45"/>
+          <g class="ticks" id="atPitchTicks"></g>
+          <!-- Level, and world fixed, so the nose is climbing against
+               something. On the left, where the hull's tail leaves room. -->
+          <g class="level"><line x1="-45" y1="0" x2="-36" y2="0"/></g>
+          <!-- The same hull as the roll dial, seen from the side instead of
+               head on, standing on the same horizon and drawn in the same
+               tones. A line from the middle to the rim said the angle and
+               nothing else: which way is up, whether that is a climb or a
+               dive, and how steep it is next to level were all left to the
+               number underneath. -->
+          <g id="atPitchNow" class="plane">
+            <path class="belly" d="M -44 0 A 44 44 0 0 0 44 0 Z"/>
+            <line class="horiz" x1="-44" y1="0" x2="44" y2="0"/>
+            <path class="wing" d="M 4 5 L -12 5 L -19 14 L -3 14 Z"/>
+            <path class="fin" d="M -21 -5 L -13 -5 L -19 -21 L -24 -21 Z"/>
+            <path class="body" d="M 31 0 L 10 -5.5 L -20 -6 L -27 -3 L -27 3 L -20 6 L 10 5.5 Z"/>
+            <ellipse class="canopy" cx="11" cy="-2.4" rx="5.6" ry="1.9"/>
+          </g>
           <g id="atPitchCmd">
             <line class="cmd" x1="0" y1="0" x2="38" y2="0"/>
             <circle class="knob" cx="38" cy="0" r="6.5"/>
