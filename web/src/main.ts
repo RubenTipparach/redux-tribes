@@ -1808,7 +1808,27 @@ function blastsAt(events: readonly SimEvent[], tick: number)
   return out;
 }
 
+/**
+ * One frame.
+ *
+ * The next frame is booked in a `finally`, so nothing inside can stop the
+ * clock. It used to be the last statement, and the battle replay returned
+ * early from the middle of this function to move to the next turn: that return
+ * skipped the booking and the loop simply stopped. Everything froze, not just
+ * the replay, and because `playing` was still true and the tick still had a
+ * value the console looked busy rather than dead. An exception anywhere in
+ * here would have done the same, which is why the fix is the `finally` rather
+ * than deleting two returns.
+ */
 function frame(): void {
+  try {
+    frameBody();
+  } finally {
+    requestAnimationFrame(frame);
+  }
+}
+
+function frameBody(): void {
   view.resize();
   probeEnvelopeIfWanted();
   if (playTick !== null && playing) {
@@ -1843,7 +1863,6 @@ function frame(): void {
     }
   }
   view.render();
-  requestAnimationFrame(frame);
 }
 
 /**
@@ -1868,6 +1887,8 @@ Object.defineProperty(window, 'ftDebug', {
      * and the same test the pointer router runs. */
     onYawKnob: (x: number, y: number) => view.onYawKnob(x, y),
     playing: () => playTick,
+    /** Whether playback is advancing, as against paused on a tick. */
+    running: () => playing,
     side: () => launch.side,
     kind: () => launch.kind,
     // Observation only, like everything else here. A harness that could WRITE
