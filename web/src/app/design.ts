@@ -283,22 +283,42 @@ export interface Socket {
 }
 
 /**
- * Which socket kinds may stand PROUD of the hull.
+ * How far out of the hull a socket's part is allowed to sit.
  *
- * A drive has to see vacuum, a gun has to see its target, and attitude jets
- * have to push on something that is not the ship. Everything else lives
- * inside: berths, magazines, holds, airlocks and stowed boarding clamps are
- * volume, not fittings, and a ship with its barracks bolted to the outside
- * reads as a scaffold rather than a hull.
+ * - **proud**: standing off the hull, where the frame put it. A drive has to
+ *   see vacuum and a gun has to see its target.
+ * - **flush**: set INTO the skin, so only its face is on the surface. This is
+ *   what attitude jets are: a thruster block is part of the hull, not a pod
+ *   bolted to the outside of one, and standing them off left cyan bricks
+ *   hanging off both flanks with a plate stub reaching back to the ship.
+ * - **enclosed**: entirely inside, a cell under the plate. Berths, magazines,
+ *   holds, airlocks and stowed boarding clamps are volume, not fittings.
  *
- * Sensors would belong here too. There is no sensor part, because `sim_core`
- * has no detection, and a part that can only ever raise a warning teaches
- * players to ignore warnings.
+ * Sensors would be flush too. There is no sensor part, because `sim_core` has
+ * no detection, and a part that can only ever raise a warning teaches players
+ * to ignore warnings.
  */
-export const EXPOSED_KINDS: ReadonlyArray<SocketKind> =
-  ['drive', 'retro', 'rcs', 'gun', 'trunnion'];
+export type Exposure = 'proud' | 'flush' | 'enclosed';
 
-export const isExposed = (k: SocketKind): boolean => EXPOSED_KINDS.indexOf(k) >= 0;
+export const EXPOSURE: Record<SocketKind, Exposure> = {
+  drive: 'proud', retro: 'proud', gun: 'proud', trunnion: 'proud',
+  rcs: 'flush',
+  missile: 'enclosed', bay: 'enclosed', clamp: 'enclosed',
+};
+
+export const exposureOf = (k: SocketKind): Exposure => EXPOSURE[k] ?? 'enclosed';
+
+/** Left where the frame put it: nothing to seat and nothing to check. */
+export const isProud = (k: SocketKind): boolean => exposureOf(k) === 'proud';
+
+/**
+ * How deep under the hull line a seated part sits.
+ *
+ * One cell for an enclosed part, which is the room the plate needs to close
+ * over it. Zero for a flush one, so its outer face lands ON the surface and
+ * the shell fills in around it rather than over it.
+ */
+const seatInset = (k: SocketKind): number => (exposureOf(k) === 'flush' ? 0 : 1);
 
 export interface FrameDef {
   readonly classKey: string;
@@ -647,14 +667,14 @@ export const FRAMES: readonly FrameDef[] = [
  * still call it seated.
  */
 export function boxInside(prof: readonly Station[], x: number, y: number, z: number,
-  hx: number, hy: number, hz: number): boolean {
+  hx: number, hy: number, hz: number, inset = 1): boolean {
   let hw = Infinity, hh = Infinity;
   for (let k = Math.round(z - hz); k <= Math.round(z + hz); k++) {
     const st = hullAt(prof, k);
     hw = Math.min(hw, st[0] as number);
     hh = Math.min(hh, st[1] as number);
   }
-  const a = Math.max(1, hw - 1), b = Math.max(1, hh - 1);
+  const a = Math.max(1, hw - inset), b = Math.max(1, hh - inset);
   const dx = (Math.abs(x - CX) + hx) / a, dy = (Math.abs(y - CY) + hy) / b;
   return dx * dx + dy * dy <= 1;
 }
@@ -662,7 +682,8 @@ export function boxInside(prof: readonly Station[], x: number, y: number, z: num
 export function seatOf(frame: FrameDef, sock: Socket,
   v: { sx: number; sy: number; sz: number }): readonly [number, number, number] {
   const cx = sock.at[0] as number, cy = sock.at[1] as number, cz = sock.at[2] as number;
-  if (isExposed(sock.kind)) return [cx, cy, cz];
+  if (isProud(sock.kind)) return [cx, cy, cz];
+  const inset = seatInset(sock.kind);
   const prof = frame.profile;
   const hx = v.sx / 2, hy = v.sy / 2, hz = v.sz / 2;
   const z0 = Math.round((prof[0] as Station)[0]);
@@ -676,8 +697,32 @@ export function seatOf(frame: FrameDef, sock: Socket,
     hw = Math.min(hw, st[0] as number);
     hh = Math.min(hh, st[1] as number);
   }
-  const a = Math.max(1, hw - 1), b = Math.max(1, hh - 1);
+  const a = Math.max(1, hw - inset), b = Math.max(1, hh - inset);
   let x = cx, y = cy;
+
+  if (inset === 0) {
+    // FLUSH: slide the part along whichever way it is facing until its outer
+    // FACE lands on the hull line, and stop there. Pulling until the corners
+    // are inside instead sinks it a cell or two, and the shell then closes
+    // over the top of it: on the Freighter's four layer plating only 9 of an
+    // attitude block's 108 cells still reached daylight, so the jets were
+    // inside the ship.
+    const onX = Math.abs(cx - CX) / Math.max(0.5, hw) >= Math.abs(cy - CY) / Math.max(0.5, hh);
+    const s = onX ? (cx >= CX ? 1 : -1) : (cy >= CY ? 1 : -1);
+    const face = onX ? hx : hy;
+    const out = (t: number) => onX
+      ? !insideHull(prof, x + s * t, y, k)
+      : !insideHull(prof, x, y + s * t, k);
+    for (let n = 0; n < 64; n++) {
+      const proud = out(face - 0.5);          // the outer face is past the skin
+      const sunk = !out(face + 0.5);          // there is still hull beyond it
+      if (!proud && !sunk) break;
+      const step = proud ? -s : s;
+      if (onX) x += step; else y += step;
+    }
+    return [x, y, k];
+  }
+
   const outside = () => {
     const dx = (Math.abs(x - CX) + hx) / a, dy = (Math.abs(y - CY) + hy) / b;
     return dx * dx + dy * dy > 1;
@@ -879,6 +924,11 @@ export interface Raster {
    *  zero: mounts live inside the frame, and only drives, retros, attitude
    *  jets, gun rings and trunnions are allowed to stand proud of it. */
   readonly enclosedOutside: number;
+  /** How far past the hull line the worst cell of a FLUSH part sits, in cells.
+   *  A flat block set into a curved hull leaves its corners a fraction proud,
+   *  which is what a recessed thruster looks like; a whole block standing off
+   *  the flank on a pylon is what this number is here to catch. */
+  readonly flushProud: number;
   readonly extent: readonly [number, number, number];
   /** The true bounding sphere, in cells, about the hull's own centre.
    *  A box diagonal is not one: it measures corners a long thin ship has
@@ -957,7 +1007,7 @@ export function rasterise(d: Design): Raster {
   // back to it below, because a pod hanging in space beside its own ship is
   // exactly the slop that voxels were supposed to end.
   const outboard: number[] = [];
-  let enclosedOutside = 0;
+  let enclosedOutside = 0, flushProud = 0;
   for (let pi = 0; pi < d.parts.length; pi++) {
     const p = d.parts[pi] as Placement;
     const sock = allSockets.find(k => k.id === p.socket);
@@ -992,7 +1042,7 @@ export function rasterise(d: Design): Raster {
     if (best > 0) {
       for (const [dx, dy, dz] of NUDGE) {
         const tx = bx + dx, ty = by + dy, tz = bz + dz;
-        if (!isExposed(sock.kind) && !boxInside(prof,
+        if (exposureOf(sock.kind) === 'enclosed' && !boxInside(prof,
           tx + v.sx / 2, ty + v.sy / 2, tz + v.sz / 2, v.sx / 2, v.sy / 2, v.sz / 2)) continue;
         const lost = lossAt(tx, ty, tz);
         if (lost < best) { best = lost; ox = tx; oy = ty; oz = tz; }
@@ -1017,7 +1067,15 @@ export function rasterise(d: Design): Raster {
       own[n] = pi + 1;
       if (!insideHull(prof, x, y, z)) {
         outboard.push(x, y, z);
-        if (!isExposed(sock.kind)) enclosedOutside++;
+        const ex = exposureOf(sock.kind);
+        if (ex === 'enclosed') enclosedOutside++;
+        else if (ex === 'flush') {
+          const st = hullAt(prof, z);
+          const shw = st[0] as number, shh = st[1] as number;
+          const ux = (x + 0.5 - CX) / shw, uy = (y + 0.5 - CY) / shh;
+          const past = (Math.sqrt(ux * ux + uy * uy) - 1) * Math.min(shw, shh);
+          if (past > flushProud) flushProud = past;
+        }
       }
     }
   }
@@ -1201,7 +1259,7 @@ export function rasterise(d: Design): Raster {
   }
 
   const raster: Raster = { grid, purp, own, plateCells, solidCells: cells.length / 3,
-    enclosedOutside, extent, radiusCells: Math.sqrt(r2) };
+    enclosedOutside, flushProud, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
   return raster;
 }
@@ -1616,17 +1674,34 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       break;
     }
     case 'rcs': {
-      // A box of jets. Four glow nozzles looking out along the flanks, which
-      // reads at two cells a side, where a hollow shell reads as nothing:
-      // the RCS quad is 2x2x2 and the old rule drew literally zero cells.
+      // A box of jets, and they point the way the block actually pushes: a
+      // yaw block throws sideways and a pitch block throws up and down, so
+      // reading `latX` and `latY` is the difference between a thruster that
+      // faces out of the hull and one that faces into it. Small parts too:
+      // the RCS quad is 2x2x2, where a hollowed shell drew literally nothing.
       fill(Mat.Machine);
-      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) {
-        put(0, y, z, y === 0 || y === sy - 1 ? Mat.Case : Mat.Accent);
-        put(sx - 1, y, z, y === 0 || y === sy - 1 ? Mat.Case : Mat.Accent);
+      const jetX = (m.latX ?? 0) > 0, jetY = (m.latY ?? 0) > 0;
+      const face = (fx: number, fy: number) => {
+        for (let z = 0; z < sz; z++) for (let q = 0; q < (fx < 0 ? sy : sx); q++) {
+          const x = fx < 0 ? (fx === -1 ? 0 : sx - 1) : q;
+          const y = fx < 0 ? q : (fy === 0 ? 0 : sy - 1);
+          const edge = fx < 0 ? (q === 0 || q === sy - 1) : (q === 0 || q === sx - 1);
+          put(x, y, z, edge ? Mat.Case : Mat.Accent);
+        }
+      };
+      if (jetX) { face(-1, 0); face(-2, 0); }
+      if (jetY) { face(0, 0); face(0, 1); }
+      // One lit nozzle at the centre of each face it pushes through, rather
+      // than a lit stripe down the whole of it: the stripe overwrote every
+      // trim cell the face had and the block came out flat.
+      const mz = Math.round(cz);
+      if (jetX) {
+        put(0, Math.round(cy), mz, Mat.Glow);
+        put(sx - 1, Math.round(cy), mz, Mat.Glow);
       }
-      for (let z = 0; z < sz; z++) {
-        put(0, Math.round(cy), z, Mat.Glow);
-        put(sx - 1, Math.round(cy), z, Mat.Glow);
+      if (jetY) {
+        put(Math.round(cx), 0, mz, Mat.Glow);
+        put(Math.round(cx), sy - 1, mz, Mat.Glow);
       }
       break;
     }

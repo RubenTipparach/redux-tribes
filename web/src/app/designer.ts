@@ -964,6 +964,7 @@ export class Designer {
       armour: this.#design.armour,
       livery: this.#liveryColours,
       enclosedOutside: rasterise(this.#design).enclosedOutside,
+      flushProud: rasterise(this.#design).flushProud,
       marks: this.#marks.children.length,
       note: this.#note,
       gridHash: this.#gridHash,

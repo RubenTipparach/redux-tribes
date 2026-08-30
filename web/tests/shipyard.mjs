@@ -131,6 +131,12 @@ async function checkShips(page) {
     if (d.enclosedOutside > 0)
       fail(`${name}: ${d.enclosedOutside} cells of enclosed parts are outside the hull`);
     else ok(`${name}: every enclosed mount is inside the hull`);
+    // Attitude blocks are set INTO the skin. A flat block on a curved hull
+    // leaves its corners a fraction proud; a block standing off the flank on
+    // a pylon does not, and that is what this catches.
+    if (d.flushProud > 1.5)
+      fail(`${name}: an attitude block stands ${d.flushProud.toFixed(1)} cells off the hull`);
+    else ok(`${name}: attitude blocks sit flush, worst corner ${d.flushProud.toFixed(2)} cells proud`);
   }
 }
 
