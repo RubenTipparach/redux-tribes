@@ -234,11 +234,25 @@ const CX = NX / 2, CY = NY / 2;
 /** A keel run: one box from z0 to z1 along the middle. */
 const keel = (y: number, z0: number, z1: number, w = 4, h = 3) =>
   [CX - w / 2, y - h / 2, z0, w, h, z1 - z0] as const;
-/** A rib ring at z, drawn as a flat band. */
-const rib = (z: number, w: number, h: number) =>
-  [CX - w / 2, CY - h / 2, z, w, h, 1] as const;
+/**
+ * A rib RING at z: four bars, not a solid plate.
+ *
+ * A frame is a skeleton. Drawn as a filled slab it reads as a bulkhead and
+ * fills the ship with material a player never asked for, which both looks
+ * wrong and charges hull for it.
+ */
+const rib = (z: number, w: number, h: number) => {
+  const x0 = CX - w / 2, y0 = CY - h / 2, t = 1;
+  return [
+    [x0, y0, z, w, t, 1],
+    [x0, y0 + h - t, z, w, t, 1],
+    [x0, y0, z, t, h, 1],
+    [x0 + w - t, y0, z, t, h, 1],
+  ] as ReadonlyArray<readonly [number, number, number, number, number, number]>;
+};
 
-const ribs = (zs: readonly number[], w: number, h: number) => zs.map(z => rib(z, w, h));
+const ribs = (zs: readonly number[], w: number, h: number) =>
+  zs.flatMap(z => rib(z, w, h));
 
 export const FRAMES: readonly FrameDef[] = [
   {
@@ -799,3 +813,152 @@ export const stockFor = (classKey: string): Design => {
   return { classKey: s.classKey, parts: s.parts.map(p => ({ ...p })),
     sections: { ...s.sections }, paint: s.paint };
 };
+
+// ============================================================== VOXELS ==
+//
+// Every part is a VOLUME OF CELLS, not a parametric mesh.
+//
+// The first cut drew bells as cones and turrets as cylinders, and it produced
+// exactly the slop that shape choice guarantees: coplanar faces z fighting
+// into stripes, barrels poking out through plating, and parts hanging in
+// space with nothing under them. None of those are bugs to chase. They are
+// what happens when the ship is a pile of overlapping solids in continuous
+// space instead of an occupancy grid.
+//
+// A cell is filled or it is not. Two parts cannot occupy the same cell, so
+// nothing z fights. A part sits on whole cells, so nothing floats a
+// fraction of a cell off its mounting. And the picture is then the same
+// structure the damage model reads, rather than a second opinion about it.
+
+/**
+ * What a filled cell is made of. The colour comes from the palette below.
+ *
+ * A plain object, NOT a const enum: a const enum has no runtime value, so
+ * importing one across a module boundary and reading `Mat.Plate` in another
+ * file gets whatever the bundler felt like inlining. It classified every cell
+ * on the ship as plate, which drew the whole hull in one colour and made the
+ * plate toggle empty the screen.
+ */
+export const Mat = {
+  Empty: 0, Plate: 1, Frame: 2, Machine: 3, Glow: 4, Accent: 5,
+} as const;
+
+export const MAT_COLOUR: Record<number, number> = {
+  [Mat.Plate]: 0x9FB2C6,
+  [Mat.Frame]: 0x6E829B,
+  [Mat.Machine]: 0x39485C,
+  [Mat.Glow]: 0xFA6A0A,
+  [Mat.Accent]: 0x35C7FF,
+};
+
+export interface VoxelModel {
+  readonly sx: number; readonly sy: number; readonly sz: number;
+  /** One material per cell, x fastest then y then z. */
+  readonly data: Uint8Array;
+  readonly filled: number;
+}
+
+const voxCache = new Map<string, VoxelModel>();
+
+/**
+ * Rasterise a part into cells.
+ *
+ * Shapes are written as fill rules over the part's own box rather than as
+ * meshes, so the same code that draws a bell is the code that says which
+ * cells a bell occupies. There is no second description to drift.
+ */
+export function voxelsOf(m: ModuleDef): VoxelModel {
+  const hit = voxCache.get(m.id);
+  if (hit) return hit;
+  const [sx, sy, sz] = m.size;
+  const data = new Uint8Array(sx * sy * sz);
+  const at = (x: number, y: number, z: number) => x + y * sx + z * sx * sy;
+  const put = (x: number, y: number, z: number, mat: number) => {
+    if (x < 0 || y < 0 || z < 0 || x >= sx || y >= sy || z >= sz) return;
+    data[at(x, y, z)] = mat;
+  };
+  const cx = (sx - 1) / 2, cy = (sy - 1) / 2;
+  // Distance from the part's own long axis, used by everything round.
+  const rad = (x: number, y: number) => Math.hypot(x - cx, y - cy);
+
+  switch (m.art) {
+    case 'bell':
+    case 'nozzle': {
+      // Aft is -z, so the throat is forward and the bell flares to the back.
+      const rOuter = Math.min(sx, sy) / 2;
+      const rThroat = m.art === 'bell' ? rOuter * 0.42 : rOuter * 0.55;
+      for (let z = 0; z < sz; z++) {
+        const t = z / Math.max(1, sz - 1);          // 0 aft, 1 forward
+        const r = rOuter + (rThroat - rOuter) * Math.min(1, t * 1.35);
+        for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+          const d = rad(x, y);
+          if (d > r) continue;
+          // Hollow through the flare, solid at the forward plug, and a lit
+          // ring at the very back where the exhaust leaves.
+          if (t > 0.72) put(x, y, z, Mat.Machine);
+          else if (d > r - 1.35) put(x, y, z, z === 0 ? Mat.Glow : Mat.Machine);
+        }
+      }
+      break;
+    }
+    case 'barbette': {
+      // A drum. The base is what takes the damage, which is why it is a part
+      // in its own right and not decoration on the gun.
+      const r = Math.min(sx, sz) / 2;
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        const d = Math.hypot(x - cx, z - (sz - 1) / 2);
+        if (d <= r) put(x, y, z, y === sy - 1 && d > r - 1.2 ? Mat.Accent : Mat.Plate);
+      }
+      break;
+    }
+    case 'beamgun':
+    case 'cannon': {
+      // A housing at the back and a barrel down the middle, both on cells.
+      const housing = Math.round(sz * (m.art === 'cannon' ? 0.45 : 0.36));
+      const rBarrel = m.art === 'cannon' ? 1.6 : 1.05;
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (z < housing) { put(x, y, z, Mat.Plate); continue; }
+        if (rad(x, y) <= rBarrel) put(x, y, z, z === sz - 1 ? Mat.Glow : Mat.Machine);
+      }
+      break;
+    }
+    case 'missilecell': {
+      // A block with tubes bored forward through it.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        put(x, y, z, Mat.Plate);
+      const qx = [Math.floor(sx * 0.28), Math.floor(sx * 0.72)];
+      const qy = [Math.floor(sy * 0.28), Math.floor(sy * 0.72)];
+      for (const x of qx) for (const y of qy) for (let z = Math.floor(sz * 0.35); z < sz; z++)
+        put(x, y, z, z === sz - 1 ? Mat.Accent : Mat.Empty);
+      break;
+    }
+    case 'bridge': {
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        put(x, y, z, Mat.Plate);
+      // A lit band across the front of the top deck.
+      for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 1, Mat.Accent);
+      for (let x = 1; x < sx - 1; x++) put(x, sy - 1, sz - 2, Mat.Accent);
+      break;
+    }
+    case 'pod': {
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        const edge = (x === 0 || x === sx - 1) && (y === 0 || y === sy - 1);
+        if (!edge) put(x, y, z, Mat.Machine);
+      }
+      break;
+    }
+    case 'strut':
+      for (let z = 0; z < sz; z++) put(Math.floor(cx), Math.floor(cy), z, Mat.Frame);
+      break;
+    default:
+      // A plain block, with a machined face so it is not a featureless brick.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+        put(x, y, z, y === sy - 1 ? Mat.Machine : Mat.Plate);
+  }
+
+  let filled = 0;
+  for (let i = 0; i < data.length; i++) if (data[i]) filled++;
+  const model: VoxelModel = { sx, sy, sz, data, filled };
+  voxCache.set(m.id, model);
+  return model;
+}

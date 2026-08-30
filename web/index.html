@@ -488,6 +488,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    exists in a sheet is one nothing on screen says exists. */
 .dzclasses { position:absolute; top:9px; left:9px; right:9px; z-index:3;
   display:flex; flex-wrap:wrap; gap:5px; pointer-events:none; }
+#dzTools { top:auto; bottom:9px; left:auto; right:9px; justify-content:flex-end; }
 .dzclasses button { pointer-events:auto; padding:7px 11px; font-size:11px;
   background:#111823dd; border-radius:6px;
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
@@ -656,6 +657,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   <section id="dzView">
     <canvas id="dzCanvas"></canvas>
     <div id="dzClasses" class="dzclasses"></div>
+    <!-- On canvas, not in a sheet: taking the plate off to see what is under
+         it is the single most used action in a voxel editor. -->
+    <div id="dzTools" class="dzclasses"><button id="dzPlate" class="on">Plate on</button></div>
     <div id="dzHint">drag to orbit &middot; pinch or wheel to zoom</div>
   </section>
 

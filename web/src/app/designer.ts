@@ -16,7 +16,8 @@ import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
-  type Design, type Derived, type ModuleDef, type SectionKey,
+  socketsOf, voxelsOf, Mat, MAT_COLOUR,
+  type Design, type Derived, type SectionKey,
 } from './design.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -50,6 +51,9 @@ export class Designer {
   #sockets = new THREE.Group();
   #cam = { yaw: 0.7, pitch: 0.35, zoom: 1 };
   #raf = 0;
+  #voxelCount = 0;
+  #showPlate = true;
+  #hist: Record<string, number> = {};
   #geoms: THREE.BufferGeometry[] = [];
   #mats: THREE.Material[] = [];
 
@@ -181,92 +185,13 @@ export class Designer {
   }
 
   /**
-   * One part, as a cluster of blocks rather than a cube.
+   * Rasterise the whole ship into ONE occupancy grid, then draw the cells.
    *
-   * A drive is a bell: a cone flaring aft off a short barrel. A gun is a
-   * barbette with a barrel on a trunnion, because the archive puts the
-   * collider on the base and turns the barrel. A missile cell is a box of
-   * tubes. Nothing here is a stat, so all of it is the client's to choose.
+   * Frame, parts and plate all land in the same grid, so a cell belongs to
+   * exactly one of them and two solids can never share a face. That is what
+   * removes the z fighting, and a part anchored on whole cells cannot float a
+   * fraction of a cell off its mounting. The picture is the structure.
    */
-  #partMesh(m: ModuleDef, cell: number, tint: number): THREE.Group {
-    const g = new THREE.Group();
-    const [sx, sy, sz] = m.size;
-    const w = sx * cell, h = sy * cell, l = sz * cell;
-    const body = this.#mat(new THREE.MeshLambertMaterial({ color: m.colour }));
-    const dark = this.#mat(new THREE.MeshLambertMaterial({ color: 0x2A3646 }));
-    const lit = this.#mat(new THREE.MeshLambertMaterial({ color: tint }));
-
-    const box = (bw: number, bh: number, bl: number, mat: THREE.Material,
-      x = 0, y = 0, z = 0) => {
-      const mesh = new THREE.Mesh(this.#geo(new THREE.BoxGeometry(bw, bh, bl)), mat);
-      mesh.position.set(x, y, z); g.add(mesh); return mesh;
-    };
-    const cyl = (rt: number, rb: number, len: number, mat: THREE.Material,
-      z = 0, seg = 12) => {
-      const mesh = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(rt, rb, len, seg)), mat);
-      mesh.rotation.x = Math.PI / 2; mesh.position.z = z; g.add(mesh); return mesh;
-    };
-
-    switch (m.art) {
-      case 'bell':
-        // Barrel forward, bell flaring aft. Aft is -z.
-        cyl(w * 0.30, w * 0.30, l * 0.40, dark, l * 0.28);
-        cyl(w * 0.30, w * 0.50, l * 0.55, body, -l * 0.18);
-        cyl(w * 0.46, w * 0.46, l * 0.06, lit, -l * 0.46);
-        break;
-      case 'nozzle':
-        cyl(w * 0.26, w * 0.42, l * 0.85, body, -l * 0.05);
-        cyl(w * 0.38, w * 0.38, l * 0.06, lit, -l * 0.46);
-        break;
-      case 'barbette':
-        // The base takes the damage; the ring on top is what turns.
-        box(w, h * 0.7, l, body, 0, -h * 0.15, 0);
-        cyl(w * 0.34, w * 0.40, h * 0.5, dark, 0).rotation.set(0, 0, 0);
-        break;
-      case 'beamgun': {
-        box(w * 0.9, h * 0.9, l * 0.32, body, 0, 0, -l * 0.30);
-        const barrel = cyl(w * 0.14, w * 0.14, l * 0.68, dark, l * 0.20);
-        barrel.position.y = h * 0.08;
-        cyl(w * 0.20, w * 0.20, l * 0.08, lit, l * 0.50);
-        break;
-      }
-      case 'cannon': {
-        box(w * 0.95, h * 0.95, l * 0.42, body, 0, 0, -l * 0.26);
-        cyl(w * 0.24, w * 0.28, l * 0.60, dark, l * 0.22);
-        cyl(w * 0.30, w * 0.30, l * 0.07, body, l * 0.48);
-        break;
-      }
-      case 'missilecell': {
-        // A block of tubes, lids forward.
-        box(w, h, l * 0.9, body);
-        const r = Math.min(w, h) * 0.16;
-        for (let a = -1; a <= 1; a += 2) for (let b = -1; b <= 1; b += 2) {
-          const t = new THREE.Mesh(this.#geo(new THREE.CylinderGeometry(r, r, l * 0.12, 8)), lit);
-          t.rotation.x = Math.PI / 2;
-          t.position.set(a * w * 0.24, b * h * 0.24, l * 0.48);
-          g.add(t);
-        }
-        break;
-      }
-      case 'bridge':
-        box(w, h * 0.6, l, body);
-        box(w * 0.55, h * 0.5, l * 0.5, lit, 0, h * 0.42, l * 0.1);
-        break;
-      case 'pod':
-        box(w, h, l, body);
-        for (const s of [-1, 1]) box(w * 0.2, h * 0.2, l * 0.3, dark, s * w * 0.5, 0, 0);
-        break;
-      case 'strut':
-        box(w * 0.5, h * 0.5, l, dark);
-        break;
-      default:
-        box(w, h, l, body);
-        box(w * 1.02, h * 0.28, l * 0.28, dark, 0, h * 0.28, 0);
-    }
-    return g;
-  }
-
-  /** Frame spine plus armour shell, rebuilt whenever the design changes. */
   #rebuild(): void {
     this.#dispose();
     this.#clear(this.#hull);
@@ -276,81 +201,153 @@ export class Designer {
     const frame = frameFor(this.#design.classKey);
     const cell = RUNG[frame.rung];
     const d = this.#derived;
-
-    // The spine, which the player cannot edit and therefore never picks.
-    const spineMat = this.#mat(new THREE.MeshLambertMaterial({ color: 0x6E829B }));
-    for (const [x, y, z, w, h, l] of frame.spine) {
-      const mesh = new THREE.Mesh(
-        this.#geo(new THREE.BoxGeometry(w * cell, h * cell, l * cell)), spineMat);
-      mesh.position.copy(this.#pos(cell, x + w / 2, y + h / 2, z + l / 2));
-      this.#rig.add(mesh);
-    }
-
-    // The armour shell: a box per plated face, thickness by layer count. It is
-    // a shell and not 65,536 cubes because a greedy mesh of a boxy hull is a
-    // few hundred quads and drawing every cell is the same picture for two
-    // orders of magnitude more work.
-    const paint = this.#design.paint;
-    const e = d.extent;
-    // Thin panels hugging the envelope, not solid slabs. Drawing a nine layer
-    // belt at nine cells thick made the armour bigger than the ship and hid
-    // everything inside it, which is the opposite of what a designer is for.
-    const shellMat = this.#mat(new THREE.MeshLambertMaterial({
-      color: paint, transparent: true, opacity: 0.3, depthWrite: false }));
-    const edgeMat = this.#mat(new THREE.LineBasicMaterial({
-      color: paint, transparent: true, opacity: 0.55 }));
-    const face = (w: number, h: number, l: number, x: number, y: number, z: number) => {
-      const geo = this.#geo(new THREE.BoxGeometry(w * cell, h * cell, l * cell));
-      const mesh = new THREE.Mesh(geo, shellMat);
-      mesh.position.set(x * cell, y * cell, z * cell);
-      this.#hull.add(mesh);
-      // An outline, so a plated face still reads as a surface at low opacity.
-      const line = new THREE.LineSegments(this.#geo(new THREE.EdgesGeometry(geo)), edgeMat);
-      line.position.copy(mesh.position);
-      this.#hull.add(line);
+    const grid = new Uint8Array(NX * NY * NZ);
+    const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
+    const inside = (i: number, j: number, k: number) =>
+      i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ;
+    // First writer wins, so the frame is never eaten by plate laid over it and
+    // two parts cannot both claim a cell.
+    const set = (i: number, j: number, k: number, mat: number) => {
+      if (!inside(i, j, k) || !mat) return;
+      const n = idx(i, j, k);
+      if (grid[n] === Mat.Empty) grid[n] = mat;
     };
-    const s = this.#design.sections;
-    // Layers drive the thickness but do not equal it. Nine layers of plate is
-    // a heavier belt, not a belt three quarters the width of the ship.
-    const t = (layers: number) => 0.4 + layers * 0.35;
-    if (s.dorsal > 0) face(e[0], t(s.dorsal), e[2], 0, (e[1] + t(s.dorsal)) / 2, 0);
-    if (s.ventral > 0) face(e[0], t(s.ventral), e[2], 0, -(e[1] + t(s.ventral)) / 2, 0);
-    if (s.bow > 0) face(e[0], e[1], t(s.bow), 0, 0, (e[2] + t(s.bow)) / 2);
-    if (s.stern > 0) face(e[0], e[1], t(s.stern), 0, 0, -(e[2] + t(s.stern)) / 2);
-    // The three belt bands, fore to aft, which is what lets a player armour
-    // the middle and leave the ends thin.
-    const bands: Array<[SectionKey, number]> = [
-      ['beltFwd', e[2] / 3], ['beltMid', 0], ['beltAft', -e[2] / 3]];
-    for (const [k, z] of bands) {
-      const n = s[k];
-      if (n <= 0) continue;
-      for (const side of [-1, 1]) {
-        face(t(n), e[1], e[2] / 3, side * (e[0] + t(n)) / 2, 0, z);
+
+    // --- the frame, which the player cannot edit ---------------------------
+    for (const [x, y, z, w, h, l] of frame.spine)
+      for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++)
+        set(Math.round(x) + i, Math.round(y) + j, Math.round(z) + k, Mat.Frame);
+
+    // --- every fitted part, on whole cells ---------------------------------
+    const allSockets = socketsOf(frame, this.#design.parts);
+    for (const p of this.#design.parts) {
+      const sock = allSockets.find(k => k.id === p.socket);
+      const m = moduleById(p.module);
+      if (!sock || !m) continue;
+      const v = voxelsOf(m);
+      const ox = Math.round(sock.at[0] - v.sx / 2);
+      const oy = Math.round(sock.at[1] - v.sy / 2);
+      const oz = Math.round(sock.at[2] - v.sz / 2);
+      for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
+        const mat = v.data[i + j * v.sx + k * v.sx * v.sy];
+        if (mat) set(ox + i, oy + j, oz + k, mat);
       }
     }
 
-    // Every part on its socket, and every empty socket as a marker you can hit.
-    const socketMat = this.#mat(new THREE.MeshBasicMaterial({
-      color: 0x35C7FF, transparent: true, opacity: 0.5, wireframe: true }));
-    const pickedMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B, wireframe: true }));
-    for (const sock of frame.sockets) {
-      const held = this.#design.parts.find(p => p.socket === sock.id);
-      const at = this.#pos(cell, sock.at[0], sock.at[1], sock.at[2]);
-      if (held) {
-        const m = moduleById(held.module);
-        if (!m) continue;
-        const g = this.#partMesh(m, cell, paint);
-        g.position.copy(at);
-        this.#hull.add(g);
-      }
-      if (!held || this.#socket === sock.id) {
-        const mk = new THREE.Mesh(
-          this.#geo(new THREE.BoxGeometry(cell * 2.2, cell * 2.2, cell * 2.2)),
-          this.#socket === sock.id ? pickedMat : socketMat);
-        mk.position.copy(at);
-        this.#sockets.add(mk);
+    // --- plate, grown OUTWARD from the ship's own surface -----------------
+    // Not a box around the bounding extent: that encases everything and turns
+    // the ship into a featureless brick. Armour is a skin, so it is a
+    // dilation of what is actually there, one step per layer, per direction.
+    const sec = this.#design.sections;
+    const occupied: number[] = [];
+    for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++)
+      if (grid[idx(i, j, k)]) occupied.push(i, j, k);
+
+    // Which section a cell's plating is charged to, so the belt bands still
+    // mean fore, midships and aft.
+    let zLo = NZ, zHi = 0;
+    for (let n = 2; n < occupied.length; n += 3) {
+      const k = occupied[n] as number;
+      if (k < zLo) zLo = k;
+      if (k > zHi) zHi = k;
+    }
+    const band = (k: number): SectionKey => {
+      const t = (k - zLo) / Math.max(1, zHi - zLo);
+      return t > 0.66 ? 'beltFwd' : t > 0.33 ? 'beltMid' : 'beltAft';
+    };
+    const DIRS: ReadonlyArray<readonly [number, number, number, SectionKey | 'belt']> = [
+      [1, 0, 0, 'belt'], [-1, 0, 0, 'belt'],
+      [0, 1, 0, 'dorsal'], [0, -1, 0, 'ventral'],
+      [0, 0, 1, 'bow'], [0, 0, -1, 'stern'],
+    ];
+    for (const [dx, dy, dz, which] of DIRS) {
+      for (let n = 0; n < occupied.length; n += 3) {
+        const i = occupied[n] as number, j = occupied[n + 1] as number, k = occupied[n + 2] as number;
+        const layers = which === 'belt' ? sec[band(k)] : sec[which];
+        for (let t = 1; t <= layers; t++) {
+          const x = i + dx * t, y = j + dy * t, z = k + dz * t;
+          if (!inside(x, y, z)) break;
+          // Stop at the first cell that is already something, so plate never
+          // grows through the ship and out the other side.
+          if (grid[idx(x, y, z)] && grid[idx(x, y, z)] !== Mat.Plate) break;
+          set(x, y, z, Mat.Plate);
+        }
       }
     }
+
+    // --- draw only what can be seen ---------------------------------------
+    // A cell with all six neighbours filled is invisible, and on a plated hull
+    // that is most of them, so culling here is the difference between a few
+    // thousand instances and tens of thousands.
+    // Taking the plate off has to take it out of the VISIBILITY pass too, not
+    // just out of the draw call. A part buried under four layers of armour is
+    // an interior cell either way, so hiding the plate while still culling
+    // against it leaves an empty screen. This is the x ray.
+    const view = this.#showPlate
+      ? grid
+      : grid.map(m => (m === Mat.Plate ? Mat.Empty : m)) as Uint8Array;
+
+    const solid: number[] = [], solidCol: number[] = [];
+    const skin: number[] = [];
+    for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const mat = view[idx(i, j, k)];
+      if (!mat) continue;
+      const hidden =
+        i > 0 && view[idx(i - 1, j, k)] && i < NX - 1 && view[idx(i + 1, j, k)] &&
+        j > 0 && view[idx(i, j - 1, k)] && j < NY - 1 && view[idx(i, j + 1, k)] &&
+        k > 0 && view[idx(i, j, k - 1)] && k < NZ - 1 && view[idx(i, j, k + 1)];
+      if (hidden) continue;
+      if (mat === Mat.Plate) skin.push(i, j, k);
+      else { solid.push(i, j, k); solidCol.push(MAT_COLOUR[mat] ?? 0x9FB2C6); }
+    }
+    this.#voxelCount = solid.length / 3 + skin.length / 3;
+    const hist: Record<number, number> = {};
+    for (let n = 0; n < grid.length; n++) if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
+    this.#hist = { ...hist, solid: solid.length / 3, skin: skin.length / 3 };
+
+    const place = (cells: number[], material: THREE.Material,
+      colourAt: ((n: number) => number) | null) => {
+      const n = cells.length / 3;
+      if (!n) return;
+      const geo = this.#geo(new THREE.BoxGeometry(cell, cell, cell));
+      const inst = new THREE.InstancedMesh(geo, material, n);
+      const mx = new THREE.Matrix4(), col = new THREE.Color();
+      for (let q = 0; q < n; q++) {
+        mx.setPosition(
+          ((cells[q * 3] as number) - NX / 2 + 0.5) * cell,
+          ((cells[q * 3 + 1] as number) - NY / 2 + 0.5) * cell,
+          ((cells[q * 3 + 2] as number) - NZ / 2 + 0.5) * cell);
+        inst.setMatrixAt(q, mx);
+        if (colourAt) inst.setColorAt(q, col.setHex(colourAt(q)));
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.#hull.add(inst);
+    };
+
+    // The structure inside, opaque, so parts read as parts.
+    place(solid, this.#mat(new THREE.MeshLambertMaterial({})),
+      q => solidCol[q] as number);
+    // The plate over it. Opaque, because four layers of see through armour
+    // stacked on itself is mush rather than a window: the way to look inside
+    // a ship is to take the plate off, which is what the toggle does.
+    place(skin, this.#mat(new THREE.MeshLambertMaterial({
+      color: this.#design.paint })), null);
+
+    // --- sockets, as markers rather than solids ----------------------------
+    const socketMat = this.#mat(new THREE.MeshBasicMaterial({
+      color: 0x35C7FF, transparent: true, opacity: 0.45, wireframe: true }));
+    const pickedMat = this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B, wireframe: true }));
+    for (const sock of allSockets) {
+      const held = this.#design.parts.find(p => p.socket === sock.id);
+      if (held && this.#socket !== sock.id) continue;
+      const mk = new THREE.Mesh(
+        this.#geo(new THREE.BoxGeometry(cell * 2.4, cell * 2.4, cell * 2.4)),
+        this.#socket === sock.id ? pickedMat : socketMat);
+      mk.position.copy(this.#pos(cell, sock.at[0], sock.at[1], sock.at[2]));
+      this.#sockets.add(mk);
+    }
+    void d;
   }
 
   // -------------------------------------------------------------- panels --
@@ -588,6 +585,12 @@ export class Designer {
       this.#socket = null;
       this.#refresh();
     };
+    $('dzPlate').onclick = () => {
+      this.#showPlate = !this.#showPlate;
+      $('dzPlate').className = this.#showPlate ? 'on' : '';
+      $('dzPlate').textContent = this.#showPlate ? 'Plate on' : 'Plate off';
+      this.#refresh();
+    };
     $('dzStrip').onclick = () => {
       this.#design.parts = [];
       for (const k of SECTIONS) this.#design.sections[k] = 0;
@@ -620,6 +623,9 @@ export class Designer {
       socket: this.#socket,
       derived: this.#derived,
       stockCount: STOCK.length,
+      voxels: this.#voxelCount,
+      showPlate: this.#showPlate,
+      hist: this.#hist,
     };
   }
 }
