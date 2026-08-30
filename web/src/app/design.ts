@@ -251,14 +251,32 @@ export interface GunDef {
   readonly batch: number;
   readonly range: number;
   readonly cooldown: number;
-  readonly arcH: number;
+  /**
+   * The firing arc, in degrees, as `data.rs` authors it: [min, max] about the
+   * SHIP's own forward axis, horizontal then vertical.
+   *
+   * About the ship, not about the mount, because that is what the core
+   * measures: `arc_test_3d` takes the ship's quaternion and no per mount
+   * rotation exists in `sim_core` yet (turn.rs:476). The designer draws these
+   * numbers and works nothing out from them: whether a shot is legal is
+   * `ft_can_fire`'s answer in a match, never this table's.
+   */
+  readonly arcH: readonly [number, number];
+  readonly arcV: readonly [number, number];
   readonly pen: number;
 }
 export const GUNS: readonly GunDef[] = [
-  { key: 'beam', name: 'Beam', dmg: 27.5, batch: 1, range: 300, cooldown: 3.0, arcH: 110, pen: 0 },
-  { key: 'projectile', name: 'Projectile', dmg: 27.5, batch: 1, range: 200, cooldown: 4.0, arcH: 90, pen: 2 },
-  { key: 'missile', name: 'Missile', dmg: 25, batch: 2, range: 250, cooldown: 6.0, arcH: 360, pen: 0 },
+  { key: 'beam', name: 'Beam', dmg: 27.5, batch: 1, range: 300, cooldown: 3.0,
+    arcH: [-110, 110], arcV: [-60, 60], pen: 0 },
+  { key: 'projectile', name: 'Projectile', dmg: 27.5, batch: 1, range: 200, cooldown: 4.0,
+    arcH: [-90, 90], arcV: [-60, 60], pen: 2 },
+  { key: 'missile', name: 'Missile', dmg: 25, batch: 2, range: 250, cooldown: 6.0,
+    arcH: [-360, 360], arcV: [-360, 360], pen: 0 },
 ];
+
+/** Does this arc cover everything? The core's own test: a span of 360 or more. */
+export const allRound = (a: readonly [number, number]): boolean =>
+  Math.abs(a[1] - a[0]) >= 360;
 export const gunByKey = (k: string): GunDef | undefined => GUNS.find(g => g.key === k);
 
 /** Layers of plate to the share they absorb. Reproduces the authored 75, 80
@@ -1016,9 +1034,11 @@ export function rasterise(d: Design): Raster {
     const v = rotatedVoxels(m, p.rot ?? 0);
     const code = purposeCode(m.purpose);
     const seat = seatOf(frame, sock, v);
-    const bx = Math.round((seat[0] as number) - v.sx / 2);
-    const by = Math.round((seat[1] as number) - v.sy / 2);
-    const bz = Math.round((seat[2] as number) - v.sz / 2);
+    // The PIVOT lands on the socket, not the box centre.
+    const pv = rotatedPivot(m, p.rot ?? 0);
+    const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
+    const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
+    const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
 
     // How many of the part's cells another part is already standing in.
     const lossAt = (ox: number, oy: number, oz: number): number => {
@@ -1044,6 +1064,8 @@ export function rasterise(d: Design): Raster {
         const tx = bx + dx, ty = by + dy, tz = bz + dz;
         if (exposureOf(sock.kind) === 'enclosed' && !boxInside(prof,
           tx + v.sx / 2, ty + v.sy / 2, tz + v.sz / 2, v.sx / 2, v.sy / 2, v.sz / 2)) continue;
+        // (tx, ty, tz) is the box origin either way, so the box test is the
+        // box test whatever the pivot is.
         const lost = lossAt(tx, ty, tz);
         if (lost < best) { best = lost; ox = tx; oy = ty; oz = tz; }
         if (best === 0) break;
@@ -1590,6 +1612,37 @@ export interface VoxelModel {
   /** One material per cell, x fastest then y then z. */
   readonly data: Uint8Array;
   readonly filled: number;
+}
+
+/**
+ * The cell a part turns about, and the cell that lands on its socket.
+ *
+ * A turret pivots on its MOUNT, not on the middle of its barrel. Placing the
+ * box centre on the trunnion put half the barrel behind the barbette and swung
+ * it through the hull when the part was turned; the outline a player selected
+ * was visibly off its own base. So a gun's pivot is inside its housing, a few
+ * cells up from the breech, and everything else keeps the box centre.
+ */
+export function pivotOf(m: ModuleDef): readonly [number, number, number] {
+  const [sx, sy, sz] = m.size;
+  const cx = (sx - 1) / 2, cy = (sy - 1) / 2;
+  if (m.art === 'beamgun' || m.art === 'cannon')
+    return [cx, cy, Math.round(sz * 0.18)];
+  return [cx, cy, (sz - 1) / 2];
+}
+
+/** The same pivot in the coordinates of the model turned `rot` quarter turns. */
+export function rotatedPivot(m: ModuleDef, rot: number): readonly [number, number, number] {
+  const r = ((rot % 4) + 4) % 4;
+  let [px, py, pz] = pivotOf(m);
+  let [sx, , sz] = m.size;
+  for (let n = 0; n < r; n++) {
+    // The same map the cells take: (x, z) -> (sz - 1 - z, x).
+    const nx = (sz as number) - 1 - pz, nz = px;
+    px = nx; pz = nz;
+    const t = sx; sx = sz; sz = t;
+  }
+  return [px, py, pz];
 }
 
 const voxCache = new Map<string, VoxelModel>();

@@ -18,11 +18,27 @@ import {
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
-  type Design, type Derived, type SectionKey, type ArmourMode,
+  gunByKey, allRound,
+  type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
 /** What the plate is doing: solid, see through, or off. */
 type PlateView = 'on' | 'ghost' | 'off';
+
+/** What the gunnery preview is doing. */
+type TurretView = 'off' | 'arcs' | 'track';
+
+/** One turret drawn in its own group so it can be swung without the hull. */
+interface Rig {
+  readonly group: THREE.Group;
+  readonly gun: GunDef;
+  readonly pivot: THREE.Vector3;
+  /** The rest facing the player set, in radians about the up axis. */
+  readonly rest: number;
+  readonly label: string;
+  /** Whether the target was inside this turret's arc on the last frame. */
+  bears: boolean;
+}
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -55,6 +71,12 @@ export class Designer {
   #ray = new THREE.Raycaster();
   #note: string | null = null;
   #marks = new THREE.Group();
+  #arcs = new THREE.Group();
+  #rigs: Rig[] = [];
+  #turrets: TurretView = 'off';
+  #target = new THREE.Vector3();
+  #clock = 0;
+  #last = performance.now();
   /** Where the hull actually is in the lattice, so the camera looks at it. */
   #centre = new THREE.Vector3();
   /** Half extents of the drawn hull, for framing it rather than its sphere. */
@@ -95,7 +117,7 @@ export class Designer {
     key.position.set(5, 8, 6); this.#scene.add(key);
     const fill = new THREE.DirectionalLight(0x35C7FF, 0.32);
     fill.position.set(-6, -3, -5); this.#scene.add(fill);
-    this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks);
+    this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks, this.#arcs);
 
     // Orbit. One finger drags, two pinch, and the buttons do the same job for
     // anyone who would rather tap. There is no second mouse button on a phone.
@@ -166,6 +188,10 @@ export class Designer {
   #frame = (): void => {
     this.#raf = requestAnimationFrame(this.#frame);
     if (!this.#renderer) return;
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - this.#last) / 1000);
+    this.#last = now;
+    this.#aimTurrets(dt);
     // Framed on the hull's own extent, not on an empty berth, so a small ship
     // does not sit in the corner of a void.
     // Frame the hull's BOX as it actually projects, not its sphere.
@@ -248,6 +274,7 @@ export class Designer {
     this.#clear(this.#rig);
     this.#clear(this.#sockets);
     this.#clear(this.#marks);
+    this.#clear(this.#arcs);
     this.#pickable = [];
 
     const frame = frameFor(this.#design.classKey);
@@ -287,6 +314,30 @@ export class Designer {
         : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
     const isPlate = (m: number) => m === Mat.Plate || m === Mat.Skinned;
 
+    // Which placements are guns, and where each one turns. A turret is drawn
+    // in a group of its own so the preview can swing it without moving the
+    // hull it is bolted to.
+    this.#rigs = [];
+    const rigOf = new Map<number, number>();          // placement index -> rig
+    const rigCells: number[][] = [], rigCols: number[][] = [];
+    const allSock = socketsOf(frame, this.#design.parts);
+    this.#design.parts.forEach((p, n) => {
+      const m = moduleById(p.module);
+      const g = m?.weapon ? gunByKey(m.weapon) : undefined;
+      if (!m || !g) return;
+      const sock = allSock.find(sk => sk.id === p.socket);
+      if (!sock) return;
+      const group = new THREE.Group();
+      const pivot = this.#pos(cell, sock.at[0], sock.at[1], sock.at[2]);
+      group.position.copy(pivot);
+      group.rotation.order = 'YXZ';
+      rigOf.set(n, this.#rigs.length);
+      rigCells.push([]); rigCols.push([]);
+      this.#rigs.push({ group, gun: g, pivot, rest: -(p.rot ?? 0) * Math.PI / 2,
+        label: `${m.name}, ${sock.label}`, bears: false });
+      this.#hull.add(group);
+    });
+
     const solid: number[] = [], solidCol: number[] = [];
     const skin: number[] = [], skinCol: number[] = [];
     const shown = (n: number) => solidView[n] as number;
@@ -304,8 +355,15 @@ export class Designer {
         skinCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
           hwAt[k] as number, hhAt[k] as number));
       } else {
-        solid.push(i, j, k);
-        solidCol.push(cellColour(mat, purp[n] as number, this.#design.paint));
+        const rig = rigOf.get((own[n] as number) - 1);
+        const col = cellColour(mat, purp[n] as number, this.#design.paint);
+        if (rig !== undefined) {
+          (rigCells[rig] as number[]).push(i, j, k);
+          (rigCols[rig] as number[]).push(col);
+        } else {
+          solid.push(i, j, k);
+          solidCol.push(col);
+        }
       }
     }
 
@@ -327,7 +385,7 @@ export class Designer {
     }
 
     let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
-    for (const list of [solid, skin, ghost]) {
+    for (const list of [solid, skin, ghost, ...rigCells]) {
       for (let q = 0; q < list.length; q += 3) {
         const x = list[q] as number, y = list[q + 1] as number, z = list[q + 2] as number;
         if (x < loX) loX = x; if (x > hiX) hiX = x;
@@ -342,9 +400,20 @@ export class Designer {
         ((loZ + hiZ + 1) / 2 - NZ / 2) * cell);
       this.#half.set((hiX - loX + 1) * cell / 2, (hiY - loY + 1) * cell / 2,
         (hiZ - loZ + 1) * cell / 2);
+      // Arcs are part of the picture when they are on, so they are part of
+      // what has to fit in the frame.
+      if (this.#turrets !== 'off') {
+        const reach = this.#arcReach() * (this.#turrets === 'track' ? 1.45 : 1.06);
+        for (const r of this.#rigs) {
+          this.#half.x = Math.max(this.#half.x, Math.abs(r.pivot.x - this.#centre.x) + reach);
+          this.#half.y = Math.max(this.#half.y, Math.abs(r.pivot.y - this.#centre.y) + reach * 0.6);
+          this.#half.z = Math.max(this.#half.z, Math.abs(r.pivot.z - this.#centre.z) + reach);
+        }
+      }
     }
 
-    this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3;
+    this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3
+      + rigCells.reduce((a, c) => a + c.length / 3, 0);
     // How many of the faction's eight actually reached the hull. One means a
     // paint bucket rather than a livery, which is the thing this replaced.
     this.#liveryColours = new Set(skinCol.length ? skinCol : ghostCol).size;
@@ -363,23 +432,25 @@ export class Designer {
       ghost: ghost.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
-      colourAt: ((n: number) => number) | null, pick = true) => {
+      colourAt: ((n: number) => number) | null, pick = true,
+      parent: THREE.Object3D = this.#hull, origin?: THREE.Vector3) => {
       const n = cells.length / 3;
       if (!n) return;
       const geo = this.#geo(new THREE.BoxGeometry(cell, cell, cell));
       const inst = new THREE.InstancedMesh(geo, material, n);
       const mx = new THREE.Matrix4(), col = new THREE.Color();
+      const ox = origin ? origin.x : 0, oy = origin ? origin.y : 0, oz = origin ? origin.z : 0;
       for (let q = 0; q < n; q++) {
         mx.setPosition(
-          ((cells[q * 3] as number) - NX / 2 + 0.5) * cell,
-          ((cells[q * 3 + 1] as number) - NY / 2 + 0.5) * cell,
-          ((cells[q * 3 + 2] as number) - NZ / 2 + 0.5) * cell);
+          ((cells[q * 3] as number) - NX / 2 + 0.5) * cell - ox,
+          ((cells[q * 3 + 1] as number) - NY / 2 + 0.5) * cell - oy,
+          ((cells[q * 3 + 2] as number) - NZ / 2 + 0.5) * cell - oz);
         inst.setMatrixAt(q, mx);
         if (colourAt) inst.setColorAt(q, col.setHex(colourAt(q)));
       }
       inst.instanceMatrix.needsUpdate = true;
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      this.#hull.add(inst);
+      parent.add(inst);
       if (pick) this.#pickable.push({ mesh: inst, cells });
     };
 
@@ -400,6 +471,12 @@ export class Designer {
     place(ghost, this.#mat(new THREE.MeshLambertMaterial({
       transparent: true, opacity: 0.3, depthWrite: false })),
       q => ghostCol[q] as number, false);
+    // Every gun in its own group, drawn about its pivot so a rotation of the
+    // group is a rotation of the turret on its mount.
+    this.#rigs.forEach((r, n) => {
+      place(rigCells[n] as number[], this.#mat(new THREE.MeshLambertMaterial({})),
+        q => (rigCols[n] as number[])[q] as number, true, r.group, r.pivot);
+    });
 
     // --- the selected part, outlined over the top of everything ------------
     // A wireframe on its own surface cells rather than a box round its
@@ -439,6 +516,8 @@ export class Designer {
         this.#marks.add(box);
       }
     }
+
+    this.#buildArcs(this.#arcReach());
 
     // --- sockets, as markers rather than solids ----------------------------
     const allSockets = socketsOf(frame, this.#design.parts);
@@ -550,6 +629,160 @@ export class Designer {
     if (x) (x as HTMLButtonElement).onclick = () => {
       this.#socket = null; this.#note = null; this.#refresh();
     };
+  }
+
+  /**
+   * The firing arcs, drawn from `data.rs`'s own numbers.
+   *
+   * A fan in the horizontal plane and a fan in the vertical one, both hung on
+   * the SHIP's forward axis rather than on the turret's rest facing, because
+   * that is what the core measures: `arc_test_3d` takes the ship's quaternion
+   * and `sim_core` has no per mount rotation yet (turn.rs:476). Drawing them
+   * off the mount would be a second opinion about a rule, and the rule is the
+   * core's. What a player sets with Facing is the model's rest pose.
+   *
+   * This DISPLAYS a config and decides nothing. Whether a shot is legal in a
+   * match is `ft_can_fire`'s answer, and the designer never asks it, because a
+   * design has no match to ask about.
+   */
+  /** How far a wedge is drawn. Long enough to read, short enough that the
+   *  ship is not lost inside its own arcs: about one hull radius. */
+  #arcReach(): number { return Math.max(0.6, this.#derived.radius) * 0.72; }
+
+  #buildArcs(full: number): void {
+    if (this.#turrets === 'off') return;
+    const SEG = 48;
+    for (const r of this.#rigs) {
+      const pu = PURPOSE[r.gun.key === 'missile' ? 'ordnance' : 'gun'];
+      const fan = (arc: readonly [number, number], vertical: boolean) => {
+        // The vertical wedge is drawn shorter. At the same radius the two
+        // cross at full length and the ship reads as a wireframe bowtie with
+        // a hull somewhere inside it.
+        const reach = vertical ? full * 0.6 : full;
+        const round = allRound(arc);
+        const a0 = round ? -180 : (arc[0] as number);
+        const a1 = round ? 180 : (arc[1] as number);
+        const pts: number[] = [0, 0, 0];
+        for (let n = 0; n <= SEG; n++) {
+          const a = (a0 + (a1 - a0) * (n / SEG)) * Math.PI / 180;
+          const s = Math.sin(a) * reach, c = Math.cos(a) * reach;
+          pts.push(vertical ? 0 : s, vertical ? s : 0, c);
+        }
+        const geo = this.#geo(new THREE.BufferGeometry());
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        const idx: number[] = [];
+        for (let n = 1; n < SEG + 1; n++) idx.push(0, n, n + 1);
+        geo.setIndex(idx);
+        geo.computeVertexNormals();
+        // The horizontal wedge is filled and the vertical one is not. Both
+        // filled, at any opacity that showed, washed the whole ship pink and
+        // the thing being described disappeared behind its own description.
+        if (!vertical) {
+          const mesh = new THREE.Mesh(geo, this.#mat(new THREE.MeshBasicMaterial({
+            color: pu.base, transparent: true, opacity: 0.07,
+            side: THREE.DoubleSide, depthWrite: false })));
+          mesh.position.copy(r.pivot);
+          this.#arcs.add(mesh);
+        }
+
+        // The limits, drawn as lines, because the fill alone does not say
+        // where an arc ENDS and that is the number a player is reading.
+        const edge: number[] = [];
+        if (!round) {
+          for (const a of [a0, a1]) {
+            const rad = a * Math.PI / 180;
+            const s = Math.sin(rad) * reach, c = Math.cos(rad) * reach;
+            edge.push(0, 0, 0, vertical ? 0 : s, vertical ? s : 0, c);
+          }
+        }
+        for (let n = 0; n <= SEG; n++) {
+          const a = (a0 + (a1 - a0) * (n / SEG)) * Math.PI / 180;
+          const s = Math.sin(a) * reach, c = Math.cos(a) * reach;
+          if (n > 0) edge.push(edge[edge.length - 3] as number,
+            edge[edge.length - 2] as number, edge[edge.length - 1] as number);
+          edge.push(vertical ? 0 : s, vertical ? s : 0, c);
+        }
+        const lg = this.#geo(new THREE.BufferGeometry());
+        lg.setAttribute('position', new THREE.Float32BufferAttribute(edge, 3));
+        const line = new THREE.LineSegments(lg, this.#mat(new THREE.LineBasicMaterial({
+          color: pu.mid, transparent: true, opacity: vertical ? 0.26 : 0.5 })));
+        line.position.copy(r.pivot);
+        this.#arcs.add(line);
+      };
+      fan(r.gun.arcH, false);
+      if (!allRound(r.gun.arcV)) fan(r.gun.arcV, true);
+    }
+
+    if (this.#turrets === 'track') {
+      const mk = new THREE.Mesh(
+        this.#geo(new THREE.OctahedronGeometry(full * 0.1)),
+        this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B, wireframe: true })));
+      mk.name = 'target';
+      this.#arcs.add(mk);
+      // One sight line per turret, shown only while that turret bears. Which
+      // guns can actually reach the thing is the question the preview exists
+      // to answer, and a swung barrel alone does not answer it.
+      this.#rigs.forEach((_r, n) => {
+        const g = this.#geo(new THREE.BufferGeometry());
+        g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0, 0], 3));
+        const line = new THREE.Line(g, this.#mat(new THREE.LineBasicMaterial({
+          color: 0xFFD24B, transparent: true, opacity: 0.55 })));
+        line.name = `sight${n}`;
+        line.visible = false;
+        this.#arcs.add(line);
+      });
+    }
+  }
+
+  /**
+   * Swing every turret onto the target, or as far as its arc allows.
+   *
+   * The angles are the core's: horizontal is atan2(x, z) and vertical is
+   * atan2(y, z) about the ship's axes, which is `arc_test_3d` verbatim
+   * (math.rs). A turret that cannot bear stops at its limit rather than
+   * snapping back, which is what "cannot bear" looks like on a real mount.
+   */
+  #aimTurrets(dt: number): void {
+    if (this.#turrets === 'off' || !this.#rigs.length) return;
+    const reach = this.#arcReach() * 1.35;
+    if (this.#turrets === 'track') {
+      this.#clock += dt;
+      const a = this.#clock * 0.55;
+      this.#target.set(Math.sin(a) * reach, Math.sin(a * 0.73) * reach * 0.3,
+        Math.cos(a) * reach);
+      const mk = this.#arcs.getObjectByName('target');
+      if (mk) mk.position.copy(this.#target);
+    }
+    for (const r of this.#rigs) {
+      if (this.#turrets !== 'track') {
+        r.group.rotation.set(0, 0, 0);
+        r.bears = false;
+        continue;
+      }
+      const d = this.#target.clone().sub(r.pivot);
+      const h = Math.atan2(d.x, d.z) * 180 / Math.PI;
+      const v = Math.atan2(d.y, d.z) * 180 / Math.PI;
+      const clamp = (x: number, a: readonly [number, number]) => allRound(a)
+        ? x : Math.max(Math.min(a[0] as number, a[1] as number),
+          Math.min(Math.max(a[0] as number, a[1] as number), x));
+      const ch = clamp(h, r.gun.arcH), cv = clamp(v, r.gun.arcV);
+      r.bears = Math.abs(ch - h) < 0.01 && Math.abs(cv - v) < 0.01;
+      // The rest facing is already baked into the cells, so the group turns
+      // by the difference rather than by the absolute angle.
+      r.group.rotation.y = ch * Math.PI / 180 - r.rest;
+      r.group.rotation.x = -cv * Math.PI / 180;
+      const sight = this.#arcs.getObjectByName(`sight${this.#rigs.indexOf(r)}`);
+      if (sight) {
+        sight.visible = r.bears;
+        if (r.bears) {
+          const g = (sight as THREE.Line).geometry;
+          g.setAttribute('position', new THREE.Float32BufferAttribute([
+            r.pivot.x, r.pivot.y, r.pivot.z,
+            this.#target.x, this.#target.y, this.#target.z], 3));
+          g.attributes.position!.needsUpdate = true;
+        }
+      }
+    }
   }
 
   // -------------------------------------------------------------- panels --
@@ -862,6 +1095,25 @@ export class Designer {
           `${g.dmg} dmg${g.batch > 1 ? ` x${g.batch}` : ''} &middot; ${g.range} u &middot; ${g.cooldown}s &middot; pen ${g.pen}`);
       }
       h += '</div>';
+      // The arcs, straight off data.rs. The designer shows the numbers and
+      // works nothing out from them: whether a shot is legal in a match is
+      // ft_can_fire's answer, and a design has no match to ask about.
+      h += '<div class="dzgrp">Firing arcs, about the ship\u2019s nose</div><div class="dzrows">';
+      for (const mt of d.mounts) {
+        const g = GUNS.find(x => x.key === mt.key);
+        if (!g) continue;
+        h += row(g.name, allRound(g.arcH)
+          ? 'all round'
+          : `${g.arcH[0]} to ${g.arcH[1]} deg across &middot; `
+            + (allRound(g.arcV) ? 'any elevation' : `${g.arcV[0]} to ${g.arcV[1]} deg up`));
+      }
+      h += '</div>';
+      h += '<p class="dznote">Measured about the hull\u2019s own nose, not about the '
+        + 'mount, because that is what the core measures: <code>arc_test_3d</code> takes '
+        + 'the ship\u2019s rotation and <code>sim_core</code> has no per mount facing yet. '
+        + 'Facing sets the model\u2019s rest pose. Turn the arcs on over the model to see '
+        + 'them, and again to give the turrets something to track.</p>';
+
       // What each gun gets through THIS ship's own belt, which is the whole
       // reason penetration exists as a field.
       h += `<div class="dzgrp">Through a ${d.belt} layer belt</div><div class="dzrows">`;
@@ -898,6 +1150,14 @@ export class Designer {
       this.#syncPlateButton();
       this.#refresh();
     };
+    // Gunnery: off, the arcs alone, or the arcs with a target for the turrets
+    // to track. On canvas, because it is a thing you watch rather than set.
+    $('dzArcs').onclick = () => {
+      this.#turrets = this.#turrets === 'off' ? 'arcs'
+        : this.#turrets === 'arcs' ? 'track' : 'off';
+      this.#syncArcButton();
+      this.#refresh();
+    };
     $('dzStrip').onclick = () => {
       this.#design.parts = [];
       for (const k of SECTIONS) this.#design.sections[k] = 0;
@@ -931,6 +1191,13 @@ export class Designer {
     this.#syncTabs();
   }
 
+  #syncArcButton(): void {
+    const b = $('dzArcs');
+    b.className = this.#turrets === 'off' ? '' : this.#turrets === 'track' ? 'ghost' : 'on';
+    b.textContent = this.#turrets === 'off' ? 'Arcs off'
+      : this.#turrets === 'arcs' ? 'Arcs on' : 'Tracking';
+  }
+
   #syncPlateButton(): void {
     const b = $('dzPlate');
     b.className = this.#plate === 'off' ? '' : this.#plate === 'ghost' ? 'ghost' : 'on';
@@ -960,6 +1227,12 @@ export class Designer {
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
       plate: this.#plate,
+      turrets: this.#turrets,
+      rigs: this.#rigs.map(r => ({ label: r.label, key: r.gun.key,
+        arcH: r.gun.arcH, arcV: r.gun.arcV, bears: r.bears,
+        yaw: +(r.group.rotation.y * 180 / Math.PI).toFixed(1),
+        pitch: +(r.group.rotation.x * 180 / Math.PI).toFixed(1) })),
+      bearing: this.#rigs.filter(r => r.bears).length,
       showPlate: this.#plate === 'on',
       armour: this.#design.armour,
       livery: this.#liveryColours,

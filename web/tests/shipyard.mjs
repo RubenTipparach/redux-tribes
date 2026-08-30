@@ -24,8 +24,8 @@ const fail = (msg) => { console.log('  FAIL ' + msg); failures++; };
 const ok = (msg) => console.log('  ok   ' + msg);
 
 /** Every control a player needs, and the tap has to ARRIVE at it. */
-const REACHABLE = ['dzClose', 'dzPlate', 'dzTabParts', 'dzTabArmour', 'dzTabStats',
-  'dzReset', 'dzBare', 'dzStrip'];
+const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTabParts', 'dzTabArmour',
+  'dzTabStats', 'dzReset', 'dzBare', 'dzStrip'];
 /** Phone only: the desk layout has the panel beside the view and hides it. */
 const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
@@ -203,6 +203,55 @@ async function checkGhostAndPicking(page) {
   await page.waitForTimeout(400);
 }
 
+/**
+ * Gunnery: the arcs, and turrets that track.
+ *
+ * The arc numbers are `data.rs`'s own, so what is checked here is that the
+ * preview obeys them: a turret swings, and it never swings past its limit.
+ */
+async function checkTurrets(page) {
+  await (await page.$$('#dzClasses button'))[0].click();
+  await page.waitForTimeout(450);
+  const seq = [];
+  for (let n = 0; n < 3; n++) {
+    await page.click('#dzArcs');
+    await page.waitForTimeout(500);
+    seq.push(await page.evaluate(() => window.ftDebug.designer().turrets));
+  }
+  if (seq.join(' -> ') !== 'arcs -> track -> off')
+    fail(`the arcs toggle cycles ${seq.join(' -> ')}, not arcs -> track -> off`);
+  else ok('the arcs toggle cycles off, arcs, tracking');
+
+  await page.click('#dzArcs'); await page.click('#dzArcs');   // into tracking
+  await page.waitForTimeout(900);
+  const a = await page.evaluate(() => window.ftDebug.designer());
+  if (!a.rigs.length) { fail('no turret rigs at all'); return; }
+  await page.waitForTimeout(2600);
+  const b = await page.evaluate(() => window.ftDebug.designer());
+
+  const moved = a.rigs.some((r, n) => Math.abs(r.yaw - b.rigs[n].yaw) > 3);
+  if (!moved) fail('the turrets did not move while tracking');
+  else ok(`${a.rigs.length} turrets swing on the target`);
+
+  // Never past the limit, in either sample.
+  const over = [];
+  for (const snap of [a, b]) {
+    for (const r of snap.rigs) {
+      const wide = Math.abs(r.arcH[1] - r.arcH[0]) >= 360;
+      if (!wide && (r.yaw < r.arcH[0] - 0.6 || r.yaw > r.arcH[1] + 0.6))
+        over.push(`${r.key} at ${r.yaw} against ${r.arcH.join(' to ')}`);
+    }
+  }
+  if (over.length) fail(`a turret swung past its arc: ${over.join('; ')}`);
+  else ok('no turret swings past its own arc');
+
+  if (!a.bearing && !b.bearing) fail('no turret ever bore on the target');
+  else ok(`turrets bearing on the target: ${a.bearing} then ${b.bearing} of ${a.rigs.length}`);
+
+  await page.click('#dzArcs');
+  await page.waitForTimeout(400);
+}
+
 async function checkModesAndRotation(page) {
   await (await page.$$('#dzClasses button'))[0].click();
   await page.waitForTimeout(400);
@@ -267,6 +316,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   if (w > 800) {
     await checkShips(page);
     await checkGhostAndPicking(page);
+    await checkTurrets(page);
     await checkModesAndRotation(page);
   } else {
     await checkViewport(page, label, 38);
