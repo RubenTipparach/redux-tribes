@@ -70,6 +70,7 @@ export interface MatchExports {
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
   ft_ship_roll(ship: number): number;
+  ft_sandbox(): number;
   ft_attitude_of(qx: number, qy: number, qz: number, qw: number): number;
   ft_ai_preview(ship: number): number;
   ft_snapshot_len(): number;
@@ -310,6 +311,11 @@ export class Match {
     return v3(this.#s, 32);
   }
 
+  /** Whether this match will accept a change to a hull's flight stats. Asked,
+   * not assumed: a console that decided for itself what the core allows would
+   * be a second copy of the rule. */
+  get sandbox(): boolean { return this.#ex.ft_sandbox() !== 0; }
+
   /** A ship's roll about its nose, radians from wings level. Which way is
    * level is the core's convention, so it is asked rather than derived. */
   rollOf(ship: number): number {
@@ -349,8 +355,10 @@ export class Match {
     return out;
   }
 
-  setFlight(ship: number, f: ClassInfo['flight']): void {
-    this.#ex.ft_set_flight(
+  /** Returns false when the core refused it, which is every match that is not
+   * a sandbox. The caller gets the verdict rather than assuming it took. */
+  setFlight(ship: number, f: ClassInfo['flight']): boolean {
+    return 0 !== this.#ex.ft_set_flight(
       ship, f.yawRate, f.pitchRate, f.accelFwd, f.accelRetro, f.accelLat, f.maxSpeed,
     );
   }
@@ -371,6 +379,14 @@ export class Match {
     const f = order.face;
     s[17] = f ? 1 : 0;
     s[13] = f?.x ?? 0; s[14] = f?.y ?? 0; s[15] = f?.z ?? 0;
+    // Roll, which this loader was missing. It reached the resolver through
+    // `ft_set_move` and the standalone probe through its own inputs, so the
+    // one path that never carried it was the one that draws: the ghost, the
+    // course and the arrival estimate were all flown wings level however the
+    // hull had been told to roll. Written every time rather than only when
+    // present, so a previous plan's roll cannot linger in the scratch.
+    s[25] = order.roll === undefined ? 0 : 1;
+    s[24] = order.roll ?? 0;
   }
 
   preview(ship: number, order: PlannedOrder, samples = 48): Vec3[] {

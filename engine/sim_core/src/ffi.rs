@@ -677,6 +677,7 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_
         3 => scenario_low_orbit(seed, mask),
         4 => scenario_binary(seed, mask),
         5 => scenario_slingshot(seed, mask),
+        6 => scenario_sandbox(seed, mask),
         _ => scenario_skirmish(seed, mask),
     };
     let n = sim.ships.len();
@@ -780,6 +781,24 @@ fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
         human_sides,
     );
     sim.wells.push(Well::new(V3::new(0.0, -300.0, 0.0), 10000.0, 20.0));
+    sim
+}
+
+/// The skirmish, with the ship stats unlocked.
+///
+/// A sandbox is not a different battle, it is the same one with the numbers
+/// exposed, so it reuses the skirmish layout rather than inventing a set of
+/// positions nobody balanced. What it changes is what the core will ACCEPT:
+/// `ft_set_flight` is refused everywhere else.
+///
+/// A scenario rather than a client side switch, because the stats are in the
+/// state hash. A flag the client owned could differ between two seats, and the
+/// first slider either of them touched would part the match; coming from the
+/// scenario id, both seats get it from the same place they get the field and
+/// the starting positions.
+fn scenario_sandbox(seed: &str, human_sides: u8) -> Sim {
+    let mut sim = scenario_skirmish(seed, human_sides);
+    sim.sandbox = true;
     sim
 }
 
@@ -1000,6 +1019,13 @@ pub extern "C" fn ft_set_flight(
     max_speed: f32,
 ) -> u32 {
     let Some(sim) = sim_opt() else { return 0 };
+    // Refused outside a sandbox, and refused HERE rather than by a client
+    // hiding a slider. Flight stats are in the state hash, so a seat that
+    // could change them mid match could part the two clients on its own; a
+    // rule that decides what the simulation accepts belongs in the simulation.
+    if !sim.sandbox {
+        return 0;
+    }
     let Some(sh) = sim.ships.get_mut(ship as usize) else { return 0 };
     sh.flight = Flight {
         yaw_rate: yaw,
@@ -1010,6 +1036,16 @@ pub extern "C" fn ft_set_flight(
         max_speed,
     };
     1
+}
+
+/// Whether this match will accept a change to a hull's flight stats.
+///
+/// Asked rather than assumed: the client knows which scenario it launched, but
+/// a console that decided on its own what the core would allow is a second
+/// copy of the rule.
+#[no_mangle]
+pub extern "C" fn ft_sandbox() -> u32 {
+    sim_opt().map(|s| s.sandbox as u32).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------- orders --

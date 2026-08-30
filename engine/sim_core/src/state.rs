@@ -330,6 +330,18 @@ pub struct Sim {
     /// flying the same orders through different fields part on turn one.
     /// Order matters, because the accelerations are summed in it.
     pub wells: Vec<Well>,
+    /// Whether a hull's flight stats may be changed while the match is running.
+    ///
+    /// Off for a real match: the stats are what the class says, and a ship
+    /// behaves the way the ship behaves. They are also in the state hash, so
+    /// one seat nudging a slider parts the two clients from that turn on, and
+    /// the only reason that has never been seen is that nobody has done it in
+    /// a versus game.
+    ///
+    /// On, they are editable, which is the whole point of a sandbox. A match
+    /// fact rather than a client one for the same reason `human_sides` is: it
+    /// decides what the simulation will accept.
+    pub sandbox: bool,
 }
 
 /// One ship in a scenario request.
@@ -369,6 +381,7 @@ impl Sim {
             record: false,
             tracks: Vec::new(),
             wells: Vec::new(),
+            sandbox: false,
         }
     }
 

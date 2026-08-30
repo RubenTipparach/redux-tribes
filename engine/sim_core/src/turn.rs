@@ -1066,6 +1066,11 @@ impl Sim {
         // The field bends every flight, so it decides outcomes and belongs in
         // the hash. Count first, so an empty field and a zero strength well
         // are not the same match.
+        // Whether stats can be edited decides what the match will accept, so
+        // two clients that disagree part here rather than several turns later
+        // when one of them has actually moved a slider.
+        byte(self.sandbox as u8);
+
         int(self.wells.len() as i32, &mut byte);
         for w in &self.wells {
             for v in [w.pos.x, w.pos.y, w.pos.z, w.mu, w.soft] {

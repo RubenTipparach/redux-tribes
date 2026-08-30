@@ -34,7 +34,12 @@ use crate::state::{
 /// Bumped to 2 when the gravity field joined the format. A turn flown
 /// through a field cannot be re-run without it, so an older snapshot is
 /// refused rather than restored into empty space.
-pub const SNAPSHOT_VERSION: f32 = 2.0;
+///
+/// 3 when the sandbox flag joined it. It decides whether flight stats may be
+/// edited, and the stats are what a turn is flown with, so a snapshot that
+/// restored without it could come back into a match that accepts changes the
+/// original refused.
+pub const SNAPSHOT_VERSION: f32 = 3.0;
 
 struct Writer<'a> {
     buf: &'a mut [f32],
@@ -120,6 +125,7 @@ impl Sim {
         w.f(f32::from_bits(self.seed_hash));
         w.i(self.turn);
         w.i(self.human_sides as i32);
+        w.i(self.sandbox as i32);
         w.i(self.next_proj_id as i32);
         w.i(match self.game_over {
             None => -1,
@@ -217,6 +223,7 @@ impl Sim {
         }
         self.turn = r.i();
         self.human_sides = r.i() as u8;
+        self.sandbox = r.i() != 0;
         self.next_proj_id = r.i() as u32;
         self.game_over = match r.i() {
             0 => Some(Winner::Player),

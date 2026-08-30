@@ -192,7 +192,11 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
   margin-bottom:3px; }
 .tune span { flex:0 0 62px; }
 .tune input { flex:1; }
-.tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600; }
+.tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600;
+  font-variant-numeric:tabular-nums; }
+/* Locked: the row keeps its shape so the panel does not jump between a real
+   match and a sandbox, and the rule takes the space the slider had. */
+.tune.locked i { flex:1; height:1px; background:var(--line); }
 select { font-family:"Exo 2",system-ui,sans-serif; font-size:13px; width:100%;
   background:var(--panel); color:var(--ink); border:1px solid var(--line);
   border-radius:4px; padding:7px 8px; margin-top:4px; }
@@ -476,6 +480,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
               <option value="low-orbit">Low orbit, a heavy body below</option>
               <option value="binary">Binary, a well either side</option>
               <option value="slingshot">Slingshot, a well off the line</option>
+              <option value="sandbox">Sandbox, ship stats unlocked</option>
             </select>
           </label>
         </div>

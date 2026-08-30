@@ -26,6 +26,8 @@ const wasm = readFileSync(resolve(root, 'public/sim_core.wasm'));
 const sim = await Sim.load(wasm);
 
 const Mode = { MoveAndTurn: 0, TurnSlide: 1, FullSpeed: 2, FullStop: 3, Drift: 4 };
+// Mirrors sim/types.ts. Sandbox is the one that unlocks the flight stats.
+const Scenario = { Skirmish: 0, Duel: 1, Convoy: 2, LowOrbit: 3, Binary: 4, Slingshot: 5, Sandbox: 6 };
 const FLIGHT = { yawRate: 6, pitchRate: 4, accelFwd: 0.9, accelRetro: 0.35, accelLat: 0.25, maxSpeed: 8 };
 const body = (vel = { x: 0, y: 0, z: 0 }) => ({
   pos: { x: 0, y: 0, z: 0 }, vel, quat: { x: 0, y: 0, z: 0, w: 1 },
@@ -248,27 +250,45 @@ test('class and mount metadata cross intact', () => {
   assert.equal(m.mount(0, 9), null, 'a mount past the end is absent, not garbage');
 });
 
-test('retuning a flight envelope changes what a ship can reach', () => {
-  const m = sim.match();
-  m.start('0000000000000005', 1);
+/**
+ * Retuning works, and only in a sandbox.
+ *
+ * Both halves in one test, because a lock that refuses everything would pass a
+ * test that only checked the refusal, and a lock that refuses nothing would
+ * pass one that only checked the tuning.
+ */
+test('flight stats retune in a sandbox and are refused outside one', () => {
   const far = { x: 0, y: 0, z: 400 };
-  const o = m.order(0);
-  o.mode = Mode.MoveAndTurn;
-  o.target = far;
-
-  m.preview(0, o, 8);
-  const before = m.previewEnd();
-
-  const base = m.classInfo(0).flight;
-  m.setFlight(0, { ...base, accelFwd: base.accelFwd * 3, maxSpeed: base.maxSpeed * 3 });
-  m.preview(0, o, 8);
-  const after = m.previewEnd();
-
   const start = { x: -30, y: 0, z: 0 };
+  const reachWithTripleDrive = (scenario) => {
+    const m = sim.match();
+    m.start('0000000000000005', scenario);
+    const o = m.order(0);
+    o.mode = Mode.MoveAndTurn;
+    o.target = far;
+    m.preview(0, o, 8);
+    const before = m.previewEnd();
+    const base = m.classInfo(0).flight;
+    const took = m.setFlight(0, { ...base, accelFwd: base.accelFwd * 3, maxSpeed: base.maxSpeed * 3 });
+    m.preview(0, o, 8);
+    return { sandbox: m.sandbox, took, before: dist(start, before), after: dist(start, m.previewEnd()) };
+  };
+
+  const open = reachWithTripleDrive(Scenario.Sandbox);
+  assert.ok(open.sandbox, 'the sandbox scenario reports itself as one');
+  assert.ok(open.took, 'a sandbox should accept a stat change');
   assert.ok(
-    dist(start, after) > dist(start, before) * 1.5,
-    `a tripled drive should reach much further: ${dist(start, before)} -> ${dist(start, after)}`,
+    open.after > open.before * 1.5,
+    `a tripled drive should reach much further: ${open.before} -> ${open.after}`,
   );
+
+  // The duel is a real match: the stats are what the class says they are, and
+  // the core refuses to be told otherwise. They are in the state hash, so a
+  // seat that could change them could part two clients on its own.
+  const shut = reachWithTripleDrive(Scenario.Duel);
+  assert.ok(!shut.sandbox, 'a duel is not a sandbox');
+  assert.ok(!shut.took, 'a real match should refuse a stat change');
+  assert.equal(shut.after, shut.before, 'the refused change moved the envelope anyway');
 });
 
 test('two seats in the same match agree on every hash', () => {

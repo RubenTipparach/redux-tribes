@@ -113,6 +113,10 @@ export const Scenario = {
   LowOrbit: 3,
   Binary: 4,
   Slingshot: 5,
+  /** The skirmish with the flight stats unlocked. Editing them is refused by
+   * the core in every other scenario, because the stats are in the state
+   * hash. */
+  Sandbox: 6,
 } as const;
 export type Scenario = (typeof Scenario)[keyof typeof Scenario];
 
@@ -128,6 +132,7 @@ export const SCENARIO_BY_NAME: Record<string, Scenario> = {
   'low-orbit': Scenario.LowOrbit,
   binary: Scenario.Binary,
   slingshot: Scenario.Slingshot,
+  sandbox: Scenario.Sandbox,
 };
 
 /** A point source of gravity, as the core reports it. */

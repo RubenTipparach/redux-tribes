@@ -391,12 +391,37 @@ function renderModes(): void {
   }
 }
 
+/**
+ * The flight stats.
+ *
+ * Read only in a real match. A hull behaves the way its class says it does,
+ * and the numbers are still worth showing, because what a ship can do is what
+ * planning a turn is about. Sliders only in a sandbox.
+ *
+ * The lock is the CORE's: `ft_set_flight` refuses outside a sandbox, because
+ * the stats are in the state hash and a seat that could change them mid match
+ * could part two clients on its own. This asks whether it would be accepted
+ * rather than deciding for itself.
+ */
 function renderTuning(): void {
   const host = $('envTune');
   host.innerHTML = '';
   const s = selectedShip();
   if (!s) return;
   const f = flightOf(s.id);
+  if (!match.sandbox) {
+    for (const [k, label] of STAT_ROWS) {
+      const row = document.createElement('div');
+      row.className = 'tune locked';
+      row.innerHTML = `<span>${label}</span><i></i><b>${f[k].toFixed(2)}</b>`;
+      host.appendChild(row);
+    }
+    const note = document.createElement('div');
+    note.className = 'hint';
+    note.textContent = 'Class stats, fixed for the match. Start a Sandbox to change them.';
+    host.appendChild(note);
+    return;
+  }
   for (const [k, label, min, max, step] of STAT_ROWS) {
     const row = document.createElement('div');
     row.className = 'tune';
@@ -1012,6 +1037,14 @@ function showPreview(): void {
     .filter((g): g is { id: number; side: number; pose: Pose } => !!g.pose);
   view.setGhosts(ghosts);
 
+  // The dials read the ghost, not the hull. Scrubbing a plan is watching the
+  // turn before it happens, so the attitude they report has to be the attitude
+  // at the second on screen: the silhouette sat at the turn boundary while the
+  // ghost it was meant to describe flew off without it.
+  const meGhost = ghosts.find(g => g.id === selected);
+  atAttitude = meGhost ? match.attitudeOf(meGhost.pose.quat) : null;
+  renderAttitude();
+
   const paths = ships.filter(s => !s.destroyed).map(s => ({
     id: s.id,
     estimated: !mine(s),
@@ -1536,10 +1569,15 @@ function renderAttitude(): void {
   // dials read THAT rather than the turn boundary: a silhouette frozen at the
   // start of a turn is not showing the roll being flown in front of it.
   const now = atAttitude ? atAttitude.forward : match.forward(s.id);
-  const cmd = atAttitude ? now : (standingFace.get(s.id) ?? match.order(s.id).face ?? now);
+  // Playing back a resolved turn there is no order left to command, so the
+  // bright needle follows the hull. While planning the order is exactly what
+  // the bright needle is for, even though the dim one now moves with the scrub.
+  const spent = playTick !== null;
+  const cmd = spent ? now : (standingFace.get(s.id) ?? match.order(s.id).face ?? now);
   const climb = (v: Vec3) => (Math.asin(Math.max(-1, Math.min(1, v.y))) * 180) / Math.PI;
   const rollNow = ((atAttitude ? atAttitude.roll : match.rollOf(s.id)) * 180) / Math.PI;
-  const rollCmd = atAttitude ? atAttitude.roll : (standingRoll.get(s.id) ?? match.order(s.id).roll);
+  const rollCmd = spent ? rollNow * Math.PI / 180
+    : (standingRoll.get(s.id) ?? match.order(s.id).roll);
   const rollDeg = rollCmd === undefined ? rollNow : (rollCmd * 180) / Math.PI;
 
   // Both start upright, where a hull's own up is world up, so a roll turns
