@@ -233,6 +233,44 @@ async function checkTurrets(page) {
   if (!moved) fail('the turrets did not move while tracking');
   else ok(`${a.rigs.length} turrets swing on the target`);
 
+  // Easing, not snapping. Sampled across a second and a half so the claim
+  // rests on frames where the turrets were actually moving: a single pair of
+  // samples taken while they happen to sit still proves nothing.
+  // Wait until something actually bears, so the samples land on frames where
+  // the turrets are moving rather than sitting at rest with nothing in arc.
+  for (let n = 0; n < 40; n++) {
+    if ((await page.evaluate(() => window.ftDebug.designer().bearing)) > 0) break;
+    await page.waitForTimeout(250);
+  }
+  const track = [];
+  for (let n = 0; n < 14; n++) {
+    track.push(await page.evaluate(() => window.ftDebug.designer().rigs.map(r => r.yaw)));
+    await page.waitForTimeout(130);
+  }
+  let jump = 0, swept = 0;
+  for (let n = 1; n < track.length; n++)
+    for (let q = 0; q < track[0].length; q++) {
+      const d = Math.abs(track[n][q] - track[n - 1][q]);
+      jump = Math.max(jump, d);
+      swept += d;
+    }
+  if (swept < 10) fail('the turrets barely moved across a second and a half of tracking');
+  else if (jump > 30) fail(`a turret jumped ${jump.toFixed(0)} degrees between frames 130 ms apart`);
+  else ok(`turrets ease rather than snap: ${swept.toFixed(0)} degrees swept, `
+    + `worst step ${jump.toFixed(1)} in 130 ms`);
+
+  // Turned off, every turret comes home to its mount's own forward.
+  await page.click('#dzArcs');            // off
+  await page.waitForTimeout(200);
+  await page.click('#dzArcs');            // arcs, so the rigs still exist
+  await page.waitForTimeout(1400);
+  const home = await page.evaluate(() => window.ftDebug.designer());
+  const away = home.rigs.filter(r => Math.abs(r.yaw - r.rest) > 6 || Math.abs(r.pitch) > 6);
+  if (away.length) fail(`${away.length} turrets did not return to their mount's forward`);
+  else ok('with nothing to track, every turret returns to straight ahead');
+  await page.click('#dzArcs'); await page.click('#dzArcs');   // back to tracking
+  await page.waitForTimeout(600);
+
   // Never past the limit, in either sample.
   const over = [];
   for (const snap of [a, b]) {

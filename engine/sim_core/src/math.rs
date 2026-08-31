@@ -249,6 +249,19 @@ pub fn arc_test_3d(
         let hi = if a1 < a2 { a2 } else { a1 };
         ang >= lo && ang <= hi
     }
+    // Yaw is the angle round from forward. Pitch is a true ELEVATION off the
+    // horizontal plane, which is why the second argument is the horizontal
+    // magnitude and not z.
+    //
+    // The archive's ArcTest.TargetArcTest3D passed z here. That is not an
+    // elevation: as a target comes abeam, z goes to zero and atan2(y, z) runs
+    // to 90 degrees however level the target is, so a 60 degree mount refused
+    // anything on its own beam. A mount has two axes, yaw and pitch, and roll
+    // does not enter it. Deliberate divergence from the archive.
+    //
+    // `sqrt` is the one transcendental the sim path is allowed: IEEE-754
+    // specifies it exactly, so it is bit identical everywhere.
+    let hyp = (local.x * local.x + local.z * local.z).sqrt();
     axis_pass(h_min_deg, h_max_deg, local.x, local.z)
-        && axis_pass(v_min_deg, v_max_deg, local.y, local.z)
+        && axis_pass(v_min_deg, v_max_deg, local.y, hyp)
 }

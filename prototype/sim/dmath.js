@@ -175,10 +175,19 @@
     },
   };
 
-  // Firing-arc test, ported from the archive's ArcTest.TargetArcTest3D:
-  // project the to-target direction onto the turret's local XZ (yaw) and YZ
-  // (pitch) planes; each axis passes if the direction is within the
-  // [minDeg, maxDeg] arc (bisector dot-comparison). A span >= 360 always passes.
+  // Firing-arc test: yaw and pitch of the to-target direction in the turret's
+  // own frame, each against its [minDeg, maxDeg] arc. A span >= 360 always
+  // passes. Roll does not enter it: a mount has two axes.
+  //
+  // YAW is atan2(x, z), the angle round from forward. PITCH is atan2(y, hyp)
+  // with hyp = sqrt(x*x + z*z): a true ELEVATION off the horizontal plane.
+  //
+  // The archive's ArcTest.TargetArcTest3D used atan2(y, z) for pitch, which is
+  // not an elevation: as a target comes abeam, z goes to zero and that angle
+  // runs to 90 degrees however level the target is, so a 60 degree mount
+  // refuses anything on its own beam. This is a deliberate divergence from the
+  // archive, and it is why `sqrt` appears here: it is IEEE-754 exact, so it is
+  // as portable as the rest of this file.
   function arcTest3D(turretPos, turretRot, targetPos, hMinDeg, hMaxDeg, vMinDeg, vMaxDeg) {
     const dir = V.norm(V.sub(targetPos, turretPos));
     const local = Q.rot(Q.inv(turretRot), dir); // into turret space, forward = +Z
@@ -191,8 +200,9 @@
       let lo = Math.min(a1, a2), hi = Math.max(a1, a2);
       return ang >= lo && ang <= hi;
     }
+    const hyp = Math.sqrt(local.x * local.x + local.z * local.z);
     const yawOk = axisPass(hMinDeg, hMaxDeg, local.x, local.z);
-    const pitchOk = axisPass(vMinDeg, vMaxDeg, local.y, local.z);
+    const pitchOk = axisPass(vMinDeg, vMaxDeg, local.y, hyp);
     return yawOk && pitchOk;
   }
 

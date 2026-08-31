@@ -38,6 +38,10 @@ interface Rig {
   readonly label: string;
   /** Whether the target was inside this turret's arc on the last frame. */
   bears: boolean;
+  /** Where the barrel is now, in radians about the mount. It eases toward the
+   *  goal rather than jumping: a turret that snaps reads as a texture swap. */
+  yaw: number;
+  pitch: number;
 }
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -334,7 +338,7 @@ export class Designer {
       rigOf.set(n, this.#rigs.length);
       rigCells.push([]); rigCols.push([]);
       this.#rigs.push({ group, gun: g, pivot, rest: -(p.rot ?? 0) * Math.PI / 2,
-        label: `${m.name}, ${sock.label}`, bears: false });
+        label: `${m.name}, ${sock.label}`, bears: false, yaw: 0, pitch: 0 });
       this.#hull.add(group);
     });
 
@@ -735,42 +739,66 @@ export class Designer {
   }
 
   /**
-   * Swing every turret onto the target, or as far as its arc allows.
+   * Swing every turret onto the target, and ease it home when it loses one.
    *
-   * The angles are the core's: horizontal is atan2(x, z) and vertical is
-   * atan2(y, z) about the ship's axes, which is `arc_test_3d` verbatim
-   * (math.rs). A turret that cannot bear stops at its limit rather than
-   * snapping back, which is what "cannot bear" looks like on a real mount.
+   * The angles are the core's, verbatim: yaw is atan2(x, z) round from the
+   * ship's nose and pitch is atan2(y, hypot(x, z)), a true elevation off the
+   * horizontal plane. Roll never enters it, because a mount has two axes.
    */
   #aimTurrets(dt: number): void {
-    if (this.#turrets === 'off' || !this.#rigs.length) return;
+    if (!this.#rigs.length) return;
     const reach = this.#arcReach() * 1.35;
     if (this.#turrets === 'track') {
       this.#clock += dt;
-      const a = this.#clock * 0.55;
+      // About seven seconds a lap. Eleven was a screensaver: a preview you
+      // have to wait on is one nobody watches to the end.
+      const a = this.#clock * 0.9;
       this.#target.set(Math.sin(a) * reach, Math.sin(a * 0.73) * reach * 0.3,
         Math.cos(a) * reach);
       const mk = this.#arcs.getObjectByName('target');
       if (mk) mk.position.copy(this.#target);
     }
+    // Easing under a slew rate. The ease alone is smooth but its first step is
+    // proportional to the gap, so a turret picking up a target 105 degrees
+    // away still moved 54 of them in a tenth of a second, which reads as a
+    // snap however continuous the maths is. A mount has a top speed.
+    const SLEW = 110 * Math.PI / 180;              // radians a second
+    const k = 1 - Math.exp(-5.5 * dt);
+    const cap = SLEW * dt;
+    const step = (gap: number) => Math.max(-cap, Math.min(cap, gap * k));
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+
     for (const r of this.#rigs) {
-      if (this.#turrets !== 'track') {
-        r.group.rotation.set(0, 0, 0);
-        r.bears = false;
-        continue;
+      // The default position is straight ahead ON THE MOUNT: the rest facing
+      // the player set in 90 degree steps is already baked into the cells, so
+      // zero in the group's own frame IS that direction.
+      let goalYaw = 0, goalPitch = 0;
+      r.bears = false;
+
+      if (this.#turrets === 'track') {
+        const d = this.#target.clone().sub(r.pivot);
+        // The core's own angles: yaw round from the nose, pitch as a true
+        // elevation off the horizontal plane (math.rs arc_test_3d). Roll does
+        // not enter it, because a mount has two axes.
+        const h = Math.atan2(d.x, d.z) * 180 / Math.PI;
+        const v = Math.atan2(d.y, Math.hypot(d.x, d.z)) * 180 / Math.PI;
+        const inside = (x: number, a: readonly [number, number]) => allRound(a)
+          || (x >= Math.min(a[0] as number, a[1] as number)
+            && x <= Math.max(a[0] as number, a[1] as number));
+        r.bears = inside(h, r.gun.arcH) && inside(v, r.gun.arcV);
+        // A mount that cannot bear returns to rest rather than straining at
+        // its stop, which is also what makes "bearing" readable at a glance.
+        if (r.bears) {
+          goalYaw = h * Math.PI / 180 - r.rest;
+          goalPitch = -v * Math.PI / 180;
+        }
       }
-      const d = this.#target.clone().sub(r.pivot);
-      const h = Math.atan2(d.x, d.z) * 180 / Math.PI;
-      const v = Math.atan2(d.y, d.z) * 180 / Math.PI;
-      const clamp = (x: number, a: readonly [number, number]) => allRound(a)
-        ? x : Math.max(Math.min(a[0] as number, a[1] as number),
-          Math.min(Math.max(a[0] as number, a[1] as number), x));
-      const ch = clamp(h, r.gun.arcH), cv = clamp(v, r.gun.arcV);
-      r.bears = Math.abs(ch - h) < 0.01 && Math.abs(cv - v) < 0.01;
-      // The rest facing is already baked into the cells, so the group turns
-      // by the difference rather than by the absolute angle.
-      r.group.rotation.y = ch * Math.PI / 180 - r.rest;
-      r.group.rotation.x = -cv * Math.PI / 180;
+
+      r.yaw += step(wrap(goalYaw - r.yaw));
+      r.pitch += step(goalPitch - r.pitch);
+      r.group.rotation.y = r.yaw;
+      r.group.rotation.x = r.pitch;
+
       const sight = this.#arcs.getObjectByName(`sight${this.#rigs.indexOf(r)}`);
       if (sight) {
         sight.visible = r.bears;

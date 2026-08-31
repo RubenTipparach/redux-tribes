@@ -586,3 +586,44 @@ fn an_ai_preview_is_the_order_the_turn_actually_flies() {
         "the hostile flew somewhere other than the course the preview drew",
     );
 }
+
+/// A mount has two axes: yaw round from forward, and pitch as a true
+/// ELEVATION off the horizontal plane. Roll does not enter it.
+///
+/// The archive's `TargetArcTest3D` measured pitch as `atan2(y, z)`, which is
+/// not an elevation. As a target comes abeam, z goes to zero and that angle
+/// runs to 90 degrees however level the target is, so a 60 degree mount
+/// refused everything on its own beam: a beam turret with a 220 degree
+/// horizontal arc could not fire at anything 90 degrees off the nose. This
+/// pins the fix, which is a deliberate divergence from the archive.
+#[test]
+fn a_level_target_abeam_is_inside_a_sixty_degree_pitch_arc() {
+    use sim_core::math::{arc_test_3d, Quat};
+
+    let origin = V3::new(0.0, 0.0, 0.0);
+    let facing = Quat::IDENTITY;
+    // Dead abeam and dead level: yaw 90, elevation 0.
+    let abeam = V3::new(100.0, 0.0, 0.0);
+    assert!(
+        arc_test_3d(origin, facing, abeam, -110.0, 110.0, -60.0, 60.0),
+        "a level target 90 degrees off the nose is inside a 110 by 60 arc"
+    );
+    // The horizontal arc still bites: 150 degrees round is outside 110.
+    let behind = V3::new(50.0, 0.0, -86.6);
+    assert!(
+        !arc_test_3d(origin, facing, behind, -110.0, 110.0, -60.0, 60.0),
+        "150 degrees off the nose is outside a 110 degree horizontal arc"
+    );
+    // And so does the vertical one: 70 degrees up is outside 60.
+    let high = V3::new(0.0, 94.0, 34.2);
+    assert!(
+        !arc_test_3d(origin, facing, high, -110.0, 110.0, -60.0, 60.0),
+        "70 degrees of elevation is outside a 60 degree pitch arc"
+    );
+    // 45 up and 45 round passes both.
+    let corner = V3::new(50.0, 70.7, 50.0);
+    assert!(
+        arc_test_3d(origin, facing, corner, -110.0, 110.0, -60.0, 60.0),
+        "45 degrees up and 45 round is inside both arcs"
+    );
+}
