@@ -75,30 +75,59 @@
     return (t >= 0 && t <= 1) ? t : -1;
   }
 
-  // Raycast a segment against every live ship (hull + live subsystem volumes).
-  // Returns { ship, sub|null, t, pos } of the nearest hit, or null.
+  // Raycast a segment against every live ship, naming the subsystem volume it
+  // struck if it struck one. Returns { ship, sub|null, t, pos } or null.
+  //
+  // Two questions rather than one: WHICH ship is nearest is decided by where
+  // the segment enters, and WHAT it hits on that ship is the first live volume
+  // inside it. One nearest-wins pass over both looks equivalent and is not, a
+  // subsystem sits INSIDE the hull sphere, so the sphere was always entered
+  // first and always won and every aimed shot landed on the hull.
   function raycastShips(state, a, b, ignoreShipId) {
     let best = null;
     for (const ship of state.ships) {
       if (ship.destroyed || ship.id === ignoreShipId) continue;
-      // subsystem volumes first (they sit inside/on the hull sphere)
+      const cls = SHIP_CLASSES[ship.classKey];
+      const hullT = segSphere(a, b, ship.pos, cls.radius);
+      let subHit = null;
       for (const sub of ship.subsystems) {
         if (sub.dead) continue;
         const t = segSphere(a, b, subWorldPos(ship, sub), sub.radius);
-        if (t >= 0 && (!best || t < best.t)) best = { ship, sub, t };
+        if (t >= 0 && (!subHit || t < subHit.t)) subHit = { sub, t };
       }
-      const cls = SHIP_CLASSES[ship.classKey];
-      const t = segSphere(a, b, ship.pos, cls.radius);
-      if (t >= 0 && (!best || t < best.t)) best = { ship, sub: null, t };
+      // Where the segment reaches this hull at all: the sphere if it clipped
+      // it, else the volume it found, since a volume can stand a little proud.
+      let entry = -1;
+      if (hullT >= 0 && subHit) entry = Math.min(hullT, subHit.t);
+      else if (hullT >= 0) entry = hullT;
+      else if (subHit) entry = subHit.t;
+      else continue;
+      if (!best || entry < best.t) best = { ship, sub: subHit ? subHit.sub : null, t: entry };
     }
     if (best) best.pos = V.lerp(a, b, best.t);
     return best;
+  }
+
+  // What a hull can still do. Derived rather than written into the ship, so
+  // the authored stats stay put and only what it can do with them changes.
+  function hasLive(ship, type) {
+    return ship.subsystems.some(s => s.type === type && !s.dead);
+  }
+  function hasLiveBay(ship) {
+    return !ship.subsystems.some(s => s.type === "weapon") || hasLive(ship, "weapon");
+  }
+  function effectiveFlight(ship) {
+    const cls = SHIP_CLASSES[ship.classKey];
+    const fl = ship.flight || cls.flight;
+    if (hasLive(ship, "rcs")) return fl;
+    return Object.assign({}, fl, { yawRate: 0, pitchRate: 0 });
   }
 
   // -------------------------------------------------------------- damage --
   function applyDamage(state, ship, sub, dmg, attackerId, events, tick, kind) {
     if (ship.destroyed) return;
     let hullShare = dmg;
+    let breached = false;
     if (sub && !sub.dead) {
       const absorbed = dmg * (sub.blockPct / 100);
       hullShare = dmg - absorbed;
@@ -106,16 +135,26 @@
       if (sub.hp <= 0) {
         sub.dead = true;
         events.push({ tick, type: "SubsystemDestroyed", ship: ship.id, sub: sub.id });
-        if (sub.type === "thruster" && !ship.subsystems.some(s => s.type === "thruster" && !s.dead)) {
+        if (sub.type === "thruster" && !hasLive(ship, "thruster")) {
           // engines out -> drift (dir = 0.25 * this turn's planned offset)
           const coastVel = ship._flight ? shipVelAtTick(ship, tick) : V.clone(ship.vel);
           ship.drift = { active: true, dir: V.clone(coastVel) };
           // the rest of this turn is unpowered from right here
           if (ship._flight) replanAfterCollision(ship, tick, coastVel);
           events.push({ tick, type: "ShipDrifting", ship: ship.id });
+        } else if (sub.type === "rcs" && !hasLive(ship, "rcs")) {
+          // Jets out is not adrift: the drive still works and the hull simply
+          // cannot point it anywhere new, so the rest of the turn is re-flown
+          // on an envelope with no turn rates.
+          if (ship._flight) replanAfterCollision(ship, tick, shipVelAtTick(ship, tick));
+        } else if (sub.type === "reactor") {
+          breached = true;
         }
       }
     }
+    // A breach is not damage that happens to be lethal: the hull is gone the
+    // moment the pile is, whatever was left of it.
+    if (breached) ship.hull = 0;
     ship.hull = Math.max(0, ship.hull - hullShare);
     events.push({
       tick, type: "Damage", ship: ship.id, sub: sub ? sub.id : null,
@@ -123,12 +162,35 @@
     });
     // AI retaliation (FiredEvent -> IfFiredUponAlert)
     if (ship.ai.enabled && attackerId) ship.ai.targetId = attackerId;
+    if (breached) {
+      events.push({ tick, type: "ShipCritical", ship: ship.id, by: attackerId || null,
+                    amount: data.CRITICAL_DAMAGE, pos: V.clone(ship.pos) });
+    }
     if (ship.hull <= 0) {
       ship.destroyed = true;
       // Where it died, same as the core: the wreck's pose is gone by the time
       // anything draws the event.
       events.push({ tick, type: "ShipDestroyed", ship: ship.id, by: attackerId || null,
                     pos: V.clone(ship.pos) });
+    }
+    if (breached) detonate(state, ship, attackerId, events, tick);
+  }
+
+  // The blast that follows a breach. Hulls only, never subsystems, so a breach
+  // cannot reach another reactor and the chain has no way to start. Targets are
+  // collected before any of them is damaged, because reading the state while
+  // writing it would make the result depend on ship order.
+  function detonate(state, ship, attackerId, events, tick) {
+    const R = data.CRITICAL_RADIUS, D = data.CRITICAL_DAMAGE;
+    const hits = [];
+    for (const t of state.ships) {
+      if (t === ship || t.destroyed) continue;
+      const d = V.len(V.sub(t.pos, ship.pos));
+      if (d >= R) continue;
+      hits.push([t, D * (1 - d / R)]);
+    }
+    for (const [t, dmg] of hits) {
+      applyDamage(state, t, null, dmg, ship.id, events, tick, "critical");
     }
   }
 
@@ -281,7 +343,9 @@
   // previews and what the resolver executes are the same array.
   function flyTurn(ship, targetArr, mode, opts) {
     opts = opts || {};
-    const fl = ship.flight || SHIP_CLASSES[ship.classKey].flight;
+    // What it can fly now, not what its class was authored to fly: a hull with
+    // the jets shot off keeps its drive and turns nowhere.
+    const fl = effectiveFlight(ship);
     const fromTick = opts.fromTick || 0;
     // steps: how many integration slices the remaining turn is cut into.
     // Resolution always uses one per tick. A probe may ask for fewer.
@@ -380,6 +444,12 @@
     const wd = WEAPONS[w.key];
     const target = state.ships.find(s => s.id === order.targetShipId);
     if (!target || target.destroyed) return;
+    // One bay feeds every mount on the hull, so losing it silences all of them
+    // at once rather than the mount that happened to be shot.
+    if (!hasLiveBay(ship)) {
+      events.push({ tick, type: "ShotSkippedOffline", ship: ship.id, weapon: w.key });
+      return;
+    }
     // cooldown: at most one shot per weapon per turn; cooldownTurns extra gap beyond that.
     // (The Unity arithmetic makes cd 0 and cd 1 both fire every turn; preserved here.)
     const gap = state.turn - w.lastFiredTurn;

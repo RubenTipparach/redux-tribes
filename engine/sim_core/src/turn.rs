@@ -74,6 +74,12 @@ pub enum EventKind {
     /// client mirrors these discriminants by position, so inserting one in the
     /// middle silently renumbers every kind after it.
     ShotSkippedCooldown,
+    /// A mount that had nothing wrong with its cooldown, its arc or its range,
+    /// and no weapon bay left to fire from.
+    ShotSkippedOffline,
+    /// A reactor went. The subject is the ship that broke up; the blast that
+    /// follows arrives as ordinary Damage events against whoever was near it.
+    ShipCritical,
 }
 
 /// One thing that happened, flattened to numbers so it crosses the wasm
@@ -139,6 +145,8 @@ impl Sim {
         }
         let mut hull_share = dmg;
         let mut engines_just_died = false;
+        let mut jets_just_died = false;
+        let mut reactor_breached = false;
 
         if let Some(bi) = sub_idx {
             let block_pct = {
@@ -163,10 +171,13 @@ impl Sim {
                     events.push(e);
 
                     let ship = &self.ships[si];
-                    let was_thruster =
-                        ship.class_def().subsystems[ship.subs[bi].def].kind == SubKind::Thruster;
-                    if was_thruster && !ship.has_live_thruster() {
-                        engines_just_died = true;
+                    match ship.class_def().subsystems[ship.subs[bi].def].kind {
+                        SubKind::Thruster if !ship.has_live_thruster() => {
+                            engines_just_died = true;
+                        }
+                        SubKind::Rcs if !ship.has_live_rcs() => jets_just_died = true,
+                        SubKind::Reactor => reactor_breached = true,
+                        _ => {}
                     }
                 }
             }
@@ -187,8 +198,22 @@ impl Sim {
             events.push(e);
         }
 
+        // Jets out: the drive still works, so this is not a drift. The ship
+        // re-flies the rest of the turn on an envelope that cannot turn, which
+        // is what a plan drawn round a corner looks like when the corner stops
+        // being available halfway through it.
+        if jets_just_died && !engines_just_died {
+            let vel = self.ships[si].vel_at_tick(tick);
+            self.replan_from(si, tick, vel);
+        }
+
         let ship = &mut self.ships[si];
         ship.hull = (ship.hull - hull_share).max(0.0);
+        // A breach is not damage that happens to be lethal. The hull is gone
+        // the moment the pile is, whatever was left of it.
+        if reactor_breached {
+            ship.hull = 0.0;
+        }
 
         let mut e = Event::new(EventKind::Damage, tick);
         e.ship = si as i32;
@@ -206,6 +231,15 @@ impl Sim {
             }
         }
 
+        if reactor_breached {
+            let mut e = Event::new(EventKind::ShipCritical, tick);
+            e.ship = si as i32;
+            e.other = attacker.map(|a| a as i32).unwrap_or(-1);
+            e.amount = data::CRITICAL_DAMAGE;
+            e.pos = ship.pos;
+            events.push(e);
+        }
+
         if ship.hull <= 0.0 {
             ship.destroyed = true;
             let mut e = Event::new(EventKind::ShipDestroyed, tick);
@@ -216,6 +250,39 @@ impl Sim {
             // reading a pose the wreck no longer has.
             e.pos = ship.pos;
             events.push(e);
+        }
+
+        if reactor_breached {
+            self.detonate(si, tick, events);
+        }
+    }
+
+    /// The blast that follows a breach.
+    ///
+    /// Hulls only, never subsystems, so a breach cannot reach another reactor
+    /// and the chain has no way to start: one detonation, bounded, rather than
+    /// a recursion whose depth is a property of where the ships happened to be
+    /// standing. Everyone in range takes it, friend and enemy alike.
+    ///
+    /// Targets are collected before any of them is damaged. Reading the state
+    /// while writing it would make the result depend on ship order, and ship
+    /// order is exactly the thing two clients must not be allowed to disagree
+    /// about.
+    fn detonate(&mut self, si: usize, tick: i32, events: &mut Vec<Event>) {
+        let centre = self.ships[si].pos;
+        let mut hits: Vec<(usize, f32)> = Vec::new();
+        for (ti, t) in self.ships.iter().enumerate() {
+            if ti == si || t.destroyed {
+                continue;
+            }
+            let d = t.pos.dist(centre);
+            if d >= data::CRITICAL_RADIUS {
+                continue;
+            }
+            hits.push((ti, data::CRITICAL_DAMAGE * (1.0 - d / data::CRITICAL_RADIUS)));
+        }
+        for (ti, dmg) in hits {
+            self.apply_damage(ti, None, dmg, Some(self.ships[si].id), events, tick);
         }
     }
 
@@ -241,7 +308,9 @@ impl Sim {
         let face = order.and_then(|o| o.face);
         let roll = order.and_then(|o| o.roll);
         let body = ship.body();
-        let fl = ship.flight;
+        // What it can fly now, not what its class was authored to fly: a hull
+        // with the jets shot off keeps its drive and turns nowhere.
+        let fl = ship.effective_flight();
         let dead = ship.drift_active;
 
         let flown = if dead {
@@ -326,7 +395,7 @@ impl Sim {
             body,
             ship.plan_target,
             mode,
-            &ship.flight,
+            &ship.effective_flight(),
             ship.plan_face,
             ship.plan_roll,
             steps,
@@ -369,6 +438,12 @@ impl Sim {
     pub fn fire_gate(&self, si: usize, weapon_index: usize, second: i32) -> bool {
         let Some(ship) = self.ships.get(si) else { return false };
         let Some(w) = ship.weapons.get(weapon_index) else { return false };
+        // The bay feeds every mount on the hull, so losing it silences all of
+        // them at once. Asked here rather than at the mount because this is
+        // the one gate both the planner and the resolver go through.
+        if !ship.has_live_weapon_bay() {
+            return false;
+        }
         if w.last_fired_tick < 0 {
             return true;
         }
@@ -440,7 +515,15 @@ impl Sim {
         // a hand written or stale order set must not get a free shot.
         let second = tick / TICKS_PER_SECOND as i32;
         if !self.fire_gate(si, order.weapon_index, second) {
-            let mut e = Event::new(EventKind::ShotSkippedCooldown, tick);
+            // Two ways to fail one gate, and a player told "cooldown" when the
+            // bay is wrecked would sit through a turn waiting for a mount that
+            // is never coming back.
+            let kind = if self.ships[si].has_live_weapon_bay() {
+                EventKind::ShotSkippedCooldown
+            } else {
+                EventKind::ShotSkippedOffline
+            };
+            let mut e = Event::new(kind, tick);
             e.ship = si as i32;
             e.aux = order.weapon_index as i32;
             events.push(e);

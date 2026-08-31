@@ -216,8 +216,42 @@ impl Ship {
     }
 
     pub fn has_live_thruster(&self) -> bool {
+        self.has_live(SubKind::Thruster)
+    }
+
+    /// Attitude authority. A hull with no live jets keeps its main drive and
+    /// loses the ability to point it anywhere.
+    pub fn has_live_rcs(&self) -> bool {
+        self.has_live(SubKind::Rcs)
+    }
+
+    /// Whether any mount on this hull may fire. A ship with no weapon bay in
+    /// its class (the freighter) has nothing to lose and nothing to fire, so
+    /// the answer is the same either way and the mount list is what decides.
+    pub fn has_live_weapon_bay(&self) -> bool {
+        !self.class_def().subsystems.iter().any(|d| d.kind == SubKind::Weapon)
+            || self.has_live(SubKind::Weapon)
+    }
+
+    fn has_live(&self, kind: SubKind) -> bool {
         let defs = self.class_def().subsystems;
-        self.subs.iter().any(|s| defs[s.def].kind == SubKind::Thruster && !s.dead)
+        self.subs.iter().any(|s| defs[s.def].kind == kind && !s.dead)
+    }
+
+    /// The envelope this hull can actually fly RIGHT NOW.
+    ///
+    /// The authored stats stay where they are: what changes is what the ship
+    /// can do with them. Everything that flies a plan reads this rather than
+    /// `flight`, so the preview a player is shown and the path the resolver
+    /// walks come from one number, and losing the jets looks like losing the
+    /// jets a turn before it is proved.
+    pub fn effective_flight(&self) -> Flight {
+        let mut fl = self.flight;
+        if !self.has_live_rcs() {
+            fl.yaw_rate = 0.0;
+            fl.pitch_rate = 0.0;
+        }
+        fl
     }
 
     fn plan_index(&self, tick: i32) -> usize {
@@ -423,34 +457,48 @@ impl Sim {
         }
     }
 
-    /// Sweep a segment against every live ship, hull sphere and live subsystem
-    /// volumes alike, and return the nearest hit.
+    /// Sweep a segment against every live ship and return the nearest hit,
+    /// naming the subsystem volume it struck if it struck one.
     ///
-    /// Subsystems are tested before the hull, and since a subsystem volume
-    /// sits inside the hull sphere, a shot that reaches one damages it rather
-    /// than the hull. The layout is the damage model: this is what makes
-    /// aiming at the engines mean something.
+    /// Two questions, not one, and conflating them was a defect that made the
+    /// whole damage model inert: WHICH ship is nearest is decided by where the
+    /// segment enters, and WHAT it hits on that ship is the first live volume
+    /// along the segment inside it. Comparing subsystem distances against hull
+    /// distances in a single nearest-wins pass looks equivalent and is not: a
+    /// subsystem sits INSIDE the hull sphere, so the sphere is always entered
+    /// first and always won, and a shot carefully aimed at the engines landed
+    /// on the hull every time. The layout is the damage model only if the
+    /// layout is what gets asked.
     pub fn raycast_ships(&self, a: V3, b: V3, ignore: Option<ShipId>) -> Option<Hit> {
         let mut best: Option<Hit> = None;
         for (si, ship) in self.ships.iter().enumerate() {
             if ship.destroyed || Some(ship.id) == ignore {
                 continue;
             }
+            let hull_t = Self::seg_sphere(a, b, ship.pos, ship.class_def().radius);
+            let mut sub_hit: Option<(usize, f32)> = None;
             for (bi, sub) in ship.subs.iter().enumerate() {
                 if sub.dead {
                     continue;
                 }
                 let def = &ship.class_def().subsystems[sub.def];
                 if let Some(t) = Self::seg_sphere(a, b, ship.sub_world_pos(sub), def.radius) {
-                    if best.as_ref().is_none_or(|h| t < h.t) {
-                        best = Some(Hit { ship: si, sub: Some(bi), t, pos: V3::ZERO });
+                    if sub_hit.is_none_or(|(_, u)| t < u) {
+                        sub_hit = Some((bi, t));
                     }
                 }
             }
-            if let Some(t) = Self::seg_sphere(a, b, ship.pos, ship.class_def().radius) {
-                if best.as_ref().is_none_or(|h| t < h.t) {
-                    best = Some(Hit { ship: si, sub: None, t, pos: V3::ZERO });
-                }
+            // Where the segment reaches this hull at all: the sphere if it
+            // clipped it, otherwise the volume it found, since a volume can
+            // stand a little proud of the sphere it belongs to.
+            let entry = match (hull_t, sub_hit) {
+                (Some(h), Some((_, u))) => h.min(u),
+                (Some(h), None) => h,
+                (None, Some((_, u))) => u,
+                (None, None) => continue,
+            };
+            if best.as_ref().is_none_or(|h| entry < h.t) {
+                best = Some(Hit { ship: si, sub: sub_hit.map(|(bi, _)| bi), t: entry, pos: V3::ZERO });
             }
         }
         if let Some(h) = &mut best {

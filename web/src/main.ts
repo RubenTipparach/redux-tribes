@@ -17,9 +17,9 @@ import type { Design } from './app/design.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
-  type Vec3,
+  type SubState, type Vec3,
   CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
-  TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
+  SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -54,6 +54,56 @@ const view = new View(canvas, match, sim);
 
 let seed = randomSeed();
 let ships: ShipState[] = [];
+/**
+ * Every ship's hit volumes, read beside the ships themselves.
+ *
+ * Read rather than derived: what a hull carries, how each volume is doing and
+ * where it is are the core's answers, and a client that kept its own copy
+ * would be a client that can disagree with the thing resolving the turn.
+ */
+let subs: SubState[] = [];
+function readShips(): void {
+  ships = match.ships();
+  subs = match.subs();
+}
+const subsOf = (shipId: number): SubState[] => subs.filter(x => x.ship === shipId);
+
+/**
+ * What to call one volume on one ship.
+ *
+ * A frigate carries two belts, and two chips both reading "armour" is a choice
+ * a player cannot make. Repeated kinds are numbered in the core's own order,
+ * so the label, the row in the rail and the index a shot carries all agree.
+ * One helper, because three near copies of a naming rule is three chances for
+ * the rail and the chip to disagree about which one is which.
+ */
+function volumeName(shipId: number, index: number): string {
+  const all = subsOf(shipId);
+  const v = all.find(x => x.index === index);
+  if (!v) return `sub ${index}`;
+  const same = all.filter(x => x.kind === v.kind);
+  const label = SUB_LABEL[v.kind] ?? '?';
+  return same.length > 1 ? `${label} ${same.indexOf(v) + 1}` : label;
+}
+
+/**
+ * Which volume the next shot is aimed at, or null for the hull.
+ *
+ * Held as a KIND and which one of that kind, not as an index, because index 5
+ * on a frigate is its reactor and on a freighter there is no index 5 at all.
+ * "Keep shooting at the engines" is the thing a player means, and it survives
+ * changing target, which an index would not.
+ *
+ * The client's own, like the target itself: a thing being planned. It reaches
+ * the core as the `targetSub` on each queued shot, resolved against whoever is
+ * being shot at, at the moment the shot goes in the slot.
+ */
+let aim: { kind: number; nth: number } | null = null;
+function aimSubFor(targetId: number): number {
+  if (!aim) return -1;
+  const v = subsOf(targetId).filter(x => x.kind === aim!.kind)[aim.nth];
+  return v && !v.dead ? v.index : -1;
+}
 let selected = -1;
 /**
  * The hostile that weapons, boarding and Face Target all aim at.
@@ -246,7 +296,7 @@ function start(): void {
   waiting = false;
   banner(false);
   flightOverride = new Map();
-  ships = match.ships();
+  readShips();
   selected = ships.find(mine)?.id ?? -1;
   targets.clear();
   standingFace.clear();
@@ -331,8 +381,12 @@ function renderFleet(): void {
         + `${!enemy && s.id === selected ? ' sel' : ''}${isAimed ? ' tg' : ''}`
         + `${s.destroyed ? ' gone' : ''}`;
       const hullPct = Math.max(0, (100 * s.hull) / s.hullMax);
-      const subs = s.subs
-        .map((x, i) => `<div class="sub${x.dead ? ' dead' : ''}"><span>sub ${i}</span><span>${x.hp.toFixed(0)}</span></div>`)
+      // Named, because "sub 2" is a number and "engines" is a decision. The
+      // order is the core's, so the label and the index a shot carries cannot
+      // drift apart.
+      const volumes = subsOf(s.id)
+        .map(x => `<div class="sub${x.dead ? ' dead' : ''}"><span>${volumeName(s.id, x.index)}</span>`
+          + `<span>${x.dead ? 'out' : x.hp.toFixed(0)}</span></div>`)
         .join('');
       div.innerHTML =
         `<div class="nm">${shipName(s)}${isAimed ? ' &middot; TARGET' : ''}`
@@ -349,7 +403,7 @@ function renderFleet(): void {
           + `<span>${enemy
             ? (s.aiTarget >= 0 ? nameOf(s.aiTarget) : 'nobody yet')
             : (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')}</span></div>`)
-        + subs;
+        + volumes;
       div.onclick = () => {
         if (enemy) {
           if (s.destroyed || selected < 0) return;
@@ -480,8 +534,12 @@ function renderWeapons(): void {
     const room = nextFree <= TURN_SECONDS;
     const div = document.createElement('div');
     div.className = `wrow${spent || !room ? ' spent' : ''}`;
+    // A mount with no bay behind it is not cooling, and telling a player to
+    // wait for it is telling them to wait for nothing.
+    const bay = match.weaponBay(s.id);
     const when = shots.length
       ? ` &middot; t+${shots.map(w => w.second).join(', ')}s`
+      : !bay ? ' &middot; weapon bay out'
       : spent ? ` &middot; ready t+${nextFree}s`
       : '';
     div.innerHTML =
@@ -524,13 +582,14 @@ function renderWeapons(): void {
  * never done here. A slot the planner offers is a slot the resolver honours,
  * because both ask the same gate.
  */
-interface SlotBlock { kind: 'after' | 'before' | 'taken'; at: number }
+interface SlotBlock { kind: 'after' | 'before' | 'taken' | 'offline'; at: number }
 
 function slotBlock(
   ship: number, weapon: number, sec: number, queued: readonly PlannedShot[],
 ): SlotBlock | null {
   const mine = queued.filter(w => w.weaponIndex === weapon).map(w => w.second).sort((a, b) => a - b);
   if (mine.includes(sec)) return { kind: 'taken', at: sec };
+  if (!match.weaponBay(ship)) return { kind: 'offline', at: 0 };
   const before = mine.filter(s => s < sec).pop() ?? -1;
   const ready = match.nextFreeSecond(ship, weapon, before);
   if (sec < ready) return { kind: 'after', at: ready };
@@ -552,6 +611,7 @@ function slotBlock(
  */
 function slotBlockText(b: SlotBlock, sec: number): string {
   if (b.kind === 'taken') return 'already firing here';
+  if (b.kind === 'offline') return 'weapon bay out';
   return b.kind === 'after'
     ? `-${b.at - sec}s to fire &middot; ready t+${b.at}s`
     : `firing in ${b.at - sec}s`;
@@ -605,7 +665,7 @@ function queueShot(sec: number, weaponIndex: number): void {
   // A mount may fire more than once in a turn, so a second shot is ADDED
   // rather than replacing the first. It used to replace it, which is what
   // "weapons queuing is not working" looked like.
-  o.weapons.push({ weaponIndex, second: sec, targetShip: t.id, targetSub: -1 });
+  o.weapons.push({ weaponIndex, second: sec, targetShip: t.id, targetSub: aimSubFor(t.id) });
   o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
   refreshAll();
 }
@@ -698,6 +758,27 @@ function renderSlotMenu(): void {
     `<div class="smhead">t+${sec}s &middot; ${aimed ? shipName(aimed) : 'no target'}`
     + `<button class="smx" id="smClose" aria-label="Close">&times;</button></div>`,
   ];
+
+  // Where on the target the shots go. On the slot menu rather than in a sheet,
+  // because this is where a shot is queued and a control that only exists in a
+  // sheet is one nothing on screen says exists. Dead volumes are still listed,
+  // greyed: knowing the engines are already gone is worth a line.
+  if (aimed) {
+    const at = aimSubFor(aimed.id);
+    const seen = new Map<number, number>();
+    const chips = [
+      `<button class="aimc${at < 0 ? ' on' : ''}" data-aim="-1">hull</button>`,
+      ...subsOf(aimed.id).map(v => {
+        const nth = seen.get(v.kind) ?? 0;
+        seen.set(v.kind, nth + 1);
+        return `<button class="aimc${v.index === at ? ' on' : ''}${v.dead ? ' gone' : ''}"`
+          + `${v.dead ? ' disabled' : ` data-aim="${v.kind}:${nth}"`}>`
+          + `${volumeName(aimed.id, v.index)}`
+          + `${v.dead ? '' : ` ${Math.round(100 * v.hp / v.hpMax)}%`}</button>`;
+      }),
+    ].join('');
+    rows.push(`<div class="smaim"><span class="k">aim</span>${chips}</div>`);
+  }
   for (let i = 0; i < info.mountCount; i++) {
     const m = match.mount(s.cls, i);
     if (!m) continue;
@@ -707,10 +788,16 @@ function renderSlotMenu(): void {
       // Queued here, so this row takes it back. Its own cooldown is not a
       // reason to refuse anything: it is the consequence of this very shot.
       const at = nameOf(here[0]!.targetShip);
+      // Where each queued shot is pointed, not where the picker is standing
+      // now: a shot keeps the aim point it was queued with.
+      const where = here[0]!.targetSub >= 0
+        ? volumeName(here[0]!.targetShip, here[0]!.targetSub)
+        : '';
       rows.push(
         `<div class="srow on" data-drop="${i}">`
         + `<span class="k">${name}</span>`
-        + `<span>at ${at}${here.length > 1 ? ` x${here.length}` : ''} &middot; remove</span></div>`);
+        + `<span>at ${at}${where ? `&rsquo;s ${where}` : ''}`
+        + `${here.length > 1 ? ` x${here.length}` : ''} &middot; remove</span></div>`);
       continue;
     }
     const block = aimed ? slotBlock(s.id, i, sec, o.weapons) : null;
@@ -732,6 +819,13 @@ function renderSlotMenu(): void {
   });
   menu.querySelectorAll<HTMLElement>('[data-drop]').forEach(el => {
     el.onclick = () => unqueueShot(sec, Number(el.dataset.drop));
+  });
+  menu.querySelectorAll<HTMLElement>('[data-aim]').forEach(el => {
+    el.onclick = () => {
+      const [kind, nth] = String(el.dataset.aim).split(':').map(Number);
+      aim = (kind ?? -1) < 0 ? null : { kind: kind as number, nth: nth ?? 0 };
+      refreshAll();
+    };
   });
 }
 
@@ -844,6 +938,9 @@ function renderTurnStrip(): void {
 }
 
 function describe(e: SimEvent): { text: string; cls: string } | null {
+  /** " engines", or nothing when the shot took the hull rather than a volume. */
+  const volume = (shipId: number, index: number) =>
+    index < 0 ? '' : ` ${volumeName(shipId, index)}`;
   const who = (i: number) => {
     const s = ships.find(x => x.id === i);
     return s ? shipName(s) : `#${i}`;
@@ -851,18 +948,24 @@ function describe(e: SimEvent): { text: string; cls: string } | null {
   const t = `${(e.tick / 60).toFixed(1)}s `;
   switch (e.kind) {
     case EventKind.ShotFired: return { text: `${t}${who(e.ship)} fires`, cls: '' };
-    case EventKind.ShotHit: return { text: `${t}${who(e.other)} hits ${who(e.ship)}${e.aux >= 0 ? ` sub ${e.aux}` : ''}`, cls: 'hit' };
+    case EventKind.ShotHit: return { text: `${t}${who(e.other)} hits ${who(e.ship)}${volume(e.ship, e.aux)}`, cls: 'hit' };
     case EventKind.ShotMiss: return { text: `${t}${who(e.ship)} misses`, cls: '' };
     case EventKind.ShotSkippedRange: return { text: `${t}${who(e.ship)} out of range`, cls: 'warn' };
     case EventKind.ShotSkippedArc: return { text: `${t}${who(e.ship)} out of arc`, cls: 'warn' };
     case EventKind.Damage: return { text: `${t}${who(e.ship)} takes ${e.amount.toFixed(1)}`, cls: 'hit' };
-    case EventKind.SubsystemDestroyed: return { text: `${t}${who(e.ship)} sub ${e.aux} destroyed`, cls: 'warn' };
+    case EventKind.SubsystemDestroyed:
+      return { text: `${t}${who(e.ship)}${volume(e.ship, e.aux) || ' subsystem'} destroyed`, cls: 'warn' };
     case EventKind.ShipDrifting: return { text: `${t}${who(e.ship)} adrift`, cls: 'warn' };
     case EventKind.ShipDestroyed: return { text: `${t}${who(e.ship)} destroyed`, cls: 'bad' };
     case EventKind.Collision: return { text: `${t}${who(e.ship)} rams ${who(e.other)} for ${e.amount.toFixed(0)}`, cls: 'bad' };
     case EventKind.BoardingStarted: return { text: `${t}${who(e.other)} sends ${e.aux} marines to ${who(e.ship)}`, cls: 'good' };
     case EventKind.BoardingTick: return { text: `${t}${who(e.ship)} boarding: ${e.amount.toFixed(0)} vs ${e.aux}`, cls: '' };
     case EventKind.ShipCaptured: return { text: `${t}${who(e.ship)} captured`, cls: 'good' };
+    case EventKind.ShotSkippedCooldown: return { text: `${t}${who(e.ship)} mount still cooling`, cls: 'warn' };
+    case EventKind.ShotSkippedOffline:
+      return { text: `${t}${who(e.ship)} has no weapon bay left to fire from`, cls: 'warn' };
+    case EventKind.ShipCritical:
+      return { text: `${t}${who(e.ship)} REACTOR BREACH`, cls: 'bad' };
     case EventKind.GameOver: {
       const won = e.aux === launch.side;
       return { text: won ? 'VICTORY' : 'DEFEAT', cls: won ? 'good' : 'bad' };
@@ -1475,7 +1578,7 @@ async function endTurn(): Promise<void> {
 
   waiting = false;
   banner(false);
-  ships = match.ships();
+  readShips();
   view.setShips(ships);
   recordTrails();
   playTick = 0;
@@ -1935,7 +2038,7 @@ function watchTurn(index: number, auto: boolean): void {
   match.resolveInPlace(rec.orders);
   review.at = index;
   review.auto = auto;
-  ships = match.ships();
+  readShips();
   view.setShips(ships);
   playTick = 0;
   playing = true;
@@ -1960,7 +2063,7 @@ function backToLive(): void {
   view.setBeams([]);
   view.setBlasts([]);
   view.setProjectiles([]);
-  ships = match.ships();
+  readShips();
   view.setShips(ships);
   view.setSelection(selected);
   atAttitude = null;
@@ -2057,7 +2160,7 @@ function frameBody(): void {
       view.setBeams([]);
       view.setBlasts([]);
       view.setProjectiles([]);
-      ships = match.ships();
+      readShips();
       view.setShips(ships);
       if (!ships.some(s => s.id === selected && !s.destroyed)) {
         selected = ships.find(s => mine(s) && !s.destroyed)?.id ?? selected;
@@ -2089,6 +2192,10 @@ Object.defineProperty(window, 'ftDebug', {
     order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
     selected: () => selected,
     target: () => targetShip()?.id ?? -1,
+    /** Where the next shot is pointed on the CURRENT target, or -1 for hull. */
+    aimSub: () => { const t = targetShip(); return t ? aimSubFor(t.id) : -1; },
+    aimKind: () => (aim ? aim.kind : -1),
+    subs: () => subs.map(v => ({ ...v })),
     /** Where the selected hull's nose actually points, for checking that a
      * commanded heading is being turned INTO over several turns. */
     forward: () => (selected < 0 ? null : match.forward(selected)),

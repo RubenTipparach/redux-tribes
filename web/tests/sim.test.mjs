@@ -147,8 +147,51 @@ test('a match starts with the scenario it was asked for', () => {
     assert.ok(s.radius > 0 && s.radius < 10, `radius ${s.radius}`);
     assert.ok(Number.isFinite(s.pos.x + s.pos.y + s.pos.z));
     assert.ok(Math.abs(Math.hypot(s.quat.x, s.quat.y, s.quat.z, s.quat.w) - 1) < 1e-3);
-    assert.ok(s.subs.length >= 1);
+    assert.ok(s.subCount >= 1);
   }
+
+  // What those volumes ARE comes from one query, and the client asks it rather
+  // than keeping a copy: kind, condition and where the thing is in the world.
+  const subs = m.subs();
+  assert.equal(subs.length, ships.reduce((a, s) => a + s.subCount, 0));
+  for (const v of subs) {
+    assert.ok(v.kind >= 0 && v.kind <= 4, `kind ${v.kind}`);
+    assert.ok(v.hp > 0 && v.hp === v.hpMax && !v.dead);
+    assert.ok(v.radius > 0 && v.radius < 4, `radius ${v.radius}`);
+    const ship = ships.find(x => x.id === v.ship);
+    const d = Math.hypot(v.pos.x - ship.pos.x, v.pos.y - ship.pos.y, v.pos.z - ship.pos.z);
+    assert.ok(d < ship.radius + v.radius, `volume ${v.index} sits ${d} from its hull`);
+  }
+  // Every frigate carries a bay, a set of jets and a pile, because losing one
+  // has to be a thing that can happen to any of them.
+  for (const s of ships) {
+    const kinds = new Set(subs.filter(v => v.ship === s.id).map(v => v.kind));
+    for (const k of [1, 2, 4]) assert.ok(kinds.has(k), `ship ${s.id} has no kind ${k}`);
+  }
+});
+
+test('a shot lands on the volume it was aimed at, not the hull in front of it', () => {
+  // The defect this pins: a volume sits INSIDE the hull sphere, so a single
+  // nearest-wins raycast over both always returned the sphere and every aimed
+  // shot hit the hull. Which SHIP is nearest and WHAT it struck are two
+  // questions with two answers.
+  const m = sim.match();
+  m.start('deadbeefcafe0002', 0);
+  const ships = m.ships();
+  const mine = ships.find(s => s.side === 0);
+  const foe = ships.find(s => s.side === 1);
+  const bay = m.subs().find(v => v.ship === foe.id && v.kind === 3);
+  assert.ok(bay, 'a frigate has a weapon bay to aim at');
+
+  let hitTheBay = false;
+  for (let t = 0; t < 6 && !hitTheBay; t++) {
+    const o = m.order(mine.id);
+    o.weapons = [0, 1, 2].map(i => ({ weaponIndex: i, second: i + 1,
+      targetShip: foe.id, targetSub: bay.index }));
+    const events = m.endTurn();
+    hitTheBay = events.some(e => e.kind === 2 && e.ship === foe.id && e.aux === bay.index);
+  }
+  assert.ok(hitTheBay, 'a shot aimed at the bay has to be able to reach the bay');
 });
 
 test('the same seed and orders produce the same hash', () => {

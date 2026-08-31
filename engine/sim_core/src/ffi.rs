@@ -59,7 +59,8 @@ const SCRATCH_LEN: usize = 16384;
 static mut SCRATCH: [f32; SCRATCH_LEN] = [0.0; SCRATCH_LEN];
 
 const OUT: usize = 64;
-pub const SHIP_STRIDE: usize = 40;
+pub const SHIP_STRIDE: usize = 34;
+pub const SUB_STRIDE: usize = 11;
 pub const EVENT_STRIDE: usize = 14;
 pub const POSE_STRIDE: usize = 9;
 pub const PROJ_STRIDE: usize = 5;
@@ -948,34 +949,81 @@ pub extern "C" fn ft_read_ships() -> u32 {
         s[b + 17] = ship.vel.z;
         s[b + 18] = ship.mode as u32 as f32;
         s[b + 19] = ship.drift_active as u32 as f32;
+        // How many volumes, and nothing about them: what each one IS comes
+        // from `ft_read_subs`, which is the only place that answer lives. The
+        // three fixed slots that used to sit here were a second copy of it,
+        // and a second copy is a copy that will be wrong for a six volume hull
+        // while still looking right for a three volume one.
         s[b + 20] = ship.subs.len() as f32;
+        s[b + 21] = ship.weapons.len() as f32;
         for k in 0..3 {
-            let (hp, dead) = match ship.subs.get(k) {
-                Some(x) => (x.hp, x.dead as u32 as f32),
-                None => (0.0, 1.0),
-            };
-            s[b + 21 + k * 2] = hp;
-            s[b + 22 + k * 2] = dead;
+            s[b + 22 + k] = ship.weapons.get(k).map(|w| w.last_fired_tick as f32).unwrap_or(-99.0);
         }
-        s[b + 27] = ship.weapons.len() as f32;
-        for k in 0..3 {
-            s[b + 28 + k] = ship.weapons.get(k).map(|w| w.last_fired_tick as f32).unwrap_or(-99.0);
-        }
-        s[b + 31] = ship.boarding_parties.len() as f32;
+        s[b + 25] = ship.boarding_parties.len() as f32;
         for k in 0..2 {
             let (f, c) = match ship.boarding_parties.get(k) {
                 Some(p) => (p.faction.index() as f32, p.count as f32),
                 None => (-1.0, 0.0),
             };
-            s[b + 32 + k * 2] = f;
-            s[b + 33 + k * 2] = c;
+            s[b + 26 + k * 2] = f;
+            s[b + 27 + k * 2] = c;
         }
-        s[b + 36] = cls.radius;
-        s[b + 37] = ship.flight.max_speed;
-        s[b + 38] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
-        s[b + 39] = cls.boarding_range;
+        s[b + 30] = cls.radius;
+        s[b + 31] = ship.flight.max_speed;
+        s[b + 32] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
+        s[b + 33] = cls.boarding_range;
     }
     n as u32
+}
+
+/// Every ship's subsystems, in one call.
+///
+/// What a shot can be aimed at, what it does when it dies, and where it is:
+/// the client needs all three to offer a target and to draw the marker on it,
+/// and asking per ship would be four crossings a frame to save nothing. World
+/// position rather than the class offset, because the volume moves with the
+/// hull and a client that rotated the offset itself would be holding a second
+/// opinion about which way the ship is facing.
+#[no_mangle]
+pub extern "C" fn ft_read_subs() -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let s = scratch();
+    let mut n = 0usize;
+    for (si, ship) in sim.ships.iter().enumerate() {
+        let defs = ship.class_def().subsystems;
+        for (bi, sub) in ship.subs.iter().enumerate() {
+            let b = OUT + n * SUB_STRIDE;
+            if b + SUB_STRIDE > SCRATCH_LEN {
+                return n as u32;
+            }
+            let def = &defs[sub.def];
+            let at = ship.sub_world_pos(sub);
+            s[b] = si as f32;
+            s[b + 1] = bi as f32;
+            s[b + 2] = sub_kind_index(def.kind) as f32;
+            s[b + 3] = sub.hp;
+            s[b + 4] = sub.max_hp;
+            s[b + 5] = sub.dead as u32 as f32;
+            s[b + 6] = at.x;
+            s[b + 7] = at.y;
+            s[b + 8] = at.z;
+            s[b + 9] = def.radius;
+            s[b + 10] = def.block_pct;
+            n += 1;
+        }
+    }
+    n as u32
+}
+
+/// The kind discriminants the client mirrors by position.
+fn sub_kind_index(k: crate::data::SubKind) -> u32 {
+    match k {
+        crate::data::SubKind::Armor => 0,
+        crate::data::SubKind::Thruster => 1,
+        crate::data::SubKind::Rcs => 2,
+        crate::data::SubKind::Weapon => 3,
+        crate::data::SubKind::Reactor => 4,
+    }
 }
 
 /// Flight stats for one ship, into the input slots the flight queries read.
@@ -996,12 +1044,17 @@ pub extern "C" fn ft_load_ship(ship: u32) -> u32 {
     s[7] = sh.quat.y;
     s[8] = sh.quat.z;
     s[9] = sh.quat.w;
-    s[18] = sh.flight.yaw_rate;
-    s[19] = sh.flight.pitch_rate;
-    s[20] = sh.flight.accel_fwd;
-    s[21] = sh.flight.accel_retro;
-    s[22] = sh.flight.accel_lat;
-    s[23] = sh.flight.max_speed;
+    // What it can fly now rather than what its class was authored to fly. A
+    // hull whose jets are gone previews as a hull that cannot turn, which is
+    // the difference between finding out while planning and finding out while
+    // watching the playback.
+    let fl = sh.effective_flight();
+    s[18] = fl.yaw_rate;
+    s[19] = fl.pitch_rate;
+    s[20] = fl.accel_fwd;
+    s[21] = fl.accel_retro;
+    s[22] = fl.accel_lat;
+    s[23] = fl.max_speed;
     1
 }
 
@@ -1262,7 +1315,7 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
         sh.body(),
         sh.plan_target,
         Mode::from_u32(mode),
-        &sh.flight,
+        &sh.effective_flight(),
         sh.plan_face,
         sh.plan_roll,
         steps,
@@ -1336,7 +1389,7 @@ pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
 pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
     sim_opt()
         .and_then(|s| s.ships.get(ship as usize))
-        .map(|sh| sh.flight.nominal_reach())
+        .map(|sh| sh.effective_flight().nominal_reach())
         .unwrap_or(0.0)
 }
 
@@ -1345,6 +1398,20 @@ pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
 #[no_mangle]
 pub extern "C" fn ft_can_fire(ship: u32, weapon: u32) -> u32 {
     sim_opt().map(|s| s.can_fire(ship as usize, weapon as usize) as u32).unwrap_or(0)
+}
+
+/// Has this hull a weapon bay left to fire from?
+///
+/// `ft_can_fire` already returns false for every mount when the bay is gone,
+/// which greys them out. This is the same answer asked separately so the
+/// client can say WHY: a mount that reads "ready in 3s" when the bay is
+/// wrecked sends a player off to wait for a shot that is never coming.
+#[no_mangle]
+pub extern "C" fn ft_weapon_bay(ship: u32) -> u32 {
+    sim_opt()
+        .and_then(|s| s.ships.get(ship as usize))
+        .map(|sh| sh.has_live_weapon_bay() as u32)
+        .unwrap_or(0)
 }
 
 /// May this ship board that one right now? Same reason as above: the button

@@ -148,11 +148,33 @@ pub fn weapon_key_name(key: WeaponKey) -> &'static str {
     }
 }
 
+/// What a hit volume DOES, which is the whole of the damage model: a volume
+/// with no consequence is just a smaller hull.
+///
+/// Order matters. The client mirrors these discriminants by position, so a new
+/// kind goes on the end rather than in the middle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SubKind {
     Armor,
     Thruster,
+    /// Attitude authority. With every one of them out, the hull keeps its
+    /// engines and loses the ability to point them anywhere.
+    Rcs,
+    /// The weapon bay. With every one of them out, no mount on the ship fires.
+    Weapon,
+    /// The pile. Breaching it does not disable anything: it ends the ship, and
+    /// takes a share of whatever is standing near it.
+    Reactor,
 }
+
+/// A reactor breach.
+///
+/// The blast damages hulls only, never subsystems, and that is deliberate
+/// rather than a simplification: a breach that could reach another reactor
+/// would chain, and a chain is a recursion with no bound written anywhere.
+/// Falls off linearly to nothing at the edge.
+pub const CRITICAL_RADIUS: f32 = 14.0;
+pub const CRITICAL_DAMAGE: f32 = 140.0;
 
 pub struct SubDef {
     pub id: &'static str,
@@ -195,7 +217,14 @@ pub struct ShipClass {
 
 /// Subsystem offsets are deterministic hit volume centres: a shot damages
 /// whichever volume it reaches first, so the layout IS the damage model.
-const fn frigate_subs(armor_block: f32) -> [SubDef; 3] {
+///
+/// The two belts sit outboard and the reactor sits deep amidships behind
+/// them, which is the whole of the protection it gets. Nothing declares the
+/// reactor "shielded": a shot from abeam meets a belt first because a belt is
+/// in the way, and a shot down the throat of a hull whose belts are gone does
+/// not. Geometry rather than a rule is what makes closing on a damaged flank
+/// worth doing.
+const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
     [
         SubDef {
             id: "armor_l",
@@ -221,21 +250,68 @@ const fn frigate_subs(armor_block: f32) -> [SubDef; 3] {
             offset: V3::new(0.0, 0.0, -2.6),
             radius: 1.4,
         },
+        // Forward and ventral, where the attitude quads are drawn on the hull.
+        // Thin, because a jet is a nozzle and a tank rather than a citadel.
+        SubDef {
+            id: "rcs",
+            kind: SubKind::Rcs,
+            hp: 60.0,
+            block_pct: 40.0,
+            offset: V3::new(0.0, -1.0, 1.5),
+            radius: 1.0,
+        },
+        // The battery, dorsal and forward, where the turrets are.
+        SubDef {
+            id: "weapons",
+            kind: SubKind::Weapon,
+            hp: 80.0,
+            block_pct: 50.0,
+            offset: V3::new(0.0, 1.0, 1.2),
+            radius: 1.1,
+        },
+        SubDef {
+            id: "reactor",
+            kind: SubKind::Reactor,
+            hp: 90.0,
+            block_pct: 45.0,
+            offset: V3::new(0.0, 0.0, -0.6),
+            radius: 1.0,
+        },
     ]
 }
 
-static TERRAN_SUBS: [SubDef; 3] = frigate_subs(80.0);
-static KARISEN_SUBS: [SubDef; 3] = frigate_subs(75.0);
-static ROGUE_SUBS: [SubDef; 3] = frigate_subs(90.0);
-static BENEFACTOR_SUBS: [SubDef; 3] = frigate_subs(80.0);
-static FREIGHTER_SUBS: [SubDef; 1] = [SubDef {
-    id: "engines",
-    kind: SubKind::Thruster,
-    hp: 100.0,
-    block_pct: 60.0,
-    offset: V3::new(0.0, 0.0, -3.4),
-    radius: 1.6,
-}];
+static TERRAN_SUBS: [SubDef; 6] = frigate_subs(80.0);
+static KARISEN_SUBS: [SubDef; 6] = frigate_subs(75.0);
+static ROGUE_SUBS: [SubDef; 6] = frigate_subs(90.0);
+static BENEFACTOR_SUBS: [SubDef; 6] = frigate_subs(80.0);
+/// No weapon bay, because the hull has no mounts to lose. A subsystem whose
+/// loss changes nothing is a hit box that teaches a player the wrong lesson.
+static FREIGHTER_SUBS: [SubDef; 3] = [
+    SubDef {
+        id: "engines",
+        kind: SubKind::Thruster,
+        hp: 100.0,
+        block_pct: 60.0,
+        offset: V3::new(0.0, 0.0, -3.4),
+        radius: 1.6,
+    },
+    SubDef {
+        id: "rcs",
+        kind: SubKind::Rcs,
+        hp: 60.0,
+        block_pct: 40.0,
+        offset: V3::new(0.0, -1.2, 2.0),
+        radius: 1.2,
+    },
+    SubDef {
+        id: "reactor",
+        kind: SubKind::Reactor,
+        hp: 120.0,
+        block_pct: 45.0,
+        offset: V3::new(0.0, 0.0, -1.0),
+        radius: 1.2,
+    },
+];
 
 static TERRAN_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.0, 0.4, 2.2) },

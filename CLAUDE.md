@@ -109,9 +109,9 @@ $ curl -sS https://redux-tribes.fly.dev/healthz
 All four must pass before a push:
 
 ```sh
-node prototype/cli.js test                  # 25, the JS design reference
-cd engine/sim_core && cargo test            # 61, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 41, the wasm boundary
+node prototype/cli.js test                  # 29, the JS design reference
+cd engine/sim_core && cargo test            # 64, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 42, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -141,9 +141,12 @@ node web/tests/playthrough.mjs            # desktop
 node web/tests/playthrough.mjs --mobile   # 390x844, touch
 ```
 
-It drives the real console (target a hostile, arm a mount, drop it in a fire
-slot, end the turn, watch the playback out) until the header says VICTORY, and
-exits non zero if it cannot get there. It needs a browser, so it is not in CI;
+It drives the real console (target a hostile, aim at one of its volumes, arm a
+mount, drop it in a fire slot, end the turn, watch the playback out) until the
+header says VICTORY, and exits non zero if it cannot get there. The aim strip is
+checked the only way that means anything: the chip is tapped and the ORDER is
+read back, because a chip that highlights and still sends the hull across the
+boundary is a light rather than a feature. It needs a browser, so it is not in CI;
 run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
@@ -352,6 +355,50 @@ Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
 either side of the commit. Reading it off the shipped figure instead would have
 charged it 14002, which is gravity, the reach chart and the scenario table as
 well.
+
+## Damage is spatial: the layout IS the damage model
+
+A shot is not scored against a health bar. It is aimed at a point, it travels,
+and it damages whatever volume it physically reaches first. Every hull carries
+six of them (three on the freighter), and each one does something when it dies:
+
+| volume | on death |
+| --- | --- |
+| armour, two belts | absorbs its block share until it goes, then stops absorbing |
+| engines | the ship is adrift, from that tick, for the rest of the match |
+| jets | attitude authority gone: the drive still works, the hull cannot turn |
+| weapons | one bay feeds every mount, so all of them fall silent at once |
+| reactor | the ship goes critical: hull to zero, and a blast to everything within 14 units |
+
+Two rules keep it honest. **Effects are derived, never written back into the
+authored stats**: losing the jets does not zero `flight.yaw_rate`, it makes
+`effective_flight()` report zero, so the class table still says what the class
+is and one function says what this hull can do right now. And **one gate, asked
+twice**: `fire_gate` is what the planner offers slots from and what the resolver
+checks at the moment of firing, so a bay that is gone greys the mount out in the
+client because the client ASKED, not because someone wrote the rule twice.
+
+The blast damages hulls only, never volumes. A breach that could reach another
+reactor would chain, and a chain is a recursion with no bound written anywhere.
+
+**The reactor is protected by geometry, not by a rule.** The belts sit outboard
+at x +/- 1.6 and the bay sits forward and dorsal, so a shot from ahead or abeam
+meets one of them first and a shot from below does not. Attacking from a high or
+low aspect is therefore worth doing, and nothing in the code says so.
+
+### The defect this exposed, worth not writing again
+
+`raycast_ships` compared subsystem distances against hull distances in one
+nearest-wins pass. It reads as obviously right and it made the whole model
+inert: a volume sits INSIDE the hull sphere, so the sphere is always entered
+first and always won, and every carefully aimed shot landed on the hull. Aiming
+at the engines had done nothing since the day it was written, in the Rust core
+AND in the JS reference, and every suite passed throughout because they all
+asserted on the hull.
+
+They are two questions. WHICH ship is nearest is decided by where the segment
+enters. WHAT it hit on that ship is the first live volume along the segment
+inside it. Ask them separately.
 
 ## Sides are a match fact, not a point of view
 

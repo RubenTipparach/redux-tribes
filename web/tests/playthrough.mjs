@@ -66,6 +66,9 @@ const state = () => page.evaluate(() => ({
 log(`playing at ${VIEWPORT.width}x${VIEWPORT.height}${MOBILE ? ' (touch)' : ''}`);
 
 let shotsQueued = 0;
+/** Whether the aim strip was used, and whether the pick reached an order. */
+let aimedAtAVolume = false;
+let aimedShotQueued = false;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -85,6 +88,18 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   final = await state();
   if (final.phase === 'VICTORY') break;
 }
+
+// Subsystem targeting is a pick that has to reach the ORDER. A chip that
+// highlights and sends -1 across the boundary is a light, not a feature.
+if (!aimedAtAVolume) {
+  console.log('\nFAIL: never managed to aim at a volume');
+  process.exit(1);
+}
+if (!aimedShotQueued) {
+  console.log('\nFAIL: aimed at a volume and the queued shot still carried the hull');
+  process.exit(1);
+}
+log('shots can be aimed at a subsystem, and the order carries it');
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -264,11 +279,33 @@ async function playMatch() {
       // Mount w if it can fire in this second, else whatever can. Taking the
       // first row every time fires mount 0 over and over and leaves the rest
       // of the battery cold, which looks like queueing and does not shoot.
+      // Once a match, aim somewhere other than the hull before queueing, and
+      // check the pick reaches the plan. Subsystem targeting is worth nothing
+      // if the chip is a light: the number on the order is the whole feature.
+      if (!aimedAtAVolume) {
+        // The engines, the way a player would: it is the volume whose loss
+        // decides a fight. Taking the first chip aims at a belt, which is the
+        // one pick that makes a shot WORSE than aiming at the hull.
+        const engines = page.locator('#slotMenu .smaim .aimc[data-aim]', { hasText: /^engines/ });
+        const chip = (await engines.count())
+          ? engines.first()
+          : page.locator('#slotMenu .smaim .aimc[data-aim]:not([data-aim="-1"])').first();
+        if (await chip.count()) {
+          await (MOBILE ? chip.tap() : chip.click());
+          await page.waitForTimeout(140);
+          aimedAtAVolume = await page.evaluate(() => window.ftDebug.aimSub() >= 0);
+          if (!aimedAtAVolume) { outcome = 'the aim chip did not take'; break; }
+        }
+      }
       const mine = page.locator(`#slotMenu .srow[data-add="${w}"]`);
       const add = (await mine.count()) ? mine : page.locator('#slotMenu .srow[data-add]').first();
       if (await add.count()) {
         await (MOBILE ? add.tap() : add.click());
         await page.waitForTimeout(140);
+        if (aimedAtAVolume && !aimedShotQueued) {
+          const o = await page.evaluate(() => window.ftDebug.order());
+          aimedShotQueued = (o?.weapons ?? []).some(x => x.targetSub >= 0);
+        }
       }
       const close = page.locator('#smClose');
       if (await close.count()) {

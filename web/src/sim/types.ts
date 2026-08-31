@@ -163,6 +163,9 @@ export const EventKind = {
   BoardingTick: 14,
   ShipCaptured: 15,
   GameOver: 16,
+  ShotSkippedCooldown: 17,
+  ShotSkippedOffline: 18,
+  ShipCritical: 19,
 } as const;
 export type EventKind = (typeof EventKind)[keyof typeof EventKind];
 
@@ -180,10 +183,39 @@ export interface SimEvent {
   readonly to: Vec3;
 }
 
+/** Matches `sim_core::data::SubKind` discriminants. */
+export const SubKind = {
+  Armour: 0,
+  Thruster: 1,
+  Rcs: 2,
+  Weapon: 3,
+  Reactor: 4,
+} as const;
+export type SubKind = (typeof SubKind)[keyof typeof SubKind];
+
+/**
+ * One hit volume on one ship: what it is, how it is doing, and where it is.
+ *
+ * Position is WORLD, straight from the core. A client that rotated the class
+ * offset itself would be holding a second opinion about which way a hull is
+ * facing, and the marker would drift off the thing it is marking.
+ */
 export interface SubState {
+  readonly ship: number;
+  readonly index: number;
+  readonly kind: SubKind;
   readonly hp: number;
+  readonly hpMax: number;
   readonly dead: boolean;
+  readonly pos: Vec3;
+  readonly radius: number;
+  readonly blockPct: number;
 }
+
+/** What each kind is called on screen. Presentation, so it lives here. */
+export const SUB_LABEL: Record<number, string> = {
+  0: 'armour', 1: 'engines', 2: 'jets', 3: 'weapons', 4: 'reactor',
+};
 
 export interface PartyState {
   readonly faction: number;
@@ -210,7 +242,8 @@ export interface ShipState {
   readonly vel: Vec3;
   readonly mode: Mode;
   readonly drifting: boolean;
-  readonly subs: readonly SubState[];
+  /** How many volumes it has. What they ARE comes from `Match.subs()`. */
+  readonly subCount: number;
   readonly weaponLastFired: readonly number[];
   readonly parties: readonly PartyState[];
   readonly radius: number;

@@ -14,13 +14,14 @@
 
 import {
   type ClassInfo, type MountInfo, type PlannedOrder, type Pose, type ShipState,
-  type SimEvent, type TrackProjectile, type Vec3,
+  type SimEvent, type SubState, type TrackProjectile, type Vec3,
   type Well,
-  EventKind, Mode, Scenario, TICKS_PER_TURN,
+  EventKind, Mode, Scenario, SubKind, TICKS_PER_TURN,
 } from './types.js';
 
 const OUT = 64;
-const SHIP_STRIDE = 40;
+const SHIP_STRIDE = 34;
+const SUB_STRIDE = 11;
 const EVENT_STRIDE = 14;
 const POSE_STRIDE = 9;
 const PROJ_STRIDE = 5;
@@ -38,6 +39,7 @@ export interface MatchExports {
   ft_hash_hi(): number;
   ft_hash_lo(): number;
   ft_read_ships(): number;
+  ft_read_subs(): number;
   ft_wells_read(): number;
   ft_next_free_second(ship: number, weapon: number, prevSecond: number): number;
   ft_fire_gate(ship: number, weapon: number, second: number): number;
@@ -67,6 +69,7 @@ export interface MatchExports {
   ft_read_mount(classIdx: number, mount: number): number;
   ft_nominal_reach(ship: number): number;
   ft_can_fire(ship: number, weapon: number): number;
+  ft_weapon_bay(ship: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
   ft_ship_roll(ship: number): number;
@@ -195,6 +198,13 @@ export class Match {
     return this.#ex.ft_fire_gate(ship, weapon, second) !== 0;
   }
 
+  /** Whether this hull has a weapon bay left at all, as against a mount that
+   * is merely cooling. The core's answer, so the reason shown and the reason
+   * the resolver acts on are one reason. */
+  weaponBay(ship: number): boolean {
+    return this.#ex.ft_weapon_bay(ship) !== 0;
+  }
+
   ships(): ShipState[] {
     const n = this.#ex.ft_read_ships();
     const s = this.#s;
@@ -202,17 +212,13 @@ export class Match {
     for (let i = 0; i < n; i++) {
       const b = OUT + i * SHIP_STRIDE;
       const subCount = s[b + 20] ?? 0;
-      const subs = [];
-      for (let k = 0; k < subCount && k < 3; k++) {
-        subs.push({ hp: s[b + 21 + k * 2] ?? 0, dead: (s[b + 22 + k * 2] ?? 0) !== 0 });
-      }
-      const wCount = s[b + 27] ?? 0;
+      const wCount = s[b + 21] ?? 0;
       const weaponLastFired = [];
-      for (let k = 0; k < wCount && k < 3; k++) weaponLastFired.push(s[b + 28 + k] ?? -99);
-      const pCount = s[b + 31] ?? 0;
+      for (let k = 0; k < wCount && k < 3; k++) weaponLastFired.push(s[b + 22 + k] ?? -99);
+      const pCount = s[b + 25] ?? 0;
       const parties = [];
       for (let k = 0; k < pCount && k < 2; k++) {
-        parties.push({ faction: s[b + 32 + k * 2] ?? -1, count: s[b + 33 + k * 2] ?? 0 });
+        parties.push({ faction: s[b + 26 + k * 2] ?? -1, count: s[b + 27 + k * 2] ?? 0 });
       }
       out.push({
         id: s[b] ?? i,
@@ -230,13 +236,42 @@ export class Match {
         vel: v3(s, b + 15),
         mode: (s[b + 18] ?? 0) as Mode,
         drifting: (s[b + 19] ?? 0) !== 0,
-        subs,
+        subCount,
         weaponLastFired,
         parties,
-        radius: s[b + 36] ?? 3.5,
-        maxSpeed: s[b + 37] ?? 8,
-        aiTarget: s[b + 38] ?? -1,
-        boardingRange: s[b + 39] ?? 20,
+        radius: s[b + 30] ?? 3.5,
+        maxSpeed: s[b + 31] ?? 8,
+        aiTarget: s[b + 32] ?? -1,
+        boardingRange: s[b + 33] ?? 20,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Every ship's hit volumes, in one call.
+   *
+   * What a shot can be aimed at, what it does when it dies, and where it is.
+   * The ship record used to carry the first three of these itself, which was a
+   * second copy of the same answer and wrong the moment a hull had more than
+   * three: one query, one truth.
+   */
+  subs(): SubState[] {
+    const n = this.#ex.ft_read_subs();
+    const s = this.#s;
+    const out: SubState[] = [];
+    for (let i = 0; i < n; i++) {
+      const b = OUT + i * SUB_STRIDE;
+      out.push({
+        ship: s[b] ?? 0,
+        index: s[b + 1] ?? 0,
+        kind: (s[b + 2] ?? 0) as SubKind,
+        hp: s[b + 3] ?? 0,
+        hpMax: s[b + 4] ?? 1,
+        dead: (s[b + 5] ?? 0) !== 0,
+        pos: v3(s, b + 6),
+        radius: s[b + 9] ?? 1,
+        blockPct: s[b + 10] ?? 0,
       });
     }
     return out;

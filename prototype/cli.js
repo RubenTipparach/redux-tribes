@@ -284,6 +284,59 @@ function tests() {
   }
   check("focused engine fire puts the target adrift", drifted, "enemy engine hp: " + enemy.subsystems.find(x => x.type === "thruster").hp);
 
+  console.log("\n== aimed shots reach the volume they were aimed at ==");
+  // The defect this pins: a subsystem sits INSIDE the hull sphere, so a single
+  // nearest-wins pass over both always returned the sphere and every carefully
+  // aimed shot landed on the hull. Which SHIP is nearest and WHAT it hit are
+  // two questions.
+  const aState = sim.createSkirmish("seed-aimed", {
+    player: [{ classKey: "terran_frigate", pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) }],
+    enemy: [{ classKey: "karisen_frigate", pos: V.v3(0, 0, 40), facing: V.v3(0, 0, -1) }],
+  });
+  aState.ships.forEach(sh => { sh.ai.enabled = false; });
+  const aRes = sim.resolveTurn(aState, {
+    P1: { move: { mode: "FULL_STOP" },
+      weapons: [{ weaponIndex: 0, second: 1, targetShipId: "E1", targetSub: "weapons" }] },
+    E1: { move: { mode: "FULL_STOP" } },
+  }, {});
+  const onBay = aRes.events.some(e => e.type === "Damage" && e.ship === "E1" && e.sub === "weapons");
+  check("a shot aimed at the bay damages the bay, not the hull", onBay);
+
+  console.log("\n== the bay silences every mount, and a breach takes the neighbours ==");
+  const bay = aState.ships.find(s => s.id === "E1").subsystems.find(x => x.type === "weapon");
+  bay.hp = 0; bay.dead = true;
+  const silent = sim.resolveTurn(aState, {
+    P1: { move: { mode: "FULL_STOP" } },
+    E1: { move: { mode: "FULL_STOP" },
+      weapons: [{ weaponIndex: 0, second: 1, targetShipId: "P1" }] },
+  }, {});
+  check("a mount with no bay behind it does not fire",
+    silent.events.some(e => e.type === "ShotSkippedOffline" && e.ship === "E1"));
+
+  const critState = sim.createSkirmish("seed-critical", {
+    player: [{ classKey: "terran_frigate", pos: V.v3(0, -30, 0), facing: V.v3(0, 1, 0) }],
+    enemy: [
+      { classKey: "freighter", pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) },
+      { classKey: "karisen_frigate", pos: V.v3(8, 0, 0), facing: V.v3(0, 0, 1) },
+    ],
+  });
+  critState.ships.forEach(sh => { sh.ai.enabled = false; });
+  const near = critState.ships.find(s => s.id === "E2");
+  const nearBefore = near.hull;
+  let critical = false;
+  for (let t = 0; t < 20 && !critical; t++) {
+    const rc = sim.resolveTurn(critState, {
+      P1: { move: { mode: "FULL_STOP" },
+        weapons: [0, 1, 2].map(i => ({ weaponIndex: i, second: 1 + i, targetShipId: "E1", targetSub: "reactor" })) },
+      E1: { move: { mode: "FULL_STOP" } },
+      E2: { move: { mode: "FULL_STOP" } },
+    }, {});
+    if (rc.events.some(e => e.type === "ShipCritical" && e.ship === "E1")) critical = true;
+  }
+  check("a breached reactor goes critical", critical);
+  check("and the blast reaches a hull eight units away", near.hull < nearBefore,
+    "neighbour hull: " + near.hull.toFixed(1) + " from " + nearBefore.toFixed(1));
+
   console.log("\n" + pass + " passed, " + fail + " failed");
   return fail === 0;
 }

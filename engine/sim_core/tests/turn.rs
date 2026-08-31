@@ -627,3 +627,122 @@ fn a_level_target_abeam_is_inside_a_sixty_degree_pitch_arc() {
         "45 degrees up and 45 round is inside both arcs"
     );
 }
+
+/// Beat on one volume of ship 1 with every mount ship 0 has, turn after turn,
+/// until it goes. The way the game would do it, because a test that reached
+/// into `subs` and set `dead` would be testing the assignment.
+fn pound(sim: &mut Sim, sub: usize, turns: i32) -> Vec<sim_core::turn::Event> {
+    // Every ship gets an order, including the ones doing nothing. An order of
+    // None is the AI's cue to plan, and an AI that manoeuvres turns the target
+    // so the volume being aimed at ends up behind another one: the test would
+    // then be measuring the AI rather than the damage model.
+    let hold_at: Vec<V3> = sim.ships.iter().map(|s| s.pos).collect();
+    for _ in 0..turns {
+        let n = sim.ships.len();
+        let mut orders: Vec<Option<Order>> = (0..n).map(|i| Some(hold(hold_at[i]))).collect();
+        orders[0] = Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            weapons: (0..sim.ships[0].weapons.len())
+                .map(|i| FireOrder {
+                    weapon_index: i,
+                    second: i as i32 + 1,
+                    target_ship: 1,
+                    target_sub: Some(sub),
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let res = sim.resolve_turn(&mut orders);
+        if sim.ships[1].subs[sub].dead || sim.ships[1].destroyed {
+            return res.events;
+        }
+    }
+    Vec::new()
+}
+
+#[test]
+fn losing_the_weapon_bay_silences_every_mount() {
+    // One bay feeds the whole hull, so this is not "the mount you shot": it is
+    // every mount at once, and the client's own greying out has to agree
+    // because it asks the same gate.
+    let mut sim = duel("seed-bay", 40.0);
+    assert!(sim.can_fire(1, 0), "a fresh hull can fire before anything is hit");
+    let _ = pound(&mut sim, 4, 14);
+    assert!(sim.ships[1].subs[4].dead, "focused fire on the bay must eventually take it");
+    for i in 0..sim.ships[1].weapons.len() {
+        assert!(!sim.can_fire(1, i), "mount {i} still fires with the bay gone");
+    }
+
+    // And an order that tries anyway is refused with the reason, not with a
+    // cooldown it has no way to wait out.
+    let mut orders: Vec<Option<Order>> = vec![None; 2];
+    orders[1] = Some(Order {
+        mode: Some(Mode::MoveAndTurn),
+        weapons: vec![FireOrder { weapon_index: 0, second: 1, target_ship: 0, target_sub: None }],
+        ..Default::default()
+    });
+    let res = sim.resolve_turn(&mut orders);
+    assert!(
+        res.events.iter().any(|e| e.kind == EventKind::ShotSkippedOffline),
+        "a shot from a wrecked bay must say so",
+    );
+}
+
+#[test]
+fn losing_the_jets_keeps_the_drive_and_takes_the_turn_rates() {
+    // Attitude authority and thrust are different systems, and losing one is
+    // not losing the other: the hull still accelerates, it just cannot point
+    // itself anywhere new.
+    let mut sim = duel("seed-jets", 40.0);
+    let authored = sim.ships[1].flight;
+    let _ = pound(&mut sim, 3, 14);
+    assert!(sim.ships[1].subs[3].dead, "focused fire on the jets must eventually take them");
+
+    let now = sim.ships[1].effective_flight();
+    assert_eq!(now.yaw_rate, 0.0, "a hull with no jets cannot yaw");
+    assert_eq!(now.pitch_rate, 0.0, "a hull with no jets cannot pitch");
+    assert_eq!(now.accel_fwd, authored.accel_fwd, "the drive is untouched");
+    assert_eq!(now.max_speed, authored.max_speed, "and so is its top speed");
+    assert!(!sim.ships[1].drift_active, "no jets is not adrift: that is the engines");
+    // The authored stats are where they were. What changed is what the ship
+    // can do with them, which is why this is derived rather than overwritten.
+    assert_eq!(sim.ships[1].flight.yaw_rate, authored.yaw_rate);
+}
+
+
+#[test]
+fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
+    // From below, because from ahead the bay and the belts are in the way and
+    // that is the point of where they sit. A hull whose core can be reached
+    // from any aspect is a hull with no armour worth drawing.
+    let mut sim = Sim::new_skirmish(
+        "seed-critical",
+        &[spec(ShipClassId::TerranFrigate, V3::new(0.0, -30.0, 0.0), V3::new(0.0, 1.0, 0.0))],
+        &[
+            spec(ShipClassId::Freighter, V3::ZERO, V3::new(0.0, 0.0, 1.0)),
+            spec(ShipClassId::KarisenFrigate, V3::new(8.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0)),
+        ],
+        Faction::Karisen,
+        SOLO,
+    );
+    let bystander_before = sim.ships[2].hull;
+    let hull_before = sim.ships[1].hull;
+    assert!(hull_before > 500.0, "the point of a freighter here is that it does not die of the bleed");
+
+    let events = pound(&mut sim, 2, 20);
+    assert!(sim.ships[1].subs[2].dead, "a clear lane to the core must eventually breach it");
+    assert!(sim.ships[1].destroyed, "a breached reactor ends the ship whatever the hull says");
+    assert_eq!(sim.ships[1].hull, 0.0, "the hull goes with the pile, not down to it");
+    assert!(
+        events.iter().any(|e| e.kind == EventKind::ShipCritical && e.ship == 1),
+        "a breach announces itself, so the client can draw it as more than a kill",
+    );
+    assert!(
+        sim.ships[2].hull < bystander_before,
+        "a hull {} units from a breach takes a share of it",
+        8.0,
+    );
+    // And it is a blast, not a second kill: the falloff leaves a frigate at
+    // eight units alive.
+    assert!(!sim.ships[2].destroyed, "the blast falls off rather than clearing the field");
+}
