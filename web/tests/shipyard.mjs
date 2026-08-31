@@ -134,7 +134,7 @@ async function checkShips(page) {
         + `${tones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
     } else ok(`${name}: every armour cell is the picked ${d.faction} colour, `
       + `0x${d.paint.toString(16)}`);
-    // Mounts live inside the frame. Only drives, retros, attitude jets, gun
+    // Mounts live inside the frame. Only drives, retros, attitude thrusters, gun
     // rings and trunnions are allowed to stand proud of the hull.
     if (d.enclosedOutside > 0)
       fail(`${name}: ${d.enclosedOutside} cells of enclosed parts are outside the hull`);

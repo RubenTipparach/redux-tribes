@@ -186,7 +186,7 @@ test('a match starts with the scenario it was asked for', () => {
     assert.ok(corner <= ship.radius,
       `volume ${v.index} reaches ${corner} on a hull of ${ship.radius}`);
   }
-  // Every frigate carries a bay, a set of jets and a pile, because losing one
+  // Every frigate carries a bay, a set of thrusters and a pile, because losing one
   // has to be a thing that can happen to any of them.
   for (const s of ships) {
     const kinds = new Set(subs.filter(v => v.ship === s.id).map(v => v.kind));

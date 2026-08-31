@@ -88,6 +88,9 @@ Built and unapproved is a normal state. Built, unapproved and unshown is not.
 
 - **3D: Blender, headless, via Python.** `blender -b file.blend --python export.py`.
 - **Pixel art: Aseprite.** The archive's UI and city sets already are; keep the sources.
+- **Textures: [Material Maker](https://www.materialmaker.org/).** Node based, free,
+  runs headless under Xvfb, exports the whole PBR set from one graph. Commit the
+  `.ptex` beside the PNG.
 - **Music: MIDI is the deliverable.**
 - **No cube people.** Character models get real silhouettes.
 - **Every texture dimension is a power of two.**

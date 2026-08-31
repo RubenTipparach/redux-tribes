@@ -172,7 +172,7 @@
           if (ship._flight) replanAfterCollision(ship, tick, coastVel);
           events.push({ tick, type: "ShipDrifting", ship: ship.id });
         } else if (sub.type === "rcs" && !hasLive(ship, "rcs")) {
-          // Jets out is not adrift: the drive still works and the hull simply
+          // Thrusters out is not adrift: the drive still works and the hull simply
           // cannot point it anywhere new, so the rest of the turn is re-flown
           // on an envelope with no turn rates.
           if (ship._flight) replanAfterCollision(ship, tick, shipVelAtTick(ship, tick));
@@ -373,7 +373,7 @@
   function flyTurn(ship, targetArr, mode, opts) {
     opts = opts || {};
     // What it can fly now, not what its class was authored to fly: a hull with
-    // the jets shot off keeps its drive and turns nowhere.
+    // the thrusters shot off keeps its drive and turns nowhere.
     const fl = effectiveFlight(ship);
     const fromTick = opts.fromTick || 0;
     // steps: how many integration slices the remaining turn is cut into.

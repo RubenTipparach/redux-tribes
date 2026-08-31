@@ -229,7 +229,7 @@ export interface SubState {
 
 /** What each kind is called on screen. Presentation, so it lives here. */
 export const SUB_LABEL: Record<number, string> = {
-  0: 'armour', 1: 'engines', 2: 'jets', 3: 'weapons', 4: 'reactor',
+  0: 'armour', 1: 'engines', 2: 'thrusters', 3: 'weapons', 4: 'reactor',
 };
 
 /**
@@ -246,7 +246,7 @@ export const SUB_BLURB: Record<number, string> = {
   1: 'Main drive. When the LAST one goes the ship is adrift from that instant: it '
     + 'coasts out the rest of the turn on the velocity it was carrying and cannot '
     + 'add to it.',
-  2: 'Attitude jets. When the last one goes the drive still pushes and the hull '
+  2: 'Attitude thrusters. When the last one goes the drive still pushes and the hull '
     + 'stops swinging, so it re-flies the rest of the turn on an envelope with no '
     + 'turn left in it.',
   3: 'Weapon bay. With it out every mount on the ship is silent, whatever cooldown '

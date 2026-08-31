@@ -426,6 +426,24 @@ at all: every shot landed in space beside the ship. The carve starts from the
 nearest cell to it instead, which is the cell the shot came in at, because the
 sphere point is in the direction the shot arrived from.
 
+## They are THRUSTERS, never jets
+
+The attitude volume is called **thrusters** everywhere a person can read it,
+and everywhere a person writing the next change can read it: on screen, in
+comments, in docs, in commit messages. "Jets" is wrong and does not appear.
+
+The two are easy to mix up, so both names are worth having straight:
+
+| on screen | in the core | what it is |
+| --- | --- | --- |
+| engines | `SubKind::Thruster` | the main drive, the thing that makes speed |
+| thrusters | `SubKind::Rcs` | attitude authority, the thing that makes heading |
+
+The core's own enum keeps `Rcs`, because those discriminants cross the wasm
+boundary by position and renaming one is a contract change for nothing. What
+the rule governs is the WORDS: `SUB_LABEL` is the one place the on screen name
+is written, and everything else asks it rather than spelling a name again.
+
 ## Damage is spatial: the layout IS the damage model
 
 A shot is not scored against a health bar. It is aimed at a point, it travels,
@@ -436,12 +454,12 @@ six of them (three on the freighter), and each one does something when it dies:
 | --- | --- |
 | armour, two belts | absorbs its block share until it goes, then stops absorbing |
 | engines | the ship is adrift, from that tick, for the rest of the match |
-| jets | attitude authority gone: the drive still works, the hull cannot turn |
+| thrusters | attitude authority gone: the drive still works, the hull cannot turn |
 | weapons | one bay feeds every mount, so all of them fall silent at once |
 | reactor | the ship goes critical: hull to zero, and a blast to everything within 14 units |
 
 Two rules keep it honest. **Effects are derived, never written back into the
-authored stats**: losing the jets does not zero `flight.yaw_rate`, it makes
+authored stats**: losing the thrusters does not zero `flight.yaw_rate`, it makes
 `effective_flight()` report zero, so the class table still says what the class
 is and one function says what this hull can do right now. And **one gate, asked
 twice**: `fire_gate` is what the planner offers slots from and what the resolver
@@ -490,6 +508,44 @@ asserted on the hull.
 They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
+
+## Textures: Material Maker is the tool, the script is a stopgap
+
+GUIDELINES 4 says art comes from real tools driven headlessly, and for textures
+that tool is **[Material Maker](https://www.materialmaker.org/)**. It is a free,
+open source, node based procedural material editor, it is a Godot application so
+it runs under Xvfb with no desktop, and it exports from the command line, which
+is exactly the shape rule 4 asks for. It also gives what a hand written
+generator does not: PBR outputs together (albedo, normal, roughness, emission,
+ambient occlusion) from one graph, a live preview on a real material while the
+graph is being tuned, seamless tiling for free, and a library of erosion, rust,
+scratch and molten nodes that would each be an afternoon of numerical code here.
+
+Use it for anything new. When exporting, GUIDELINES 3 wants the SOURCE beside
+the product, so the `.ptex` graph is committed next to the PNG it produced, and
+GUIDELINES 4 wants every dimension a power of two.
+
+`tools/make_ember_texture.py` is the exception and is NOT the pattern to copy.
+It hand rolls periodic value noise and a PNG encoder because Material Maker
+could not be fetched from the sandbox it was written in: every GitHub release
+download path answered 403 through the agent proxy, and itch.io needs a browser.
+The script therefore holds `web/public/ember.png` to the same contract a real
+export would (a static file, a committed source, `--check` to catch drift), and
+should be replaced by a Material Maker graph the first time a session can
+actually install the thing.
+
+Two lessons from that texture are about the material and outlive the tool:
+
+- **The map carries the colour, the vertex ramp carries the state.**
+  `MeshBasicMaterial` multiplies `map` by the vertex colour, and a grey times an
+  orange is only ever a darker orange, so white hot cores are unreachable if the
+  hue is left to the ramp. Author the full gradient into the texture and let the
+  ramp be a multiplier that starts at white and cools.
+- **Detail has to survive being three pixels across.** A wound is hundreds of
+  cell faces about a tenth of a unit wide. A fine bright web over a dark ground
+  samples as the dark ground almost every time, which once put the wound out
+  altogether on a ship while looking correct at 1:1. Keep the octaves coarse and
+  keep the hot share near half.
 
 ## A hull a side fields is a match fact too
 

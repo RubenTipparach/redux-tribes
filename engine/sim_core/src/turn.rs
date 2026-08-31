@@ -145,7 +145,7 @@ impl Sim {
         }
         let mut hull_share = dmg;
         let mut engines_just_died = false;
-        let mut jets_just_died = false;
+        let mut thrusters_just_died = false;
         let mut reactor_breached = false;
 
         if let Some(bi) = sub_idx {
@@ -175,7 +175,7 @@ impl Sim {
                         SubKind::Thruster if !ship.has_live_thruster() => {
                             engines_just_died = true;
                         }
-                        SubKind::Rcs if !ship.has_live_rcs() => jets_just_died = true,
+                        SubKind::Rcs if !ship.has_live_rcs() => thrusters_just_died = true,
                         SubKind::Reactor => reactor_breached = true,
                         _ => {}
                     }
@@ -198,11 +198,11 @@ impl Sim {
             events.push(e);
         }
 
-        // Jets out: the drive still works, so this is not a drift. The ship
+        // Thrusters out: the drive still works, so this is not a drift. The ship
         // re-flies the rest of the turn on an envelope that cannot turn, which
         // is what a plan drawn round a corner looks like when the corner stops
         // being available halfway through it.
-        if jets_just_died && !engines_just_died {
+        if thrusters_just_died && !engines_just_died {
             let vel = self.ships[si].vel_at_tick(tick);
             self.replan_from(si, tick, vel);
         }
@@ -309,7 +309,7 @@ impl Sim {
         let roll = order.and_then(|o| o.roll);
         let body = ship.body();
         // What it can fly now, not what its class was authored to fly: a hull
-        // with the jets shot off keeps its drive and turns nowhere.
+        // with the thrusters shot off keeps its drive and turns nowhere.
         let fl = ship.effective_flight();
         let dead = ship.drift_active;
 

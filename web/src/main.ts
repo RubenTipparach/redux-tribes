@@ -453,7 +453,7 @@ const aimersOf = (enemyId: number): ShipState[] =>
  * A chip is a button with a picture of the ship on it, because a player who
  * spent an hour in the shipyard should be able to pick their hull out of the
  * rail without reading. Beside it, and only when there is something to say,
- * the systems that have gone offline: a hull at 80 hull points with its jets
+ * the systems that have gone offline: a hull at 80 hull points with its thrusters
  * out is in far more trouble than one at 50 with everything working, and the
  * bar alone cannot tell those apart.
  *

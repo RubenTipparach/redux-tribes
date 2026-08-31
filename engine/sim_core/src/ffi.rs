@@ -1279,7 +1279,7 @@ pub extern "C" fn ft_load_ship(ship: u32) -> u32 {
     s[8] = sh.quat.z;
     s[9] = sh.quat.w;
     // What it can fly now rather than what its class was authored to fly. A
-    // hull whose jets are gone previews as a hull that cannot turn, which is
+    // hull whose thrusters are gone previews as a hull that cannot turn, which is
     // the difference between finding out while planning and finding out while
     // watching the playback.
     let fl = sh.effective_flight();
