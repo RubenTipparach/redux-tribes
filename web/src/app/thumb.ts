@@ -96,7 +96,9 @@ export function shipThumb(design: Design, tone: number): string {
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
   try {
     const hull = hullMesh(design);
-    tintHull(mat, tone, false);
+    // Full map range. A chip is 44 pixels across, which is the size a hull is
+    // on the map when whose it is matters more than what it is built out of.
+    tintHull(mat, tone, false, 1);
     const mesh = new THREE.Mesh(hull.geo, mat);
     r.scene.add(mesh);
     r.camera.aspect = 1;

@@ -67,6 +67,8 @@ export interface SchematicSubject {
   readonly design: Design;
   /** The side wash, so the hull here is the colour it is on the map. */
   readonly tone: number;
+  /** A wreck is washed out at any range, which the tint has to be told. */
+  readonly lost: boolean;
   /** Header figures, already formatted: this draws them, it does not derive them. */
   readonly stats: ReadonlyArray<readonly [string, string]>;
   readonly volumes: readonly SchematicVolume[];
@@ -207,7 +209,9 @@ export class Schematic {
     // Opaque. The volumes over it are the transparent things, and a hull that
     // is transparent too leaves nothing solid for them to be volumes OF.
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    tintHull(mat, s.tone, false);
+    // The other end of the range: a schematic exists to show what a hull is
+    // made of, so the side wash gets out of the way of the design's own paint.
+    tintHull(mat, s.tone, s.lost, 0);
     this.#owned.push(mat);
     this.#hull.add(new THREE.Mesh(hull.geo, mat));
 

@@ -49,6 +49,8 @@ interface SimExports {
     classIdx: number, plateCells: number, extX: number, extY: number, extZ: number,
     radiusCells: number, fouled: number, parts: number,
   ): number;
+  ft_arc_dirs(): number;
+  ft_arc_bit(x: number, y: number, z: number): number;
 }
 
 /** Where a design's part list goes before `derive` reads it. Mirrors
@@ -144,6 +146,26 @@ export class Sim {
       boardingRange: o[b + 12] ?? 0, massMax: o[b + 13] ?? 1, parts: o[b + 14] ?? 0,
       guns: o[b + 15] ?? 0, trunnions: o[b + 16] ?? 0, gates: o[b + 17] ?? 0,
     };
+  }
+
+  /**
+   * Which way every arc mask cell points, in the ship's frame.
+   *
+   * Copied out rather than handed back as a view: the scratch buffer is one
+   * buffer and the next call over the boundary would overwrite the table under
+   * whoever was scanning with it. Constant for the life of the module, so the
+   * copy is paid once.
+   */
+  arcDirs(): Float32Array | null {
+    const n = this.#ex.ft_arc_dirs();
+    if (!n) return null;
+    return this.#s.slice(64, 64 + n * 3);
+  }
+
+  /** Which mask cell a direction in the ship's frame falls in. The binning is
+   *  the core's, so the question goes there. */
+  arcBit(x: number, y: number, z: number): number {
+    return this.#ex.ft_arc_bit(x, y, z);
   }
 
   #writeInputs(body: Body, flight: Flight, order: FlyOrder): void {

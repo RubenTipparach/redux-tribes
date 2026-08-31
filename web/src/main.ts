@@ -14,7 +14,8 @@ import * as THREE from 'three';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
-import { mountsOf, partsOf, rasterise, stockFor, useCore, type Design } from './app/design.js';
+import { arcMasks, mountsOf, partsOf, rasterise, stockFor, useArcDirs, useCore, type Design }
+  from './app/design.js';
 import { hullTone } from './app/hull.js';
 import { shipThumb } from './app/thumb.js';
 import { Schematic, type SchematicSubject } from './app/schematic.js';
@@ -61,6 +62,9 @@ const match: Match = sim.match();
 // fallback, so a boot that failed to wire this fails loudly at the first
 // derivation instead of quietly showing numbers nobody computed.
 useCore((cls, geo, parts) => sim.derive(cls, geo, parts));
+// And where the mask cells point, for the same reason: the angles are the
+// core's definition of its own mask, not something to rebuild out of Math.sin.
+useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 const view = new View(canvas, match, sim);
 
 let seed = randomSeed();
@@ -319,7 +323,7 @@ function start(): void {
     const r = rasterise(picked);
     const took = match.setHull(launch.side, classIndexOf(picked.classKey), {
       plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
-    }, partsOf(picked), mountsOf(picked));
+    }, partsOf(picked), mountsOf(picked), arcMasks(picked));
     // The core refuses an illegal hull, and saying so beats spawning the class
     // hull and letting a player wonder why their ship is somebody else's.
     flying = took ? `in ${launch.hullName ?? 'your design'}`
@@ -582,6 +586,7 @@ function schematicOf(id: number): SchematicSubject | null {
       + `${s.destroyed ? ' &middot; lost' : s.drifting ? ' &middot; adrift' : ''}`,
     design: hullOf(s),
     tone: hullTone(s, launch.side),
+    lost: s.destroyed,
     stats: [
       ['hull', `${s.hull.toFixed(0)}/${s.hullMax.toFixed(0)}`],
       ['speed', `${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s`],
@@ -1033,10 +1038,21 @@ function renderWeapons(): void {
     // A mount with no bay behind it is not cooling, and telling a player to
     // wait for it is telling them to wait for nothing.
     const bay = match.weaponBay(s.id);
+    // And a mount whose own hull is in the way is not cooling either. Asked of
+    // the core, never worked out here: the arc is scanned off the design and
+    // read by the resolver, and a console holding its own opinion of it would
+    // grey out one mount while the resolver dropped the shot from another.
+    //
+    // A hint rather than a gate, because the shot is fired several seconds
+    // from now and both ships will have turned by then. What it answers is
+    // "would this mount bear if the shot went off as things stand".
+    const foe = targetShip();
+    const bears = !foe || match.canBear(s.id, i, foe.id, aimSubFor(foe.id));
     const when = shots.length
       ? ` &middot; t+${shots.map(w => w.second).join(', ')}s`
       : !bay ? ' &middot; weapon bay out'
       : spent ? ` &middot; ready t+${nextFree}s`
+      : !bears ? ' &middot; hull in the way'
       : '';
     div.innerHTML =
       `<span class="k">${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}</span>`
@@ -2874,6 +2890,8 @@ Object.defineProperty(window, 'ftDebug', {
       const s = ships.find(x => x.id === id);
       return s ? view.screenOf(s.pos) : null;
     },
+    /** What the camera is doing and what is drawn over the ship. */
+    camera: () => view.cameraState(),
     /** What has been shot off the hulls, and what is still in the air. */
     damage: () => view.damageState(),
     /** What the hulls cost to draw, and a switch to weigh it against. */

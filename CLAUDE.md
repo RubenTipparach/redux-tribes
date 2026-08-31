@@ -110,8 +110,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 69, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 43, the wasm boundary
+cd engine/sim_core && cargo test            # 76, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 45, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -163,8 +163,9 @@ node web/tests/shipyard.mjs   # 1280x900, 390x844 and 390x560
 Same rules, different screen. It opens the designer at all three sizes and
 checks what only a browser can answer: no horizontal scroll, the centre of
 every control hits THAT control and not something drawn over it, all five
-classes legal out of the box, all eight of a faction's swatches actually on
-the hull, every enclosed mount inside the hull, both exteriors, the plate
+classes legal out of the box, the faction swatch a player PICKED actually on
+the hull and a different pick repainting it, every enclosed mount inside the
+hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
 selection that outlines it, a turret that turns 90 degrees and takes its
 cells with it, a saved hull taken out of the library into a practice level and
@@ -353,8 +354,9 @@ Rules that came out of actually measuring this repo:
   is. If it was not measured, do not claim it.
 
 Current figures, worth not regressing: a turn resolved in 452 microseconds,
-envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 149537
-bytes locally (57325 gzipped) after the damage model and the design derivation;
+envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 152822
+bytes locally (58265 gzipped) after the damage model, the design derivation and
+the turret arc scan;
 quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody

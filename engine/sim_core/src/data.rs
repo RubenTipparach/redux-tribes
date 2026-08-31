@@ -70,6 +70,16 @@ pub enum WeaponKey {
     Missile,
 }
 
+/// The arc every weapon starts with.
+///
+/// Omnidirectional, because a turret swivels: beams, cannons and missiles can
+/// all be brought to bear in any direction the mount can reach. The one thing
+/// no mount can do is fire into its own base, so the floor is ten degrees
+/// below the mount and everything else is the HULL's business, scanned per
+/// design into an arc mask rather than authored per weapon.
+pub const ARC_ALL: (f32, f32) = (-360.0, 360.0);
+pub const ARC_PITCH_FLOOR: (f32, f32) = (-10.0, 90.0);
+
 pub struct WeaponDef {
     pub kind: WeaponKind,
     pub dmg: f32,
@@ -104,8 +114,8 @@ static W_BEAM: WeaponDef = WeaponDef {
     // formality. Measured on the match clock, so a shot at second 9 still
     // holds the mount into second 2 of the next turn.
     cooldown_secs: 3.0,
-    arc_h: (-110.0, 110.0),
-    arc_v: (-60.0, 60.0),
+    arc_h: ARC_ALL,
+    arc_v: ARC_PITCH_FLOOR,
     batch: 1,
 };
 static W_CANNON: WeaponDef = WeaponDef {
@@ -114,8 +124,8 @@ static W_CANNON: WeaponDef = WeaponDef {
     mult: 5.5,
     range: 200.0,
     cooldown_secs: 4.0,
-    arc_h: (-90.0, 90.0),
-    arc_v: (-60.0, 60.0),
+    arc_h: ARC_ALL,
+    arc_v: ARC_PITCH_FLOOR,
     batch: 1,
 };
 static W_MISSILE: WeaponDef = WeaponDef {
@@ -124,8 +134,8 @@ static W_MISSILE: WeaponDef = WeaponDef {
     mult: 1.0,
     range: 250.0,
     cooldown_secs: 6.0,
-    arc_h: (-360.0, 360.0),
-    arc_v: (-360.0, 360.0),
+    arc_h: ARC_ALL,
+    arc_v: ARC_PITCH_FLOOR,
     batch: 2,
 };
 

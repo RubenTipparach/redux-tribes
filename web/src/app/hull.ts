@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, Mat,
-  armourColour, cellColour, frameFor, hullAt, paintFor, rasterise, rasterSig,
+  armourColour, cellColour, frameFor, rasterise, rasterSig,
   type Design,
 } from './design.js';
 
@@ -81,16 +81,47 @@ export function hullTone(
 }
 
 /**
+ * How far the side wash goes, at the two ends of the range.
+ *
+ * Whose ship this is matters at MAP range, where a hull is a few pixels; what
+ * it is built out of matters up CLOSE, where the tint is just paint over the
+ * thing being looked at. A wreck is washed out whatever the range, because
+ * "this one is gone" outranks both.
+ */
+const TINT_NEAR = 0.05, TINT_FAR = 0.40, TINT_LOST = 0.8;
+/** How much the hull glows at map range, so it reads against the field. */
+const GLOW_FAR = 0.09;
+
+/**
+ * The camera's distance as a 0 to 1 "far": 0 up close, 1 out at map range.
+ *
+ * Twelve to fifty four units, which is the span between inspecting one ship
+ * and planning a move with a fleet.
+ */
+export const tintFar = (dist: number): number =>
+  Math.max(0, Math.min(1, (dist - 14) / 40));
+
+/** How much of the side colour a hull wears at that range. */
+export const tintMix = (destroyed: boolean, far: number): number =>
+  destroyed ? TINT_LOST : TINT_NEAR + (TINT_FAR - TINT_NEAR) * far;
+
+/**
  * Wash a hull material toward its side, keeping the design's own paint.
  *
  * Lambert MULTIPLIES this by the vertex colour, so the full side colour would
- * wash a red gun to near black. Halfway from white keeps the hue and still
- * says whose it is, with a little emissive so a hull reads against the field
- * rather than sinking into it.
+ * wash a red gun to near black. A lerp from white keeps the hue.
+ *
+ * `far` is what the three callers differ on and the only thing they differ on,
+ * which is why it is a parameter rather than three copies of this: the map
+ * passes the camera's own range so a hull repaints as it is zoomed in on, a
+ * chip thumbnail passes 1 because a 44 pixel picture IS map range, and the
+ * schematic passes 0 because it exists to show what a hull is made of.
  */
-export function tintHull(mat: THREE.MeshLambertMaterial, tone: number, destroyed: boolean): void {
-  mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), destroyed ? 0.8 : 0.5);
-  mat.emissive.setHex(destroyed ? 0x000000 : tone).multiplyScalar(0.12);
+export function tintHull(
+  mat: THREE.MeshLambertMaterial, tone: number, destroyed: boolean, far: number,
+): void {
+  mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), tintMix(destroyed, far));
+  mat.emissive.setHex(destroyed ? 0x000000 : tone).multiplyScalar(GLOW_FAR * far);
   mat.needsUpdate = true;
 }
 
@@ -107,10 +138,6 @@ export function hullMesh(d: Design): HullMesh {
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
   const { grid, purp } = rasterise(d);
-  const sw = paintFor(d.faction).swatches;
-  const prof = frame.profile;
-  const z0 = Math.round(prof[0]![0] as number);
-  const z1 = Math.round(prof[prof.length - 1]![0] as number);
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
   // What the outside can reach: a flood fill through empty cells from the
@@ -142,11 +169,9 @@ export function hullMesh(d: Design): HullMesh {
   const colourAt = (i: number, j: number, k: number): number => {
     const n = idx(i, j, k);
     const mat = grid[n] as number;
-    if (mat === Mat.Plate || mat === Mat.Skinned) {
-      const st = hullAt(prof, k);
-      return armourColour(sw, d.paint, i, j, k, z0, z1, st[0] as number, st[1] as number);
-    }
-    return cellColour(mat, purp[n] as number, d.paint);
+    return mat === Mat.Plate || mat === Mat.Skinned
+      ? armourColour(d.paint)
+      : cellColour(mat, purp[n] as number, d.paint);
   };
 
   const pos: number[] = [], nrm: number[] = [], col: number[] = [], cellOf: number[] = [];
@@ -220,8 +245,19 @@ export function hullMesh(d: Design): HullMesh {
 
           // The rectangle's four corners, in lattice space, on the face's own
           // side of the cell.
+          //
+          // Which way round they go depends on the axis, not just on the sign.
+          // The layer's own two axes are (u, v) and the triangle is front
+          // facing when u cross v points along the normal: for the x faces
+          // that is Y cross Z which is +X, and for the z faces X cross Y which
+          // is +Z, but for the y faces it is X cross Z which is MINUS Y. So
+          // the top and bottom of every hull came out wound backwards, was
+          // culled, and the ship read as a flat slab you could see into. The
+          // normals were right the whole time, which is why it looked lit and
+          // wrong rather than black.
           const face = dir.step > 0 ? 1 : 0;
-          const corners: ReadonlyArray<readonly [number, number]> = dir.step > 0
+          const ccw = (dir.step > 0) !== (axis === 1);
+          const corners: ReadonlyArray<readonly [number, number]> = ccw
             ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
             : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
           c.setHex(hex);
