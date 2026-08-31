@@ -12,7 +12,8 @@
  * broken on a flaky connection.
  */
 
-import { Api, ApiError, type Room, type Ticket } from '../net/api.js';
+import { Api, ApiError, type Room, type SavedDesign, type Ticket } from '../net/api.js';
+import { CLASS_NAMES, classIndexOf } from '../sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -29,11 +30,36 @@ export interface Launch {
   readonly humanSides: number;
   /** Which side this client sits in. */
   readonly side: number;
+  /**
+   * The design this side fields, or undefined for the hull the scenario
+   * authored. The whole record, not its class: the core derives what it
+   * weighs, what it can take and how it flies from the parts and the plate.
+   */
+  readonly hull?: unknown;
+  /** What that design is called, for the console to say so. */
+  readonly hullName?: string;
   readonly ticket?: Ticket;
   readonly roomName?: string;
 }
 
 const POLL_MS = 2500;
+
+/**
+ * The practice levels, one button each.
+ *
+ * They were a dropdown beside a Play button, which put six of the seven behind
+ * a gesture nobody makes on a phone: a control that needs opening to reveal
+ * what is in it is a control most people never open.
+ */
+const PRACTICE: ReadonlyArray<{ key: string; name: string; blurb: string }> = [
+  { key: 'skirmish', name: 'Skirmish', blurb: 'Two on two, open space' },
+  { key: 'duel', name: 'Duel', blurb: 'One on one, nowhere to hide' },
+  { key: 'convoy', name: 'Convoy', blurb: 'A hull worth boarding' },
+  { key: 'low-orbit', name: 'Low orbit', blurb: 'A heavy body below you' },
+  { key: 'binary', name: 'Binary', blurb: 'A well either side of the line' },
+  { key: 'slingshot', name: 'Slingshot', blurb: 'A well off the line, to whip round' },
+  { key: 'sandbox', name: 'Sandbox', blurb: 'Ship stats unlocked, nothing at stake' },
+];
 
 export class Lobby {
   readonly #api: Api;
@@ -41,6 +67,14 @@ export class Lobby {
   #room: Room | null = null;
   #socket: WebSocket | null = null;
   #timer: number | null = null;
+  #library: SavedDesign[] = [];
+  #libMine = false;
+  /** Set by main.ts: opening a library design is the shipyard's job. */
+  #onOpenDesign: ((d: SavedDesign) => void) | null = null;
+  /** The design whose hull the next practice level is flown in, if any. */
+  #hull: SavedDesign | null = null;
+
+  onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
   constructor(api: Api, onLaunch: (l: Launch) => void) {
     this.#api = api;
@@ -55,6 +89,7 @@ export class Lobby {
     this.#room = null;
     this.#showLobbyPanel();
     void this.refresh();
+    void this.refreshLibrary();
     this.#startPolling();
   }
 
@@ -253,18 +288,127 @@ export class Lobby {
     if (this.#timer !== null) { clearInterval(this.#timer); this.#timer = null; }
   }
 
-  #bind(): void {
-    $('bPractice').onclick = () => {
-      this.#stopPolling();
-      this.hide();
-      this.#onLaunch({
-        kind: 'offline',
-        seed: randomSeed(),
-        scenario: 'skirmish',
-        humanSides: 0b01,
-        side: 0,
-      });
+  /** A button a level. The first keeps the id the harness has always used. */
+  #renderPractice(): void {
+    const host = $('practiceList');
+    if (host.childElementCount) return;
+    PRACTICE.forEach((p, n) => {
+      const b = document.createElement('button');
+      if (n === 0) b.id = 'bPractice';
+      b.innerHTML = `<span class="n">${p.name}</span><span class="d">${p.blurb}</span>`;
+      b.onclick = () => { this.#practice(p.key); };
+      host.appendChild(b);
+    });
+  }
+
+  /**
+   * Which hull to take into a practice level.
+   *
+   * One chooser above the levels rather than one per level: it is a single
+   * choice that applies to whichever is tapped, and seven copies of it would
+   * be seven controls saying one thing. Anyone's design may be picked, the
+   * same rule the library itself follows.
+   */
+  #renderPracticeHull(): void {
+    const host = $('practiceHull');
+    host.innerHTML = '';
+    // `sub` is HTML the caller has already escaped, so a separator entity
+    // stays a separator instead of arriving on screen as its own source.
+    const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
+      const b = document.createElement('button');
+      b.className = on ? 'on' : '';
+      b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
+      b.onclick = fn;
+      host.appendChild(b);
     };
+    pick('As authored', 'the level picks the hulls', !this.#hull, () => {
+      this.#hull = null;
+      this.#renderPracticeHull();
+    });
+    for (const d of this.#library) {
+      if (classIndexOf(d.classKey) < 0) continue;
+      pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
+        + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
+        this.#hull?.designId === d.designId, () => {
+          this.#hull = d;
+          this.#renderPracticeHull();
+        });
+    }
+    // Say exactly how far the pick goes. A design that quietly flew as a stock
+    // hull would read as the editor not working.
+    $('practiceHullNote').innerHTML = this.#hull
+      ? `Every ship you field is this hull: its own mass, hull points, flight `
+        + 'envelope and guns, derived by the core from the parts and the plate '
+        + 'you fitted. The level still decides where they stand and how many.'
+      : 'Or take a hull out of the library. Anyone&rsquo;s will do.';
+  }
+
+  #practice(scenario: string): void {
+    this.#stopPolling();
+    this.hide();
+    this.#onLaunch({
+      kind: 'offline', seed: randomSeed(), scenario, humanSides: 0b01, side: 0,
+      ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
+    });
+  }
+
+  // ------------------------------------------------------- the ship library --
+
+  /** Refresh the library. Public to read, so this works signed out too. */
+  async refreshLibrary(): Promise<void> {
+    try {
+      const { designs } = await this.#api.listDesigns({ mine: this.#libMine, limit: 60 });
+      this.#library = designs;
+    } catch {
+      // A library that cannot load must not take the lobby down with it: the
+      // rooms and the practice levels have nothing to do with it.
+      this.#library = [];
+    }
+    this.#renderLibrary();
+    // The hull chooser is the library seen from the practice screen, so it is
+    // rebuilt from the same fetch rather than from a copy of it.
+    this.#renderPracticeHull();
+  }
+
+  #renderLibrary(): void {
+    const host = $('libList');
+    host.innerHTML = '';
+    $('libEmpty').style.display = this.#library.length ? 'none' : '';
+    $('bLibAll').className = this.#libMine ? '' : 'primary';
+    $('bLibMine').className = this.#libMine ? 'primary' : '';
+    for (const d of this.#library) {
+      const row = document.createElement('div');
+      row.className = 'libRow';
+      const cls = d.classKey.replace(/_/g, ' ');
+      row.innerHTML = `<div class="bd"><div class="n">${escape(d.name)}`
+        + (d.mine ? '<span class="me">yours</span>' : '') + '</div>'
+        + `<div class="s">${escape(cls)} &middot; by ${escape(d.owner.name)} &middot; `
+        + `saved mass ${d.reported.mass.toFixed(3)}, hull ${d.reported.hull.toFixed(0)}`
+        + (d.reported.legal ? '' : ' &middot; <span class="bad">illegal when saved</span>')
+        + '</div></div>';
+      const open = document.createElement('button');
+      open.textContent = 'Open';
+      open.onclick = () => { this.#onOpenDesign?.(d); };
+      row.appendChild(open);
+      if (d.mine) {
+        const del = document.createElement('button');
+        del.textContent = 'Delete';
+        del.onclick = () => {
+          void this.#api.deleteDesign(d.designId)
+            .then(() => this.refreshLibrary())
+            .catch(e => this.#err(e));
+        };
+        row.appendChild(del);
+      }
+      host.appendChild(row);
+    }
+  }
+
+  #bind(): void {
+    this.#renderPractice();
+    this.#renderPracticeHull();
+    $('bLibAll').onclick = () => { this.#libMine = false; void this.refreshLibrary(); };
+    $('bLibMine').onclick = () => { this.#libMine = true; void this.refreshLibrary(); };
     $('bNewPve').onclick = () => { void this.#create('pve'); };
     $('bNewPvp').onclick = () => { void this.#create('pvp'); };
 

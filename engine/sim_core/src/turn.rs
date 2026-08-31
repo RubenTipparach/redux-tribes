@@ -35,6 +35,10 @@ pub struct Order {
     pub mode: Option<Mode>,
     pub target: Option<V3>,
     pub face: Option<V3>,
+    /// Commanded roll about the nose, in radians from wings level. None holds
+    /// whatever the hull is already at, which is what every order did before
+    /// there was a roll to command.
+    pub roll: Option<f32>,
     pub weapons: Vec<FireOrder>,
     pub board: Option<ShipId>,
     /// The AI's chosen target, carried IN the order rather than written onto
@@ -66,6 +70,16 @@ pub enum EventKind {
     BoardingTick,
     ShipCaptured,
     GameOver,
+    /// Appended rather than filed next to the other two skips on purpose: the
+    /// client mirrors these discriminants by position, so inserting one in the
+    /// middle silently renumbers every kind after it.
+    ShotSkippedCooldown,
+    /// A mount that had nothing wrong with its cooldown, its arc or its range,
+    /// and no weapon bay left to fire from.
+    ShotSkippedOffline,
+    /// A reactor went. The subject is the ship that broke up; the blast that
+    /// follows arrives as ordinary Damage events against whoever was near it.
+    ShipCritical,
 }
 
 /// One thing that happened, flattened to numbers so it crosses the wasm
@@ -131,6 +145,8 @@ impl Sim {
         }
         let mut hull_share = dmg;
         let mut engines_just_died = false;
+        let mut jets_just_died = false;
+        let mut reactor_breached = false;
 
         if let Some(bi) = sub_idx {
             let block_pct = {
@@ -155,10 +171,13 @@ impl Sim {
                     events.push(e);
 
                     let ship = &self.ships[si];
-                    let was_thruster =
-                        ship.class_def().subsystems[ship.subs[bi].def].kind == SubKind::Thruster;
-                    if was_thruster && !ship.has_live_thruster() {
-                        engines_just_died = true;
+                    match ship.class_def().subsystems[ship.subs[bi].def].kind {
+                        SubKind::Thruster if !ship.has_live_thruster() => {
+                            engines_just_died = true;
+                        }
+                        SubKind::Rcs if !ship.has_live_rcs() => jets_just_died = true,
+                        SubKind::Reactor => reactor_breached = true,
+                        _ => {}
                     }
                 }
             }
@@ -179,8 +198,22 @@ impl Sim {
             events.push(e);
         }
 
+        // Jets out: the drive still works, so this is not a drift. The ship
+        // re-flies the rest of the turn on an envelope that cannot turn, which
+        // is what a plan drawn round a corner looks like when the corner stops
+        // being available halfway through it.
+        if jets_just_died && !engines_just_died {
+            let vel = self.ships[si].vel_at_tick(tick);
+            self.replan_from(si, tick, vel);
+        }
+
         let ship = &mut self.ships[si];
         ship.hull = (ship.hull - hull_share).max(0.0);
+        // A breach is not damage that happens to be lethal. The hull is gone
+        // the moment the pile is, whatever was left of it.
+        if reactor_breached {
+            ship.hull = 0.0;
+        }
 
         let mut e = Event::new(EventKind::Damage, tick);
         e.ship = si as i32;
@@ -198,12 +231,58 @@ impl Sim {
             }
         }
 
+        if reactor_breached {
+            let mut e = Event::new(EventKind::ShipCritical, tick);
+            e.ship = si as i32;
+            e.other = attacker.map(|a| a as i32).unwrap_or(-1);
+            e.amount = data::CRITICAL_DAMAGE;
+            e.pos = ship.pos;
+            events.push(e);
+        }
+
         if ship.hull <= 0.0 {
             ship.destroyed = true;
             let mut e = Event::new(EventKind::ShipDestroyed, tick);
             e.ship = si as i32;
             e.other = attacker.map(|a| a as i32).unwrap_or(-1);
+            // Where it died. Every other event worth drawing carries one, and
+            // a client that looked the hull's position up instead would be
+            // reading a pose the wreck no longer has.
+            e.pos = ship.pos;
             events.push(e);
+        }
+
+        if reactor_breached {
+            self.detonate(si, tick, events);
+        }
+    }
+
+    /// The blast that follows a breach.
+    ///
+    /// Hulls only, never subsystems, so a breach cannot reach another reactor
+    /// and the chain has no way to start: one detonation, bounded, rather than
+    /// a recursion whose depth is a property of where the ships happened to be
+    /// standing. Everyone in range takes it, friend and enemy alike.
+    ///
+    /// Targets are collected before any of them is damaged. Reading the state
+    /// while writing it would make the result depend on ship order, and ship
+    /// order is exactly the thing two clients must not be allowed to disagree
+    /// about.
+    fn detonate(&mut self, si: usize, tick: i32, events: &mut Vec<Event>) {
+        let centre = self.ships[si].pos;
+        let mut hits: Vec<(usize, f32)> = Vec::new();
+        for (ti, t) in self.ships.iter().enumerate() {
+            if ti == si || t.destroyed {
+                continue;
+            }
+            let d = t.pos.dist(centre);
+            if d >= data::CRITICAL_RADIUS {
+                continue;
+            }
+            hits.push((ti, data::CRITICAL_DAMAGE * (1.0 - d / data::CRITICAL_RADIUS)));
+        }
+        for (ti, dmg) in hits {
+            self.apply_damage(ti, None, dmg, Some(self.ships[si].id), events, tick);
         }
     }
 
@@ -227,17 +306,20 @@ impl Sim {
 
         let target = order.and_then(|o| o.target);
         let face = order.and_then(|o| o.face);
+        let roll = order.and_then(|o| o.roll);
         let body = ship.body();
-        let fl = ship.flight;
+        // What it can fly now, not what its class was authored to fly: a hull
+        // with the jets shot off keeps its drive and turns nowhere.
+        let fl = ship.effective_flight();
         let dead = ship.drift_active;
 
         let flown = if dead {
             // No thrust and no attitude authority: coast, and let fly_span
             // handle it through Drift rather than special casing it here.
-            fly_span(body, None, Mode::Drift, &fl, face, TICKS_PER_TURN,
+            fly_span(body, None, Mode::Drift, &fl, face, roll, TICKS_PER_TURN,
                      1.0 / TICKS_PER_SECOND as f32, &self.wells)
         } else {
-            fly_span(body, target, mode, &fl, face, TICKS_PER_TURN,
+            fly_span(body, target, mode, &fl, face, roll, TICKS_PER_TURN,
                      1.0 / TICKS_PER_SECOND as f32, &self.wells)
         };
 
@@ -261,6 +343,44 @@ impl Sim {
         ship.plan_from_tick = 0;
         ship.plan_target = target;
         ship.plan_face = face;
+        ship.plan_roll = roll;
+    }
+
+    /// Fly into a world and you are part of it.
+    ///
+    /// A well's softening radius is not a fudge factor, it is the body's own
+    /// radius: the distance inside which the field stops growing because you
+    /// are inside the mass. So crossing it is not a near miss, it is the
+    /// surface, and a hull that reaches it is gone.
+    ///
+    /// Straight after kinematics and before contact, because a hull that is
+    /// inside a planet should not go on to bump into anything else this tick.
+    /// Killed through `apply_damage` like everything else, so the wreck, the
+    /// event and its position all come out of the one pipeline rather than a
+    /// second way for a ship to die.
+    fn resolve_impacts(&mut self, tick: i32, events: &mut Vec<Event>) {
+        // Gathered first, because the loop reads the wells while the kill
+        // writes to the ships.
+        let mut hit: Vec<usize> = Vec::new();
+        for (si, ship) in self.ships.iter().enumerate() {
+            if ship.destroyed {
+                continue;
+            }
+            let r = ship.radius;
+            for w in &self.wells {
+                let reach = w.soft + r;
+                if ship.pos.sub(w.pos).len2() <= reach * reach {
+                    hit.push(si);
+                    break;
+                }
+            }
+        }
+        for si in hit {
+            // Exactly enough to finish it, so the damage event carries a real
+            // number rather than an infinity the console would have to print.
+            let left = self.ships[si].hull.max(0.0) + 1.0;
+            self.apply_damage(si, None, left, None, events, tick);
+        }
     }
 
     /// Re-fly the remainder of the turn after contact changed the velocity.
@@ -275,8 +395,9 @@ impl Sim {
             body,
             ship.plan_target,
             mode,
-            &ship.flight,
+            &ship.effective_flight(),
             ship.plan_face,
+            ship.plan_roll,
             steps,
             1.0 / TICKS_PER_SECOND as f32,
             &self.wells,
@@ -297,16 +418,70 @@ impl Sim {
 
     /// May this weapon fire this turn?
     ///
-    /// One shot per weapon per turn at most, plus any extra turn gap the
-    /// weapon asks for. The archive's arithmetic made cooldown 0 and 1 both
-    /// fire every turn, and that is preserved rather than tidied.
+    /// Now just `fire_gate` at second zero: "can this mount fire at all this
+    /// turn". The old arithmetic counted whole turns, which made cooldown 0
+    /// and 1 both mean fire every turn, so no weapon ever waited.
     pub fn can_fire(&self, si: usize, weapon_index: usize) -> bool {
+        self.fire_gate(si, weapon_index, 0)
+    }
+
+    /// May this mount fire at `second` of the CURRENT turn?
+    ///
+    /// One rule on the match clock: the gap since the mount last fired must
+    /// reach its cooldown. Absolute ticks, so a shot at second 9 of one turn
+    /// still holds the mount at second 0 of the next, and a second shot later
+    /// in the same turn is gated by exactly the same comparison.
+    ///
+    /// The planner asks this to decide which fire slots to offer, and the
+    /// resolver asks it before every shot, so a slot the client offers is a
+    /// slot the resolver will honour.
+    pub fn fire_gate(&self, si: usize, weapon_index: usize, second: i32) -> bool {
         let Some(ship) = self.ships.get(si) else { return false };
         let Some(w) = ship.weapons.get(weapon_index) else { return false };
-        if w.last_fired_turn < 0 {
+        // The bay feeds every mount on the hull, so losing it silences all of
+        // them at once. Asked here rather than at the mount because this is
+        // the one gate both the planner and the resolver go through.
+        if !ship.has_live_weapon_bay() {
+            return false;
+        }
+        if w.last_fired_tick < 0 {
             return true;
         }
-        self.turn - w.last_fired_turn >= data::weapon(w.key).cooldown_turns.max(1)
+        let at = self.absolute_tick(second * TICKS_PER_SECOND as i32);
+        at - w.last_fired_tick >= Self::cooldown_ticks(w.key)
+    }
+
+    /// A weapon's cooldown in ticks. Rounded once, here, so the planner and the
+    /// resolver cannot round it differently.
+    pub fn cooldown_ticks(key: crate::data::WeaponKey) -> i32 {
+        (data::weapon(key).cooldown_secs * TICKS_PER_SECOND as f32) as i32
+    }
+
+    /// Ticks since the match began, which is the clock cooldown runs on.
+    pub fn absolute_tick(&self, tick: i32) -> i32 {
+        self.turn * TICKS_PER_TURN as i32 + tick
+    }
+
+    /// The earliest second of THIS turn at which a mount could fire again,
+    /// given a shot already planned at `prev_second`. Negative `prev_second`
+    /// means nothing is planned yet. The client walks its own queue and asks
+    /// this, so the spacing itself is never computed in the renderer.
+    pub fn next_free_second(&self, si: usize, weapon_index: usize, prev_second: i32) -> i32 {
+        let Some(ship) = self.ships.get(si) else { return 0 };
+        let Some(w) = ship.weapons.get(weapon_index) else { return 0 };
+        let gap = Self::cooldown_ticks(w.key);
+        let from_state = if w.last_fired_tick < 0 {
+            0
+        } else {
+            let t = w.last_fired_tick + gap - self.absolute_tick(0);
+            (t + TICKS_PER_SECOND as i32 - 1) / TICKS_PER_SECOND as i32
+        };
+        let from_queue = if prev_second < 0 {
+            0
+        } else {
+            prev_second + (gap + TICKS_PER_SECOND as i32 - 1) / TICKS_PER_SECOND as i32
+        };
+        from_state.max(from_queue).max(0)
     }
 
     /// May this ship send marines to that one right now?
@@ -318,7 +493,7 @@ impl Sim {
             && !to.destroyed
             && to.faction != from.faction
             && from.marines > 0
-            && from.pos.dist(to.pos) <= from.class_def().boarding_range
+            && from.pos.dist(to.pos) <= from.boarding_range
     }
 
     // --------------------------------------------------------------- weapons --
@@ -334,7 +509,24 @@ impl Sim {
         let key = w.key;
         let wd = data::weapon(key);
 
-        if !self.can_fire(si, order.weapon_index) {
+        // The same gate the planner offered slots from, asked again here at
+        // the moment of firing. A shot the cooldown does not allow is dropped
+        // rather than silently fired: the client will not have offered it, and
+        // a hand written or stale order set must not get a free shot.
+        let second = tick / TICKS_PER_SECOND as i32;
+        if !self.fire_gate(si, order.weapon_index, second) {
+            // Two ways to fail one gate, and a player told "cooldown" when the
+            // bay is wrecked would sit through a turn waiting for a mount that
+            // is never coming back.
+            let kind = if self.ships[si].has_live_weapon_bay() {
+                EventKind::ShotSkippedCooldown
+            } else {
+                EventKind::ShotSkippedOffline
+            };
+            let mut e = Event::new(kind, tick);
+            e.ship = si as i32;
+            e.aux = order.weapon_index as i32;
+            events.push(e);
             return;
         }
 
@@ -374,8 +566,8 @@ impl Sim {
             return;
         }
 
-        let turn = self.turn;
-        self.ships[si].weapons[order.weapon_index].last_fired_turn = turn;
+        let fired_at = self.absolute_tick(tick);
+        self.ships[si].weapons[order.weapon_index].last_fired_tick = fired_at;
         let dmg = wd.damage();
         let owner = self.ships[si].id;
 
@@ -583,7 +775,7 @@ impl Sim {
                 if self.ships[i].destroyed || self.ships[j].destroyed {
                     continue;
                 }
-                let (ra, rb) = (self.ships[i].class_def().radius, self.ships[j].class_def().radius);
+                let (ra, rb) = (self.ships[i].radius, self.ships[j].radius);
                 let delta = self.ships[j].pos.sub(self.ships[i].pos);
                 let dist = delta.len();
                 let min_dist = ra + rb;
@@ -593,7 +785,7 @@ impl Sim {
 
                 let nrm = delta.scale(1.0 / dist);
                 let overlap = min_dist - dist;
-                let (ma, mb) = (self.ships[i].class_def().mass, self.ships[j].class_def().mass);
+                let (ma, mb) = (self.ships[i].mass, self.ships[j].mass);
                 // The heavier hull moves less, which is the only place mass
                 // shows up in this game and the only place it needs to.
                 let wa = mb / (ma + mb);
@@ -814,11 +1006,13 @@ impl Sim {
                     self.ships[si].quat = q;
                 }
             }
-            // 2. projectiles
+            // 2. the ground
+            self.resolve_impacts(tick, &mut events);
+            // 3. projectiles
             self.step_projectiles(tick, &mut events);
-            // 3. contact
+            // 4. contact
             self.resolve_collisions(tick, &mut events, &mut pair_cooldowns, &prev_positions);
-            // 4. whatever the second boundary schedules
+            // 5. whatever the second boundary schedules
             if tick % TICKS_PER_SECOND as i32 == 0 {
                 let second = tick / TICKS_PER_SECOND as i32;
                 if second == 0 {
@@ -839,7 +1033,7 @@ impl Sim {
                     self.boarding_second(tick, &mut events);
                 }
             }
-            // 5. record the frame for playback
+            // 6. record the frame for playback
             if self.record {
                 self.tracks.push(crate::state::TrackFrame {
                     ships: self.ships.iter().map(|s| (s.pos, s.quat, s.destroyed)).collect(),
@@ -889,7 +1083,7 @@ impl Sim {
             if !self.can_board(si, ti) {
                 continue;
             }
-            let capacity = self.ships[si].class_def().boarding_capacity;
+            let capacity = self.ships[si].boarding_capacity;
             let send = self.ships[si].marines.min(capacity);
             self.ships[si].marines -= send;
             let faction = self.ships[si].faction;
@@ -955,6 +1149,11 @@ impl Sim {
         // The field bends every flight, so it decides outcomes and belongs in
         // the hash. Count first, so an empty field and a zero strength well
         // are not the same match.
+        // Whether stats can be edited decides what the match will accept, so
+        // two clients that disagree part here rather than several turns later
+        // when one of them has actually moved a slider.
+        byte(self.sandbox as u8);
+
         int(self.wells.len() as i32, &mut byte);
         for w in &self.wells {
             for v in [w.pos.x, w.pos.y, w.pos.z, w.mu, w.soft] {
@@ -964,6 +1163,10 @@ impl Sim {
 
         for s in &self.ships {
             int(s.id as i32, &mut byte);
+            // Which hull it is, because a side may now pick one: a player who
+            // fielded a Rogue against a client that spawned a Terran would
+            // otherwise agree for as long as the two happened to fly alike.
+            int(data::class_index(s.class) as i32, &mut byte);
             int(s.faction.index() as i32, &mut byte);
             int(s.side as i32, &mut byte);
             int(s.destroyed as i32, &mut byte);
@@ -987,13 +1190,20 @@ impl Sim {
                 num(v, &mut byte);
             }
             num(s.hull, &mut byte);
+            // Per ship since a design may set them, so two clients that
+            // disagreed about a hull's mass or radius would ram differently
+            // and shoot past each other.
+            for v in [s.mass, s.radius, s.boarding_range] {
+                num(v, &mut byte);
+            }
+            int(s.boarding_capacity, &mut byte);
             int(s.marines, &mut byte);
             for x in &s.subs {
                 num(x.hp, &mut byte);
                 int(x.dead as i32, &mut byte);
             }
             for w in &s.weapons {
-                int(w.last_fired_turn, &mut byte);
+                int(w.last_fired_tick, &mut byte);
             }
             for p in &s.boarding_parties {
                 int(p.faction.index() as i32, &mut byte);

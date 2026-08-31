@@ -8,9 +8,9 @@
  * trapped the app in playback with no way back to planning, and a bottom sheet
  * that covered the fire slots so a queued shot could not be placed on a phone.
  *
- * So this drives the actual console: taps a hostile to target it, arms each
- * mount, drops it in a fire slot, ends the turn, watches the playback out, and
- * repeats until the header says VICTORY. Nothing here reaches into app state to
+ * So this drives the actual console: taps a hostile to target it, opens a fire
+ * slot, queues a mount from the list it offers, ends the turn, watches the
+ * playback out, and repeats until the header says VICTORY. Nothing here reaches into app state to
  * make progress; ftDebug is read only and used only to observe.
  *
  *   node web/tests/playthrough.mjs [url] [--mobile]
@@ -66,6 +66,11 @@ const state = () => page.evaluate(() => ({
 log(`playing at ${VIEWPORT.width}x${VIEWPORT.height}${MOBILE ? ' (touch)' : ''}`);
 
 let shotsQueued = 0;
+/** Whether the aim strip was used, and whether the pick reached an order. */
+let aimedAtAVolume = false;
+let aimedShotQueued = false;
+/** The most chunks of hull seen in the air at once. */
+let chunksSeen = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -79,10 +84,165 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await tap('#bPractice');
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
+  if (attempt === 1) await checkNothingIsBuried();
+  if (attempt === 1) await checkHullsAreShips(page);
 
   outcome = await playMatch();
   final = await state();
   if (final.phase === 'VICTORY') break;
+}
+
+// Subsystem targeting is a pick that has to reach the ORDER. A chip that
+// highlights and sends -1 across the boundary is a light, not a feature.
+if (!aimedAtAVolume) {
+  console.log('\nFAIL: never managed to aim at a volume');
+  process.exit(1);
+}
+if (!aimedShotQueued) {
+  console.log('\nFAIL: aimed at a volume and the queued shot still carried the hull');
+  process.exit(1);
+}
+log('shots can be aimed at a subsystem, and the order carries it');
+
+// A hit takes cells off the hull it hit, and they fly. Both are drawn from the
+// event stream, so this is the check that the stream is actually reaching the
+// renderer: a match full of hits and nothing off any hull means the carve
+// stopped finding the cells.
+const carved = await page.evaluate(() => window.ftDebug.damage().carved);
+const total = carved.reduce((a, [, n]) => a + n, 0);
+if (!total) {
+  console.log('\nFAIL: a whole match of hits and not one cell off a hull');
+  process.exit(1);
+}
+if (!chunksSeen) {
+  console.log('\nFAIL: cells came off and nothing flew');
+  process.exit(1);
+}
+log(`hulls come apart: ${total} cells off ${carved.length} ships, `
+  + `${chunksSeen} chunks in the air at once`);
+
+/**
+ * Nothing a player needs may sit UNDER a sheet.
+ *
+ * This defect has landed twice and looks identical both times: a control is
+ * drawn, is not disabled, and swallows every touch because a sheet is over it.
+ * The fire slots went first, then the heading dials. So the class is checked
+ * rather than the instances: with a sheet open, the centre of every on canvas
+ * control must hit that control and not something else.
+ *
+ * elementFromPoint is the browser's own answer to "what would this tap reach",
+ * which is why it catches a case that a screenshot and a visibility check both
+ * pass.
+ */
+/**
+ * The map draws the ships, not stand ins for them.
+ *
+ * Every hull used to be a five sided cone. It reads at a glance and it is a
+ * lie: a player spends an hour in the shipyard and then flies a triangle. A
+ * quad count is the cheapest thing that can tell the difference, and it is the
+ * one that would go back to zero if the cone ever returned.
+ */
+async function checkHullsAreShips(page) {
+  const quads = await page.evaluate(() => window.ftDebug.hullQuads());
+  if (quads.length < 2) {
+    console.log(`\nFAIL: only ${quads.length} hulls on the map`);
+    process.exit(1);
+  }
+  if (quads.some(q => q < 200)) {
+    console.log(`\nFAIL: a hull is ${Math.min(...quads)} quads, which is not a ship`);
+    process.exit(1);
+  }
+  const total = quads.reduce((a, b) => a + b, 0);
+  if (total > 24000) {
+    console.log(`\nFAIL: ${total} quads of hull on screen, which is a budget rather than a ship`);
+    process.exit(1);
+  }
+  log(`hulls are drawn from their own cells: ${quads.join(', ')} quads, ${total} in all`);
+}
+
+async function checkNothingIsBuried() {
+  await sheet(true);
+  await assertNothingBuried('an open sheet');
+  await sheet(false);
+}
+
+/** The one implementation, so a second thing that floats over the canvas is
+ * checked the same way the sheets are rather than by its own near copy. */
+async function assertNothingBuried(what) {
+  const buried = await page.evaluate(() => {
+    const out = [];
+    const sel = '#modes button, .dial, #toolbar button, #bEnd, #timeline, footer .slot';
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (top && el.contains(top)) continue;
+      const over = top ? (top.closest('[id]')?.id || top.tagName) : 'nothing';
+      out.push(`${el.id || el.className || el.tagName}:${el.textContent.trim().slice(0, 8)} under ${over}`);
+    }
+    return out;
+  });
+  if (buried.length) {
+    console.log(`\nFAIL: ${buried.length} control(s) buried under ${what}:`);
+    for (const b of buried) console.log('  ' + b);
+    process.exit(1);
+  }
+  log(`nothing buried under ${what}`);
+}
+
+/**
+ * The review panel: shut unless asked for, and it puts the match back.
+ *
+ * The point of the panel is that watching a turn again is a MODE you enter,
+ * so the two things worth proving are that it is not on screen until you open
+ * it, and that leaving it returns the match bit for bit. Watching restores a
+ * past world into the live core, so a review that left the world anywhere else
+ * would be worse than no review at all, and the state hash is the check the
+ * core already computes for exactly that.
+ */
+async function checkReview() {
+  const read = () => page.evaluate(() => ({
+    hidden: document.getElementById('reviewPanel').classList.contains('hidden'),
+    hash: document.getElementById('hHash').textContent,
+    turn: document.getElementById('hTurn').textContent,
+    phase: document.getElementById('hPhase').textContent,
+    review: window.ftDebug.review(),
+  }));
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+
+  const shut = await read();
+  if (!shut.hidden) fail('the review panel is on screen before it is opened');
+  if (shut.review !== null) fail('review state exists with the panel shut');
+  const live = { hash: shut.hash, turn: shut.turn };
+
+  await tap('#bReview');
+  const open = await read();
+  if (open.hidden) fail('Review did not open the panel');
+  await assertNothingBuried('the review panel');
+  // Aiming must not move the match.
+  await tap('#rpPrev');
+  const aimed = await read();
+  if (aimed.hash !== live.hash || aimed.turn !== live.turn) {
+    fail(`aiming the picker moved the match: ${live.turn}/${live.hash} became ${aimed.turn}/${aimed.hash}`);
+  }
+  if (aimed.review?.watching) fail('aiming the picker started watching');
+
+  await tap('#rpWatch');
+  await page.waitForTimeout(400);
+  const watching = await read();
+  if (!watching.review?.watching) fail('Watch did not load the turn it was aimed at');
+  if (!/WATCHING/.test(watching.phase)) fail(`header says ${watching.phase} while watching`);
+
+  await tap('#rpLive');
+  await page.waitForTimeout(200);
+  const back = await read();
+  if (back.hash !== live.hash || back.turn !== live.turn) {
+    fail(`the review did not put the match back: ${live.turn}/${live.hash} became ${back.turn}/${back.hash}`);
+  }
+  await tap('#rpClose');
+  const closed = await read();
+  if (!closed.hidden) fail('closing the panel left it on screen');
+  log(`review panel opens, aims without moving the match, and restores ${live.turn}/${live.hash}`);
 }
 
 async function playMatch() {
@@ -101,9 +261,43 @@ async function playMatch() {
   await (MOBILE ? foes.first().tap() : foes.first().click());
   await page.waitForTimeout(150);
 
-  // Every living ship of mine fires everything it has.
   const mineRows = page.locator('#fleet .shipRow:not(.gone)');
   const mineCount = await mineRows.count();
+
+  // First give every ship the target and point it at one.
+  //
+  // Whether a mount MAY fire is a cooldown question, so the console will
+  // happily take a shot at a hostile no arc bears on, and this harness used to
+  // sit still and shoot: one run queued 156 shots over 26 turns and killed
+  // nothing, because the last hostile had flown behind a fleet that never
+  // turned. Facing the target is what a player does between turns, and it goes
+  // through the toolbar button rather than ftDebug, which observes and never
+  // drives.
+  //
+  // Targeting is per ship, so the pick has to be made with that ship selected;
+  // aiming and firing are two passes because the button lives on the canvas and
+  // the rows live in a sheet that covers it on a phone.
+  for (let i = 0; i < mineCount; i++) {
+    await sheet(true);
+    const row = page.locator('#fleet .shipRow:not(.gone)').nth(i);
+    if (!(await row.count())) continue;
+    await (MOBILE ? row.tap() : row.click());
+    await page.waitForTimeout(150);
+    if (!(await page.evaluate(() => window.ftDebug.canPlan()))) continue;
+    const foe = page.locator('#hostiles .shipRow:not(.gone)').first();
+    if (await foe.count()) {
+      await (MOBILE ? foe.tap() : foe.click());
+      await page.waitForTimeout(150);
+    }
+    await sheet(false);
+    const face = page.locator('#pFace');
+    if ((await face.count()) && !(await face.isDisabled())) {
+      await (MOBILE ? face.tap() : face.click());
+      await page.waitForTimeout(150);
+    }
+  }
+
+  // Then every living ship of mine fires everything it has.
   let queuedThisTurn = 0;
   for (let i = 0; i < mineCount; i++) {
     await sheet(true);
@@ -120,17 +314,50 @@ async function playMatch() {
       await page.waitForTimeout(150);
     }
 
-    const weps = page.locator('#weps .wrow:not(.spent)');
-    const n = await weps.count();
+    // A fire slot opens what can happen in that second. There is no arming
+    // step any more: pick the second, then pick the mount out of its list.
+    const n = await page.locator('#weps .wrow:not(.spent)').count();
     for (let w = 0; w < n; w++) {
-      const wep = page.locator('#weps .wrow:not(.spent)').nth(w);
-      if (!(await wep.count())) break;
-      await (MOBILE ? wep.tap() : wep.click());
-      await page.waitForTimeout(120);
       // Spread the shots across the ten seconds of the turn.
       const slot = page.locator('#slots .slot').nth(Math.min(9, 1 + w * 3));
       await (MOBILE ? slot.tap() : slot.click());
-      await page.waitForTimeout(120);
+      await page.waitForTimeout(140);
+      // Mount w if it can fire in this second, else whatever can. Taking the
+      // first row every time fires mount 0 over and over and leaves the rest
+      // of the battery cold, which looks like queueing and does not shoot.
+      // Once a match, aim somewhere other than the hull before queueing, and
+      // check the pick reaches the plan. Subsystem targeting is worth nothing
+      // if the chip is a light: the number on the order is the whole feature.
+      if (!aimedAtAVolume) {
+        // The engines, the way a player would: it is the volume whose loss
+        // decides a fight. Taking the first chip aims at a belt, which is the
+        // one pick that makes a shot WORSE than aiming at the hull.
+        const engines = page.locator('#slotMenu .smaim .aimc[data-aim]', { hasText: /^engines/ });
+        const chip = (await engines.count())
+          ? engines.first()
+          : page.locator('#slotMenu .smaim .aimc[data-aim]:not([data-aim="-1"])').first();
+        if (await chip.count()) {
+          await (MOBILE ? chip.tap() : chip.click());
+          await page.waitForTimeout(140);
+          aimedAtAVolume = await page.evaluate(() => window.ftDebug.aimSub() >= 0);
+          if (!aimedAtAVolume) { outcome = 'the aim chip did not take'; break; }
+        }
+      }
+      const mine = page.locator(`#slotMenu .srow[data-add="${w}"]`);
+      const add = (await mine.count()) ? mine : page.locator('#slotMenu .srow[data-add]').first();
+      if (await add.count()) {
+        await (MOBILE ? add.tap() : add.click());
+        await page.waitForTimeout(140);
+        if (aimedAtAVolume && !aimedShotQueued) {
+          const o = await page.evaluate(() => window.ftDebug.order());
+          aimedShotQueued = (o?.weapons ?? []).some(x => x.targetSub >= 0);
+        }
+      }
+      const close = page.locator('#smClose');
+      if (await close.count()) {
+        await (MOBILE ? close.tap() : close.click());
+        await page.waitForTimeout(100);
+      }
     }
     const order = await page.evaluate(() => window.ftDebug.order());
     queuedThisTurn += order?.weapons?.length ?? 0;
@@ -141,6 +368,16 @@ async function playMatch() {
   const endBtn = page.locator('#bEnd');
   if (await endBtn.isDisabled()) { outcome = 'End Turn was disabled while planning'; break; }
   await tap('#bEnd');
+
+  // Cells come off a hull where it was hit, and the chunks fly. Sampled until
+  // chunks are actually seen, because an early turn where nothing connects is
+  // an early turn where nothing should fly: waiting for the first two turns
+  // and giving up is a check that fails on a match that opened at long range.
+  if (!chunksSeen) {
+    await page.waitForTimeout(1500);
+    const d = await page.evaluate(() => window.ftDebug.damage());
+    chunksSeen = Math.max(chunksSeen, d.chunks);
+  }
 
   // Playback must run out and hand control back. A turn that never returns to
   // planning is the freeze this harness exists to catch.
@@ -168,6 +405,7 @@ log('turns played   :', final.turn);
 log('shots queued   :', shotsQueued);
 log('my ships       :', final.mine.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 log('hostiles       :', final.foes.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
+await checkReview();
 log('page errors    :', errors.length ? errors : 'none');
 
 await page.screenshot({ path: MOBILE ? '/tmp/playthrough-mobile.png' : '/tmp/playthrough.png' });

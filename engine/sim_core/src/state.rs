@@ -63,7 +63,10 @@ pub struct Sub {
 pub struct WeaponSlot {
     pub key: WeaponKey,
     pub mount: V3,
-    pub last_fired_turn: i32,
+    /// Absolute tick this mount last fired on, or -1. Absolute rather than per
+    /// turn, so one comparison covers both a second shot later in the same
+    /// turn and a shot early in the next one.
+    pub last_fired_tick: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -97,6 +100,17 @@ pub struct Ship {
 
     pub hull: f32,
     pub hull_max: f32,
+    /// Mass, radius and the boarding numbers, per SHIP rather than per class.
+    ///
+    /// They seed from the class and a designed hull replaces them, which is
+    /// what makes a design a ship rather than a skin: mass decides what a ram
+    /// costs, radius decides what a shot can reach and what collides, and the
+    /// boarding pair decides who can be taken. All four are in the state hash
+    /// for the same reason the flight stats are.
+    pub mass: f32,
+    pub radius: f32,
+    pub boarding_range: f32,
+    pub boarding_capacity: i32,
     pub subs: Vec<Sub>,
     pub weapons: Vec<WeaponSlot>,
 
@@ -134,6 +148,10 @@ pub struct Ship {
     /// destination from wherever the contact left the ship.
     pub plan_target: Option<V3>,
     pub plan_face: Option<V3>,
+    /// The roll this turn was flown with, kept for the same reason as the
+    /// face: resolution re-enters the span after a collision and must fly
+    /// the remainder on the order it started with.
+    pub plan_roll: Option<f32>,
 }
 
 impl Ship {
@@ -158,6 +176,10 @@ impl Ship {
             flight: cls.flight,
             hull: cls.hull,
             hull_max: cls.hull,
+            mass: cls.mass,
+            radius: cls.radius,
+            boarding_range: cls.boarding_range,
+            boarding_capacity: cls.boarding_capacity,
             subs: cls
                 .subsystems
                 .iter()
@@ -167,7 +189,7 @@ impl Ship {
             weapons: cls
                 .weapons
                 .iter()
-                .map(|m| WeaponSlot { key: m.key, mount: m.mount, last_fired_turn: -99 })
+                .map(|m| WeaponSlot { key: m.key, mount: m.mount, last_fired_tick: -99 })
                 .collect(),
             marines: cls.marines,
             boarding_parties: Vec::new(),
@@ -188,6 +210,7 @@ impl Ship {
             plan_from_tick: 0,
             plan_target: None,
             plan_face: None,
+            plan_roll: None,
         }
     }
 
@@ -208,8 +231,42 @@ impl Ship {
     }
 
     pub fn has_live_thruster(&self) -> bool {
+        self.has_live(SubKind::Thruster)
+    }
+
+    /// Attitude authority. A hull with no live jets keeps its main drive and
+    /// loses the ability to point it anywhere.
+    pub fn has_live_rcs(&self) -> bool {
+        self.has_live(SubKind::Rcs)
+    }
+
+    /// Whether any mount on this hull may fire. A ship with no weapon bay in
+    /// its class (the freighter) has nothing to lose and nothing to fire, so
+    /// the answer is the same either way and the mount list is what decides.
+    pub fn has_live_weapon_bay(&self) -> bool {
+        !self.class_def().subsystems.iter().any(|d| d.kind == SubKind::Weapon)
+            || self.has_live(SubKind::Weapon)
+    }
+
+    fn has_live(&self, kind: SubKind) -> bool {
         let defs = self.class_def().subsystems;
-        self.subs.iter().any(|s| defs[s.def].kind == SubKind::Thruster && !s.dead)
+        self.subs.iter().any(|s| defs[s.def].kind == kind && !s.dead)
+    }
+
+    /// The envelope this hull can actually fly RIGHT NOW.
+    ///
+    /// The authored stats stay where they are: what changes is what the ship
+    /// can do with them. Everything that flies a plan reads this rather than
+    /// `flight`, so the preview a player is shown and the path the resolver
+    /// walks come from one number, and losing the jets looks like losing the
+    /// jets a turn before it is proved.
+    pub fn effective_flight(&self) -> Flight {
+        let mut fl = self.flight;
+        if !self.has_live_rcs() {
+            fl.yaw_rate = 0.0;
+            fl.pitch_rate = 0.0;
+        }
+        fl
     }
 
     fn plan_index(&self, tick: i32) -> usize {
@@ -322,6 +379,18 @@ pub struct Sim {
     /// flying the same orders through different fields part on turn one.
     /// Order matters, because the accelerations are summed in it.
     pub wells: Vec<Well>,
+    /// Whether a hull's flight stats may be changed while the match is running.
+    ///
+    /// Off for a real match: the stats are what the class says, and a ship
+    /// behaves the way the ship behaves. They are also in the state hash, so
+    /// one seat nudging a slider parts the two clients from that turn on, and
+    /// the only reason that has never been seen is that nobody has done it in
+    /// a versus game.
+    ///
+    /// On, they are editable, which is the whole point of a sandbox. A match
+    /// fact rather than a client one for the same reason `human_sides` is: it
+    /// decides what the simulation will accept.
+    pub sandbox: bool,
 }
 
 /// One ship in a scenario request.
@@ -361,6 +430,7 @@ impl Sim {
             record: false,
             tracks: Vec::new(),
             wells: Vec::new(),
+            sandbox: false,
         }
     }
 
@@ -402,34 +472,48 @@ impl Sim {
         }
     }
 
-    /// Sweep a segment against every live ship, hull sphere and live subsystem
-    /// volumes alike, and return the nearest hit.
+    /// Sweep a segment against every live ship and return the nearest hit,
+    /// naming the subsystem volume it struck if it struck one.
     ///
-    /// Subsystems are tested before the hull, and since a subsystem volume
-    /// sits inside the hull sphere, a shot that reaches one damages it rather
-    /// than the hull. The layout is the damage model: this is what makes
-    /// aiming at the engines mean something.
+    /// Two questions, not one, and conflating them was a defect that made the
+    /// whole damage model inert: WHICH ship is nearest is decided by where the
+    /// segment enters, and WHAT it hits on that ship is the first live volume
+    /// along the segment inside it. Comparing subsystem distances against hull
+    /// distances in a single nearest-wins pass looks equivalent and is not: a
+    /// subsystem sits INSIDE the hull sphere, so the sphere is always entered
+    /// first and always won, and a shot carefully aimed at the engines landed
+    /// on the hull every time. The layout is the damage model only if the
+    /// layout is what gets asked.
     pub fn raycast_ships(&self, a: V3, b: V3, ignore: Option<ShipId>) -> Option<Hit> {
         let mut best: Option<Hit> = None;
         for (si, ship) in self.ships.iter().enumerate() {
             if ship.destroyed || Some(ship.id) == ignore {
                 continue;
             }
+            let hull_t = Self::seg_sphere(a, b, ship.pos, ship.radius);
+            let mut sub_hit: Option<(usize, f32)> = None;
             for (bi, sub) in ship.subs.iter().enumerate() {
                 if sub.dead {
                     continue;
                 }
                 let def = &ship.class_def().subsystems[sub.def];
                 if let Some(t) = Self::seg_sphere(a, b, ship.sub_world_pos(sub), def.radius) {
-                    if best.as_ref().is_none_or(|h| t < h.t) {
-                        best = Some(Hit { ship: si, sub: Some(bi), t, pos: V3::ZERO });
+                    if sub_hit.is_none_or(|(_, u)| t < u) {
+                        sub_hit = Some((bi, t));
                     }
                 }
             }
-            if let Some(t) = Self::seg_sphere(a, b, ship.pos, ship.class_def().radius) {
-                if best.as_ref().is_none_or(|h| t < h.t) {
-                    best = Some(Hit { ship: si, sub: None, t, pos: V3::ZERO });
-                }
+            // Where the segment reaches this hull at all: the sphere if it
+            // clipped it, otherwise the volume it found, since a volume can
+            // stand a little proud of the sphere it belongs to.
+            let entry = match (hull_t, sub_hit) {
+                (Some(h), Some((_, u))) => h.min(u),
+                (Some(h), None) => h,
+                (None, Some((_, u))) => u,
+                (None, None) => continue,
+            };
+            if best.as_ref().is_none_or(|h| entry < h.t) {
+                best = Some(Hit { ship: si, sub: sub_hit.map(|(bi, _)| bi), t: entry, pos: V3::ZERO });
             }
         }
         if let Some(h) = &mut best {

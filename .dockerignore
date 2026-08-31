@@ -1,7 +1,40 @@
+# What the builder is sent.
+#
+# Deliberately a list of what to LEAVE OUT rather than what to include,
+# because the Dockerfile already says what it copies and a second include list
+# would be a second place to forget something.
+#
+# This matters more than it looks. The context is uploaded to Fly's remote
+# builder on every deploy, and it was 380 MB across 4,525 files: 225 MB of
+# archived Unity assets, 149 MB of git history and 5 MB of mockups, none of
+# which any stage of the build touches. A deploy that waits five minutes for a
+# builder and then uploads 380 MB has a lot of surface for a transient failure
+# to land on, and run 79 is what that looks like.
+
+# Build output and dependencies: every stage installs its own.
 **/node_modules
 **/dist
 **/target
+
+# The archived Unity game. It is the REFERENCE the rebuild is read from, never
+# anything the image runs.
+archive-model
+
+# History, notes and explorations. The image needs the sources, not the story.
+.git
+.github
+mockups
+docs
+prototype
+*.md
+
+# Tests run in CI, not in the image.
 **/tests
+web/tests
+
+# Local databases and editor noise.
 *.db
 *.db-wal
 *.db-shm
+.DS_Store
+*.log

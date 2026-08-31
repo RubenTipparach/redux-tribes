@@ -49,16 +49,60 @@ fn every_leaf_the_octree_reports_actually_straddles() {
     let count = ft_reach_octree(0, EPS, STEPS, 4, n, 0.0, 0.0, 40.0, 0.0, 0.0, 1.0, 45.0, 45.0, 60.0);
     assert!(count > 0, "found nothing to draw");
     let out = ft_octree_slice();
+    let mut leaves = 0;
+    let mut blocks = 0;
     for c in 0..count as usize {
         let word = out[c * 2];
         let bits = out[c * 2 + 1];
-        assert_ne!(bits & 0xff, 0x00, "leaf {c} is entirely outside the set");
-        assert_ne!(bits & 0xff, 0xff, "leaf {c} is entirely inside the set");
-        let level = word >> 24;
-        assert_eq!(level, 0, "a leaf is always at the finest level");
+        let uniform = bits & (1 << 8) != 0;
+        let corners = bits & 0xff;
+        if uniform {
+            assert!(corners == 0x00 || corners == 0xff, "a uniform block agrees with itself");
+            blocks += 1;
+        } else {
+            assert_ne!(corners, 0x00, "leaf {c} is entirely outside the set");
+            assert_ne!(corners, 0xff, "leaf {c} is entirely inside the set");
+            assert_eq!(word >> 24, 0, "a straddling leaf is always at the finest level");
+            leaves += 1;
+        }
         for shift in [0u32, 8, 16] {
             assert!((word >> shift) & 0xff < n, "cell index inside the grid");
         }
+    }
+    assert!(leaves > 0 && blocks > 0, "{leaves} leaves and {blocks} blocks");
+}
+
+/// Leaves and uniform blocks together have to account for the WHOLE grid, or a
+/// caller rebuilding a dense field from them is left with holes it will march
+/// through as if they were empty space.
+#[test]
+fn the_entries_tile_the_whole_grid() {
+    let _lock = alone();
+    set_body(4.0);
+    let n = 16usize;
+    let count = ft_reach_octree(
+        0, EPS, STEPS, 4, n as u32, 0.0, 0.0, 40.0, 0.0, 0.0, 1.0, 45.0, 45.0, 60.0,
+    );
+    let out = ft_octree_slice();
+    let mut covered = vec![0u32; n * n * n];
+    for c in 0..count as usize {
+        let word = out[c * 2];
+        let (i, j, k) = (
+            (word & 0xff) as usize,
+            ((word >> 8) & 0xff) as usize,
+            ((word >> 16) & 0xff) as usize,
+        );
+        let size = 1usize << (word >> 24);
+        for a in i..i + size {
+            for b in j..j + size {
+                for d in k..k + size {
+                    covered[(a * n + b) * n + d] += 1;
+                }
+            }
+        }
+    }
+    for (idx, c) in covered.iter().enumerate() {
+        assert_eq!(*c, 1, "cell {idx} covered {c} times, should be exactly once");
     }
 }
 
@@ -70,9 +114,17 @@ fn a_coarser_root_finds_the_same_surface() {
     set_body(4.0);
     let mut counts = Vec::new();
     for base in [2u32, 4, 8] {
-        counts.push(ft_reach_octree(
+        let n = ft_reach_octree(
             0, EPS, STEPS, base, 16, 0.0, 0.0, 40.0, 0.0, 0.0, 1.0, 45.0, 45.0, 60.0,
-        ));
+        );
+        // Only the straddling leaves. The uniform blocks legitimately differ:
+        // a coarse root settles the empty corners of the box in one big block
+        // where a fine root reports several small ones, and both describe the
+        // same space. The SURFACE is what must not move.
+        let out = ft_octree_slice();
+        counts.push(
+            (0..n as usize).filter(|c| out[c * 2 + 1] & (1 << 8) == 0).count(),
+        );
     }
     assert!(counts[0] > 0);
     for c in &counts {

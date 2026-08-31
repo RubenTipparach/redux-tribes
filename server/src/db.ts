@@ -104,6 +104,35 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS rooms_open ON rooms(status, updated_ms);
   CREATE INDEX IF NOT EXISTS seats_by_room ON seats(room_id, side);
+
+  -- The ship library. A design is a small JSON record the client authors and
+  -- the client reads back; the server stores it, says who saved it and when,
+  -- and never interprets it. It cannot: what a design MEANS is the core's
+  -- business, and the core does not run here (ADR-6).
+  --
+  -- Everything is public to read and anybody may clone anything. Cloning is a
+  -- new row with a new owner rather than a reference, so a design that someone
+  -- is working from cannot change under them, and deleting yours never breaks
+  -- anyone else's.
+  CREATE TABLE IF NOT EXISTS designs (
+    id          TEXT PRIMARY KEY,
+    owner_id    TEXT NOT NULL REFERENCES accounts(id),
+    owner_name  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    class_key   TEXT NOT NULL,
+    -- What the shipyard shows on a card without parsing the whole record.
+    mass        REAL NOT NULL DEFAULT 0,
+    hull        REAL NOT NULL DEFAULT 0,
+    legal       INTEGER NOT NULL DEFAULT 0,
+    body        TEXT NOT NULL,
+    -- The design this was cloned from, for provenance. Never a live link.
+    from_id     TEXT,
+    created_ms  INTEGER NOT NULL,
+    updated_ms  INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS designs_recent ON designs(updated_ms);
+  CREATE INDEX IF NOT EXISTS designs_by_owner ON designs(owner_id, updated_ms);
 `);
 
 export const nowMs = (): number => Date.now();

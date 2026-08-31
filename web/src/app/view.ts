@@ -13,50 +13,173 @@ import * as THREE from 'three';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type Vec3,
-  isCommitted, PROBE_STEPS,
+  chartDir, contourLevels, fit, radiusAt, sliceClamp, sliceFill, sliceHolds,
+  sliceOutline, sliceRegion, type Fitted, type SliceCut,
+} from './spline.js';
+import {
+  type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
+  CLASS_KEYS, isCommitted, Mode, PROBE_STEPS,
 } from '../sim/types.js';
+import { stockFor, type Design } from './design.js';
+import { hullMesh, type HullMesh } from './hull.js';
+
+/** How long a chunk of hull stays on screen, in ticks: three seconds. */
+const DEBRIS_TICKS = 180;
+/** Chunks one hit may throw, and how many may be in the air at once. A hull
+ *  coming apart is a few dozen cells, not a snowstorm. */
+const DEBRIS_PER_HIT = 14;
+const DEBRIS_MAX = 400;
+
+/** A hit, in the frame the hull is drawn in and the frame the chunks fly in. */
+export interface HullHit {
+  readonly ship: number;
+  /** Where it landed in the hull's OWN space, which is where cells live. */
+  readonly local: readonly [number, number, number];
+  /** And in the world, which is where the chunks come from. */
+  readonly world: Vec3;
+  readonly tick: number;
+  readonly radius: number;
+}
+
+interface Debris {
+  readonly at: THREE.Vector3;
+  readonly dir: THREE.Vector3;
+  readonly hex: number;
+}
+
+interface Carved {
+  readonly hull: HullMesh;
+  /** This ship's own copy, so a hole in one is not a hole in every hull of the
+   *  same design. */
+  readonly geo: THREE.BufferGeometry;
+  readonly dead: Uint8Array;
+  readonly born: Map<number, Debris[]>;
+  readonly cells: Set<number>;
+  upTo: number;
+}
 
 const CYAN = 0x35c7ff;
 const ORANGE = 0xfa6a0a;
 const GREEN = 0x4cd97b;
 const RED = 0xff4b4b;
 const MUTED = 0x7c8b9d;
+const FLAME = 0xffd24b;
+const WHITE = 0xfff3d0;
+
+/**
+ * How long an effect is on screen, in ticks of the 60 Hz sim clock.
+ *
+ * A kill runs two whole seconds, because losing a hull is the event of the
+ * turn and a flicker is not an ending. A hit is half a second, and a beam
+ * holds for one: long enough to see which mount fired at what, short enough
+ * that a turn's worth of them is a battle rather than a lightshow.
+ */
+export const KILL_TICKS = 120;
+export const HIT_TICKS = 30;
+export const BEAM_TICKS = 60;
+/** The longest anything burns, which is how much playback tail a turn may
+ * need before the next one starts. */
+export const FX_TICKS = Math.max(KILL_TICKS, HIT_TICKS, BEAM_TICKS);
+/** A kill's fireball, as a multiple of the hull radius it consumed. */
+const KILL_REACH = 7.5;
 
 const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
-const GRID_N = 14;
 /**
- * Bisection steps used to place a surface vertex on the boundary. Four halves
- * the cell four times, which puts the vertex within a sixteenth of a cell of
- * the real surface: about 0.5 units at rest, against half a cell, 5.5 units,
- * for the midpoint it replaces.
+ * Cells a side for the envelope probe.
+ *
+ * The dense probe could afford 14, because it pays for the whole volume. The
+ * octree pays for the surface, so the same budget buys a finer grid: 32 cells
+ * is a cell a little over half the size for a comparable number of flights.
+ * A power of two, which the traversal requires.
  */
-const BISECT_STEPS = 4;
-/** Bisections used to measure how far the lobe runs while fitting the box. */
-const FIT_STEPS = 12;
-/** Slack on the fitted box, since 26 rays can slip between creases. */
-const FIT_PAD = 6;
 /**
- * Bisection steps for sliding the picker onto the boundary. Seven halvings of
- * the drag length, which is finer than a pixel at any sane zoom and costs
- * seven flights, against the roughly 2500 a whole envelope probe costs.
+ * Resolutions the envelope sharpens through, coarsest first.
+ *
+ * Every octree level is a complete answer at its own cell size, so the shape
+ * appears at once and gets finer over the following frames instead of the
+ * console blocking on the fine one. Measured per ship on a 45 x 60 x 82 u box:
+ * 8 cells costs 5 ms, 16 costs 14, 32 costs 57. 64 is a further 228 ms for a
+ * cell already well under a hull radius, so it is not in the ladder: one
+ * frame of 228 ms is a stutter a player feels and a cell of 1.4 u is not
+ * something they can see.
  */
-const SLIDE_STEPS = 7;
-/** Horizontal slices the shell is read out as. */
+const ENVELOPE_LEVELS: ReadonlyArray<readonly [number, number]> =
+  [[16, 10], [24, 14], [32, 18], [48, 26]];
+/** Bisections a ray, over a 200 u reach: 0.05 u, well inside the 1.6 u the
+ * predicate itself is fuzzy by. */
+const RAY_STEPS = 12;
+/**
+ * How still a heading has to be before the boundary is re-probed, while it is
+ * under a finger. A trailing debounce: a drag that keeps moving never pays for
+ * a rebuild it is about to invalidate.
+ */
+const SETTLE_MS = 180;
+/**
+ * And the longest the drawn boundary may lag a heading that never settles, so
+ * a slow continuous sweep still shows roughly where it can get to rather than
+ * where it could a second ago. The throttle over the debounce.
+ */
+const LIVE_MAX_MS = 700;
+/** How finely the fitted surface is tessellated, as a multiple of the sample
+ * grid. Twice the control density: any less throws away what a fine fit
+ * bought, any more costs triangles for a curve that is already smooth. */
+const TESS = 2;
+/** About how many contour rungs to draw. Not exact: the interval is a round
+ * number of units and the shape decides how many of them fit. */
 const SLICES = 9;
-/** Cube corners, then six tetrahedra sharing the main diagonal 0 to 6. */
-const CUBE: ReadonlyArray<readonly [number, number, number]> = [
-  [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0],
-  [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1],
-];
-const TETS: ReadonlyArray<readonly number[]> = [
-  [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6],
-  [0, 7, 4, 6], [0, 4, 5, 6], [0, 5, 1, 6],
-];
-/** How finely the movable AREA on the working plane is probed. */
-const PLANE_N = 40;
+/**
+ * Contour intervals to choose from, smallest first. Round numbers on purpose,
+ * so the ladder is an altitude scale a player can count in rather than an
+ * arbitrary ninth of whatever the shape happens to be tall. 5 is the elevation
+ * nudge, so at the usual reach one press steps exactly one rung.
+ */
+const INTERVALS = [5, 10, 20, 25, 50, 100, 200, 500];
+/**
+ * Points around one slice. This is the resolution of the LINE, not of the
+ * probe: the fitted surface is continuous, so a finer contour costs
+ * evaluations of a polynomial and not one extra flight.
+ */
+const SLICE_RAYS = 120;
+
+/** One finished resolution of one ship's envelope. */
+interface BuiltShell {
+  readonly cells: number;
+  readonly geo: THREE.BufferGeometry;
+  /** The surface itself, kept so every line drawn on it is cut from the same
+   * thing the skin is drawn from rather than from a second model of it. The
+   * contours are NOT baked in here: they depend on where the working plane
+   * sits, which moves without the surface changing at all. */
+  readonly fitted: Fitted;
+  readonly anchor: Vec3;
+  readonly ylo: number;
+  readonly yhi: number;
+  readonly tris: number;
+  readonly edges: number;
+  readonly entries: number;
+  readonly box: { right: number; up: number; forward: number };
+  /** Nearest and furthest the boundary sits from the coast landing. */
+  readonly reach: { min: number; max: number };
+}
+
+/** What is known about one ship's envelope, and how far it has sharpened. */
+interface ShellEntry {
+  key: string;
+  /** Index into ENVELOPE_LEVELS of the next level still to build. */
+  next: number;
+  built: BuiltShell | null;
+  /** True while `built` belongs to a superseded key: drawn, but not current. */
+  stale: boolean;
+  /** True while the ladder is capped at its coarsest rung because a heading is
+   * under a finger. Cleared, and the rest of the ladder queued, on release. */
+  coarse: boolean;
+}
+/**
+ * Points around the working plane contour. Denser than a slice because this is
+ * the line a hand aims at rather than one of nine that suggest a volume.
+ */
+const PLANE_RAYS = 192;
 /**
  * "Close enough to count as arriving", for both the drawn boundary and the
  * click router. One constant on purpose: if the contour and the router used
@@ -65,18 +188,6 @@ const PLANE_N = 40;
  * lands.
  */
 const REACH_EPS = 1.6;
-
-/**
- * Marching squares: which edge midpoints to join, per corner membership code.
- * Edges are 0 top, 1 right, 2 bottom, 3 left. The two saddle cases (5 and 10)
- * emit both segments rather than guessing which way the region connects.
- */
-const MARCHING: number[][] = [
-  [], [3, 0], [0, 1], [3, 1],
-  [1, 2], [3, 0, 1, 2], [0, 2], [3, 2],
-  [2, 3], [2, 0], [0, 1, 2, 3], [2, 1],
-  [1, 3], [1, 0], [0, 3], [],
-];
 
 export class View {
   readonly #canvas: HTMLCanvasElement;
@@ -98,6 +209,169 @@ export class View {
   workAlt = 0;
 
   #hulls = new Map<number, THREE.Mesh>();
+  /**
+   * Which design each ship is flying, so the battlefield can draw the hull a
+   * player built rather than a cone standing in for it.
+   *
+   * Set by the app, because which design a ship carries is a match fact the
+   * console knows and the renderer does not: side 0 flies what was picked in
+   * the lobby, everybody else flies their class's stock hull.
+   */
+  #designs = new Map<number, Design>();
+  /** What each hull is currently tinted for, so a repaint that would change
+   *  nothing does not touch the GPU. */
+  #tint = new Map<number, number>();
+  /** What has been shot off each hull, and the chunks it threw. */
+  #carved = new Map<number, Carved>();
+  #debris: THREE.InstancedMesh | null = null;
+
+  /**
+   * This ship's own copy of its hull, made the first time it takes damage.
+   *
+   * Designs are shared: four ships out of one design draw one geometry, which
+   * is the whole reason the map can afford them. The moment one of them starts
+   * losing cells it needs its own, or a hole in one would be a hole in all of
+   * them.
+   */
+  #carveOf(id: number): Carved | null {
+    const found = this.#carved.get(id);
+    if (found) return found;
+    const mesh = this.#hulls.get(id);
+    const s = this.#ships.find(x => x.id === id);
+    if (!mesh || !s) return null;
+    const design = this.#designs.get(id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    const hull = hullMesh(design);
+    const geo = hull.geo.clone();
+    mesh.geometry = geo;
+    const c: Carved = {
+      hull, geo, dead: new Uint8Array(hull.quads), born: new Map(), cells: new Set(), upTo: -1,
+    };
+    this.#carved.set(id, c);
+    return c;
+  }
+
+  /** Put a hull back together, which is what scrubbing backwards means. */
+  #resetCarve(id: number): void {
+    const c = this.#carved.get(id);
+    if (!c) return;
+    const mesh = this.#hulls.get(id);
+    if (mesh) mesh.geometry = c.hull.geo;
+    c.geo.dispose();
+    this.#carved.delete(id);
+  }
+
+  /**
+   * Take the cells one hit reached off a hull.
+   *
+   * A quad is collapsed rather than removed: four vertices onto one point is a
+   * pair of degenerate triangles the rasteriser throws away, and it costs one
+   * write to a buffer that is already on the card. Rebuilding the index for
+   * every hit would cost the whole hull.
+   */
+  #applyHit(c: Carved, h: HullHit): void {
+    const pos = c.geo.getAttribute('position') as THREE.BufferAttribute;
+    const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const born: Debris[] = [];
+
+    // Where the shot actually met the hull.
+    //
+    // A hit event carries the point on the ship's COLLISION SPHERE, and that
+    // sphere circumscribes the long axis: on a Terran it is 3.29 units against
+    // a hull 1.2 by 0.76 by 3.2, so a hit abeam lands two units off the flank
+    // and a carve measured from it took nothing at all. The nearest cell is
+    // the cell the shot came in at, and it is on the right side of the ship
+    // because the sphere point is in the direction the shot arrived from.
+    let near = -1, best = Infinity;
+    for (let q = 0; q < c.hull.quads; q++) {
+      if (c.dead[q]) continue;
+      const dx = (c.hull.centre[q * 3] as number) - h.local[0];
+      const dy = (c.hull.centre[q * 3 + 1] as number) - h.local[1];
+      const dz = (c.hull.centre[q * 3 + 2] as number) - h.local[2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < best) { best = d2; near = q; }
+    }
+    if (near < 0) return;
+    const ax = c.hull.centre[near * 3] as number;
+    const ay = c.hull.centre[near * 3 + 1] as number;
+    const az = c.hull.centre[near * 3 + 2] as number;
+
+    const r2 = h.radius * h.radius;
+    for (let q = 0; q < c.hull.quads; q++) {
+      if (c.dead[q]) continue;
+      const dx = (c.hull.centre[q * 3] as number) - ax;
+      const dy = (c.hull.centre[q * 3 + 1] as number) - ay;
+      const dz = (c.hull.centre[q * 3 + 2] as number) - az;
+      if (dx * dx + dy * dy + dz * dz > r2) continue;
+      c.dead[q] = 1;
+      const b = q * 12;
+      for (let v = 1; v < 4; v++) {
+        arr[b + v * 3] = arr[b] as number;
+        arr[b + v * 3 + 1] = arr[b + 1] as number;
+        arr[b + v * 3 + 2] = arr[b + 2] as number;
+      }
+      // One chunk per CELL, not per face: a corner cell has three quads and
+      // three chunks off one cell is three times the debris nobody asked for.
+      // The cell is counted whether or not it throws one, because how much of
+      // a hull is gone and how much of it is in the air are two questions.
+      const cell = c.hull.cellOf[q] as number;
+      if (c.cells.has(cell)) continue;
+      c.cells.add(cell);
+      if (born.length >= DEBRIS_PER_HIT) continue;
+      // Away from the hit, jittered by a hash of the cell so the same shot
+      // throws the same chunks on both screens and on a re-watch.
+      const rnd = (salt: number) => {
+        const x = Math.imul(cell ^ (h.tick * 2654435761) ^ salt, 2246822519) >>> 0;
+        return (x % 2048) / 1024 - 1;
+      };
+      born.push({
+        at: new THREE.Vector3(h.world.x, h.world.y, h.world.z),
+        dir: new THREE.Vector3(dx + rnd(1) * 0.6, dy + rnd(2) * 0.6, dz + rnd(3) * 0.6)
+          .normalize().multiplyScalar(0.6 + 0.5 * (rnd(4) + 1)),
+        hex: new THREE.Color(
+          col.array[q * 12] as number, col.array[q * 12 + 1] as number,
+          col.array[q * 12 + 2] as number).getHex(),
+      });
+    }
+    pos.needsUpdate = true;
+    if (born.length) c.born.set(h.tick, [...(c.born.get(h.tick) ?? []), ...born]);
+  }
+
+  /** The chunks in flight, as one instanced mesh however many there are. */
+  #drawDebris(chunks: ReadonlyArray<{ at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number }>): void {
+    if (!this.#debris) {
+      this.#debris = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshLambertMaterial({ transparent: true }),
+        DEBRIS_MAX);
+      this.#debris.frustumCulled = false;
+      this.#scene.add(this.#debris);
+    }
+    const mesh = this.#debris;
+    const n = Math.min(chunks.length, DEBRIS_MAX);
+    mesh.count = n;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const at = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+    const c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const d = chunks[i] as { at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number };
+      // Out and slowing, shrinking as it goes, so the field does not silt up
+      // with the wreckage of a long match.
+      const t = d.age * (2 - d.age);
+      at.copy(d.at).addScaledVector(d.dir, t * 6);
+      q.setFromAxisAngle(d.dir, d.age * 7);
+      const s = 0.16 * (1 - d.age * 0.75);
+      scale.set(s, s, s);
+      mesh.setMatrixAt(i, m.compose(at, q, scale));
+      mesh.setColorAt(i, c.setHex(d.hex));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    (mesh.material as THREE.MeshLambertMaterial).opacity = 1;
+    mesh.visible = n > 0;
+  }
   #ring = new THREE.Mesh();
   #planLine: THREE.Line;
   #planPip: THREE.Mesh;
@@ -106,9 +380,37 @@ export class View {
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
+  #planeFill: THREE.Mesh;
+  /** Which shell and working plane the drawn contours belong to. */
+  #wireKey = '';
+  /**
+   * The cut currently drawn on the working plane, kept because it is also what
+   * a drag is clamped into. One region, drawn and picked against, so the marker
+   * cannot sit outside the area highlighted for it.
+   */
+  #planeCut: { cut: SliceCut; anchor: Vec3; y: number } | null = null;
   #planeGrid: THREE.GridHelper;
   #projGroup = new THREE.Group();
   #beamGroup = new THREE.Group();
+  /** Blasts: kills, collisions and hits, drawn for the tick being shown. */
+  #fxGroup = new THREE.Group();
+  /** Where hulls have actually been, one line per ship per turn flown. */
+  #trailGroup = new THREE.Group();
+  /** The gravity field, drawn from what the match reports rather than from a
+   * second model of gravity living here. */
+  #wellGroup = new THREE.Group();
+  /** Where our own hulls would be part way through the turn being planned. */
+  #ghostGroup = new THREE.Group();
+  /** Every ship's course: ours planned, theirs estimated. */
+  #pathGroup = new THREE.Group();
+  /** Who is aiming at whom, drawn hull to hull. */
+  #aimGroup = new THREE.Group();
+  /** The yaw ring around the arrival estimate, and the knob you drag on it. */
+  #yawRing: THREE.Line;
+  #yawKnob: THREE.Mesh;
+  /** Where the ring is centred and how wide, so a pointer can be tested
+   * against it without guessing at the geometry that drew it. */
+  #yawAt: { centre: Vec3; radius: number } | null = null;
 
   #ships: ShipState[] = [];
   #selected = -1;
@@ -118,11 +420,21 @@ export class View {
    */
   mySide = 0;
   /** Cached so the envelope is not re-probed on every frame, only on change. */
-  #shellKey = '';
-  #shellTris = 0;
-  #shellEdges = 0;
-  #shellBox = { right: 0, up: 0, forward: 0 };
+  /** One entry per ship, so selecting a hull shows its envelope at once
+   * instead of starting a probe. */
+  #shells = new Map<number, ShellEntry>();
+  /** Ships whose envelope is still sharpening, in the order they were asked
+   * for. Read by the console to say so. */
+  #pending: number[] = [];
   #planeKey = '';
+  /** True while a heading is being dragged, so the boundary is not re-probed
+   * once per pointer event. */
+  #live = false;
+  /** Ships whose boundary is out of date because a heading is still moving. */
+  #deferred = new Set<number>();
+  /** When the heading last moved, and when a deferred rebuild last ran. */
+  #movedAt = 0;
+  #liveBuiltAt = 0;
 
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
     this.#canvas = canvas;
@@ -166,6 +478,27 @@ export class View {
     this.#planPip.visible = false;
     this.#scene.add(this.#planPip);
 
+    // Yaw, as a ring around where the ship ends up. The heading is a direction
+    // in the working plane, so the control is a direction in the working plane:
+    // a dial reads as an angle, where two nudge buttons read as a rate.
+    const ringPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      ringPts.push(new THREE.Vector3(Math.cos(a), 0, Math.sin(a)));
+    }
+    this.#yawRing = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(ringPts),
+      new THREE.LineBasicMaterial({ color: CYAN, transparent: true, opacity: 0.4 }),
+    );
+    this.#yawRing.visible = false;
+    this.#scene.add(this.#yawRing);
+    this.#yawKnob = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 12),
+      new THREE.MeshBasicMaterial({ color: CYAN }),
+    );
+    this.#yawKnob.visible = false;
+    this.#scene.add(this.#yawKnob);
+
     this.#headingArrow = new THREE.Line(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ color: GREEN }),
@@ -179,11 +512,15 @@ export class View {
     this.#shell = new THREE.Mesh(
       new THREE.BufferGeometry(),
       new THREE.MeshBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.045, side: THREE.DoubleSide,
+        color: GREEN, transparent: true, opacity: 0.022, side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
     this.#scene.add(this.#shell);
+    this.#scene.add(this.#wellGroup);
+    this.#scene.add(this.#ghostGroup);
+    this.#scene.add(this.#pathGroup);
+    this.#scene.add(this.#aimGroup);
     // The silhouette, drawn as the surface seen edge on. Every triangle edge
     // was too much: marching tetrahedra makes thin triangles and the mesh read
     // as wire soup rather than as a shape. The skin carries the volume and the
@@ -192,7 +529,7 @@ export class View {
     this.#shellLines = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.42,
+        color: GREEN, transparent: true, opacity: 0.16,
         blending: THREE.AdditiveBlending, depthWrite: false,
       }),
     );
@@ -203,12 +540,27 @@ export class View {
     // rather than an eye.
     this.#planeShape = new THREE.LineSegments(
       new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: GREEN, transparent: true, opacity: 0.9 }),
+      new THREE.LineBasicMaterial({ color: GREEN, transparent: true, opacity: 0.95 }),
     );
     this.#scene.add(this.#planeShape);
 
+    // The area the ship can finish its turn in AT THIS ELEVATION, filled. The
+    // shell says where it could go at all, which is a volume and reads as one;
+    // this is the single horizontal slice of it a click can actually land in,
+    // so it is the one thing on screen drawn as ground rather than as wire.
+    this.#planeFill = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: GREEN, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }),
+    );
+    this.#scene.add(this.#planeFill);
+
     this.#scene.add(this.#projGroup);
     this.#scene.add(this.#beamGroup);
+    this.#scene.add(this.#fxGroup);
+    this.#scene.add(this.#trailGroup);
   }
 
   // ------------------------------------------------------------- camera --
@@ -289,6 +641,29 @@ export class View {
     return ray.ray.intersectPlane(plane, hit) ? { x: hit.x, y: hit.y, z: hit.z } : null;
   }
 
+  /**
+   * Keep the working plane inside the shape it is cutting.
+   *
+   * Off the top of the envelope there is no reachable point at that height, so
+   * the aiming line correctly has nothing to draw and correctly disappears.
+   * That is honest and useless: the control still moves, the readout still
+   * counts up, and the thing the player was aiming with is gone with nothing
+   * saying why. Holding the button now stops at the shape instead.
+   *
+   * Held a hair inside the extreme, because exactly at it the plane is tangent
+   * and meets the surface in a point rather than a curve.
+   */
+  clampWorkAlt(): void {
+    const sel = this.#ships.find(s => s.id === this.#selected);
+    const built = sel ? this.#shells.get(sel.id)?.built : null;
+    if (!sel || !built) return;
+    const inset = (built.yhi - built.ylo) * 0.02;
+    const lo = built.ylo + inset - sel.pos.y;
+    const hi = built.yhi - inset - sel.pos.y;
+    if (hi < lo) return;
+    this.workAlt = Math.min(hi, Math.max(lo, this.workAlt));
+  }
+
   planeY(): number {
     const sel = this.#ships.find(s => s.id === this.#selected);
     return (sel ? sel.pos.y : 0) + this.workAlt;
@@ -319,29 +694,154 @@ export class View {
 
   // --------------------------------------------------------------- state --
 
+  /**
+   * What each ship is flying. Call before `setShips`, whenever a match starts.
+   *
+   * Rebuilding a hull is a rasterisation, so it happens here rather than per
+   * frame; `hullCells` caches by design, and a skirmish is four ships out of
+   * at most five distinct designs.
+   */
+  setDesigns(designs: ReadonlyMap<number, Design>): void {
+    this.#designs = new Map(designs);
+    for (const [, mesh] of this.#hulls) {
+      this.#scene.remove(mesh);
+      // The geometry belongs to the design cache and is shared; the material
+      // is this ship's own.
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.#hulls.clear();
+    this.#tint.clear();
+  }
+
+  /**
+   * A ship's hull, as the cells it is built out of.
+   *
+   * Tinted toward its side rather than painted over: whose ship this is has to
+   * be readable across the map at a glance, and a hull in its own faction
+   * colours alone is a hull a player has to squint at. Sixty percent the
+   * design's own colour, forty percent the side, which keeps a Karisen stripe
+   * a Karisen stripe and still says whose it is.
+   */
+  #buildHull(s: ShipState): THREE.Mesh {
+    const design = this.#designs.get(s.id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    const hull: HullMesh = hullMesh(design);
+    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshLambertMaterial({
+      vertexColors: true,
+    }));
+    this.#tintHull(mesh, s);
+    return mesh;
+  }
+
+  /**
+   * Whose ship this is, said in colour.
+   *
+   * A hull in nothing but its own faction paint is a hull a player has to
+   * squint at, and which ships are yours is the first thing the map has to
+   * answer. The design's colours stay: the MATERIAL is tinted rather than the
+   * cells, so a Karisen stripe is still a Karisen stripe under a cyan wash,
+   * and a repaint is one number rather than a walk over every face.
+   */
+  #tintHull(mesh: THREE.Mesh, s: ShipState): void {
+    const tone = s.destroyed ? 0x33404f
+      : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE;
+    if (this.#tint.get(s.id) === tone) return;
+    this.#tint.set(s.id, tone);
+    const mat = mesh.material as THREE.MeshLambertMaterial;
+    // Lambert MULTIPLIES this by the vertex colour, so the full side colour
+    // would wash a red gun to near black. Halfway from white keeps the hue and
+    // still says whose it is, with a little emissive so a hull reads against
+    // the field rather than sinking into it.
+    mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), s.destroyed ? 0.8 : 0.5);
+    mat.emissive.setHex(s.destroyed ? 0x000000 : tone).multiplyScalar(0.12);
+    mat.needsUpdate = true;
+  }
+
+  /**
+   * Where a world point lands on screen, in CSS pixels.
+   *
+   * The reverse of the pick ray, and the thing a harness needs to aim a click
+   * at a particular ship rather than at the middle of the canvas.
+   */
+  screenOf(at: Vec3): { x: number; y: number } {
+    const v = new THREE.Vector3(at.x, at.y, at.z).project(this.#camera);
+    const r = this.#renderer.domElement.getBoundingClientRect();
+    return {
+      x: r.left + (v.x * 0.5 + 0.5) * r.width,
+      y: r.top + (0.5 - v.y * 0.5) * r.height,
+    };
+  }
+
+  /**
+   * What a turn has taken off each hull, as a pure function of the tick.
+   *
+   * A hit removes the cells it reached, and the chunks fly off and fade. Both
+   * are the CLIENT's: what a hole means is already the subsystem model's job,
+   * and the cells coming off follow the damage rather than deciding it. That
+   * is why none of this is in the state hash and none of it crosses the
+   * boundary. It still matches on two screens, because both are drawing the
+   * same event stream and the drift directions are hashed from the event
+   * rather than rolled.
+   *
+   * Scrubbing backwards un-carves: the hits are re-applied from nothing when
+   * the tick goes back, which is what makes the picture a function of the tick
+   * rather than a pile of side effects.
+   */
+  setDamage(hits: ReadonlyArray<HullHit>, tick: number): void {
+    const live = new Set<number>();
+    for (const h of hits) live.add(h.ship);
+    for (const [id, c] of this.#carved) {
+      if (!live.has(id) || tick < c.upTo) this.#resetCarve(id);
+    }
+    const chunks: Array<{ at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number }> = [];
+    for (const h of hits) {
+      if (h.tick > tick) continue;
+      const c = this.#carveOf(h.ship);
+      if (!c) continue;
+      if (h.tick > c.upTo) this.#applyHit(c, h);
+      const age = (tick - h.tick) / DEBRIS_TICKS;
+      if (age >= 0 && age < 1) {
+        for (const d of c.born.get(h.tick) ?? []) {
+          chunks.push({ at: d.at, dir: d.dir, age, hex: d.hex });
+        }
+      }
+    }
+    for (const c of this.#carved.values()) c.upTo = Math.max(c.upTo, tick);
+    this.#drawDebris(chunks);
+  }
+
+  /** What has come off the hulls, and what is in the air: cells carved per
+   *  ship, and chunks currently drawn. Observation only. */
+  damageState(): { carved: Array<[number, number]>; chunks: number } {
+    return {
+      carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
+      chunks: this.#debris?.visible ? this.#debris.count : 0,
+    };
+  }
+
+  /** How many quads each hull on screen is, for weighing what they cost. */
+  hullQuads(): number[] {
+    return [...this.#hulls.values()].map(m => (m.geometry.getIndex()?.count ?? 0) / 6);
+  }
+
+  /** Hide every hull, to measure what the rest of the frame costs without
+   *  them. Observation only: nothing in the console turns this off. */
+  hullsVisible(on: boolean): void {
+    for (const m of this.#hulls.values()) m.visible = on;
+  }
+
   setShips(ships: ShipState[]): void {
     this.#ships = ships;
     for (const s of ships) {
       let mesh = this.#hulls.get(s.id);
       if (!mesh) {
-        // A five sided cone: cheap, and its nose reads at a glance, which is
-        // the one thing a player must be able to see about a ship in a game
-        // where facing decides what the guns can reach.
-        const geo = new THREE.ConeGeometry(s.radius * 0.62, s.radius * 2.1, 5);
-        geo.rotateX(Math.PI / 2);
-        mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-          color: s.side === this.mySide ? CYAN : ORANGE, flatShading: true, roughness: 0.55,
-        }));
+        mesh = this.#buildHull(s);
         this.#hulls.set(s.id, mesh);
         this.#scene.add(mesh);
       }
       mesh.position.set(s.pos.x, s.pos.y, s.pos.z);
       mesh.quaternion.set(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
       mesh.visible = !s.destroyed;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.color.setHex(
-        s.destroyed ? 0x33404f : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE,
-      );
+      this.#tintHull(mesh, s);
     }
   }
 
@@ -378,15 +878,130 @@ export class View {
     }
   }
 
-  /** Beams are events, not objects: drawn for the tick they happened on. */
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3 }>): void {
+  /**
+   * Beams are events, not objects: drawn from the tick they fired on, for as
+   * long as the mount holds them.
+   *
+   * A beam holds bright for the first third of its second and then dies down,
+   * which is what a sustained shot looks like and what a line that simply
+   * vanishes never does. `age` is passed in for the same reason a blast's is:
+   * scrubbing must be able to run one backwards.
+   */
+  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+    for (const c of this.#beamGroup.children) {
+      (c as THREE.Line).geometry.dispose();
+      ((c as THREE.Line).material as THREE.Material).dispose();
+    }
     this.#beamGroup.clear();
     for (const b of list) {
+      const a = Math.max(0, Math.min(1, b.age));
       const geo = new THREE.BufferGeometry().setFromPoints([v(b.from), v(b.to)]);
       this.#beamGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
-        color: CYAN, transparent: true, opacity: 0.85,
+        color: CYAN, transparent: true,
+        opacity: a < 0.35 ? 0.95 : 0.95 * (1 - (a - 0.35) / 0.65),
+        blending: THREE.AdditiveBlending, depthWrite: false,
       })));
     }
+  }
+
+  /**
+   * Blasts, drawn from the same event stream the beams come from.
+   *
+   * A pure function of (event tick, tick being shown): `age` is passed in
+   * rather than accumulated here, so scrubbing backwards runs an explosion
+   * backwards and pausing holds it. Animation state kept in the renderer would
+   * make the picture depend on how the player got to a tick rather than on
+   * which tick it is.
+   *
+   * A kill is three things because one sphere reads as a bubble: a white core
+   * that flashes and shrinks, a fireball that expands to KILL_REACH hull radii
+   * and fades, and a flat ring that keeps expanding past both, which is what
+   * makes it legible from a camera looking down the blast rather than across
+   * it. Additive and depth-write off, so they light each other instead of
+   * cutting holes.
+   */
+  setBlasts(list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>): void {
+    for (const c of this.#fxGroup.children) {
+      const m = c as THREE.Mesh;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.#fxGroup.clear();
+    for (const b of list) {
+      const a = Math.max(0, Math.min(1, b.age));
+      const at = v(b.pos);
+      // An explosion leaps and then lingers: it reaches its size in the first
+      // third of its life and spends the rest fading. Growth spread evenly
+      // over two seconds would be a balloon inflating, not a hull coming
+      // apart, which is why the reach and the fade run on separate clocks.
+      const grow = (frac: number) => {
+        const g = Math.min(1, a / frac);
+        return 1 - (1 - g) * (1 - g);
+      };
+      if (!b.kill) {
+        this.#fxGroup.add(this.#blastMesh(
+          new THREE.SphereGeometry(b.radius * (0.35 + 2.2 * grow(0.35)), 10, 8),
+          at, FLAME, (1 - a) * 0.9));
+        continue;
+      }
+      const out = grow(0.32);
+      const reach = b.radius * KILL_REACH;
+      this.#fxGroup.add(this.#blastMesh(
+        new THREE.SphereGeometry(reach * (0.18 + 0.82 * out), 20, 14),
+        at, a < 0.4 ? FLAME : RED, (1 - a) * 0.55));
+      this.#fxGroup.add(this.#blastMesh(
+        new THREE.SphereGeometry(b.radius * (1.8 - 1.4 * Math.min(1, a * 3)), 14, 10),
+        at, WHITE, Math.max(0, 1 - a * 5)));
+      // The shockwave runs on past the fireball, which is what reads from a
+      // camera looking down the blast rather than across it. Same reach as the
+      // fireball, on a slower clock: it is the fireball's edge still travelling
+      // after the flame has stopped, not a wider explosion.
+      const wide = reach * grow(0.55);
+      const ring = new THREE.RingGeometry(wide * 0.92, wide * 1.12, 44);
+      ring.rotateX(-Math.PI / 2);
+      const m = this.#blastMesh(ring, at, WHITE, (1 - a) * 0.5);
+      (m.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;
+      this.#fxGroup.add(m);
+    }
+  }
+
+  /**
+   * Where hulls have been.
+   *
+   * One line per ship per turn, taken from poses the core reported rather than
+   * re-flown here: a second integrator drawing a second path is exactly the
+   * divergent rule GUIDELINES 5.1 forbids, and this one would be wrong in a
+   * way nobody could see.
+   *
+   * `age` is how many turns back the line is, so the oldest fade out and the
+   * turn just flown reads clearly against them.
+   */
+  setTrails(list: ReadonlyArray<{ points: readonly Vec3[]; side: number; age: number }>): void {
+    for (const c of this.#trailGroup.children) {
+      (c as THREE.Line).geometry.dispose();
+      ((c as THREE.Line).material as THREE.Material).dispose();
+    }
+    this.#trailGroup.clear();
+    for (const t of list) {
+      if (t.points.length < 2) continue;
+      const geo = new THREE.BufferGeometry().setFromPoints(t.points.map(v));
+      this.#trailGroup.add(new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: t.side === this.mySide ? CYAN : ORANGE,
+        transparent: true,
+        // Never all the way to nothing: a line that fades out entirely is a
+        // history that quietly stops rather than one that recedes.
+        opacity: Math.max(0.12, 0.75 / (1 + t.age * 0.9)),
+      })));
+    }
+  }
+
+  #blastMesh(geo: THREE.BufferGeometry, at: THREE.Vector3, color: number, opacity: number): THREE.Mesh {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: Math.max(0, opacity),
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    m.position.copy(at);
+    return m;
   }
 
   // ------------------------------------------------------------- planning --
@@ -396,6 +1011,67 @@ export class View {
    * nose will point. The path comes from the core's own integrator, so this is
    * the executed turn drawn early rather than an approximation of it.
    */
+  /**
+   * Every ship's path, ours planned and theirs estimated.
+   *
+   * Our own come from the order being planned, so they are exactly what the
+   * resolver will fly. A hostile's orders do not exist yet, so its line is the
+   * course it is ALREADY on, coasted forward: an estimate, drawn dashed and
+   * dimmer to say so. It is what the hull does if it does nothing, which is
+   * the only honest thing to draw before the turn is released.
+   */
+  /**
+   * Who is aiming at whom.
+   *
+   * Ours is dotted red from the hull we are flying to the hull it is pointed
+   * at; theirs is a dimmer orange from each hostile to the ship it is set on.
+   *
+   * Their line is not a guess. `ai_target` is state the core keeps on the
+   * hull and reports over the boundary: it is who that ship retaliated against
+   * and will keep after while it lives. Nothing here decides it, so a line is
+   * drawn only where the core says there is one.
+   */
+  setAiming(links: readonly { from: Vec3; to: Vec3; mine: boolean }[]): void {
+    while (this.#aimGroup.children.length) {
+      const c = this.#aimGroup.children.pop() as THREE.Line;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const l of links) {
+      const geo = new THREE.BufferGeometry().setFromPoints([v(l.from), v(l.to)]);
+      const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
+        color: l.mine ? RED : ORANGE,
+        dashSize: l.mine ? 1.6 : 3.4,
+        gapSize: l.mine ? 1.6 : 3.4,
+        transparent: true,
+        opacity: l.mine ? 0.85 : 0.3,
+      }));
+      line.computeLineDistances();
+      this.#aimGroup.add(line);
+    }
+  }
+
+  setPaths(paths: readonly { id: number; pts: Vec3[]; estimated: boolean }[]): void {
+    while (this.#pathGroup.children.length) {
+      const c = this.#pathGroup.children.pop() as THREE.Line;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const p of paths) {
+      if (p.pts.length < 2) continue;
+      const geo = new THREE.BufferGeometry().setFromPoints(p.pts.map(v));
+      const line = p.estimated
+        ? new THREE.Line(geo, new THREE.LineDashedMaterial({
+            color: ORANGE, dashSize: 2.5, gapSize: 2.5, transparent: true, opacity: 0.55,
+          }))
+        : new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: CYAN, transparent: true, opacity: 0.45,
+          }));
+      if (p.estimated) line.computeLineDistances();
+      this.#pathGroup.add(line);
+    }
+  }
+
   drawPlan(ship: ShipState | undefined, order: PlannedOrder): void {
     if (!ship || ship.destroyed) {
       this.#planLine.visible = false;
@@ -422,8 +1098,13 @@ export class View {
       shortfall > 1.0 ? 0xffd24b : CYAN,
     );
 
-    const face = order.face;
-    if (face) {
+    // Slide always shows a heading, whether or not one has been commanded yet:
+    // it is the mode where the nose is an input, so there has to be something
+    // on screen to turn. Move faces its own course, so it shows none.
+    const face = order.mode === Mode.TurnSlide
+      ? (order.face ?? this.#match.forward(ship.id))
+      : order.face;
+    if (face && order.mode === Mode.TurnSlide) {
       const from = v(ship.pos);
       const to = from.clone().add(new THREE.Vector3(face.x, face.y, face.z).normalize().multiplyScalar(18));
       this.#headingArrow.geometry.dispose();
@@ -432,6 +1113,66 @@ export class View {
     } else {
       this.#headingArrow.visible = false;
     }
+
+    // The ring sits on the arrival estimate, because that is the hull whose
+    // heading is being set: the ship on screen now is where it starts from.
+    const spin = order.mode === Mode.TurnSlide;
+    if (spin) {
+      const centre = { x: end.x, y: end.y, z: end.z };
+      // Wide enough to clear the selection ring around the hull, so the two
+      // circles read as two controls rather than one thick one.
+      const radius = Math.max(14, this.#dist * 0.105);
+      this.#yawAt = { centre, radius };
+      this.#yawRing.position.set(centre.x, centre.y, centre.z);
+      this.#yawRing.scale.setScalar(radius);
+      const dir = face ?? { x: 0, y: 0, z: 1 };
+      const flat = Math.hypot(dir.x, dir.z) || 1;
+      this.#yawKnob.position.set(
+        centre.x + (dir.x / flat) * radius, centre.y, centre.z + (dir.z / flat) * radius);
+      this.#yawKnob.scale.setScalar(Math.max(1.1, radius * 0.10));
+    } else {
+      this.#yawAt = null;
+    }
+    this.#yawRing.visible = spin;
+    this.#yawKnob.visible = spin;
+  }
+
+  /** Is this screen point on the yaw knob? Generous, because it is a target
+   * for a thumb as well as a cursor. */
+  onYawKnob(clientX: number, clientY: number): boolean {
+    if (!this.#yawKnob.visible) return false;
+    const rect = this.#canvas.getBoundingClientRect();
+    const p = this.#yawKnob.position.clone().project(this.#camera);
+    const sx = rect.left + ((p.x + 1) / 2) * rect.width;
+    const sy = rect.top + ((1 - p.y) / 2) * rect.height;
+    return Math.hypot(clientX - sx, clientY - sy) <= 26;
+  }
+
+  /**
+   * The heading a pointer over the ring is asking for.
+   *
+   * Read off the ring's own plane rather than the working plane: the ring sits
+   * at the arrival estimate, which is rarely the height a click projects to,
+   * and reading the wrong plane puts the knob under the hand only by accident.
+   */
+  yawFromPointer(clientX: number, clientY: number): Vec3 | null {
+    const at = this.#yawAt;
+    if (!at) return null;
+    const rect = this.#canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.#camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -at.centre.y);
+    const hit = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(plane, hit)) return null;
+    const dx = hit.x - at.centre.x;
+    const dz = hit.z - at.centre.z;
+    const l = Math.hypot(dx, dz);
+    if (l < 1e-4) return null;
+    return { x: dx / l, y: 0, z: dz / l };
   }
 
   /**
@@ -442,431 +1183,622 @@ export class View {
    * the only honest way to know where a ship can get to is to fly it there and
    * see. That is what this does, once per grid cell, in a single crossing.
    */
+  /**
+   * What every ship on this side can reach, computed once at the start of a
+   * turn rather than when a hull is selected.
+   *
+   * Reachability is fixed the moment a turn opens: nothing a player does while
+   * planning changes where a ship could have gone. So this is asked once per
+   * ship, and picking a destination afterwards never probes anything, which is
+   * what keeps the picker instant.
+   *
+   * The one exception is a commanded heading in slide mode. There the nose is
+   * an INPUT to the flight rather than aimed at the target, and thrust is spent
+   * in the ship's own frame, so turning re-points the strong drive: measured,
+   * commanding a different heading moves the boundary by up to 30 u. The cache
+   * key carries the face for that reason, and changing it re-opens the ladder.
+   */
+  planTurn(ships: readonly ShipState[], orderOf: (id: number) => PlannedOrder,
+           flightOf: (id: number) => Flight, side: number): void {
+    for (const ship of ships) {
+      if (ship.side !== side || ship.destroyed) continue;
+      this.requestShell(ship, orderOf(ship.id), flightOf(ship.id));
+    }
+  }
+
+  /**
+   * Say whether a heading is under a finger right now.
+   *
+   * A rotation drag fires a pointer event per pixel, and in slide mode every
+   * one of them moves the boundary, so the envelope was re-probed per event:
+   * a 16 x 10 chart is 1920 flights through the core, and the console fell
+   * from 46 fps to 14, with a median frame of 68 ms against 21 idle. The dial
+   * then stutters under its own feedback, which reads as a broken control
+   * rather than a slow one.
+   *
+   * So while this is on, the boundary follows at a fixed rate and only to its
+   * coarsest rung, and the fine ones are left until the finger comes off. The
+   * shape still tracks the dial; it is simply not re-derived to 48 x 26 for a
+   * heading that is still moving.
+   */
+  setLiveHeading(on: boolean): void {
+    if (this.#live === on) return;
+    this.#live = on;
+    if (on) {
+      this.#movedAt = performance.now();
+      this.#liveBuiltAt = this.#movedAt;
+      return;
+    }
+    // Released. Anything still deferred is asked for by the refresh that
+    // follows, and every capped ladder is uncapped so it sharpens to the end.
+    this.#deferred.clear();
+    for (const [id, e] of this.#shells) {
+      if (!e.coarse) continue;
+      e.coarse = false;
+      if (e.next < ENVELOPE_LEVELS.length && !this.#pending.includes(id)) this.#pending.push(id);
+    }
+  }
+
+  /** Note what this ship's envelope depends on, and queue it if that changed. */
+  requestShell(ship: ShipState, order: PlannedOrder, flight: Flight): void {
+    if (ship.destroyed || isCommitted(order.mode)) {
+      this.#shells.delete(ship.id);
+      this.#pending = this.#pending.filter(id => id !== ship.id);
+      return;
+    }
+    const key = this.#shellKeyFor(ship, order, flight);
+    const have = this.#shells.get(ship.id);
+    if (have && have.key === key) return;
+    if (this.#live) {
+      // Under the finger the boundary is not rebuilt per event. The request is
+      // noted and the frame loop runs it once the heading settles, or once it
+      // has lagged far enough to be worth one anyway. The old surface stays
+      // drawn in the meantime, which is what `stale` is for.
+      this.#movedAt = performance.now();
+      this.#deferred.add(ship.id);
+      return;
+    }
+    // Keep the old surface on screen while the new one is found. It used to be
+    // thrown away here, so anything that re-opened the ladder blanked the
+    // envelope and grew it back from the coarsest level: a flash on every
+    // rotation in slide mode, where turning genuinely does move the boundary
+    // and so cannot be spared the rebuild. Stale for a few frames beats absent.
+    this.#shells.set(ship.id, {
+      key, next: 0, built: have?.built ?? null, stale: !!have?.built, coarse: this.#live,
+    });
+    if (!this.#pending.includes(ship.id)) this.#pending.push(ship.id);
+  }
+
+  /**
+   * The inputs the boundary actually depends on. Everything here changes where
+   * the ship can get to; nothing else does, which is why picking a destination
+   * is not in it.
+   */
+  #shellKeyFor(ship: ShipState, order: PlannedOrder, flight: Flight): string {
+    return [
+      ship.id, order.mode,
+      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
+      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
+      // The commanded heading, but ONLY where the flight reads it. Slide holds
+      // the nose, so turning re-points the strong drive and moves the boundary:
+      // measured at 19.09 u worst and 0.81 u mean over a 48 x 26 chart. Move
+      // faces its own course, so the same turn moves it by 0.00 u, exactly, and
+      // carrying the face here rebuilt a surface that could not have changed.
+      // All three components, since the old key carried x and z only.
+      ...(order.mode === Mode.TurnSlide
+        ? [order.face?.x.toFixed(3) ?? '-',
+           order.face?.y.toFixed(3) ?? '-',
+           order.face?.z.toFixed(3) ?? '-',
+           // Roll too, and for a reason that is easy to argue away: x and y
+           // are spent against the same lateral cap, so the budget looks
+           // rotationally symmetric about the nose. The cap is a BOX, and a
+           // box has corners, so rolling turns it under the wanted thrust and
+           // the arrival point moves, by 7.87 u on a 44 u reach when measured.
+           order.roll?.toFixed(4) ?? '-']
+        : []),
+      flight.yawRate, flight.pitchRate, flight.accelFwd,
+      flight.accelRetro, flight.accelLat, flight.maxSpeed,
+    ].join('|');
+  }
+
+  /**
+   * Run a deferred rebuild once the heading has stopped moving, or once the
+   * drawn boundary has lagged a heading that will not stop.
+   *
+   * Which of the two it is decides how far the ladder runs. A heading that has
+   * settled gets the whole thing, finger down or not, because nothing is about
+   * to throw it away: pausing on a dial should sharpen the shape, not coarsen
+   * it. One that is still sweeping gets the coarsest rung only, since the fine
+   * ones are the expensive ones and the next nudge would discard them.
+   */
+  #flushDeferred(orderOf: (id: number) => PlannedOrder,
+                 flightOf: (id: number) => Flight,
+                 shipOf: (id: number) => ShipState | undefined): void {
+    if (!this.#live) return;
+    const now = performance.now();
+    const settled = now - this.#movedAt >= SETTLE_MS;
+    if (this.#deferred.size) {
+      if (!settled && now - this.#liveBuiltAt < LIVE_MAX_MS) return;
+      this.#liveBuiltAt = now;
+      for (const id of this.#deferred) {
+        const ship = shipOf(id);
+        if (!ship) continue;
+        const have = this.#shells.get(id);
+        this.#shells.set(id, {
+          key: this.#shellKeyFor(ship, orderOf(id), flightOf(id)),
+          next: 0, built: have?.built ?? null, stale: !!have?.built, coarse: !settled,
+        });
+        if (!this.#pending.includes(id)) this.#pending.push(id);
+      }
+      this.#deferred.clear();
+      return;
+    }
+    // Nothing outstanding, but a sweep that ran past LIVE_MAX_MS left its
+    // ladder capped at the coarse rung. Once the heading stops, uncap it: the
+    // shape must sharpen when the finger rests, not only when it lifts.
+    if (!settled) return;
+    for (const [id, e] of this.#shells) {
+      if (!e.coarse) continue;
+      e.coarse = false;
+      if (e.next < ENVELOPE_LEVELS.length && !this.#pending.includes(id)) this.#pending.push(id);
+    }
+  }
+
+  /**
+   * Build at most ONE level, for one ship, and return whether anything is
+   * still outstanding.
+   *
+   * A level is a single call into the core that runs a whole traversal, so it
+   * cannot be split part way. What keeps this off the frame budget is that the
+   * levels are cheap before they are fine: the shape is up in 5 ms and only
+   * then sharpens. Called once a frame, so a heavy level costs one frame and
+   * never a queue of them.
+   */
+  stepShells(orderOf: (id: number) => PlannedOrder,
+             flightOf: (id: number) => Flight,
+             shipOf: (id: number) => ShipState | undefined): boolean {
+    this.#flushDeferred(orderOf, flightOf, shipOf);
+    while (this.#pending.length) {
+      const id = this.#pending[0]!;
+      const entry = this.#shells.get(id);
+      const ship = shipOf(id);
+      if (!entry || !ship || entry.next >= ENVELOPE_LEVELS.length) {
+        this.#pending.shift();
+        continue;
+      }
+      const [nu, nv] = ENVELOPE_LEVELS[entry.next]!;
+      const built = this.#probeShell(ship, orderOf(id), flightOf(id), nu, nv);
+      if (built) {
+        if (entry.built) entry.built.geo.dispose();
+        entry.built = built;
+        entry.stale = false;
+        // A new level is a new surface, so whatever contours were cut from the
+        // old one are stale even if the working plane has not moved.
+        this.#wireKey = '';
+      }
+      entry.next++;
+      // Capped while a heading is being dragged: one rung is the whole answer
+      // for now, and the rest waits for the finger to come off.
+      if (entry.next >= ENVELOPE_LEVELS.length || entry.coarse) this.#pending.shift();
+      return this.#pending.length > 0;
+    }
+    return false;
+  }
+
+  /** How many course lines are drawn, and how long each is. Observation only,
+   * for the harness. */
+  pathStats(): { count: number; points: number[] } {
+    return {
+      count: this.#pathGroup.children.length,
+      points: this.#pathGroup.children.map(
+        c => (c as THREE.Line).geometry.getAttribute('position')?.count ?? 0),
+    };
+  }
+
+  /** How many plan ghosts are drawn. */
+  ghostCount(): number { return this.#ghostGroup.children.length; }
+
+  /** How much blast and how much history is on screen, and how big the biggest
+   * blast has grown. Observation only, for the harness and the console. */
+  fxStats(): { blasts: number; beams: number; trails: number; widest: number } {
+    let widest = 0;
+    for (const c of this.#fxGroup.children) {
+      const g = (c as THREE.Mesh).geometry;
+      g.computeBoundingSphere();
+      widest = Math.max(widest, g.boundingSphere?.radius ?? 0);
+    }
+    return {
+      blasts: this.#fxGroup.children.length,
+      beams: this.#beamGroup.children.length,
+      trails: this.#trailGroup.children.length,
+      widest,
+    };
+  }
+
+  /** True while any ship's envelope is still sharpening. */
+  get rebuilding(): boolean { return this.#pending.length > 0; }
+
+  /** How far the selected ship's envelope has got, for the console to show. */
+  shellProgress(shipId: number): { at: string; of: string; frac: number; done: boolean } {
+    const e = this.#shells.get(shipId);
+    const done = !e || e.next >= ENVELOPE_LEVELS.length;
+    const top = ENVELOPE_LEVELS[ENVELOPE_LEVELS.length - 1]!;
+    const cur = e?.built ? [e.built.cells, e.built.edges / e.built.cells] : null;
+    return {
+      at: cur ? `${cur[0]} x ${cur[1]}` : 'starting',
+      of: `${top[0]} x ${top[1]}`,
+      frac: e ? e.next / ENVELOPE_LEVELS.length : 1,
+      done,
+    };
+  }
+
+  /** Show the envelope this ship already has, without probing anything. */
   drawEnvelope(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#shell.visible = false;
       this.#shellLines.visible = false;
       return;
     }
-    // Size the box from what the hull can actually cover, plus the ground the
-    // carried velocity will make regardless. maxSpeed alone over-sizes it by
-    // roughly double, and an over-sized box spends its cells on empty space:
-    // the shell comes out coarse and the shape stops being readable, which is
-    // the one thing it exists to show.
-    const half = this.probeHalf(ship, flight);
-    const key = [
-      ship.id, order.mode, half.toFixed(1),
-      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
-      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
-      order.face?.x.toFixed(3) ?? '-', order.face?.z.toFixed(3) ?? '-',
-      flight.yawRate, flight.pitchRate, flight.accelFwd,
-      flight.accelRetro, flight.accelLat, flight.maxSpeed,
-    ].join('|');
-    if (key === this.#shellKey) return;
-    this.#shellKey = key;
+    this.requestShell(ship, order, flight);
+    const built = this.#shells.get(ship.id)?.built;
+    if (!built) {
+      this.#shell.visible = false;
+      this.#shellLines.visible = false;
+      return;
+    }
+    if (this.#shell.geometry !== built.geo) this.#shell.geometry = built.geo;
 
+    // Contours follow the working plane, so they are cut here rather than with
+    // the surface: the plane moves far more often than the surface does.
+    const planeY = this.planeY();
+    // The ladder itself does not move with the plane. What changes is which
+    // rung is left out, so the key carries the plane rather than ignoring it.
+    const key = `${ship.id}|${built.cells}|${ship.pos.y.toFixed(2)}|${planeY.toFixed(2)}`;
+    if (key !== this.#wireKey) {
+      this.#wireKey = key;
+      const wire: number[] = [];
+      const levels = contourLevels(
+        built.ylo, built.yhi, ship.pos.y, planeY, SLICES, INTERVALS);
+      for (const y of levels) {
+        const cut = sliceRegion(built.fitted, built.anchor.y, y, SLICE_RAYS);
+        wire.push(...sliceOutline(cut, built.anchor.x, built.anchor.z, y));
+      }
+      // The rungs are a fixed scale anchored to the ship, so this list must not
+      // change as the elevation moves: only which rung drops out, being the one
+      // the bright cut is already drawing.
+      console.log(
+        `FT rungs | ${levels.map(y => y.toFixed(1)).join(' ')}`
+        + ` | anchored at ship y ${ship.pos.y.toFixed(3)}`
+        + ` | plane ${planeY.toFixed(3)} takes its own rung out`,
+      );
+      this.#shellLines.geometry.dispose();
+      const wgeo = new THREE.BufferGeometry();
+      wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
+      this.#shellLines.geometry = wgeo;
+    }
+    this.#shell.visible = built.tris > 0;
+    this.#shellLines.visible = built.tris > 0;
+  }
+
+  /**
+   * Fit and tessellate the boundary at one sample density.
+   *
+   * The surface is closed by construction, which the marching build was not:
+   * a spherical grid wraps in theta and pins at both poles, so there is no
+   * seam and no box wall to be clipped against. The contours below are cut
+   * from THIS mesh, so they cannot disagree with the surface they sit on.
+   */
+  #probeShell(
+    ship: ShipState, order: PlannedOrder, flight: Flight, nu: number, nv: number,
+  ): BuiltShell | null {
     const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
     const flyOrder = order.face
       ? { mode: order.mode, face: order.face }
       : { mode: order.mode };
-    // WHERE to look, before how finely. The reachable set leans along the
-    // velocity and at speed it leaves the hull behind: a ship carrying eight
-    // units per second finishes its turn about eighty units away whatever it
-    // does. A cube centred on the hull therefore spends nearly all of itself
-    // on space the ship cannot use, and the cell it can afford grows from 7.9
-    // units at rest to 13.7 at speed, which is backwards.
-    //
-    // So anchor on where the turn actually LANDS with no order given, which is
-    // one flight and lies along the velocity by construction, then measure how
-    // far the lobe runs around it. Same probe count, cells of about 3.8 units
-    // at rest and 2.8 at speed.
-    const landing = this.#sim.flyTurn(body, flight, { mode: order.mode }, PROBE_STEPS, 1).endPos;
-    const speed = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
-    const along = speed > 0.05
-      ? { x: ship.vel.x / speed, y: ship.vel.y / speed, z: ship.vel.z / speed }
-      : this.#match.forward(ship.id);
-    const basis = this.#sim.lookBasis(along);
-    const reachAlong = (dx: number, dy: number, dz: number): number => {
-      let lo = 0;
-      let hi = half * 2.2;
-      const hit = (t: number) => this.#sim.canReach(
-        body, flight, flyOrder,
-        { x: landing.x + dx * t, y: landing.y + dy * t, z: landing.z + dz * t },
-        REACH_EPS, PROBE_STEPS,
-      );
-      if (hit(hi)) return hi;
-      for (let n = 0; n < FIT_STEPS; n++) {
-        const m = (lo + hi) / 2;
-        if (hit(m)) lo = m; else hi = m;
-      }
-      return lo;
-    };
-    // The 26 face, edge and corner directions of a cube, in the box's own
-    // frame, so the extents come back as half sizes along its three axes.
-    let hr = 0;
-    let hu = 0;
-    let hf = 0;
-    for (let a = -1; a <= 1; a++) {
-      for (let b = -1; b <= 1; b++) {
-        for (let c = -1; c <= 1; c++) {
-          if (!a && !b && !c) continue;
-          const l = Math.hypot(a, b, c);
-          const dx = (basis.right.x * a + basis.up.x * b + basis.forward.x * c) / l;
-          const dy = (basis.right.y * a + basis.up.y * b + basis.forward.y * c) / l;
-          const dz = (basis.right.z * a + basis.up.z * b + basis.forward.z * c) / l;
-          const r = reachAlong(dx, dy, dz);
-          hr = Math.max(hr, Math.abs((a / l) * r));
-          hu = Math.max(hu, Math.abs((b / l) * r));
-          hf = Math.max(hf, Math.abs((c / l) * r));
-        }
-      }
-    }
-    // Twenty six rays can slip between the lobes of a shape this creased, so
-    // pad before probing rather than clipping the surface at the box wall.
-    const boxHalf = {
-      right: Math.max(6, hr + FIT_PAD),
-      up: Math.max(6, hu + FIT_PAD),
-      forward: Math.max(6, hf + FIT_PAD),
-    };
-    const grid = this.#sim.reachGridAt(
-      body, flight, flyOrder, landing, along, boxHalf, GRID_N, REACH_EPS, PROBE_STEPS,
+    // Rays are cast from where a plain coast lands, not from the hull: at
+    // speed the hull is outside its own reachable set and cannot see it.
+    const anchor = this.#sim.flyTurn(body, flight, { mode: order.mode }, PROBE_STEPS, 1).endPos;
+    const radii = this.#sim.reachRadii(
+      body, flight, flyOrder, anchor, nu, nv, REACH_EPS, RAY_STEPS, 200, PROBE_STEPS,
     );
+    if (!radii) return null;
+    const fitted = fit(radii, nu, nv);
 
-    // Marching tetrahedra over the sampled field. Six tets per cube sharing
-    // the main diagonal gives sixteen cases and no 256 entry table, and it is
-    // watertight for any topology, which matters here: a ship carrying speed
-    // cannot stop where it already is, so the reachable set has a pocket
-    // around the hull that a ray cast from one centre cannot describe.
-    //
-    // Every vertex is then BISECTED onto the real boundary rather than dropped
-    // at the edge midpoint. A midpoint sits up to half a cell off, which is
-    // what made the old shell look blocky, and the correction is the same
-    // question the router asks: can the ship finish here.
-    // Cell centres in the box's own frame, mapped out through the basis the
-    // core probed with, so a drawn cell is the cell that was asked about.
-    const axis = (i: number, h: number) => -h + (i + 0.5) * ((2 * h) / GRID_N);
-    const cell = (i: number, j: number, k: number): Vec3 => {
-      const a = axis(i, boxHalf.right);
-      const b = axis(j, boxHalf.up);
-      const c = axis(k, boxHalf.forward);
-      return {
-        x: landing.x + basis.right.x * a + basis.up.x * b + basis.forward.x * c,
-        y: landing.y + basis.right.y * a + basis.up.y * b + basis.forward.y * c,
-        z: landing.z + basis.right.z * a + basis.up.z * b + basis.forward.z * c,
-      };
-    };
-    const at = (i: number, j: number, k: number) =>
-      i >= 0 && j >= 0 && k >= 0 && i < GRID_N && j < GRID_N && k < GRID_N && grid.at(i, j, k);
-
-    // A crossing edge is shared by several tetrahedra, so solve it once and
-    // key the answer by the edge. Without that the same edge is bisected four
-    // or five times over and the placement looks far dearer than it is.
-    const edge = new Map<number, Vec3>();
-    const edgeKey = (a: number[], b: number[]) => {
-      const ka = (a[0]! * GRID_N + a[1]!) * GRID_N + a[2]!;
-      const kb = (b[0]! * GRID_N + b[1]!) * GRID_N + b[2]!;
-      return ka < kb ? ka * 1e7 + kb : kb * 1e7 + ka;
-    };
-    const surfacePoint = (ga: number[], gb: number[]): Vec3 => {
-      const k = edgeKey(ga, gb);
-      const hit = edge.get(k);
-      if (hit) return hit;
-      const A = cell(ga[0]!, ga[1]!, ga[2]!);
-      const B = cell(gb[0]!, gb[1]!, gb[2]!);
-      const inside = at(ga[0]!, ga[1]!, ga[2]!);
-      const from = inside ? A : B;
-      const to = inside ? B : A;
-      let lo = 0;
-      let hi = 1;
-      for (let n = 0; n < BISECT_STEPS; n++) {
-        const m = (lo + hi) / 2;
-        const q = {
-          x: from.x + (to.x - from.x) * m,
-          y: from.y + (to.y - from.y) * m,
-          z: from.z + (to.z - from.z) * m,
-        };
-        if (this.#sim.canReach(body, flight, flyOrder, q, REACH_EPS, PROBE_STEPS)) lo = m;
-        else hi = m;
-      }
-      const v: Vec3 = {
-        x: from.x + (to.x - from.x) * lo,
-        y: from.y + (to.y - from.y) * lo,
-        z: from.z + (to.z - from.z) * lo,
-      };
-      edge.set(k, v);
-      return v;
-    };
-
-    const tri: number[] = [];
-    const wire: number[] = [];
-    // Keep an edge only if exactly one triangle owns it. A shared edge lies
-    // inside the skin and drawing it is what turned the shell into wire soup.
-    const seen = new Map<string, [Vec3, Vec3]>();
-    const rim = (a: Vec3, b: Vec3) => {
-      const q = (v: Vec3) => `${v.x.toFixed(2)},${v.y.toFixed(2)},${v.z.toFixed(2)}`;
-      const ka = q(a);
-      const kb = q(b);
-      const k = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
-      if (seen.has(k)) seen.delete(k);
-      else seen.set(k, [a, b]);
-    };
-    const push = (a: Vec3, b: Vec3, c: Vec3) => {
-      tri.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-      rim(a, b); rim(b, c); rim(c, a);
-    };
-    for (let i = 0; i < GRID_N - 1; i++) {
-      for (let j = 0; j < GRID_N - 1; j++) {
-        for (let k = 0; k < GRID_N - 1; k++) {
-          const corner = CUBE.map(([dx, dy, dz]) => [i + dx!, j + dy!, k + dz!]);
-          const inside = corner.map((c) => at(c[0]!, c[1]!, c[2]!));
-          let n = 0;
-          for (const b of inside) if (b) n++;
-          if (n === 0 || n === 8) continue;
-          for (const tet of TETS) {
-            const ins = tet.filter((t) => inside[t!]);
-            const outs = tet.filter((t) => !inside[t!]);
-            const g = (t: number) => corner[t]!;
-            if (ins.length === 1) {
-              const a = ins[0]!;
-              push(surfacePoint(g(a), g(outs[0]!)),
-                   surfacePoint(g(a), g(outs[1]!)),
-                   surfacePoint(g(a), g(outs[2]!)));
-            } else if (ins.length === 3) {
-              const o = outs[0]!;
-              push(surfacePoint(g(ins[0]!), g(o)),
-                   surfacePoint(g(ins[1]!), g(o)),
-                   surfacePoint(g(ins[2]!), g(o)));
-            } else if (ins.length === 2) {
-              const [a, b] = ins as [number, number];
-              const [c, d] = outs as [number, number];
-              const v1 = surfacePoint(g(a), g(c));
-              const v2 = surfacePoint(g(a), g(d));
-              const v3 = surfacePoint(g(b), g(d));
-              const v4 = surfacePoint(g(b), g(c));
-              push(v1, v2, v3);
-              push(v1, v3, v4);
-            }
-          }
-        }
+    const RU = nu * TESS;
+    const RV = nv * TESS;
+    const pos: number[] = [];
+    for (let a = 0; a <= RU; a++) {
+      for (let b = 0; b <= RV; b++) {
+        const u = a / RU;
+        const v = b / RV;
+        const d = chartDir(u, v);
+        const r = Math.max(0, radiusAt(fitted, u, v));
+        pos.push(anchor.x + d[0] * r, anchor.y + d[1] * r, anchor.z + d[2] * r);
       }
     }
-
-    this.#shell.geometry.dispose();
+    const idx: number[] = [];
+    for (let a = 0; a < RU; a++) {
+      for (let b = 0; b < RV; b++) {
+        const i0 = a * (RV + 1) + b;
+        const i1 = (a + 1) * (RV + 1) + b;
+        idx.push(i0, i1, i0 + 1, i1, i1 + 1, i0 + 1);
+      }
+    }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setIndex(idx);
     geo.computeVertexNormals();
-    this.#shell.geometry = geo;
-    this.#shell.visible = tri.length > 0;
 
-    // Read the surface out as level lines rather than as a skin. Every segment
-    // comes from intersecting a triangle this build already produced with a
-    // horizontal plane, so the contours cost no extra probes and cannot
-    // disagree with the surface they are cut from. Slicing the mesh also keeps
-    // whatever topology it found: where a moving hull leaves a pocket, the
-    // rings simply open around it.
+    // How tall the shape is, which is what sets the contour interval. The
+    // contours themselves are cut later, because where they sit depends on the
+    // working plane and that moves without the surface changing.
     let ylo = Infinity;
     let yhi = -Infinity;
-    for (let n = 1; n < tri.length; n += 3) {
-      if (tri[n]! < ylo) ylo = tri[n]!;
-      if (tri[n]! > yhi) yhi = tri[n]!;
+    for (let i = 1; i < pos.length; i += 3) {
+      const y = pos[i]!;
+      if (y < ylo) ylo = y;
+      if (y > yhi) yhi = y;
     }
-    if (tri.length) {
-      for (let sI = 0; sI < SLICES; sI++) {
-        const y = ylo + ((yhi - ylo) * (sI + 0.5)) / SLICES;
-        for (let t = 0; t < tri.length; t += 9) {
-          const vx = [tri[t]!, tri[t + 3]!, tri[t + 6]!];
-          const vy = [tri[t + 1]!, tri[t + 4]!, tri[t + 7]!];
-          const vz = [tri[t + 2]!, tri[t + 5]!, tri[t + 8]!];
-          const cut: number[] = [];
-          for (let e = 0; e < 3; e++) {
-            const f = (e + 1) % 3;
-            const a = vy[e]!;
-            const b = vy[f]!;
-            if ((a <= y && b > y) || (b <= y && a > y)) {
-              const u = (y - a) / (b - a);
-              cut.push(vx[e]! + (vx[f]! - vx[e]!) * u, y, vz[e]! + (vz[f]! - vz[e]!) * u);
-            }
-          }
-          if (cut.length === 6) wire.push(...cut);
-        }
-      }
-    }
-    // And the silhouette, so the shape still reads where the slices are sparse.
-    for (const [a, b] of seen.values()) {
-      wire.push(a.x, a.y, a.z, b.x, b.y, b.z);
-    }
-    this.#shellLines.geometry.dispose();
-    const wgeo = new THREE.BufferGeometry();
-    wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
-    this.#shellLines.geometry = wgeo;
-    this.#shellLines.visible = wire.length > 0;
-    this.#shellTris = tri.length / 9;
-    this.#shellEdges = edge.size;
-    this.#shellBox = boxHalf;
-  }
 
-  /**
-   * Can this ship finish its turn at this exact point?
-   *
-   * The one authority on whether a click is a move order. Asking the core the
-   * real question costs a single flight, which is nothing, and it means the
-   * router can never disagree with the model about what is reachable. The
-   * alternative, a radius, was wrong in both directions at once: it accepted
-   * clicks far outside a lobe that does not extend that way, and rejected
-   * nothing at all behind a ship carrying velocity.
-   */
-  /**
-   * The furthest point toward `p` the ship can still finish its turn at.
-   *
-   * A drag that leaves the reachable set used to be refused outright, so the
-   * marker stopped dead and the plan stopped tracking the hand. Walking in
-   * from a point that IS reachable puts the marker on the boundary instead,
-   * so it keeps following and lands exactly on the edge rather than a grid
-   * cell inside it. Same bisection the surface uses, so the line you slide
-   * along is the line you see.
-   *
-   * Walks from the HULL by preference, because that anchor is fixed while the
-   * cursor sweeps, so the boundary point sweeps with it. Anchoring on the last
-   * marker instead makes the ray stop turning once it is already on the edge,
-   * and the marker stalls when you drag straight outward. The hull is not
-   * always reachable though, since a ship carrying speed cannot stop where it
-   * already is, so the standing target is the fallback and then the caller
-   * holds its last good point.
-   */
-  clampToReach(
-    ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3,
-  ): Vec3 | null {
-    if (this.canReachPoint(ship, flight, order, p)) return p;
-    const seeds = [ship.pos, order.target].filter((q): q is Vec3 => !!q);
-    const from = seeds.find((q) => this.canReachPoint(ship, flight, order, q));
-    if (!from) return null;
-    let lo = 0;
-    let hi = 1;
-    for (let n = 0; n < SLIDE_STEPS; n++) {
-      const m = (lo + hi) / 2;
-      const q = {
-        x: from.x + (p.x - from.x) * m,
-        y: from.y + (p.y - from.y) * m,
-        z: from.z + (p.z - from.z) * m,
-      };
-      if (this.canReachPoint(ship, flight, order, q)) lo = m; else hi = m;
-    }
+    let rmin = Infinity;
+    let rmax = 0;
+    for (const r of radii) { if (r < rmin) rmin = r; if (r > rmax) rmax = r; }
     return {
-      x: from.x + (p.x - from.x) * lo,
-      y: from.y + (p.y - from.y) * lo,
-      z: from.z + (p.z - from.z) * lo,
+      cells: nu,
+      geo,
+      fitted,
+      anchor,
+      ylo,
+      yhi,
+      tris: idx.length / 3,
+      edges: nu * nv,
+      entries: radii.length,
+      box: { right: rmax, up: rmax, forward: rmax },
+      reach: { min: rmin, max: rmax },
     };
   }
 
-  canReachPoint(ship: ShipState, flight: Flight, order: PlannedOrder, p: Vec3): boolean {
-    if (isCommitted(order.mode)) return false;
-    const body = { pos: ship.pos, vel: ship.vel, quat: ship.quat };
-    const flyOrder = order.face
-      ? { mode: order.mode, face: order.face }
-      : { mode: order.mode };
-    return this.#sim.canReach(body, flight, flyOrder, p, REACH_EPS, PROBE_STEPS);
+
+  /**
+   * Is this point inside the area the ship can finish its turn in, AT the
+   * working plane?
+   *
+   * Asked of the region already drawn there rather than of the core. That is
+   * not a second model of the rule: the region IS the core's own bisections,
+   * taken once when the turn started, which is when reachability is decided.
+   * Re-probing per pointer move answers the same question again at a flight a
+   * pixel, and the answer it gives can disagree with the picture, which is
+   * what let a marker sit outside the area lit up for it.
+   */
+  sliceContains(p: Vec3): boolean {
+    const c = this.#planeCut;
+    if (!c) return false;
+    return sliceHolds(c.cut, p.x - c.anchor.x, p.z - c.anchor.z);
+  }
+
+  /**
+   * The nearest point to `p` inside the drawn region, always AT the working
+   * plane.
+   *
+   * y comes from the plane and never from `p` or from anything interpolated.
+   * The walk this replaces bisected between the click and the SHIP's own
+   * position, which sits at the ship's height rather than the plane's, so the
+   * point it returned drifted off the plane and out of the area drawn for it.
+   */
+  clampToSlice(p: Vec3): Vec3 | null {
+    const c = this.#planeCut;
+    if (!c) return null;
+    const q = sliceClamp(c.cut, p.x - c.anchor.x, p.z - c.anchor.z);
+    return q ? { x: c.anchor.x + q.dx, y: c.y, z: c.anchor.z + q.dz } : null;
   }
 
   /**
    * Trace the movable area where it crosses the working plane.
    *
-   * The shell is a cloud of points in three dimensions, which reads well as a
-   * shape and badly as a target. A click happens on the plane, so the plane is
-   * where the boundary has to be drawn. Marching squares over the same
-   * predicate the router uses, so the line and the rule are one thing: the
-   * contour is a discretisation of it, and can disagree by under half a cell
-   * right at the edge, which is the only honest way to draw a curve on a grid.
+   * A click happens on the plane, so the plane is where the boundary has to be
+   * drawn. This cuts the SAME fitted surface the skin is drawn from, one
+   * meridian walk per azimuth, so the bright line and the shell around it are
+   * one model of the boundary rather than two that can disagree.
+   *
+   * It used to be marching squares over its own 40 by 40 grid of `can_reach`
+   * probes, with each vertex snapped to a cell edge midpoint and no
+   * interpolation at all. That was a second, coarser model of a boundary the
+   * surface already described, which is the divergent path GUIDELINES 5.1
+   * forbids, and it looked like one: a hard polygon sitting inside a smooth
+   * shell. It also cost 1681 flights every time the working altitude moved,
+   * where cutting the surface costs none.
+   *
+   * The drawn line may now sit up to the fit error off the predicate, 0.80 u
+   * rms at the finest level, against up to half a cell of midpoint snapping
+   * before. The picker is unaffected either way: it asks the core, never this.
    */
   drawPlaneShape(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
       this.#planeShape.visible = false;
+      this.#planeFill.visible = false;
+      this.#planeCut = null;
       return;
     }
-    const half = this.probeHalf(ship, flight);
+    const built = this.#shells.get(ship.id)?.built;
+    if (!built) {
+      this.#planeShape.visible = false;
+      this.#planeFill.visible = false;
+      this.#planeCut = null;
+      return;
+    }
     const y = this.planeY();
     const key = [
-      ship.id, order.mode, half.toFixed(1), y.toFixed(2),
-      ship.pos.x.toFixed(2), ship.pos.y.toFixed(2), ship.pos.z.toFixed(2),
-      ship.vel.x.toFixed(3), ship.vel.y.toFixed(3), ship.vel.z.toFixed(3),
-      order.face?.x.toFixed(3) ?? '-', order.face?.z.toFixed(3) ?? '-',
-      flight.yawRate, flight.pitchRate, flight.accelFwd,
-      flight.accelRetro, flight.accelLat, flight.maxSpeed,
+      ship.id, built.cells, y.toFixed(2),
+      this.#shellKeyFor(ship, order, flight),
     ].join('|');
     if (key === this.#planeKey) return;
     this.#planeKey = key;
 
-    const step = (2 * half) / PLANE_N;
-    const x0 = ship.pos.x - half;
-    const z0 = ship.pos.z - half;
-    const px = (i: number) => x0 + i * step;
-    const pz = (j: number) => z0 + j * step;
+    // One cut, drawn twice: the ground it covers and the edge around it. Both
+    // come off the same spans, so the fill cannot spill past its own outline.
+    const cut = sliceRegion(built.fitted, built.anchor.y, y, PLANE_RAYS);
+    const a = built.anchor;
+    this.#planeCut = { cut, anchor: a, y };
+    const pts = sliceOutline(cut, a.x, a.z, y);
+    const tris = sliceFill(cut, a.x, a.z, y);
 
-    // Membership at every grid CORNER, so a cell can read its four corners
-    // without probing any point twice.
-    const n = PLANE_N + 1;
-    const inside = new Uint8Array(n * n);
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        inside[i * n + j] =
-          this.canReachPoint(ship, flight, order, { x: px(i), y, z: pz(j) }) ? 1 : 0;
-      }
-    }
-
-    const pts: number[] = [];
-    const mid = (e: number, i: number, j: number): [number, number] => {
-      switch (e) {
-        case 0: return [px(i + 0.5), pz(j)];
-        case 1: return [px(i + 1), pz(j + 0.5)];
-        case 2: return [px(i + 0.5), pz(j + 1)];
-        default: return [px(i), pz(j + 0.5)];
-      }
-    };
-    for (let i = 0; i < PLANE_N; i++) {
-      for (let j = 0; j < PLANE_N; j++) {
-        const code =
-          (inside[i * n + j] ?? 0) |
-          ((inside[(i + 1) * n + j] ?? 0) << 1) |
-          ((inside[(i + 1) * n + j + 1] ?? 0) << 2) |
-          ((inside[i * n + j + 1] ?? 0) << 3);
-        const edges = MARCHING[code] ?? [];
-        for (let e = 0; e < edges.length; e += 2) {
-          const a = mid(edges[e] ?? 0, i, j);
-          const b = mid(edges[e + 1] ?? 0, i, j);
-          pts.push(a[0], y, a[1], b[0], y, b[1]);
-        }
-      }
-    }
     this.#planeShape.geometry.dispose();
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     this.#planeShape.geometry = geo;
     this.#planeShape.visible = pts.length > 0;
+
+    this.#planeFill.geometry.dispose();
+    const fgeo = new THREE.BufferGeometry();
+    fgeo.setAttribute('position', new THREE.Float32BufferAttribute(tris, 3));
+    this.#planeFill.geometry = fgeo;
+    this.#planeFill.visible = tris.length > 0;
+
+    // Every vertex of both took `y` verbatim, so this reports the elevation
+    // asked for beside the elevation drawn. They are the same number or there
+    // is a bug, which is the only reason to print it.
+    let ylo = Infinity;
+    let yhi = -Infinity;
+    for (const src of [pts, tris]) {
+      for (let i = 1; i < src.length; i += 3) {
+        if (src[i]! < ylo) ylo = src[i]!;
+        if (src[i]! > yhi) yhi = src[i]!;
+      }
+    }
+    const p = ship.pos;
+    console.log(
+      `FT slice | elevation ${y.toFixed(3)}`
+      + ` | ship (${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)})`
+      + ` | work alt ${this.workAlt.toFixed(3)}`
+      + ` | drawn y ${Number.isFinite(ylo) ? ylo.toFixed(3) : 'none'}`
+      + ` to ${Number.isFinite(yhi) ? yhi.toFixed(3) : 'none'}`
+      + ` | ${tris.length / 9} triangles, ${pts.length / 6} edges`
+      + (Number.isFinite(ylo) && (ylo !== y || yhi !== y) ? '  DEVIATES' : ''),
+    );
   }
 
   /**
-   * How far out to probe. The core owns the reach; the momentum term is this
-   * side's business, since it is about framing rather than about flight.
+   * Draw the match's gravity field.
+   *
+   * A well is a body plus the region where it actually bites. The rings are
+   * NOT decoration and not a second gravity model: each is the radius at which
+   * the pull equals a given fraction of `drive`, the ship's own main drive,
+   * solved from mu / r^2 = a. So the outer ring is where the field starts to
+   * be worth planning around and the inner one is where it beats the engine
+   * outright. The drive comes in from the caller rather than being written
+   * down here, because it is authored per class in data.rs and a copy of it
+   * in the renderer is a number that can drift.
    */
-  probeHalf(ship: ShipState, flight: Flight): number {
-    const carried = Math.hypot(ship.vel.x, ship.vel.y, ship.vel.z);
-    const reach = this.#match.nominalReach(ship.id) || flight.maxSpeed * 5;
-    return Math.max(30, reach * 1.25 + carried * 5);
+  setWells(wells: Well[], drive: number): void {
+    while (this.#wellGroup.children.length) {
+      const c = this.#wellGroup.children.pop() as THREE.Mesh | THREE.LineSegments;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    if (!(drive > 0)) return;
+    for (const w of wells) {
+      const body = new THREE.Mesh(
+        new THREE.SphereGeometry(Math.max(2, w.soft), 24, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0x2a3550, emissive: 0x101c33, roughness: 0.9, metalness: 0.0,
+        }),
+      );
+      body.position.set(w.pos.x, w.pos.y, w.pos.z);
+      this.#wellGroup.add(body);
+
+      // ACCEL_FWD is the frigate main drive from data.rs. A ring at a fraction
+      // of it is the honest way to show reach: the field is inverse square, so
+      // a single sphere would say nothing about where it stops mattering.
+      for (const [frac, colour, op] of [
+        [1.0, 0xff5f6d, 0.55],
+        [0.25, 0xffa23f, 0.35],
+        [0.05, 0x35c7ff, 0.2],
+      ] as const) {
+        const r = Math.sqrt(w.mu / (drive * frac));
+        if (!Number.isFinite(r) || r < w.soft) continue;
+        const mat = new THREE.LineBasicMaterial({ color: colour, transparent: true, opacity: op });
+        for (const axis of [0, 1, 2]) {
+          const pts: THREE.Vector3[] = [];
+          for (let i = 0; i <= 72; i++) {
+            const a = (i / 72) * Math.PI * 2;
+            const c = Math.cos(a) * r;
+            const d = Math.sin(a) * r;
+            pts.push(axis === 0 ? new THREE.Vector3(0, c, d)
+                   : axis === 1 ? new THREE.Vector3(c, 0, d)
+                                : new THREE.Vector3(c, d, 0));
+          }
+          const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat);
+          ring.position.set(w.pos.x, w.pos.y, w.pos.z);
+          this.#wellGroup.add(ring);
+        }
+      }
+    }
   }
 
-  /** Cells probed, cells reachable, and the volume that implies. */
+  /**
+   * Ghost our hulls at a point in the plan, orientation included.
+   *
+   * The nose matters as much as the position: a slide order that arrives
+   * pointing the wrong way is a turn spent, and this is where a player sees
+   * that before committing. Only our own ships are ghosted, because the other
+   * side's orders do not exist until the turn is released.
+   */
+  setGhosts(poses: readonly { id: number; side: number; pose: Pose }[]): void {
+    while (this.#ghostGroup.children.length) {
+      const c = this.#ghostGroup.children.pop() as THREE.Mesh;
+      c.geometry?.dispose();
+      (c.material as THREE.Material | undefined)?.dispose();
+    }
+    for (const g of poses) {
+      const mesh = new THREE.Mesh(
+        new THREE.ConeGeometry(1.6, 5.2, 4),
+        new THREE.MeshBasicMaterial({
+          // A hostile's ghost is where the AI's own plan puts it, so it is
+          // drawn in their colour: a cyan cone out among the enemy would read
+          // as one of mine.
+          color: g.side === this.mySide ? CYAN : ORANGE,
+          wireframe: true, transparent: true, opacity: 0.5,
+        }),
+      );
+      // The cone points along +Y as built and a hull points along +Z, so it is
+      // tipped once here rather than every frame.
+      mesh.geometry.rotateX(Math.PI / 2);
+      mesh.position.set(g.pose.pos.x, g.pose.pos.y, g.pose.pos.z);
+      mesh.quaternion.set(g.pose.quat.x, g.pose.quat.y, g.pose.quat.z, g.pose.quat.w);
+      this.#ghostGroup.add(mesh);
+    }
+  }
+
   envelopeSummary(ship: ShipState | undefined, _flight: Flight): string {
     if (!ship) return 'no ship selected';
-    const b = this.#shellBox;
-    const cell = Math.cbrt((8 * b.right * b.up * b.forward) / (GRID_N * GRID_N * GRID_N));
-    return `${GRID_N}<sup>3</sup> probes in a box `
-      + `${(2 * b.right).toFixed(0)} x ${(2 * b.up).toFixed(0)} x ${(2 * b.forward).toFixed(0)} u `
-      + `on the velocity, ${this.#shellTris} triangles from ${this.#shellEdges} `
-      + `bisected edges, cell ${cell.toFixed(1)} u`;
+    const e = this.#shells.get(ship.id);
+    const built = e?.built;
+    if (!built) return 'probing the boundary...';
+    const nv = built.edges / built.cells;
+    // Spacing between neighbouring rays at the widest part of the surface,
+    // which is what actually sets how much detail the fit can carry.
+    const spacing = (built.reach.max * Math.PI) / Math.max(1, nv - 1);
+    return `bicubic surface through ${built.cells} x ${nv} rays `
+      + `(${built.entries} bisected), ${built.tris} triangles, `
+      + `reach ${built.reach.min.toFixed(1)} to ${built.reach.max.toFixed(1)} u, `
+      + `sample spacing ${spacing.toFixed(1)} u`;
   }
 
+  /**
+   * Drop every cached envelope.
+   *
+   * Only for a NEW turn. Reachability is fixed while a turn is open, so
+   * nothing a player does during planning belongs here: what a ship can reach
+   * depends on its state, its mode, its commanded heading and its flight
+   * stats, and every one of those is in the cache key, which restarts one
+   * ship's ladder rather than throwing away every ship's work.
+   */
   invalidateEnvelope(): void {
-    this.#shellKey = '';
+    for (const e of this.#shells.values()) e.built?.geo.dispose();
+    this.#shells.clear();
+    this.#pending = [];
     this.#planeKey = '';
+    this.#wireKey = '';
   }
 
   render(): void {

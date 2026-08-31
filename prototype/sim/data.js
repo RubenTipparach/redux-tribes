@@ -3,6 +3,11 @@
 (function (global) {
   "use strict";
 
+  // A reactor breach. Hulls only, never subsystems: a breach that could reach
+  // another reactor would chain, and a chain is a recursion with no bound.
+  const CRITICAL_RADIUS = 14;
+  const CRITICAL_DAMAGE = 140;
+
   const CONST = {
     TICKS_PER_SECOND: 60,
     TURN_SECONDS: 10,
@@ -93,11 +98,18 @@
     return 0.5 * fl.accelFwd * tAccel * tAccel + fl.maxSpeed * (T - tAccel);
   }
 
+  // The belts sit outboard and the core sits deep amidships behind them, which
+  // is the whole of the protection it gets. Nothing declares the reactor
+  // shielded: a shot from abeam meets a belt because a belt is in the way, and
+  // one from below does not. Geometry rather than a rule.
   function frigateSubsystems(armorBlock) {
     return [
       { id: "armor_l", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: -1.6, y: 0, z: 0.5 }, radius: 1.6 },
       { id: "armor_r", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: 1.6,  y: 0, z: 0.5 }, radius: 1.6 },
       { id: "engines", type: "thruster", hp: 100, blockPct: 60,         offset: { x: 0, y: 0, z: -2.6 },  radius: 1.4 },
+      { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40,         offset: { x: 0, y: -1.0, z: 1.5 }, radius: 1.0 },
+      { id: "weapons", type: "weapon",   hp: 80,  blockPct: 50,         offset: { x: 0, y: 1.0, z: 1.2 },  radius: 1.1 },
+      { id: "reactor", type: "reactor",  hp: 90,  blockPct: 45,         offset: { x: 0, y: 0, z: -0.6 },   radius: 1.0 },
     ];
   }
 
@@ -149,14 +161,19 @@
       name: "Freighter", hull: 600, radius: 4.5, mass: 2.0,
       flight: flight({ yawRate: 2.5, pitchRate: 1.5, accelFwd: 0.45, accelRetro: 0.18, accelLat: 0.10, maxSpeed: 5 }),
       thrusterRange: 30, boardingRange: 10, marines: 15, marinesMax: 50, boardingCapacity: 8,
+      // No weapon bay, because the hull has no mounts to lose. A volume whose
+      // loss changes nothing teaches a player the wrong lesson.
       subsystems: () => [
         { id: "engines", type: "thruster", hp: 100, blockPct: 60, offset: { x: 0, y: 0, z: -3.4 }, radius: 1.6 },
+        { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40, offset: { x: 0, y: -1.2, z: 2.0 }, radius: 1.2 },
+        { id: "reactor", type: "reactor",  hp: 120, blockPct: 45, offset: { x: 0, y: 0, z: -1.0 }, radius: 1.2 },
       ],
       weapons: [],
     },
   };
 
-  const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, nominalReach };
+  const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, nominalReach,
+    CRITICAL_RADIUS, CRITICAL_DAMAGE };
   global.FT = global.FT || {};
   global.FT.data = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

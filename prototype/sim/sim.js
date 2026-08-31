@@ -75,30 +75,59 @@
     return (t >= 0 && t <= 1) ? t : -1;
   }
 
-  // Raycast a segment against every live ship (hull + live subsystem volumes).
-  // Returns { ship, sub|null, t, pos } of the nearest hit, or null.
+  // Raycast a segment against every live ship, naming the subsystem volume it
+  // struck if it struck one. Returns { ship, sub|null, t, pos } or null.
+  //
+  // Two questions rather than one: WHICH ship is nearest is decided by where
+  // the segment enters, and WHAT it hits on that ship is the first live volume
+  // inside it. One nearest-wins pass over both looks equivalent and is not, a
+  // subsystem sits INSIDE the hull sphere, so the sphere was always entered
+  // first and always won and every aimed shot landed on the hull.
   function raycastShips(state, a, b, ignoreShipId) {
     let best = null;
     for (const ship of state.ships) {
       if (ship.destroyed || ship.id === ignoreShipId) continue;
-      // subsystem volumes first (they sit inside/on the hull sphere)
+      const cls = SHIP_CLASSES[ship.classKey];
+      const hullT = segSphere(a, b, ship.pos, cls.radius);
+      let subHit = null;
       for (const sub of ship.subsystems) {
         if (sub.dead) continue;
         const t = segSphere(a, b, subWorldPos(ship, sub), sub.radius);
-        if (t >= 0 && (!best || t < best.t)) best = { ship, sub, t };
+        if (t >= 0 && (!subHit || t < subHit.t)) subHit = { sub, t };
       }
-      const cls = SHIP_CLASSES[ship.classKey];
-      const t = segSphere(a, b, ship.pos, cls.radius);
-      if (t >= 0 && (!best || t < best.t)) best = { ship, sub: null, t };
+      // Where the segment reaches this hull at all: the sphere if it clipped
+      // it, else the volume it found, since a volume can stand a little proud.
+      let entry = -1;
+      if (hullT >= 0 && subHit) entry = Math.min(hullT, subHit.t);
+      else if (hullT >= 0) entry = hullT;
+      else if (subHit) entry = subHit.t;
+      else continue;
+      if (!best || entry < best.t) best = { ship, sub: subHit ? subHit.sub : null, t: entry };
     }
     if (best) best.pos = V.lerp(a, b, best.t);
     return best;
+  }
+
+  // What a hull can still do. Derived rather than written into the ship, so
+  // the authored stats stay put and only what it can do with them changes.
+  function hasLive(ship, type) {
+    return ship.subsystems.some(s => s.type === type && !s.dead);
+  }
+  function hasLiveBay(ship) {
+    return !ship.subsystems.some(s => s.type === "weapon") || hasLive(ship, "weapon");
+  }
+  function effectiveFlight(ship) {
+    const cls = SHIP_CLASSES[ship.classKey];
+    const fl = ship.flight || cls.flight;
+    if (hasLive(ship, "rcs")) return fl;
+    return Object.assign({}, fl, { yawRate: 0, pitchRate: 0 });
   }
 
   // -------------------------------------------------------------- damage --
   function applyDamage(state, ship, sub, dmg, attackerId, events, tick, kind) {
     if (ship.destroyed) return;
     let hullShare = dmg;
+    let breached = false;
     if (sub && !sub.dead) {
       const absorbed = dmg * (sub.blockPct / 100);
       hullShare = dmg - absorbed;
@@ -106,16 +135,26 @@
       if (sub.hp <= 0) {
         sub.dead = true;
         events.push({ tick, type: "SubsystemDestroyed", ship: ship.id, sub: sub.id });
-        if (sub.type === "thruster" && !ship.subsystems.some(s => s.type === "thruster" && !s.dead)) {
+        if (sub.type === "thruster" && !hasLive(ship, "thruster")) {
           // engines out -> drift (dir = 0.25 * this turn's planned offset)
           const coastVel = ship._flight ? shipVelAtTick(ship, tick) : V.clone(ship.vel);
           ship.drift = { active: true, dir: V.clone(coastVel) };
           // the rest of this turn is unpowered from right here
           if (ship._flight) replanAfterCollision(ship, tick, coastVel);
           events.push({ tick, type: "ShipDrifting", ship: ship.id });
+        } else if (sub.type === "rcs" && !hasLive(ship, "rcs")) {
+          // Jets out is not adrift: the drive still works and the hull simply
+          // cannot point it anywhere new, so the rest of the turn is re-flown
+          // on an envelope with no turn rates.
+          if (ship._flight) replanAfterCollision(ship, tick, shipVelAtTick(ship, tick));
+        } else if (sub.type === "reactor") {
+          breached = true;
         }
       }
     }
+    // A breach is not damage that happens to be lethal: the hull is gone the
+    // moment the pile is, whatever was left of it.
+    if (breached) ship.hull = 0;
     ship.hull = Math.max(0, ship.hull - hullShare);
     events.push({
       tick, type: "Damage", ship: ship.id, sub: sub ? sub.id : null,
@@ -123,9 +162,35 @@
     });
     // AI retaliation (FiredEvent -> IfFiredUponAlert)
     if (ship.ai.enabled && attackerId) ship.ai.targetId = attackerId;
+    if (breached) {
+      events.push({ tick, type: "ShipCritical", ship: ship.id, by: attackerId || null,
+                    amount: data.CRITICAL_DAMAGE, pos: V.clone(ship.pos) });
+    }
     if (ship.hull <= 0) {
       ship.destroyed = true;
-      events.push({ tick, type: "ShipDestroyed", ship: ship.id, by: attackerId || null });
+      // Where it died, same as the core: the wreck's pose is gone by the time
+      // anything draws the event.
+      events.push({ tick, type: "ShipDestroyed", ship: ship.id, by: attackerId || null,
+                    pos: V.clone(ship.pos) });
+    }
+    if (breached) detonate(state, ship, attackerId, events, tick);
+  }
+
+  // The blast that follows a breach. Hulls only, never subsystems, so a breach
+  // cannot reach another reactor and the chain has no way to start. Targets are
+  // collected before any of them is damaged, because reading the state while
+  // writing it would make the result depend on ship order.
+  function detonate(state, ship, attackerId, events, tick) {
+    const R = data.CRITICAL_RADIUS, D = data.CRITICAL_DAMAGE;
+    const hits = [];
+    for (const t of state.ships) {
+      if (t === ship || t.destroyed) continue;
+      const d = V.len(V.sub(t.pos, ship.pos));
+      if (d >= R) continue;
+      hits.push([t, D * (1 - d / R)]);
+    }
+    for (const [t, dmg] of hits) {
+      applyDamage(state, t, null, dmg, ship.id, events, tick, "critical");
     }
   }
 
@@ -166,21 +231,51 @@
   // The error is resolved in the BODY frame so the two axes are limited
   // separately, which is what makes a sluggish nose feel different from a
   // sluggish pitch rather than just "slow".
-  function rotateToward(quat, want, fl, dt) {
+  function rotateToward(quat, want, rollWant, fl, dt) {
     const local = Q.rot(Q.inv(quat), want);          // desired forward, body frame
     const flat = Math.sqrt(local.x * local.x + local.z * local.z);
     // Straight up or straight down has no yaw: x and z are both ~0 there and
     // atan2 of two near-zero numbers is noise, which the rotation then
     // amplifies. Hold the current yaw and let pitch do the work instead.
     let yawErr = flat < 1e-4 ? 0 : dmath.datan2(local.x, local.z);
-    let pitchErr = dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
+    // Negated, because a right handed rotation about +X carries +Z toward -Y,
+    // while a positive error means the target is at +Y. Unnegated, a nose told
+    // to come up went down instead, and at the full pitch rate: a hull asked
+    // for 21.8 degrees of climb ended 40 degrees below its course, which is its
+    // whole authority spent backwards. Yaw needs no flip, because a rotation
+    // about +Y carries +Z toward +X, the way atan2 measures it.
+    let pitchErr = -dmath.datan2(local.y, flat < 1e-9 ? 1e-9 : flat);
     const maxYaw = fl.yawRate * Math.PI / 180 * dt;
     const maxPitch = fl.pitchRate * Math.PI / 180 * dt;
     yawErr = Math.max(-maxYaw, Math.min(maxYaw, yawErr));
     pitchErr = Math.max(-maxPitch, Math.min(maxPitch, pitchErr));
     let q = Q.mul(quat, Q.axisAngle(V.v3(0, 1, 0), yawErr));
     q = Q.mul(q, Q.axisAngle(V.v3(1, 0, 0), pitchErr));
-    return Q.norm(q);
+    q = Q.norm(q);
+    return rollWant === null || rollWant === undefined ? q : rollToward(q, rollWant, fl, dt);
+  }
+
+  // The roll the hull is at: the angle its own up sits at about its nose,
+  // measured from wings level, which is world up with the nose taken out of it.
+  // Vertical has no wings level to measure from, so it reports null.
+  function rollOf(quat) {
+    const fwd = Q.forward(quat);
+    const worldUp = V.v3(0, 1, 0);
+    const proj = V.sub(worldUp, V.scale(fwd, V.dot(worldUp, fwd)));
+    if (V.len(proj) < 1e-3) return null;
+    const r = V.norm(proj);
+    const rr = V.cross(r, fwd);
+    const up = Q.rot(quat, worldUp);
+    return dmath.datan2(-V.dot(up, rr), V.dot(up, r));
+  }
+
+  // Swing about the nose toward a commanded roll, at the yaw rate.
+  function rollToward(quat, want, fl, dt) {
+    const now = rollOf(quat);
+    if (now === null) return quat;
+    const max = fl.yawRate * Math.PI / 180 * dt;
+    const err = Math.max(-max, Math.min(max, dmath.wrapPi(want - now)));
+    return Q.norm(Q.mul(quat, Q.axisAngle(V.v3(0, 0, 1), err)));
   }
 
   // The velocity the controller wants this tick, before the hull gets a say.
@@ -195,7 +290,7 @@
   }
 
   // One tick of flight. Returns the new {pos, vel, quat}.
-  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt) {
+  function stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, rollWant, dt) {
     dt = dt || DT;
     const boosting = mode === "FULL_SPEED";
     const accelFwd = fl.accelFwd * (boosting ? CONST.BOOST_ACCEL_MULT : 1);
@@ -210,16 +305,25 @@
       dv = V.sub(want, vel);
     }
 
-    // Point the hull. MOVE_AND_TURN aims the nose where thrust is needed, which
-    // is the most manoeuvrable thing a ship can do. TURN_SLIDE holds a commanded
-    // heading instead, so course changes are left to the RCS: a far smaller
-    // envelope, bought in exchange for keeping the guns on a bearing.
+    // Point the hull.
+    //
+    // MOVE_AND_TURN auto-faces the course it was given (DESIGN 3.2), so the
+    // ship arrives looking the way it went. It used to aim wherever thrust was
+    // needed, which is the most manoeuvrable thing a hull can do and the wrong
+    // thing to watch: desiredVelocity falls to zero on arrival, so dv becomes
+    // -vel and the nose swung fully retrograde over the last seconds of every
+    // move. TURN_SLIDE holds a commanded heading instead, leaving course
+    // changes to the RCS: a far smaller envelope, bought in exchange for
+    // keeping the guns on a bearing. FULL_STOP still aims at the thrust,
+    // because a hull braking to a dead stop SHOULD swing retrograde and brake
+    // on its main drive.
     let aimDir;
     if (mode === "TURN_SLIDE" && faceDir) aimDir = faceDir;
+    else if (mode === "MOVE_AND_TURN" && courseDir) aimDir = courseDir;
     else if (boosting) aimDir = V.len(vel) > 1e-6 ? V.norm(vel) : Q.forward(quat);
     else if (V.len(dv) > 1e-6) aimDir = V.norm(dv);
     else aimDir = Q.forward(quat);
-    quat = rotateToward(quat, aimDir, fl, dt);
+    quat = rotateToward(quat, aimDir, rollWant, fl, dt);
 
     // Spend thrust in the ship's own frame, one budget per axis.
     const local = Q.rot(Q.inv(quat), dv);
@@ -239,7 +343,9 @@
   // previews and what the resolver executes are the same array.
   function flyTurn(ship, targetArr, mode, opts) {
     opts = opts || {};
-    const fl = ship.flight || SHIP_CLASSES[ship.classKey].flight;
+    // What it can fly now, not what its class was authored to fly: a hull with
+    // the jets shot off keeps its drive and turns nowhere.
+    const fl = effectiveFlight(ship);
     const fromTick = opts.fromTick || 0;
     // steps: how many integration slices the remaining turn is cut into.
     // Resolution always uses one per tick. A probe may ask for fewer.
@@ -259,6 +365,15 @@
       ? V.v3(targetArr[0], targetArr[1], targetArr[2])
       : V.add(pos, V.scale(vel, CONST.TURN_SECONDS));   // no order: hold course
 
+    // The course as plotted, fixed for the span. MOVE_AND_TURN flies nose first
+    // along this, so it is the heading the ship ends the turn on. Resolution
+    // re-enters here after a collision with the same target, so a knocked ship
+    // aims at where it is still trying to get to rather than where it was
+    // originally pointed.
+    const rollWant = (opts.roll === undefined || opts.roll === null) ? null : opts.roll;
+    const course = V.sub(target, pos);
+    const courseDir = V.len(course) > 1e-6 ? V.norm(course) : Q.forward(quat);
+
     // engines dead: no thrust, no attitude authority, just coast
     const dead = ship.drift.active;
     const path = [{ pos: V.clone(pos), quat }];
@@ -267,7 +382,7 @@
         pos = V.add(pos, V.scale(vel, dt));
       } else {
         const secondsLeft = (steps - i) * dt;
-        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, dt);
+        const r = stepFlight(pos, vel, quat, target, secondsLeft, fl, mode, faceDir, courseDir, rollWant, dt);
         pos = r.pos; vel = r.vel; quat = r.quat;
       }
       path.push({ pos: V.clone(pos), quat });
@@ -329,6 +444,12 @@
     const wd = WEAPONS[w.key];
     const target = state.ships.find(s => s.id === order.targetShipId);
     if (!target || target.destroyed) return;
+    // One bay feeds every mount on the hull, so losing it silences all of them
+    // at once rather than the mount that happened to be shot.
+    if (!hasLiveBay(ship)) {
+      events.push({ tick, type: "ShotSkippedOffline", ship: ship.id, weapon: w.key });
+      return;
+    }
     // cooldown: at most one shot per weapon per turn; cooldownTurns extra gap beyond that.
     // (The Unity arithmetic makes cd 0 and cd 1 both fire every turn; preserved here.)
     const gap = state.turn - w.lastFiredTurn;
@@ -704,7 +825,7 @@
 
   const api = {
     createSkirmish, makeShip, resolveTurn,
-    previewPath, plannedTarget, canReach, flyTurn,
+    previewPath, plannedTarget, canReach, flyTurn, rollOf,
     raycastShips, CONST,
   };
   global.FT = global.FT || {};

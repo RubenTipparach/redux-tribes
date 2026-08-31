@@ -54,6 +54,8 @@ export interface FlyOrder {
   readonly target?: Vec3;
   /** commanded heading. Only TurnSlide honours it. */
   readonly face?: Vec3;
+  /** commanded roll about the nose, radians from wings level. */
+  readonly roll?: number;
 }
 
 export interface Flown {
@@ -68,6 +70,8 @@ export interface Flown {
 /** Turn geometry, mirroring `sim_core::flight`. */
 export const TICKS_PER_TURN = 600;
 export const TURN_SECONDS = 10;
+/** Mirrors `flight::TICKS_PER_SECOND`. A fire slot is one of these seconds. */
+export const TICKS_PER_SECOND = TICKS_PER_TURN / TURN_SECONDS;
 /** Resolution flies one slice per tick; a probe may ask for fewer. */
 export const RESOLUTION_STEPS = TICKS_PER_TURN;
 export const PROBE_STEPS = 60;
@@ -86,6 +90,19 @@ export const ShipClass = {
   Freighter: 4,
 } as const;
 export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
+
+/**
+ * The class keys, in `sim_core::data::ALL_CLASSES` order.
+ *
+ * The same strings the designer uses for `classKey`, which is what lets a
+ * saved design name a hull the core can spawn. Positional, like the event and
+ * subsystem discriminants: an entry inserted in the middle here renumbers
+ * every class after it on one side of the boundary and not the other.
+ */
+export const CLASS_KEYS: readonly string[] = [
+  'terran_frigate', 'karisen_frigate', 'rogue_frigate', 'benefactor_frigate', 'freighter',
+];
+export const classIndexOf = (key: string): number => CLASS_KEYS.indexOf(key);
 
 export const CLASS_NAMES: Record<number, string> = {
   0: 'Terran Frigate',
@@ -106,8 +123,39 @@ export const Scenario = {
   Skirmish: 0,
   Duel: 1,
   Convoy: 2,
+  LowOrbit: 3,
+  Binary: 4,
+  Slingshot: 5,
+  /** The skirmish with the flight stats unlocked. Editing them is refused by
+   * the core in every other scenario, because the stats are in the state
+   * hash. */
+  Sandbox: 6,
 } as const;
 export type Scenario = (typeof Scenario)[keyof typeof Scenario];
+
+/**
+ * The name a lobby carries, mapped to the id the core builds from. The field a
+ * scenario is fought in comes from that id and lives on the match, so both
+ * seats get the same wells and the state hash covers them.
+ */
+export const SCENARIO_BY_NAME: Record<string, Scenario> = {
+  skirmish: Scenario.Skirmish,
+  duel: Scenario.Duel,
+  convoy: Scenario.Convoy,
+  'low-orbit': Scenario.LowOrbit,
+  binary: Scenario.Binary,
+  slingshot: Scenario.Slingshot,
+  sandbox: Scenario.Sandbox,
+};
+
+/** A point source of gravity, as the core reports it. */
+export interface Well {
+  readonly pos: Vec3;
+  /** GM, in u^3/s^2. */
+  readonly mu: number;
+  /** Softening radius: inside it the field stops growing. */
+  readonly soft: number;
+}
 
 /** Matches `sim_core::turn::EventKind` discriminants. */
 export const EventKind = {
@@ -128,6 +176,9 @@ export const EventKind = {
   BoardingTick: 14,
   ShipCaptured: 15,
   GameOver: 16,
+  ShotSkippedCooldown: 17,
+  ShotSkippedOffline: 18,
+  ShipCritical: 19,
 } as const;
 export type EventKind = (typeof EventKind)[keyof typeof EventKind];
 
@@ -145,10 +196,39 @@ export interface SimEvent {
   readonly to: Vec3;
 }
 
+/** Matches `sim_core::data::SubKind` discriminants. */
+export const SubKind = {
+  Armour: 0,
+  Thruster: 1,
+  Rcs: 2,
+  Weapon: 3,
+  Reactor: 4,
+} as const;
+export type SubKind = (typeof SubKind)[keyof typeof SubKind];
+
+/**
+ * One hit volume on one ship: what it is, how it is doing, and where it is.
+ *
+ * Position is WORLD, straight from the core. A client that rotated the class
+ * offset itself would be holding a second opinion about which way a hull is
+ * facing, and the marker would drift off the thing it is marking.
+ */
 export interface SubState {
+  readonly ship: number;
+  readonly index: number;
+  readonly kind: SubKind;
   readonly hp: number;
+  readonly hpMax: number;
   readonly dead: boolean;
+  readonly pos: Vec3;
+  readonly radius: number;
+  readonly blockPct: number;
 }
+
+/** What each kind is called on screen. Presentation, so it lives here. */
+export const SUB_LABEL: Record<number, string> = {
+  0: 'armour', 1: 'engines', 2: 'jets', 3: 'weapons', 4: 'reactor',
+};
 
 export interface PartyState {
   readonly faction: number;
@@ -175,7 +255,8 @@ export interface ShipState {
   readonly vel: Vec3;
   readonly mode: Mode;
   readonly drifting: boolean;
-  readonly subs: readonly SubState[];
+  /** How many volumes it has. What they ARE comes from `Match.subs()`. */
+  readonly subCount: number;
   readonly weaponLastFired: readonly number[];
   readonly parties: readonly PartyState[];
   readonly radius: number;
@@ -202,7 +283,8 @@ export interface MountInfo {
   readonly kind: number;
   readonly damage: number;
   readonly range: number;
-  readonly cooldownTurns: number;
+  /** Seconds between two shots from this mount, on the match clock. */
+  readonly cooldown: number;
   readonly arcH: readonly [number, number];
   readonly arcV: readonly [number, number];
   readonly batch: number;
@@ -229,10 +311,20 @@ export interface ClassInfo {
 }
 
 /** A player's plan for one ship, before it is submitted. */
+/** One queued shot: which mount, at which second of the turn, at whom. */
+export interface PlannedShot {
+  weaponIndex: number;
+  second: number;
+  targetShip: number;
+  targetSub: number;
+}
+
 export interface PlannedOrder {
   mode: Mode;
   target?: Vec3;
   face?: Vec3;
-  weapons: Array<{ weaponIndex: number; second: number; targetShip: number; targetSub: number }>;
+  /** Commanded roll about the nose, radians from wings level. */
+  roll?: number;
+  weapons: PlannedShot[];
   board?: number;
 }

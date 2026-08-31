@@ -14,12 +14,21 @@
 
 import {
   type ClassInfo, type MountInfo, type PlannedOrder, type Pose, type ShipState,
-  type SimEvent, type TrackProjectile, type Vec3,
-  EventKind, Mode, Scenario, TICKS_PER_TURN,
+  type SimEvent, type SubState, type TrackProjectile, type Vec3,
+  type Well,
+  EventKind, Mode, Scenario, SubKind, TICKS_PER_TURN,
 } from './types.js';
 
 const OUT = 64;
-const SHIP_STRIDE = 40;
+/** Where a design's part list goes before the core reads it. Mirrors
+ *  `ffi::DERIVE_PARTS`. */
+const DERIVE_PARTS = OUT + 32;
+/** The designer's gun keys to `sim_core::data::WeaponKey` discriminants. The
+ *  editor has three guns; the core also knows plasma, which is a cannon with
+ *  different effects and nothing fits. */
+const WEAPON_KEY: Record<string, number> = { beam: 0, projectile: 1, missile: 3 };
+const SHIP_STRIDE = 34;
+const SUB_STRIDE = 11;
 const EVENT_STRIDE = 14;
 const POSE_STRIDE = 9;
 const PROJ_STRIDE = 5;
@@ -31,12 +40,25 @@ export interface MatchExports {
   ft_scratch_ptr(): number;
   ft_scratch_len(): number;
   ft_match_new(seedHi: number, seedLo: number, scenario: number, humanSides: number): number;
+  ft_hull_choice(side: number, classIdx: number): number;
+  ft_hull_design(
+    side: number, classIdx: number, plateCells: number,
+    extX: number, extY: number, extZ: number,
+    radiusCells: number, fouled: number, parts: number,
+  ): number;
+  ft_hull_mount(side: number, key: number, x: number, y: number, z: number): number;
+  ft_hull_clear(side: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
   ft_game_over(): number;
   ft_hash_hi(): number;
   ft_hash_lo(): number;
   ft_read_ships(): number;
+  ft_read_subs(): number;
+  ft_wells_read(): number;
+  ft_next_free_second(ship: number, weapon: number, prevSecond: number): number;
+  ft_fire_gate(ship: number, weapon: number, second: number): number;
+  ft_gravity_at(x: number, y: number, z: number): number;
   ft_load_ship(ship: number): number;
   ft_set_flight(
     ship: number, yaw: number, pitch: number,
@@ -46,6 +68,7 @@ export interface MatchExports {
   ft_set_move(
     ship: number, mode: number, hasTarget: number, tx: number, ty: number, tz: number,
     hasFace: number, fx: number, fy: number, fz: number,
+    hasRoll: number, roll: number,
   ): number;
   ft_add_fire(
     ship: number, weaponIndex: number, second: number, targetShip: number, targetSub: number,
@@ -61,8 +84,13 @@ export interface MatchExports {
   ft_read_mount(classIdx: number, mount: number): number;
   ft_nominal_reach(ship: number): number;
   ft_can_fire(ship: number, weapon: number): number;
+  ft_weapon_bay(ship: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
+  ft_ship_roll(ship: number): number;
+  ft_sandbox(): number;
+  ft_attitude_of(qx: number, qy: number, qz: number, qw: number): number;
+  ft_ai_preview(ship: number): number;
   ft_snapshot_len(): number;
   ft_snapshot(): number;
   ft_restore(count: number): number;
@@ -121,6 +149,37 @@ export class Match {
    * it. It goes to the core rather than staying here because it changes the
    * simulation, and two clients that disagreed about it would part on turn one.
    */
+  /** Both sides back to the hulls their scenario authored. */
+  clearHulls(): void {
+    this.#ex.ft_hull_clear(0);
+    this.#ex.ft_hull_clear(1);
+  }
+
+  /**
+   * The hull one side fields, as a design rather than a class.
+   *
+   * The core derives it: mass, hull points, envelope, marines, boarding and
+   * the guns, from the parts and the plate. What crosses from here is what the
+   * client MEASURED off its own voxel grid, which is a count and not a rule.
+   * A match fact like the seed, and hashed for the same reason: two seats that
+   * fielded different ships would part on the first turn.
+   */
+  setHull(side: number, classIdx: number, geo: {
+    plateCells: number; ext: readonly [number, number, number];
+    radiusCells: number; fouled: number;
+  }, parts: readonly number[], mounts: ReadonlyArray<{ key: string; at: readonly [number, number, number] }>): boolean {
+    const s = this.#s;
+    if (DERIVE_PARTS + parts.length > s.length) return false;
+    for (let i = 0; i < parts.length; i++) s[DERIVE_PARTS + i] = parts[i] as number;
+    const ok = this.#ex.ft_hull_design(side, classIdx, geo.plateCells,
+      geo.ext[0], geo.ext[1], geo.ext[2], geo.radiusCells, geo.fouled, parts.length);
+    if (!ok) return false;
+    for (const m of mounts) {
+      this.#ex.ft_hull_mount(side, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2]);
+    }
+    return true;
+  }
+
   start(seed: string, scenario: Scenario, humanSides = 0b01): void {
     const clean = seed.replace(/[^0-9a-f]/gi, '').padStart(16, '0').slice(-16);
     const hi = parseInt(clean.slice(0, 8), 16) >>> 0;
@@ -142,6 +201,56 @@ export class Match {
     return hi.toString(16).padStart(8, '0') + lo.toString(16).padStart(8, '0');
   }
 
+  /**
+   * The gravity field this match is fought in. It comes from the scenario and
+   * lives on the match, so it is the same on both seats and the state hash
+   * covers it: the client reads it to draw, never to decide.
+   */
+  wells(): Well[] {
+    const n = this.#ex.ft_wells_read();
+    const s = this.#s;
+    const out: Well[] = [];
+    for (let i = 0; i < n; i++) {
+      const b = 64 + i * 5;
+      out.push({
+        pos: { x: s[b] ?? 0, y: s[b + 1] ?? 0, z: s[b + 2] ?? 0 },
+        mu: s[b + 3] ?? 0,
+        soft: s[b + 4] ?? 1,
+      });
+    }
+    return out;
+  }
+
+  /** The field's acceleration at a point, in u/s^2. Asked for rather than
+   * recomputed, so the arrows the client draws are the field the ship flies. */
+  gravityAt(p: Vec3): Vec3 {
+    this.#ex.ft_gravity_at(p.x, p.y, p.z);
+    const s = this.#s;
+    return { x: s[32] ?? 0, y: s[33] ?? 0, z: s[34] ?? 0 };
+  }
+
+  /**
+   * The earliest second this mount may fire, given a shot already planned at
+   * `prevSecond` (negative for none). Asked rather than worked out here: the
+   * client owns what is queued, the core owns when it is allowed, and the
+   * resolver applies the same gate at the moment of firing.
+   */
+  nextFreeSecond(ship: number, weapon: number, prevSecond: number): number {
+    return this.#ex.ft_next_free_second(ship, weapon, prevSecond);
+  }
+
+  /** May this mount fire at this second of the current turn? */
+  fireGate(ship: number, weapon: number, second: number): boolean {
+    return this.#ex.ft_fire_gate(ship, weapon, second) !== 0;
+  }
+
+  /** Whether this hull has a weapon bay left at all, as against a mount that
+   * is merely cooling. The core's answer, so the reason shown and the reason
+   * the resolver acts on are one reason. */
+  weaponBay(ship: number): boolean {
+    return this.#ex.ft_weapon_bay(ship) !== 0;
+  }
+
   ships(): ShipState[] {
     const n = this.#ex.ft_read_ships();
     const s = this.#s;
@@ -149,17 +258,13 @@ export class Match {
     for (let i = 0; i < n; i++) {
       const b = OUT + i * SHIP_STRIDE;
       const subCount = s[b + 20] ?? 0;
-      const subs = [];
-      for (let k = 0; k < subCount && k < 3; k++) {
-        subs.push({ hp: s[b + 21 + k * 2] ?? 0, dead: (s[b + 22 + k * 2] ?? 0) !== 0 });
-      }
-      const wCount = s[b + 27] ?? 0;
+      const wCount = s[b + 21] ?? 0;
       const weaponLastFired = [];
-      for (let k = 0; k < wCount && k < 3; k++) weaponLastFired.push(s[b + 28 + k] ?? -99);
-      const pCount = s[b + 31] ?? 0;
+      for (let k = 0; k < wCount && k < 3; k++) weaponLastFired.push(s[b + 22 + k] ?? -99);
+      const pCount = s[b + 25] ?? 0;
       const parties = [];
       for (let k = 0; k < pCount && k < 2; k++) {
-        parties.push({ faction: s[b + 32 + k * 2] ?? -1, count: s[b + 33 + k * 2] ?? 0 });
+        parties.push({ faction: s[b + 26 + k * 2] ?? -1, count: s[b + 27 + k * 2] ?? 0 });
       }
       out.push({
         id: s[b] ?? i,
@@ -177,13 +282,42 @@ export class Match {
         vel: v3(s, b + 15),
         mode: (s[b + 18] ?? 0) as Mode,
         drifting: (s[b + 19] ?? 0) !== 0,
-        subs,
+        subCount,
         weaponLastFired,
         parties,
-        radius: s[b + 36] ?? 3.5,
-        maxSpeed: s[b + 37] ?? 8,
-        aiTarget: s[b + 38] ?? -1,
-        boardingRange: s[b + 39] ?? 20,
+        radius: s[b + 30] ?? 3.5,
+        maxSpeed: s[b + 31] ?? 8,
+        aiTarget: s[b + 32] ?? -1,
+        boardingRange: s[b + 33] ?? 20,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Every ship's hit volumes, in one call.
+   *
+   * What a shot can be aimed at, what it does when it dies, and where it is.
+   * The ship record used to carry the first three of these itself, which was a
+   * second copy of the same answer and wrong the moment a hull had more than
+   * three: one query, one truth.
+   */
+  subs(): SubState[] {
+    const n = this.#ex.ft_read_subs();
+    const s = this.#s;
+    const out: SubState[] = [];
+    for (let i = 0; i < n; i++) {
+      const b = OUT + i * SUB_STRIDE;
+      out.push({
+        ship: s[b] ?? 0,
+        index: s[b + 1] ?? 0,
+        kind: (s[b + 2] ?? 0) as SubKind,
+        hp: s[b + 3] ?? 0,
+        hpMax: s[b + 4] ?? 1,
+        dead: (s[b + 5] ?? 0) !== 0,
+        pos: v3(s, b + 6),
+        radius: s[b + 9] ?? 1,
+        blockPct: s[b + 10] ?? 0,
       });
     }
     return out;
@@ -220,7 +354,7 @@ export class Match {
       kind: s[OUT + 1] ?? 0,
       damage: s[OUT + 2] ?? 0,
       range: s[OUT + 3] ?? 0,
-      cooldownTurns: s[OUT + 4] ?? 0,
+      cooldown: s[OUT + 4] ?? 0,
       arcH: [s[OUT + 5] ?? -180, s[OUT + 6] ?? 180],
       arcV: [s[OUT + 7] ?? -180, s[OUT + 8] ?? 180],
       batch: s[OUT + 9] ?? 1,
@@ -258,8 +392,54 @@ export class Match {
     return v3(this.#s, 32);
   }
 
-  setFlight(ship: number, f: ClassInfo['flight']): void {
-    this.#ex.ft_set_flight(
+  /** Whether this match will accept a change to a hull's flight stats. Asked,
+   * not assumed: a console that decided for itself what the core allows would
+   * be a second copy of the rule. */
+  get sandbox(): boolean { return this.#ex.ft_sandbox() !== 0; }
+
+  /** A ship's roll about its nose, radians from wings level. Which way is
+   * level is the core's convention, so it is asked rather than derived. */
+  rollOf(ship: number): number {
+    this.#ex.ft_ship_roll(ship);
+    return this.#s[32] ?? 0;
+  }
+
+  /**
+   * Nose and roll for an ORIENTATION rather than for a ship.
+   *
+   * Playback poses hulls from a recorded track, so the dials that read an
+   * attitude have to read that track and not the turn boundary. Which axis is
+   * forward and which way is level stay the core's conventions.
+   */
+  attitudeOf(q: { x: number; y: number; z: number; w: number }): { forward: Vec3; roll: number } {
+    this.#ex.ft_attitude_of(q.x, q.y, q.z, q.w);
+    return { forward: v3(this.#s, 32), roll: this.#s[35] ?? 0 };
+  }
+
+  /**
+   * The order the AI will fly this hull with this turn, or null for a hull it
+   * does not fly.
+   *
+   * Not a guess: the resolver asks the same planner first, from this same
+   * boundary state, and the planner writes nothing. A seat held by a person
+   * returns null, because answering for one would hand over their orders.
+   */
+  aiPreview(ship: number): (PlannedOrder & { aiTarget: number }) | null {
+    if (!this.#ex.ft_ai_preview(ship)) return null;
+    const s = this.#s;
+    const out: PlannedOrder & { aiTarget: number } = {
+      mode: (s[32] ?? 0) as Mode,
+      aiTarget: Math.round(s[37] ?? -1),
+      weapons: [],
+    };
+    if ((s[36] ?? 0) !== 0) out.target = v3(s, 33);
+    return out;
+  }
+
+  /** Returns false when the core refused it, which is every match that is not
+   * a sandbox. The caller gets the verdict rather than assuming it took. */
+  setFlight(ship: number, f: ClassInfo['flight']): boolean {
+    return 0 !== this.#ex.ft_set_flight(
       ship, f.yawRate, f.pitchRate, f.accelFwd, f.accelRetro, f.accelLat, f.maxSpeed,
     );
   }
@@ -269,7 +449,9 @@ export class Match {
    * ship's live state. Preview and execution are the same code, which is the
    * only way a drawn plan can be trusted to be what happens.
    */
-  preview(ship: number, order: PlannedOrder, samples = 48): Vec3[] {
+  /** Load a ship and write the order it is planning into the input slots.
+   * Shared, so the drawn plan line and a scrubbed pose fly the same thing. */
+  #loadPlan(ship: number, order: PlannedOrder): void {
     this.#ex.ft_load_ship(ship);
     const s = this.#s;
     const t = order.target;
@@ -278,6 +460,18 @@ export class Match {
     const f = order.face;
     s[17] = f ? 1 : 0;
     s[13] = f?.x ?? 0; s[14] = f?.y ?? 0; s[15] = f?.z ?? 0;
+    // Roll, which this loader was missing. It reached the resolver through
+    // `ft_set_move` and the standalone probe through its own inputs, so the
+    // one path that never carried it was the one that draws: the ghost, the
+    // course and the arrival estimate were all flown wings level however the
+    // hull had been told to roll. Written every time rather than only when
+    // present, so a previous plan's roll cannot linger in the scratch.
+    s[25] = order.roll === undefined ? 0 : 1;
+    s[24] = order.roll ?? 0;
+  }
+
+  preview(ship: number, order: PlannedOrder, samples = 48): Vec3[] {
+    this.#loadPlan(ship, order);
     const n = this.#ex.ft_ship_preview(ship, order.mode, samples);
     const out: Vec3[] = [];
     const v = this.#s;
@@ -286,6 +480,32 @@ export class Match {
   }
 
   /** Where a plan actually ends up. Read from the same flight it just flew. */
+  /**
+   * Where a ship would be, and how it would be pointing, `tick` into the turn
+   * it is planning.
+   *
+   * One flight of the plan, sampled: about 68 microseconds at 120 samples, and
+   * the scrub then reads the sampled array rather than flying again. So
+   * dragging the timeline costs nothing per frame and never touches
+   * reachability, which is settled when the turn opens.
+   */
+  previewPose(ship: number, order: PlannedOrder, tick: number): Pose | null {
+    this.#loadPlan(ship, order);
+    const n = this.#ex.ft_ship_preview(ship, order.mode, 120);
+    if (n <= 0) return null;
+    const s = this.#s;
+    const at = Math.max(0, Math.min(n - 1, Math.round((tick / TICKS_PER_TURN) * (n - 1))));
+    // The flight path is written seven floats a sample, position then
+    // orientation, which is not the nine of a resolved pose record.
+    const b = OUT + at * 7;
+    return {
+      id: ship,
+      destroyed: false,
+      pos: { x: s[b] ?? 0, y: s[b + 1] ?? 0, z: s[b + 2] ?? 0 },
+      quat: { x: s[b + 3] ?? 0, y: s[b + 4] ?? 0, z: s[b + 5] ?? 0, w: s[b + 6] ?? 1 },
+    };
+  }
+
   previewEnd(): Vec3 {
     return v3(this.#s, 32);
   }
@@ -358,6 +578,7 @@ export class Match {
       this.#ex.ft_set_move(
         ship, o.mode, t ? 1 : 0, t?.x ?? 0, t?.y ?? 0, t?.z ?? 0,
         f ? 1 : 0, f?.x ?? 0, f?.y ?? 0, f?.z ?? 0,
+        o.roll === undefined ? 0 : 1, o.roll ?? 0,
       );
       this.#ex.ft_clear_fire(ship);
       for (const w of o.weapons) {

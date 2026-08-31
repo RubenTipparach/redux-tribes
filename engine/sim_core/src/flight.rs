@@ -48,6 +48,17 @@ impl Mode {
             _ => Mode::MoveAndTurn,
         }
     }
+    /// The inverse, so a mode can cross the boundary in either direction from
+    /// one table rather than two that can drift apart.
+    pub fn to_u32(self) -> u32 {
+        match self {
+            Mode::MoveAndTurn => 0,
+            Mode::TurnSlide => 1,
+            Mode::FullSpeed => 2,
+            Mode::FullStop => 3,
+            Mode::Drift => 4,
+        }
+    }
     /// A committed mode is one whose outcome the destination cannot influence.
     pub fn committed(self) -> bool {
         matches!(self, Mode::FullSpeed | Mode::FullStop | Mode::Drift)
@@ -157,20 +168,67 @@ pub struct Flown {
 /// slice. The error is resolved in the BODY frame so the two axes are limited
 /// separately, which is what makes a sluggish nose feel different from a
 /// sluggish pitch rather than just "slow".
-fn rotate_toward(quat: Quat, want: V3, fl: &Flight, dt: f32) -> Quat {
+fn rotate_toward(quat: Quat, want: V3, roll_want: Option<f32>, fl: &Flight, dt: f32) -> Quat {
     let local = quat.inv().rot(want);
     let flat = (local.x * local.x + local.z * local.z).sqrt();
     // Straight up or straight down has no yaw: x and z are both ~0 there and
     // atan2 of two near-zero numbers is noise, which the rotation then
     // amplifies. Hold the current yaw and let pitch do the work instead.
     let mut yaw_err = if flat < 1e-4 { 0.0 } else { datan2(local.x, local.z) };
-    let mut pitch_err = datan2(local.y, flat.max(1e-9));
+    // Negated, because a right handed rotation about +X carries +Z toward -Y,
+    // while a positive error means the target is at +Y. Unnegated, a nose told
+    // to come up went down instead, and did it at the full pitch rate: a hull
+    // asked for 21.8 degrees of climb ended 40 degrees below its course, which
+    // is its whole authority spent backwards. Yaw needs no such flip, because
+    // a rotation about +Y carries +Z toward +X, the way atan2 measures it.
+    let mut pitch_err = -datan2(local.y, flat.max(1e-9));
     let max_yaw = fl.yaw_rate * crate::math::PI / 180.0 * dt;
     let max_pitch = fl.pitch_rate * crate::math::PI / 180.0 * dt;
     yaw_err = yaw_err.clamp(-max_yaw, max_yaw);
     pitch_err = pitch_err.clamp(-max_pitch, max_pitch);
     let q = quat.mul(Quat::axis_angle(V3::new(0.0, 1.0, 0.0), yaw_err));
-    q.mul(Quat::axis_angle(V3::new(1.0, 0.0, 0.0), pitch_err)).norm()
+    let q = q.mul(Quat::axis_angle(V3::new(1.0, 0.0, 0.0), pitch_err)).norm();
+    match roll_want {
+        Some(r) => roll_toward(q, r, fl, dt),
+        None => q,
+    }
+}
+
+/// The roll the hull is at: the angle its own up sits at about its nose,
+/// measured from wings level, which is world up with the nose direction taken
+/// out of it. Straight up or straight down has no wings level to measure from,
+/// so there the roll is held rather than read off noise.
+pub fn roll_of(quat: Quat) -> Option<f32> {
+    let fwd = quat.forward();
+    let world_up = V3::new(0.0, 1.0, 0.0);
+    let proj = world_up.sub(fwd.scale(world_up.dot(fwd)));
+    if proj.len2() < 1e-6 {
+        return None;
+    }
+    let r = proj.norm();
+    let rr = r.cross(fwd);
+    let up = quat.rot(world_up);
+    Some(datan2(-up.dot(rr), up.dot(r)))
+}
+
+/// Swing the hull about its own nose toward a commanded roll, spending at most
+/// this slice's worth.
+///
+/// Rolls at the yaw rate: a hull's roll authority is not authored separately,
+/// because one more number per class buys little that the game reads.
+///
+/// Roll DOES move the reachable set, which is worth stating because it is easy
+/// to argue that it cannot: x and y are spent against the same lateral cap, so
+/// the budget looks rotationally symmetric. It is not. The cap is a BOX, and a
+/// box has corners: `lat * sqrt(2)` on the diagonal against `lat` on the axis.
+/// Rolling turns that box under the thrust the controller wants, and the
+/// arrival point moves with it, by 7.87 u on a 44 u reach when it was measured.
+/// So a probe carries a roll like any other input.
+fn roll_toward(quat: Quat, want: f32, fl: &Flight, dt: f32) -> Quat {
+    let Some(now) = roll_of(quat) else { return quat };
+    let max = fl.yaw_rate * crate::math::PI / 180.0 * dt;
+    let err = crate::math::wrap_pi(want - now).clamp(-max, max);
+    quat.mul(Quat::axis_angle(V3::new(0.0, 0.0, 1.0), err)).norm()
 }
 
 fn desired_velocity(pos: V3, target: V3, seconds_left: f32, fl: &Flight, mode: Mode) -> V3 {
@@ -193,6 +251,8 @@ fn step_flight(
     fl: &Flight,
     mode: Mode,
     face_dir: V3,
+    course_dir: V3,
+    roll_want: Option<f32>,
     dt: f32,
     wells: &[Well],
 ) -> Body {
@@ -206,12 +266,24 @@ fn step_flight(
         desired_velocity(b.pos, target, seconds_left, fl, mode).sub(b.vel)
     };
 
-    // Point the hull. MoveAndTurn aims the nose where thrust is needed, the most
-    // manoeuvrable thing a ship can do. TurnSlide holds a commanded heading
-    // instead, leaving course changes to the RCS: a far smaller envelope, bought
-    // in exchange for keeping the guns on a bearing.
+    // Point the hull.
+    //
+    // MoveAndTurn auto-faces the course it was given (DESIGN 3.2), so the ship
+    // arrives looking the way it went. It used to aim wherever thrust was
+    // needed, which is the most manoeuvrable thing a hull can do and the wrong
+    // thing to watch: `desired_velocity` falls to zero on arrival, so `dv`
+    // becomes -vel and the nose swung fully retrograde over the last seconds
+    // of every move. The ship ended each turn pointing back where it came
+    // from.
+    //
+    // TurnSlide holds a commanded heading instead, leaving course changes to
+    // the RCS: a far smaller envelope, bought in exchange for keeping the guns
+    // on a bearing. FullStop still aims at the thrust, because a hull braking
+    // to a dead stop SHOULD swing retrograde and brake on its main drive.
     let aim_dir = if mode == Mode::TurnSlide {
         face_dir
+    } else if mode == Mode::MoveAndTurn {
+        course_dir
     } else if boosting {
         if b.vel.len() > 1e-6 { b.vel.norm() } else { b.quat.forward() }
     } else if dv.len() > 1e-6 {
@@ -219,7 +291,7 @@ fn step_flight(
     } else {
         b.quat.forward()
     };
-    let quat = rotate_toward(b.quat, aim_dir, fl, dt);
+    let quat = rotate_toward(b.quat, aim_dir, roll_want, fl, dt);
 
     // Spend thrust in the ship's own frame, one budget per axis.
     let local = quat.inv().rot(dv);
@@ -254,11 +326,12 @@ pub fn fly_turn(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     steps: u32,
     wells: &[Well],
 ) -> Flown {
     let steps = steps.max(1);
-    fly_span(body, target, mode, fl, face, steps, TURN_SECONDS / steps as f32, wells)
+    fly_span(body, target, mode, fl, face, roll, steps, TURN_SECONDS / steps as f32, wells)
 }
 
 /// Fly `steps` slices of `dt` seconds each, from wherever the body is now.
@@ -275,6 +348,7 @@ pub fn fly_span(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     steps: u32,
     dt: f32,
     wells: &[Well],
@@ -290,6 +364,13 @@ pub fn fly_span(
     };
     // No order means hold course: coast on the velocity already carried.
     let target = target.unwrap_or_else(|| b.pos.add(b.vel.scale(TURN_SECONDS)));
+    // The course as plotted, fixed for the span. MoveAndTurn flies nose first
+    // along this, so it is the heading the ship ends the turn on. Resolution
+    // re-enters here after a collision with the same target, so a knocked ship
+    // aims at where it is still trying to get to rather than at where it was
+    // originally pointed.
+    let course = target.sub(b.pos);
+    let course_dir = if course.len() > 1e-6 { course.norm() } else { b.quat.forward() };
 
     let dead = mode == Mode::Drift;
     let mut path = Vec::with_capacity(steps as usize + 1);
@@ -302,7 +383,7 @@ pub fn fly_span(
             b.pos = b.pos.add(b.vel.scale(dt));
         } else {
             let seconds_left = (steps - i) as f32 * dt;
-            b = step_flight(b, target, seconds_left, fl, mode, face_dir, dt, wells);
+            b = step_flight(b, target, seconds_left, fl, mode, face_dir, course_dir, roll, dt, wells);
         }
         path.push((b.pos, b.quat));
     }
@@ -319,12 +400,13 @@ pub fn can_reach(
     mode: Mode,
     fl: &Flight,
     face: Option<V3>,
+    roll: Option<f32>,
     eps: f32,
     steps: u32,
     wells: &[Well],
 ) -> bool {
     let t = if mode.committed() { None } else { Some(target) };
-    fly_turn(body, t, mode, fl, face, steps, wells).end_pos.dist(target) <= eps
+    fly_turn(body, t, mode, fl, face, roll, steps, wells).end_pos.dist(target) <= eps
 }
 
 /// Angle between two directions, in degrees. Used to report how much of a

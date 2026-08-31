@@ -423,22 +423,46 @@ fn a_weapon_fires_once_per_turn_at_most() {
     // a weapon already fired THIS turn, is one the planner cannot reach: it
     // only exists mid resolution.
     //
-    // With the authored data cooldown 0 and 1 both floor to 1, so every
-    // weapon fires every turn and the gate never bites between turns. That is
-    // the archive's own arithmetic, preserved rather than tidied, and the
-    // reason the client's copy of it was quietly doing nothing.
+    // Cooldown runs on the match clock in absolute ticks, so one comparison
+    // covers a second shot later in the same turn and a shot early in the
+    // next one. The old arithmetic counted whole turns, which made cooldown 0
+    // and 1 both mean fire every turn: no mount ever waited, and the client's
+    // copy of the rule was quietly doing nothing.
     let mut sim = duel("seed-cooldown", 60.0);
     assert!(sim.can_fire(0, 0), "an unused mount is available");
 
-    sim.ships[0].weapons[0].last_fired_turn = sim.turn;
-    assert!(!sim.can_fire(0, 0), "a mount that already fired this turn is spent");
-    assert!(sim.can_fire(0, 1), "and its neighbour is not");
+    // fired at second 0 of this turn
+    sim.ships[0].weapons[0].last_fired_tick = sim.absolute_tick(0);
+    assert!(!sim.can_fire(0, 0), "a mount that just fired is not ready at once");
+    assert!(sim.can_fire(0, 1), "and its neighbour is untouched");
 
+    // it comes back WITHIN the turn, once its own cooldown has run
+    let gap = Sim::cooldown_ticks(sim.ships[0].weapons[0].key);
+    let secs = gap / 60;
+    assert!(secs >= 1 && secs <= 10, "a cooldown of {secs} s should fit inside a turn");
+    assert!(!sim.fire_gate(0, 0, secs - 1), "not a second early");
+    assert!(sim.fire_gate(0, 0, secs), "ready exactly on its cooldown");
+
+    // and the clock carries across the turn boundary rather than resetting
+    sim.ships[0].weapons[0].last_fired_tick = sim.absolute_tick(9 * 60);
     sim.turn += 1;
-    assert!(sim.can_fire(0, 0), "next turn it is available again");
+    assert!(!sim.fire_gate(0, 0, 0),
+        "a shot at second 9 still holds the mount at second 0 of the next turn");
 
     assert!(!sim.can_fire(0, 99), "a mount that does not exist cannot fire");
     assert!(!sim.can_fire(99, 0), "nor can one on a ship that does not exist");
+}
+
+/// What the planner offers has to be what the resolver honours, so the slot
+/// arithmetic lives in the core and both ask it.
+#[test]
+fn the_next_free_second_walks_the_queue() {
+    let sim = duel("seed-slots", 60.0);
+    let gap_secs = Sim::cooldown_ticks(sim.ships[0].weapons[0].key) / 60;
+
+    assert_eq!(sim.next_free_second(0, 0, -1), 0, "nothing queued, fire at once");
+    assert_eq!(sim.next_free_second(0, 0, 0), gap_secs, "one cooldown after a shot at 0");
+    assert_eq!(sim.next_free_second(0, 0, 3), 3 + gap_secs, "and after a shot at 3");
 }
 
 #[test]
@@ -457,4 +481,307 @@ fn boarding_needs_range_an_enemy_and_marines() {
 
     let far = duel("seed-board-far", 400.0);
     assert!(!far.can_board(0, 1), "nor across open space");
+}
+
+/// The point of a cooldown in seconds: a mount can fire more than once in a
+/// turn. Under the old per turn arithmetic that was impossible, and the client
+/// enforced it by throwing away the previous shot whenever a second one was
+/// queued, which is exactly what "weapons queuing is broken" looked like.
+#[test]
+fn a_mount_fires_twice_in_one_turn_when_its_cooldown_allows() {
+    let mut sim = duel("seed-twice", 60.0);
+    let gap = Sim::cooldown_ticks(sim.ships[0].weapons[0].key) / 60;
+    let shot = |second: i32| FireOrder {
+        weapon_index: 0,
+        second,
+        target_ship: 1,
+        target_sub: None,
+    };
+    let mut orders = vec![
+        Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            target: None,
+            roll: None,
+            face: None,
+            ai_target: None,
+            weapons: vec![shot(0), shot(gap)],
+            board: None,
+        }),
+        None,
+    ];
+    let r = sim.resolve_turn(&mut orders);
+    let fired = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotFired && e.ship == 0 && e.aux == 0)
+        .count();
+    assert_eq!(fired, 2, "both shots should be taken, {gap} s apart");
+}
+
+/// And the resolver refuses one that is too close rather than trusting the
+/// planner to have filtered it, so a stale or hand written order set cannot
+/// buy a free shot.
+#[test]
+fn the_resolver_drops_a_shot_inside_the_cooldown() {
+    let mut sim = duel("seed-tooclose", 60.0);
+    let shot = |second: i32| FireOrder {
+        weapon_index: 0,
+        second,
+        target_ship: 1,
+        target_sub: None,
+    };
+    let mut orders = vec![
+        Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            target: None,
+            roll: None,
+            face: None,
+            ai_target: None,
+            weapons: vec![shot(0), shot(1)],
+            board: None,
+        }),
+        None,
+    ];
+    let r = sim.resolve_turn(&mut orders);
+    let fired = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotFired && e.ship == 0 && e.aux == 0)
+        .count();
+    let skipped = r
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::ShotSkippedCooldown && e.ship == 0)
+        .count();
+    assert_eq!(fired, 1, "only the first shot lands");
+    assert_eq!(skipped, 1, "and the second is reported, not silently dropped");
+}
+
+/// The AI preview is not an estimate. It is the order the resolver will use.
+///
+/// The whole point of showing a hostile's course while the player is still
+/// planning is that the course is real, and that rests on two properties: the
+/// planner writes nothing, and the resolver asks it FIRST, from the same
+/// untouched boundary state the client is sitting in. Both are checked here,
+/// because a preview that merely usually matched would be worse than none.
+#[test]
+fn an_ai_preview_is_the_order_the_turn_actually_flies() {
+    let mut sim = duel("seed-ai-preview", 70.0);
+    let before = sim_core::ai::plan_ship(&sim, 1);
+    let hash = sim.hash_state();
+    // Asking twice gives the same answer and moves nothing: the planner draws
+    // its own RNG stream from the seed and the turn rather than the match's.
+    let again = sim_core::ai::plan_ship(&sim, 1);
+    assert_eq!(hash, sim.hash_state(), "asking the AI what it will do moved the match");
+    assert_eq!(before.target, again.target, "the planner is not a pure function of the state");
+    assert_eq!(before.mode, again.mode);
+    assert_eq!(before.ai_target, again.ai_target);
+    assert!(before.target.is_some(), "the fixture should have the AI going somewhere");
+
+    // And the turn flies exactly that. `plan_target` is what resolution kept.
+    let mut orders = vec![Some(hold(V3::new(0.0, 0.0, 0.0))), None];
+    sim.resolve_turn(&mut orders);
+    assert_eq!(
+        sim.ships[1].plan_target, before.target,
+        "the hostile flew somewhere other than the course the preview drew",
+    );
+}
+
+/// A mount has two axes: yaw round from forward, and pitch as a true
+/// ELEVATION off the horizontal plane. Roll does not enter it.
+///
+/// The archive's `TargetArcTest3D` measured pitch as `atan2(y, z)`, which is
+/// not an elevation. As a target comes abeam, z goes to zero and that angle
+/// runs to 90 degrees however level the target is, so a 60 degree mount
+/// refused everything on its own beam: a beam turret with a 220 degree
+/// horizontal arc could not fire at anything 90 degrees off the nose. This
+/// pins the fix, which is a deliberate divergence from the archive.
+#[test]
+fn a_level_target_abeam_is_inside_a_sixty_degree_pitch_arc() {
+    use sim_core::math::{arc_test_3d, Quat};
+
+    let origin = V3::new(0.0, 0.0, 0.0);
+    let facing = Quat::IDENTITY;
+    // Dead abeam and dead level: yaw 90, elevation 0.
+    let abeam = V3::new(100.0, 0.0, 0.0);
+    assert!(
+        arc_test_3d(origin, facing, abeam, -110.0, 110.0, -60.0, 60.0),
+        "a level target 90 degrees off the nose is inside a 110 by 60 arc"
+    );
+    // The horizontal arc still bites: 150 degrees round is outside 110.
+    let behind = V3::new(50.0, 0.0, -86.6);
+    assert!(
+        !arc_test_3d(origin, facing, behind, -110.0, 110.0, -60.0, 60.0),
+        "150 degrees off the nose is outside a 110 degree horizontal arc"
+    );
+    // And so does the vertical one: 70 degrees up is outside 60.
+    let high = V3::new(0.0, 94.0, 34.2);
+    assert!(
+        !arc_test_3d(origin, facing, high, -110.0, 110.0, -60.0, 60.0),
+        "70 degrees of elevation is outside a 60 degree pitch arc"
+    );
+    // 45 up and 45 round passes both.
+    let corner = V3::new(50.0, 70.7, 50.0);
+    assert!(
+        arc_test_3d(origin, facing, corner, -110.0, 110.0, -60.0, 60.0),
+        "45 degrees up and 45 round is inside both arcs"
+    );
+}
+
+/// Beat on one volume of ship 1 with every mount ship 0 has, turn after turn,
+/// until it goes. The way the game would do it, because a test that reached
+/// into `subs` and set `dead` would be testing the assignment.
+fn pound(sim: &mut Sim, sub: usize, turns: i32) -> Vec<sim_core::turn::Event> {
+    // Every ship gets an order, including the ones doing nothing. An order of
+    // None is the AI's cue to plan, and an AI that manoeuvres turns the target
+    // so the volume being aimed at ends up behind another one: the test would
+    // then be measuring the AI rather than the damage model.
+    let hold_at: Vec<V3> = sim.ships.iter().map(|s| s.pos).collect();
+    for _ in 0..turns {
+        let n = sim.ships.len();
+        let mut orders: Vec<Option<Order>> = (0..n).map(|i| Some(hold(hold_at[i]))).collect();
+        orders[0] = Some(Order {
+            mode: Some(Mode::MoveAndTurn),
+            weapons: (0..sim.ships[0].weapons.len())
+                .map(|i| FireOrder {
+                    weapon_index: i,
+                    second: i as i32 + 1,
+                    target_ship: 1,
+                    target_sub: Some(sub),
+                })
+                .collect(),
+            ..Default::default()
+        });
+        let res = sim.resolve_turn(&mut orders);
+        if sim.ships[1].subs[sub].dead || sim.ships[1].destroyed {
+            return res.events;
+        }
+    }
+    Vec::new()
+}
+
+#[test]
+fn losing_the_weapon_bay_silences_every_mount() {
+    // One bay feeds the whole hull, so this is not "the mount you shot": it is
+    // every mount at once, and the client's own greying out has to agree
+    // because it asks the same gate.
+    let mut sim = duel("seed-bay", 40.0);
+    assert!(sim.can_fire(1, 0), "a fresh hull can fire before anything is hit");
+    let _ = pound(&mut sim, 4, 14);
+    assert!(sim.ships[1].subs[4].dead, "focused fire on the bay must eventually take it");
+    for i in 0..sim.ships[1].weapons.len() {
+        assert!(!sim.can_fire(1, i), "mount {i} still fires with the bay gone");
+    }
+
+    // And an order that tries anyway is refused with the reason, not with a
+    // cooldown it has no way to wait out.
+    let mut orders: Vec<Option<Order>> = vec![None; 2];
+    orders[1] = Some(Order {
+        mode: Some(Mode::MoveAndTurn),
+        weapons: vec![FireOrder { weapon_index: 0, second: 1, target_ship: 0, target_sub: None }],
+        ..Default::default()
+    });
+    let res = sim.resolve_turn(&mut orders);
+    assert!(
+        res.events.iter().any(|e| e.kind == EventKind::ShotSkippedOffline),
+        "a shot from a wrecked bay must say so",
+    );
+}
+
+#[test]
+fn losing_the_jets_keeps_the_drive_and_takes_the_turn_rates() {
+    // Attitude authority and thrust are different systems, and losing one is
+    // not losing the other: the hull still accelerates, it just cannot point
+    // itself anywhere new.
+    let mut sim = duel("seed-jets", 40.0);
+    let authored = sim.ships[1].flight;
+    let _ = pound(&mut sim, 3, 14);
+    assert!(sim.ships[1].subs[3].dead, "focused fire on the jets must eventually take them");
+
+    let now = sim.ships[1].effective_flight();
+    assert_eq!(now.yaw_rate, 0.0, "a hull with no jets cannot yaw");
+    assert_eq!(now.pitch_rate, 0.0, "a hull with no jets cannot pitch");
+    assert_eq!(now.accel_fwd, authored.accel_fwd, "the drive is untouched");
+    assert_eq!(now.max_speed, authored.max_speed, "and so is its top speed");
+    assert!(!sim.ships[1].drift_active, "no jets is not adrift: that is the engines");
+    // The authored stats are where they were. What changed is what the ship
+    // can do with them, which is why this is derived rather than overwritten.
+    assert_eq!(sim.ships[1].flight.yaw_rate, authored.yaw_rate);
+}
+
+
+#[test]
+fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
+    // From below, because from ahead the bay and the belts are in the way and
+    // that is the point of where they sit. A hull whose core can be reached
+    // from any aspect is a hull with no armour worth drawing.
+    let mut sim = Sim::new_skirmish(
+        "seed-critical",
+        &[spec(ShipClassId::TerranFrigate, V3::new(0.0, -30.0, 0.0), V3::new(0.0, 1.0, 0.0))],
+        &[
+            spec(ShipClassId::Freighter, V3::ZERO, V3::new(0.0, 0.0, 1.0)),
+            spec(ShipClassId::KarisenFrigate, V3::new(8.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0)),
+        ],
+        Faction::Karisen,
+        SOLO,
+    );
+    let bystander_before = sim.ships[2].hull;
+    let hull_before = sim.ships[1].hull;
+    assert!(hull_before > 500.0, "the point of a freighter here is that it does not die of the bleed");
+
+    let events = pound(&mut sim, 2, 20);
+    assert!(sim.ships[1].subs[2].dead, "a clear lane to the core must eventually breach it");
+    assert!(sim.ships[1].destroyed, "a breached reactor ends the ship whatever the hull says");
+    assert_eq!(sim.ships[1].hull, 0.0, "the hull goes with the pile, not down to it");
+    assert!(
+        events.iter().any(|e| e.kind == EventKind::ShipCritical && e.ship == 1),
+        "a breach announces itself, so the client can draw it as more than a kill",
+    );
+    assert!(
+        sim.ships[2].hull < bystander_before,
+        "a hull {} units from a breach takes a share of it",
+        8.0,
+    );
+    // And it is a blast, not a second kill: the falloff leaves a frigate at
+    // eight units alive.
+    assert!(!sim.ships[2].destroyed, "the blast falls off rather than clearing the field");
+}
+
+#[test]
+fn a_side_can_field_a_hull_the_scenario_did_not_author() {
+    // Picked in the lobby, applied at spawn, and hashed: which hull a side
+    // fields decides radius, boarding range, mounts and volumes, so two seats
+    // that disagreed about it would be playing different matches.
+    use sim_core::ffi::{ft_hull_choice, ft_match_new, ft_read_ships, ft_scratch_ptr};
+    const OUT: usize = 64;
+    const STRIDE: usize = sim_core::ffi::SHIP_STRIDE;
+    let read = || {
+        let n = ft_read_ships() as usize;
+        let s = unsafe { core::slice::from_raw_parts(ft_scratch_ptr(), 16384) };
+        (0..n).map(|i| (s[OUT + i * STRIDE + 3] as u32, s[OUT + i * STRIDE + 1] as u32)).collect::<Vec<_>>()
+    };
+
+    ft_hull_choice(0, -1);
+    ft_hull_choice(1, -1);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    let authored = read();
+    assert!(authored.iter().any(|(side, _)| *side == 0), "the skirmish seats a player");
+
+    // 2 is the Rogue. Every hull on side 0 becomes one; side 1 is untouched.
+    ft_hull_choice(0, 2);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    let picked = read();
+    for ((side, cls), (_, was)) in picked.iter().zip(authored.iter()) {
+        if *side == 0 {
+            assert_eq!(*cls, 2, "a picked hull applies to every ship on that side");
+        } else {
+            assert_eq!(cls, was, "the other side keeps what the scenario authored");
+        }
+    }
+
+    // And clearing it puts the authored ships back, so the pick is a choice
+    // rather than a one way door.
+    ft_hull_choice(0, -1);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    assert_eq!(read(), authored, "clearing the pick restores the authored hulls");
 }

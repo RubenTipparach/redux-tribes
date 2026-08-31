@@ -26,6 +26,8 @@ const wasm = readFileSync(resolve(root, 'public/sim_core.wasm'));
 const sim = await Sim.load(wasm);
 
 const Mode = { MoveAndTurn: 0, TurnSlide: 1, FullSpeed: 2, FullStop: 3, Drift: 4 };
+// Mirrors sim/types.ts. Sandbox is the one that unlocks the flight stats.
+const Scenario = { Skirmish: 0, Duel: 1, Convoy: 2, LowOrbit: 3, Binary: 4, Slingshot: 5, Sandbox: 6 };
 const FLIGHT = { yawRate: 6, pitchRate: 4, accelFwd: 0.9, accelRetro: 0.35, accelLat: 0.25, maxSpeed: 8 };
 const body = (vel = { x: 0, y: 0, z: 0 }) => ({
   pos: { x: 0, y: 0, z: 0 }, vel, quat: { x: 0, y: 0, z: 0, w: 1 },
@@ -145,8 +147,103 @@ test('a match starts with the scenario it was asked for', () => {
     assert.ok(s.radius > 0 && s.radius < 10, `radius ${s.radius}`);
     assert.ok(Number.isFinite(s.pos.x + s.pos.y + s.pos.z));
     assert.ok(Math.abs(Math.hypot(s.quat.x, s.quat.y, s.quat.z, s.quat.w) - 1) < 1e-3);
-    assert.ok(s.subs.length >= 1);
+    assert.ok(s.subCount >= 1);
   }
+
+  // What those volumes ARE comes from one query, and the client asks it rather
+  // than keeping a copy: kind, condition and where the thing is in the world.
+  const subs = m.subs();
+  assert.equal(subs.length, ships.reduce((a, s) => a + s.subCount, 0));
+  for (const v of subs) {
+    assert.ok(v.kind >= 0 && v.kind <= 4, `kind ${v.kind}`);
+    assert.ok(v.hp > 0 && v.hp === v.hpMax && !v.dead);
+    assert.ok(v.radius > 0 && v.radius < 4, `radius ${v.radius}`);
+    const ship = ships.find(x => x.id === v.ship);
+    const d = Math.hypot(v.pos.x - ship.pos.x, v.pos.y - ship.pos.y, v.pos.z - ship.pos.z);
+    assert.ok(d < ship.radius + v.radius, `volume ${v.index} sits ${d} from its hull`);
+  }
+  // Every frigate carries a bay, a set of jets and a pile, because losing one
+  // has to be a thing that can happen to any of them.
+  for (const s of ships) {
+    const kinds = new Set(subs.filter(v => v.ship === s.id).map(v => v.kind));
+    for (const k of [1, 2, 4]) assert.ok(kinds.has(k), `ship ${s.id} has no kind ${k}`);
+  }
+});
+
+test('a side fields the design it picked, derived by the core', () => {
+  // Picked in the lobby, derived here, applied at spawn and hashed. The parts
+  // and the counts below are the stock Rogue's, so a hull built out of them
+  // has to come out as one.
+  const parts = [3, 3, 3, 12, 12, 14, 14, 7, 7, 6, 10, 10, 8, 8, 11, 11, 16,
+    17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19];
+  const geo = { plateCells: 1632, ext: [24, 14, 45], radiusCells: 24.315633, fouled: 0 };
+
+  const m = sim.match();
+  m.clearHulls();
+  m.start('deadbeefcafe0003', 0);
+  const authored = m.ships().map(s => [s.side, s.cls, +s.hullMax.toFixed(2)]);
+  const hashA = m.hash;
+
+  // What the core says the design is, asked directly.
+  const stats = sim.derive(2, geo, parts);
+  assert.ok(stats, 'the core derives the record');
+  assert.ok(Math.abs(stats.hull - 194.848) < 0.1, `hull ${stats.hull}`);
+  assert.ok(Math.abs(stats.mass - 0.789256) < 1e-4, `mass ${stats.mass}`);
+  assert.equal(stats.marines, 40);
+  assert.equal(stats.gates, 0b1111111, 'the stock Rogue passes every gate');
+
+  m.clearHulls();
+  m.setHull(0, 2, geo, parts, [
+    { key: 'projectile', at: [-0.8, 0.2, 1.5] },
+    { key: 'projectile', at: [0.8, 0.2, 1.5] },
+  ]);
+  m.start('deadbeefcafe0003', 0);
+  const flown = m.ships();
+  for (const s of flown) {
+    if (s.side !== 0) continue;
+    assert.ok(Math.abs(s.hullMax - stats.hull) < 0.1,
+      `a designed hull carries its own hull points: ${s.hullMax} against ${stats.hull}`);
+    assert.ok(Math.abs(s.radius - stats.radius) < 0.01, `radius ${s.radius}`);
+    assert.equal(s.marines, stats.marines);
+  }
+  assert.notEqual(m.hash, hashA, 'the design a side fields is in the hash');
+
+  // The other side keeps what the scenario authored, and clearing restores it.
+  const mineNow = flown.filter(s => s.side === 0).map(s => +s.hullMax.toFixed(2));
+  const foeNow = flown.filter(s => s.side === 1).map(s => +s.hullMax.toFixed(2));
+  const foeWas = authored.filter(a => a[0] === 1).map(a => a[2]);
+  assert.deepEqual(foeNow, foeWas, 'a design is one side\'s, not the match\'s');
+  assert.ok(mineNow.every(h => Math.abs(h - 194.85) < 0.1), 'and mine are the design');
+
+  m.clearHulls();
+  m.start('deadbeefcafe0003', 0);
+  assert.deepEqual(m.ships().map(s => [s.side, s.cls, +s.hullMax.toFixed(2)]), authored,
+    'clearing the design restores the authored ships');
+  assert.equal(m.hash, hashA, 'exactly, hash and all');
+});
+
+test('a shot lands on the volume it was aimed at, not the hull in front of it', () => {
+  // The defect this pins: a volume sits INSIDE the hull sphere, so a single
+  // nearest-wins raycast over both always returned the sphere and every aimed
+  // shot hit the hull. Which SHIP is nearest and WHAT it struck are two
+  // questions with two answers.
+  const m = sim.match();
+  m.start('deadbeefcafe0002', 0);
+  const ships = m.ships();
+  const mine = ships.find(s => s.side === 0);
+  const foe = ships.find(s => s.side === 1);
+  const bay = m.subs().find(v => v.ship === foe.id && v.kind === 3);
+  assert.ok(bay, 'a frigate has a weapon bay to aim at');
+
+  let hitTheBay = false;
+  for (let t = 0; t < 6 && !hitTheBay; t++) {
+    const o = m.order(mine.id);
+    o.weapons = [0, 1, 2].map(i => ({ weaponIndex: i, second: i + 1,
+      targetShip: foe.id, targetSub: bay.index }));
+    const events = m.endTurn();
+    hitTheBay = events.some(e => e.kind === 2 && e.ship === foe.id && e.aux === bay.index);
+  }
+  assert.ok(hitTheBay, 'a shot aimed at the bay has to be able to reach the bay');
 });
 
 test('the same seed and orders produce the same hash', () => {
@@ -248,27 +345,45 @@ test('class and mount metadata cross intact', () => {
   assert.equal(m.mount(0, 9), null, 'a mount past the end is absent, not garbage');
 });
 
-test('retuning a flight envelope changes what a ship can reach', () => {
-  const m = sim.match();
-  m.start('0000000000000005', 1);
+/**
+ * Retuning works, and only in a sandbox.
+ *
+ * Both halves in one test, because a lock that refuses everything would pass a
+ * test that only checked the refusal, and a lock that refuses nothing would
+ * pass one that only checked the tuning.
+ */
+test('flight stats retune in a sandbox and are refused outside one', () => {
   const far = { x: 0, y: 0, z: 400 };
-  const o = m.order(0);
-  o.mode = Mode.MoveAndTurn;
-  o.target = far;
-
-  m.preview(0, o, 8);
-  const before = m.previewEnd();
-
-  const base = m.classInfo(0).flight;
-  m.setFlight(0, { ...base, accelFwd: base.accelFwd * 3, maxSpeed: base.maxSpeed * 3 });
-  m.preview(0, o, 8);
-  const after = m.previewEnd();
-
   const start = { x: -30, y: 0, z: 0 };
+  const reachWithTripleDrive = (scenario) => {
+    const m = sim.match();
+    m.start('0000000000000005', scenario);
+    const o = m.order(0);
+    o.mode = Mode.MoveAndTurn;
+    o.target = far;
+    m.preview(0, o, 8);
+    const before = m.previewEnd();
+    const base = m.classInfo(0).flight;
+    const took = m.setFlight(0, { ...base, accelFwd: base.accelFwd * 3, maxSpeed: base.maxSpeed * 3 });
+    m.preview(0, o, 8);
+    return { sandbox: m.sandbox, took, before: dist(start, before), after: dist(start, m.previewEnd()) };
+  };
+
+  const open = reachWithTripleDrive(Scenario.Sandbox);
+  assert.ok(open.sandbox, 'the sandbox scenario reports itself as one');
+  assert.ok(open.took, 'a sandbox should accept a stat change');
   assert.ok(
-    dist(start, after) > dist(start, before) * 1.5,
-    `a tripled drive should reach much further: ${dist(start, before)} -> ${dist(start, after)}`,
+    open.after > open.before * 1.5,
+    `a tripled drive should reach much further: ${open.before} -> ${open.after}`,
   );
+
+  // The duel is a real match: the stats are what the class says they are, and
+  // the core refuses to be told otherwise. They are in the state hash, so a
+  // seat that could change them could part two clients on its own.
+  const shut = reachWithTripleDrive(Scenario.Duel);
+  assert.ok(!shut.sandbox, 'a duel is not a sandbox');
+  assert.ok(!shut.took, 'a real match should refuse a stat change');
+  assert.equal(shut.after, shut.before, 'the refused change moved the envelope anyway');
 });
 
 test('two seats in the same match agree on every hash', () => {

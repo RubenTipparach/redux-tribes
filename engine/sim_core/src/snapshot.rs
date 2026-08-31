@@ -34,7 +34,12 @@ use crate::state::{
 /// Bumped to 2 when the gravity field joined the format. A turn flown
 /// through a field cannot be re-run without it, so an older snapshot is
 /// refused rather than restored into empty space.
-pub const SNAPSHOT_VERSION: f32 = 2.0;
+///
+/// 3 when the sandbox flag joined it. It decides whether flight stats may be
+/// edited, and the stats are what a turn is flown with, so a snapshot that
+/// restored without it could come back into a match that accepts changes the
+/// original refused.
+pub const SNAPSHOT_VERSION: f32 = 4.0;
 
 struct Writer<'a> {
     buf: &'a mut [f32],
@@ -120,6 +125,7 @@ impl Sim {
         w.f(f32::from_bits(self.seed_hash));
         w.i(self.turn);
         w.i(self.human_sides as i32);
+        w.i(self.sandbox as i32);
         w.i(self.next_proj_id as i32);
         w.i(match self.game_over {
             None => -1,
@@ -148,6 +154,10 @@ impl Sim {
             w.b(s.destroyed);
             w.f(s.hull);
             w.f(s.hull_max);
+            w.f(s.mass);
+            w.f(s.radius);
+            w.f(s.boarding_range);
+            w.i(s.boarding_capacity);
             w.i(s.marines);
             w.v3(s.pos);
             w.quat(s.quat);
@@ -176,7 +186,7 @@ impl Sim {
             }
             w.i(s.weapons.len() as i32);
             for x in &s.weapons {
-                w.i(x.last_fired_turn);
+                w.i(x.last_fired_tick);
             }
             w.i(s.boarding_parties.len() as i32);
             for p in &s.boarding_parties {
@@ -217,6 +227,7 @@ impl Sim {
         }
         self.turn = r.i();
         self.human_sides = r.i() as u8;
+        self.sandbox = r.i() != 0;
         self.next_proj_id = r.i() as u32;
         self.game_over = match r.i() {
             0 => Some(Winner::Player),
@@ -247,6 +258,10 @@ impl Sim {
             s.destroyed = r.b();
             s.hull = r.f();
             s.hull_max = r.f();
+            s.mass = r.f();
+            s.radius = r.f();
+            s.boarding_range = r.f();
+            s.boarding_capacity = r.i();
             s.marines = r.i();
             s.pos = r.v3();
             s.quat = r.quat();
@@ -281,7 +296,7 @@ impl Sim {
             for k in 0..weapons {
                 let fired = r.i();
                 if let Some(w) = s.weapons.get_mut(k) {
-                    w.last_fired_turn = fired;
+                    w.last_fired_tick = fired;
                 }
             }
             let parties = r.i().max(0) as usize;

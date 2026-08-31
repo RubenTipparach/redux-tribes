@@ -1,0 +1,1155 @@
+<title>Slice Yard</title>
+<meta name="description" content="Variant C of the ship designer: the hull is built one Z slice at a time on a flat tap grid, with a bow on 3D preview that shows the slice you are standing in, and every derived number coming back from the core.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
+<!--THREE-->
+<style>
+/* Tokens copied from web/index.html so the yard reads as the same console.
+   The three shipped faces (Michroma, Exo 2, Rajdhani) are named first and fall
+   back to system UI: a mockup takes no network, so no remote font is loaded.
+   One colour is added beyond the console's eleven, --violet, because a seventh
+   cube kind needs a seventh hue and reusing one would make two kinds look
+   alike on a phone. */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --amber:#FFD24B; --violet:#A98BFF; --steel:#93A6BC;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+  --disp:Michroma,"Rajdhani",system-ui,sans-serif;
+  --ui:"Exo 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --lbl:Rajdhani,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:14px;
+  overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+
+/* minmax(0,1fr) on every flexible track: a bare 1fr carries a min content
+   minimum, and one wide child would then push the layout off a phone. */
+#app{display:grid;
+  grid-template-columns:224px minmax(0,1fr) minmax(0,1fr) 312px;
+  grid-template-rows:46px minmax(0,1fr);
+  grid-template-areas:"h h h h" "rail edit view core";
+  height:100vh;height:100dvh;min-width:0}
+
+header{grid-area:h;display:flex;align-items:center;gap:10px;padding:0 12px;min-width:0;overflow:hidden;
+  background:var(--panel2);border-bottom:1px solid var(--line);
+  -webkit-user-select:none;user-select:none}
+header h1{font-family:var(--disp);font-size:12px;font-weight:400;letter-spacing:.12em;
+  margin:0;color:var(--cyan);white-space:nowrap}
+.hgap{flex:1;min-width:0}
+.stat{font-family:var(--lbl);font-weight:600;font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.stat b{color:var(--ink);font-weight:700}
+.verdict{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;border:1px solid var(--line);border-radius:4px;
+  padding:4px 9px;white-space:nowrap;background:var(--panel);color:var(--muted)}
+.verdict.ok{color:var(--green);border-color:#1f6b40;background:#0c1d16}
+.verdict.bad{color:var(--red);border-color:#6b2020;background:#1d0f0f}
+
+button{font-family:var(--lbl);font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  font-size:12px;touch-action:manipulation;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--cyan);color:var(--cyan)}
+button:disabled{opacity:.32;cursor:default}
+button:disabled:hover{border-color:var(--line);color:var(--ink)}
+button.on{border-color:var(--cyan);color:var(--cyan);background:#0d2231}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
+aside,section{min-width:0;min-height:0}
+#rail{grid-area:rail;background:var(--panel2);border-right:1px solid var(--line);
+  padding:10px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+#core{grid-area:core;background:var(--panel2);border-left:1px solid var(--line);
+  padding:10px;overflow-y:auto}
+#edit{grid-area:edit;padding:8px 10px 10px;display:flex;flex-direction:column;
+  gap:8px;min-height:0;background:var(--ground)}
+#view{grid-area:view;position:relative;min-height:0;border-left:1px solid var(--line);
+  border-right:1px solid var(--line);background:#070a0f}
+
+h2{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+.note{font-size:11px;line-height:1.45;color:var(--muted);margin:6px 0 0}
+.note b{color:var(--ink)}
+.tag{font-family:var(--lbl);font-weight:700;font-size:9px;letter-spacing:.1em;
+  text-transform:uppercase;border:1px solid var(--line);border-radius:3px;
+  padding:1px 5px;color:var(--muted);white-space:nowrap}
+.tag.warn{color:var(--amber);border-color:#5a4713}
+
+/* ------------------------------------------------------------- palette -- */
+#palette{display:grid;grid-template-columns:1fr;gap:5px}
+.chip{display:flex;align-items:center;gap:8px;padding:7px 8px;background:var(--panel);
+  border:1px solid var(--line);border-radius:4px;cursor:pointer;text-align:left;
+  font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink);width:100%;touch-action:manipulation}
+.chip .sw{width:20px;height:20px;border-radius:3px;flex:0 0 auto;display:grid;
+  place-items:center;font-size:11px;font-weight:700;color:#06090e;
+  font-family:var(--mono);border:1px solid #0006}
+.chip .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chip .num{font-family:var(--mono);font-size:10px;color:var(--muted);letter-spacing:0}
+.chip.on{border-color:var(--cyan);background:#0d2231}
+.chip.on .nm{color:var(--cyan)}
+.chip:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
+/* --------------------------------------------------------- layer strip -- */
+.layerbar{display:flex;align-items:center;gap:6px;min-width:0}
+.layerbar .lname{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.layerbar .lname b{color:var(--cyan)}
+.step{width:38px;height:34px;padding:0;font-size:14px;flex:0 0 auto}
+#lrail{display:flex;gap:3px;flex:1;min-width:0}
+.lz{flex:1;min-width:0;height:34px;padding:0;position:relative;overflow:hidden;
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  display:flex;align-items:flex-end;justify-content:center;cursor:pointer}
+.lz .bar{position:absolute;left:0;right:0;bottom:0;background:#1c3448}
+.lz .n{position:relative;font-family:var(--mono);font-size:10px;color:var(--muted);
+  line-height:1;padding-bottom:3px}
+.lz.on{border-color:var(--cyan)}
+.lz.on .bar{background:#12405c}
+.lz.on .n{color:var(--cyan)}
+
+/* ---------------------------------------------------------- slice grid -- */
+/* overflow:hidden is a guard, not a layout: a grid that outgrew this box
+   would be drawn ON TOP of the palette below it and would eat those taps
+   while still looking enabled. Clipped is wrong and visible; covering a
+   control is wrong and invisible. */
+#gridwrap{flex:1;min-height:0;display:grid;place-items:center;overflow:hidden}
+/* The size is set in JS from the box it sits in, not from a vh guess: a
+   guessed cap is either a grid that overflows and covers the palette or one
+   that leaves half the space empty, and which of the two you get depends on
+   the phone. */
+#grid{width:100%;max-width:100%;aspect-ratio:1;display:grid;
+  grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(4,1fr);gap:6px;
+  touch-action:none;-webkit-user-select:none;user-select:none}
+.cell{position:relative;padding:0;border-radius:5px;background:#0c1118;
+  border:1px solid var(--line);overflow:hidden;cursor:pointer;
+  display:grid;place-items:center;min-width:0;min-height:0}
+.cell:hover{border-color:#2f4258}
+.cell .gl{font-family:var(--mono);font-size:clamp(11px,3.4vh,20px);font-weight:700;
+  color:#06090e;line-height:1;position:relative;z-index:2}
+/* Ghost of the slice beneath, drawn INSIDE the cell rather than beside it, so
+   the shape you are building on is under your thumb and not in a second
+   picture that has to be cross referenced. */
+.cell .gh{position:absolute;inset:14%;border-radius:4px;border:1px dashed currentColor;
+  opacity:.42;z-index:1}
+.cell .gh.solid{border-style:solid;opacity:.5}
+/* The whole run of the ship through this cell's X,Y column: one tick per Z
+   slice, lit where that slice is filled. It is how a flat grid still says
+   what the solid looks like fore and aft of where you stand. */
+.cell .tk{position:absolute;left:0;right:0;bottom:0;height:7px;display:flex;gap:1px;
+  padding:0 2px 2px;z-index:3}
+.cell .tk i{flex:1;background:#1b2634;border-radius:1px}
+.cell .tk i.f{background:var(--steel)}
+.cell .tk i.here{outline:1px solid var(--cyan);outline-offset:-1px}
+.cell.filled{border-color:#2b3d52}
+.cell.orphan{border-color:var(--red);box-shadow:0 0 0 1px var(--red) inset}
+.cell:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+.axlab{display:flex;justify-content:space-between;font-family:var(--lbl);font-weight:700;
+  font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+
+/* ------------------------------------------------------------ filmstrip -- */
+#film{display:flex;gap:5px;min-width:0}
+.mini{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);
+  border-radius:4px;padding:4px 3px 3px;cursor:pointer;touch-action:manipulation}
+.mini.on{border-color:var(--cyan);background:#0d2231}
+.mini .mg{display:grid;grid-template-columns:repeat(4,1fr);gap:1px}
+.mini .mg i{aspect-ratio:1;background:#141d29;border-radius:1px}
+.mini .lb{font-family:var(--mono);font-size:9px;color:var(--muted);text-align:center;
+  margin-top:2px;line-height:1}
+.mini.on .lb{color:var(--cyan)}
+/* Two flattened views of the whole hull, because a slice editor's one real
+   risk is building seven good cross sections that add up to a bad silhouette.
+   Both collapse an axis: side loses X, plan loses Y, and the column you are
+   standing in is boxed in both. */
+#proj{display:flex;gap:10px;margin-top:8px}
+.pv{flex:1;min-width:0}
+.pl{display:block;font-family:var(--lbl);font-weight:700;font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+.pg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.pg i{aspect-ratio:1;background:#141d29;border-radius:2px}
+.pg i.here{outline:1px solid var(--cyan);outline-offset:-1px}
+
+/* ------------------------------------------------------------- 3d view -- */
+#cv{display:block;width:100%;height:100%;touch-action:none;
+  -webkit-user-select:none;user-select:none;background:#070a0f}
+#viewbtns{position:absolute;top:8px;right:8px;display:flex;gap:5px;z-index:4}
+#viewbtns button{padding:0;width:44px;height:34px;font-size:10px;letter-spacing:.06em;
+  background:#0d131dcc;backdrop-filter:blur(2px)}
+#viewtag{position:absolute;left:8px;top:8px;z-index:4;font-family:var(--lbl);
+  font-weight:700;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);background:#0d131dcc;border:1px solid var(--line);
+  border-radius:4px;padding:4px 7px;pointer-events:none}
+#viewtag b{color:var(--cyan)}
+#viewhint{position:absolute;left:8px;bottom:8px;right:8px;z-index:4;font-size:10px;
+  color:var(--muted);pointer-events:none;line-height:1.4}
+
+/* -------------------------------------------------------- core readout -- */
+.coremark{border:1px solid #1d4a5f;background:#0a1a22;border-radius:4px;padding:7px 8px;
+  margin-bottom:9px}
+.coremark .t{font-family:var(--lbl);font-weight:700;font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--cyan);margin-bottom:3px}
+.coremark p{margin:0;font-size:11px;line-height:1.45;color:var(--muted)}
+.coremark code{font-family:var(--mono);color:var(--ink);font-size:10px}
+#core.bad .coremark{border-color:#6b2020;background:#1a0e0e}
+#core.bad .coremark .t{color:var(--red)}
+.rows{display:flex;flex-direction:column;gap:2px;margin-bottom:9px}
+.r{display:flex;align-items:baseline;gap:6px;padding:3px 5px;border-radius:3px;
+  background:#0e141d}
+.r .k{font-family:var(--lbl);font-weight:600;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);flex:1;min-width:0}
+.r .v{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap}
+.r .d{font-family:var(--mono);font-size:10px;width:56px;text-align:right;color:var(--muted)}
+.r .d.up{color:var(--green)}
+.r .d.dn{color:var(--orange)}
+.r.zero .v{color:var(--red)}
+.checks{display:flex;flex-direction:column;gap:4px}
+.ck{display:flex;gap:7px;padding:5px 6px;border-radius:4px;background:#0e141d;
+  border-left:2px solid var(--green)}
+.ck.no{border-left-color:var(--red);background:#170e12}
+.ck .mk{font-family:var(--mono);font-size:12px;color:var(--green);line-height:1.3}
+.ck.no .mk{color:var(--red)}
+.ck .bd{min-width:0;flex:1}
+.ck .h{display:block;font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink)}
+.ck.no .h{color:var(--red)}
+.ck .s{display:block;font-size:10.5px;color:var(--muted);line-height:1.4;margin-top:1px}
+.wrow{display:flex;align-items:center;gap:7px;padding:5px 6px;background:#0e141d;
+  border-radius:3px;margin-bottom:3px}
+.wrow .k{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.06em;
+  text-transform:uppercase;flex:0 0 auto}
+.wrow .m{font-family:var(--mono);font-size:10px;color:var(--muted);flex:1;min-width:0;
+  text-align:right;letter-spacing:-.01em}
+
+#tabbar{display:none}
+.closebar{display:none}
+.deskonly{display:block}
+
+/* ------------------------------------------------------------ mid width --
+   The core readout drops under the two editing columns rather than being
+   squeezed to nothing beside them. */
+@media (max-width:1180px) and (min-width:901px){
+  #app{grid-template-columns:200px minmax(0,1fr) minmax(0,1fr);
+    grid-template-rows:46px minmax(0,1fr) 196px;
+    grid-template-areas:"h h h" "rail edit view" "core core core"}
+  #core{border-left:0;border-top:1px solid var(--line);
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:start}
+  #core .coremark{grid-column:1/4;margin-bottom:0}
+  /* 200px of rail is not enough for a name and a number side by side, and a
+     clipped number is worse than no number: the core panel carries them too. */
+  .chip .num{display:none}
+}
+
+/* ---------------------------------------------------------------- phone --
+   The rail stops being a column and becomes a strip of chips under the grid,
+   because the palette is the one control you use between every other tap:
+   putting it in a sheet would mean opening a sheet to change cube kind and
+   then closing it to place one.
+   The three panels (core, layers, presets) are FULL AREA overlays, not half
+   sheets. A half sheet leaves live looking controls underneath it that
+   silently eat the tap; an opaque panel from the header to the tab bar has
+   nothing under it to eat one, and its own toggle stays on the tab bar. */
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr);
+    grid-template-rows:44px auto minmax(0,1fr) auto calc(var(--tabh) + var(--safe));
+    grid-template-areas:"h" "view" "edit" "pal" "tabs"}
+  header{padding:0 10px;gap:7px}
+  header h1{font-size:10px;letter-spacing:.1em}
+  .stat{font-size:10px;letter-spacing:.06em}
+  .verdict{font-size:10px;padding:3px 7px}
+  /* Three chips and a verdict do not fit 390px without wrapping, and a header
+     that wraps eats the grid. Hull is the one the core panel already carries. */
+  #hHullWrap{display:none}
+  #rail{display:contents}
+  /* display:contents on the rail hands the palette straight to the page grid,
+     so it lands in its own row under the slice instead of in a sheet nobody
+     would think to open between one cube and the next. */
+  #paletteBox{grid-area:pal;min-width:0}
+  #paletteBox h2{display:none}
+  #palette{grid-template-columns:repeat(4,1fr);gap:4px;padding:5px 6px;
+    background:var(--panel2);border-top:1px solid var(--line)}
+  .chip{flex-direction:column;gap:3px;padding:5px 2px;font-size:9px;letter-spacing:.02em;
+    align-items:center;text-align:center}
+  .chip .sw{width:18px;height:18px}
+  .chip .num{display:none}
+  #view{grid-area:view;height:232px;border-left:0;border-right:0;
+    border-bottom:1px solid var(--line)}
+  #edit{grid-area:edit;padding:6px 8px 8px;gap:6px}
+  #grid{gap:5px}
+  #film{display:none}
+  #edit .axlab{display:none}
+  #viewhint{display:none}
+
+  #core,#panelPresets,#panelFilm{position:fixed;left:0;right:0;top:44px;
+    bottom:calc(var(--tabh) + var(--safe));z-index:20;background:var(--panel2);
+    border:0;border-top:1px solid var(--line);padding:10px 12px 16px;overflow-y:auto;
+    transform:translateY(102%);transition:transform .2s ease;visibility:hidden}
+  #core.open,#panelPresets.open,#panelFilm.open{transform:none;visibility:visible}
+  #panelFilm #film{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+  .closebar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .deskonly{display:none}
+  .closebar h2{margin:0;flex:1}
+  #tabbar{display:flex;grid-area:tabs;z-index:21;background:var(--panel2);
+    border-top:1px solid var(--line);height:calc(var(--tabh) + var(--safe));
+    padding-bottom:var(--safe)}
+  #tabbar button{flex:1;height:100%;padding:0;border:0;border-radius:0;
+    background:transparent;color:var(--muted);font-size:10px;letter-spacing:.08em}
+  #tabbar button.on{color:var(--cyan);background:#0d2231;box-shadow:inset 0 2px 0 var(--cyan)}
+  .step{width:42px;height:38px}
+  .lz{height:38px}
+}
+
+/* Phone held sideways, or any short window: about 560px of height and the
+   preview has to give most of it back. */
+@media (max-width:900px) and (max-height:600px){
+  #app{grid-template-rows:38px auto minmax(0,1fr) auto calc(46px + var(--safe))}
+  header{height:38px}
+  #view{height:126px}
+  #core,#panelPresets,#panelFilm{top:38px;bottom:calc(46px + var(--safe))}
+  #tabbar{height:calc(46px + var(--safe))}
+  #grid{gap:4px}
+  .step{width:38px;height:30px}
+  .lz{height:30px}
+  .chip{font-size:8px;padding:4px 2px}
+  .chip .sw{width:15px;height:15px;font-size:9px}
+  #viewbtns button{width:38px;height:28px;font-size:9px}
+}
+
+@media (prefers-reduced-motion:reduce){#core,#panelPresets,#panelFilm{transition:none}}
+</style>
+
+<div id="app">
+  <header>
+    <h1>Slice Yard</h1>
+    <span class="stat">cells <b id="hCells">0</b></span>
+    <span class="stat">mass <b id="hMass">0.00</b></span>
+    <span class="stat" id="hHullWrap">hull <b id="hHull">0</b></span>
+    <span class="hgap"></span>
+    <span class="verdict" id="hVerdict">no hull</span>
+  </header>
+
+  <aside id="rail">
+    <div id="paletteBox">
+      <h2>Palette</h2>
+      <div id="palette"></div>
+    </div>
+    <div id="panelPresets">
+      <div class="closebar"><h2>States</h2><button id="bClosePresets">close</button></div>
+      <h2 class="deskonly">States</h2>
+      <div id="presets" style="display:flex;flex-wrap:wrap;gap:5px"></div>
+      <p class="note" id="presetNote"></p>
+      <h2 style="margin-top:12px">Edit</h2>
+      <div style="display:flex;gap:5px;flex-wrap:wrap">
+        <button id="bUndo">undo</button>
+        <button id="bClearLayer">clear slice</button>
+        <button id="bClearAll">clear all</button>
+      </div>
+      <p class="note">Tap an empty cell to place the selected kind. Tap a filled cell to
+      replace it. <b>Erase</b> is its own palette chip, so no tap ever means two things.
+      Drag across the grid to paint a run.</p>
+      <p class="note">The 3D view takes orbit only and never a placement, which is the
+      whole point of the variant: a flat cell cannot be picked by accident the way a
+      cube behind another cube can.</p>
+      <p class="note">The only arithmetic outside <b>askTheCore</b> is framing: how many
+      pixels the grid gets, where a cube sits in the scene, how tall a bar in the slice
+      rail is drawn. Nothing that decides an outcome.</p>
+    </div>
+  </aside>
+
+  <section id="edit">
+    <div class="layerbar">
+      <button class="step" id="bPrev" aria-label="previous slice">&lt;</button>
+      <span class="lname">slice <b id="lNow">1</b>/7</span>
+      <div id="lrail"></div>
+      <button class="step" id="bNext" aria-label="next slice">&gt;</button>
+    </div>
+    <div class="axlab"><span>port, X0</span><span id="axZ">aft</span><span>starboard, X3</span></div>
+    <div id="gridwrap"><div id="grid"></div></div>
+    <div id="panelFilm">
+      <div class="closebar"><h2>All seven slices</h2><button id="bCloseFilm">close</button></div>
+      <div id="film"></div>
+      <div id="proj">
+        <div class="pv"><span class="pl">side, bow right</span><div class="pg" id="pgSide"></div></div>
+        <div class="pv"><span class="pl">plan, bow right</span><div class="pg" id="pgPlan"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view">
+    <canvas id="cv"></canvas>
+    <div id="viewtag">slice <b id="vTag">1</b> lit</div>
+    <div id="viewbtns">
+      <button id="bBow" title="bow on">bow on</button>
+      <button id="bIso" title="iso">iso</button>
+      <button id="bIn" aria-label="zoom in">+</button>
+      <button id="bOut" aria-label="zoom out">&minus;</button>
+    </div>
+    <div id="viewhint">drag to orbit &middot; wheel or the buttons to zoom &middot; bow on puts
+      the camera exactly where the flat grid is drawn from</div>
+  </section>
+
+  <aside id="core">
+    <div class="closebar"><h2>From the core</h2><button id="bCloseCore">close</button></div>
+    <div class="coremark">
+      <div class="t" id="cmT">every number below comes from the core</div>
+      <p>One call, <code>askTheCore(placements)</code>, standing in for
+      <code>ft_read_design(ship)</code>. Mass, hull, thrust, legality: the client
+      does not work any of them out, it prints what came back.</p>
+    </div>
+    <div id="coreBody"></div>
+  </aside>
+
+  <nav id="tabbar">
+    <button id="tCore">core</button>
+    <button id="tFilm">slices</button>
+    <button id="tPresets">states</button>
+  </nav>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// Numbers from the real project (GUIDELINES.md rule 2.1):
+//   engine/sim_core/src/data.rs - terran_frigate hull 300, mass 1.0, radius 3.5,
+//     flight 6.0 / 4.0 / 0.9 / 0.35 / 0.25 / 8.0; frigate_subs armour block 80,
+//     engines block 60; W_BEAM 5.0 x 5.5 at 300 u, cooldown 3.0 s, arc 110 / 60;
+//     W_CANNON 5.0 x 5.5 at 200 u, 4.0 s, 90 / 60; W_MISSILE 25.0 x 1.0 at 250 u,
+//     6.0 s, full sphere, batch 2.
+//   prototype/sim/data.js - TURN_SECONDS 10, nominalReach().
+//   ship_1.fbx measures 6.9 x 3.4 x 4.0 u (docs/DESIGN.md asset inventory), which
+//     is what sets the lattice: 4 x 4 x 7 cells of 0.98 u is 3.92 x 3.92 x 6.86.
+
+var NX=4, NY=4, NZ=7, CELL=0.98;
+
+// ===========================================================================
+// THE BOUNDARY.
+// In the real client this whole function is one wasm call, ft_read_design(ship),
+// and the table inside it is rows in engine/sim_core/src/data.rs next to
+// SHIP_CLASSES. It moves to Rust exactly as written. askTheCore() is the ONLY
+// place in this file where a derived number is produced: mass, hull, thrust,
+// reach, power, heat, which cubes are orphaned and whether the design is legal.
+// Everything else in the page reads its result and formats it. Two clients that
+// each worked these out for themselves would disagree, and a disagreement is a
+// desync (CLAUDE.md, "Ask the core, never reimplement it").
+// ===========================================================================
+function askTheCore(placements){
+
+  // ---- would be data.rs: MODULE_DEFS, one row per cube kind ---------------
+  // mass is in ShipClass mass units (terran_frigate mass = 1.0).
+  // hull feeds the hull pool (terran_frigate hull = 300.0).
+  // block is the SubDef block_pct field, armour only, 80.0 on a Terran hull.
+  // power and heat describe systems the core does NOT have yet. The table is
+  // the argument for building them, not a claim that they are there.
+  var M={
+    engine  :{label:"engine",   ch:"E", col:"#FA6A0A", mass:0.030, hull:8, power:-7, heat:9,  sink:0,  block:0,  sub:"Thruster"},
+    reactor :{label:"reactor",  ch:"R", col:"#FFD24B", mass:0.034, hull:9, power:42, heat:6,  sink:0,  block:0,  sub:null},
+    heatsink:{label:"heatsink", ch:"H", col:"#35C7FF", mass:0.018, hull:6, power:-1, heat:0,  sink:60, block:0,  sub:null},
+    armor   :{label:"armor",    ch:"A", col:"#93A6BC", mass:0.021, hull:7, power:0,  heat:0,  sink:0,  block:80, sub:"Armor"},
+    beam    :{label:"turret beam",       ch:"B", col:"#4CD97B", mass:0.024, hull:6, power:-8, heat:28, sink:0, block:0, sub:null, w:"beam"},
+    cannon  :{label:"turret projectile", ch:"C", col:"#FF4B4B", mass:0.026, hull:7, power:-5, heat:18, sink:0, block:0, sub:null, w:"cannon"},
+    missile :{label:"turret missile",    ch:"M", col:"#A98BFF", mass:0.022, hull:6, power:-3, heat:11, sink:0, block:0, sub:null, w:"missile"}
+  };
+  // data.rs:97-131 verbatim. Plasma is not its own stat block: it is a cannon
+  // with different FX, so TURRET_PROJECTILE covers both.
+  var W={
+    beam   :{kind:"Beam",    dmg:5.0,  mult:5.5, range:300, cd:3.0, arcH:110, arcV:60,  batch:1},
+    cannon :{kind:"Cannon",  dmg:5.0,  mult:5.5, range:200, cd:4.0, arcH:90,  arcV:60,  batch:1},
+    missile:{kind:"Missile", dmg:25.0, mult:1.0, range:250, cd:6.0, arcH:360, arcV:360, batch:2}
+  };
+  // Per engine flight contribution at unit mass, calibrated so that four
+  // engines on a 1.0 mass hull reproduce terran_frigate exactly.
+  var E_FWD=0.225, E_RETRO=0.0875, E_LAT=0.0625;
+  var YAW_REF=6.0, PITCH_REF=4.0, REF_LEN=7, SPEED_REF=8.0, SPEED_CAP=12.0;
+  // The drive ceiling. mockups/ship-movement-3d tops its forward thrust slider
+  // out at 3.0 u/s2, so that is the number a hull of nothing but engines runs
+  // into rather than an accel that no other part of the game has ever seen.
+  var ACC_CAP=3.0;
+  var TURN_SECONDS=10;                 // data.js CONST
+  var MASS_MAX=1.20;                   // a frigate berth. The freighter is 2.0 and a different yard.
+  var STOCK={hull:300, mass:1.0, radius:3.5, accelFwd:0.9, accelRetro:0.35,
+             accelLat:0.25, yaw:6.0, pitch:4.0, maxSpeed:8.0};
+
+  var r={cells:placements.length, counts:{}, modules:M, weapons:W, massMax:MASS_MAX,
+    mass:0, hull:0, plates:0, blockPct:0, engines:0, turrets:0,
+    power:{supply:0,draw:0,margin:0}, heat:{cap:0,load:0,margin:0},
+    mounts:[], orphans:[], groups:0, extent:[0,0,0], radius:0,
+    checks:[], legal:false, stock:STOCK, delta:{}};
+
+  var i,j,p,d;
+  for(i=0;i<placements.length;i++){
+    p=placements[i]; d=M[p.kind]; if(!d) continue;
+    r.counts[p.kind]=(r.counts[p.kind]||0)+1;
+    r.mass+=d.mass; r.hull+=d.hull;
+    r.heat.load+=d.heat; r.heat.cap+=d.sink;
+    if(d.power>0) r.power.supply+=d.power; else r.power.draw+=-d.power;
+    if(d.block>0){ r.plates++; r.blockPct=d.block; }
+    if(d.sub==="Thruster") r.engines++;
+    if(d.w) r.turrets++;
+  }
+  r.power.margin=r.power.supply-r.power.draw;
+  r.heat.margin=r.heat.cap-r.heat.load;
+
+  var wk=["beam","cannon","missile"], k;
+  for(k=0;k<wk.length;k++){
+    var n=r.counts[wk[k]]||0; if(!n) continue;
+    var w=W[wk[k]];
+    r.mounts.push({kind:wk[k], label:M[wk[k]].label, n:n, dmg:w.dmg*w.mult,
+      range:w.range, cd:w.cd, arcH:w.arcH, arcV:w.arcV, batch:w.batch});
+  }
+
+  // extent and the collision sphere the contact solver would be handed.
+  if(placements.length){
+    var lo=[99,99,99], hi=[-99,-99,-99], a;
+    for(i=0;i<placements.length;i++){
+      var c=[placements[i].i,placements[i].j,placements[i].k];
+      for(a=0;a<3;a++){ if(c[a]<lo[a])lo[a]=c[a]; if(c[a]>hi[a])hi[a]=c[a]; }
+    }
+    for(a=0;a<3;a++) r.extent[a]=hi[a]-lo[a]+1;
+    r.radius=Math.max(r.extent[0],r.extent[1],r.extent[2])*CELL/2;
+  }
+
+  // flight. No thruster means no thrust at all, which is the core's own rule:
+  // losing the last live Thruster costs 100 percent of thrust.
+  var m=r.mass>0?r.mass:1;
+  r.accelFwd=E_FWD*r.engines/m;
+  r.accelRetro=E_RETRO*r.engines/m;
+  r.accelLat=E_LAT*r.engines/m;
+  if(r.accelFwd>ACC_CAP){ var sc=ACC_CAP/r.accelFwd;
+    r.accelFwd*=sc; r.accelRetro*=sc; r.accelLat*=sc; r.capped=true; }
+  var lenZ=r.extent[2]>0?r.extent[2]:REF_LEN;
+  var agility=(STOCK.mass/m)*(REF_LEN/lenZ);
+  r.yaw=Math.min(24, YAW_REF*agility);
+  r.pitch=Math.min(16, PITCH_REF*agility);
+  r.maxSpeed=r.accelFwd>0?Math.min(SPEED_CAP, SPEED_REF*Math.sqrt(r.accelFwd/STOCK.accelFwd)):0;
+  // prototype/sim/data.js nominalReach(fl), verbatim.
+  var tAccel=r.accelFwd>0?Math.min(TURN_SECONDS, r.maxSpeed/r.accelFwd):0;
+  r.reach=0.5*r.accelFwd*tAccel*tAccel + r.maxSpeed*(TURN_SECONDS-tAccel);
+  if(r.cells===0){ r.yaw=0; r.pitch=0; r.reach=0; }
+
+  // connectivity: face adjacency, one flood fill from the first cube.
+  var have={}, key;
+  for(i=0;i<placements.length;i++) have[placements[i].i+","+placements[i].j+","+placements[i].k]=1;
+  var seen={}, stack, head, groups=0, first=null;
+  for(i=0;i<placements.length;i++){
+    key=placements[i].i+","+placements[i].j+","+placements[i].k;
+    if(seen[key]) continue;
+    groups++; if(groups===1) first=key;
+    stack=[key]; seen[key]=groups;
+    for(head=0;head<stack.length;head++){
+      var q=stack[head].split(","), qi=+q[0], qj=+q[1], qk=+q[2];
+      var nb=[[qi+1,qj,qk],[qi-1,qj,qk],[qi,qj+1,qk],[qi,qj-1,qk],[qi,qj,qk+1],[qi,qj,qk-1]];
+      for(j=0;j<6;j++){
+        var nk=nb[j][0]+","+nb[j][1]+","+nb[j][2];
+        if(have[nk] && !seen[nk]){ seen[nk]=groups; stack.push(nk); }
+      }
+    }
+  }
+  r.groups=groups;
+  // The biggest group is the ship; everything else is an orphan. Ties go to the
+  // group that was found first, so the answer never depends on iteration order.
+  if(groups>1){
+    var size={}, g;
+    for(key in seen) if(seen.hasOwnProperty(key)) size[seen[key]]=(size[seen[key]]||0)+1;
+    var best=1;
+    for(g=2;g<=groups;g++) if(size[g]>size[best]) best=g;
+    for(key in seen) if(seen.hasOwnProperty(key) && seen[key]!==best) r.orphans.push(key);
+  }
+
+  function ck(id,label,ok,detail,soft){ r.checks.push({id:id,label:label,ok:!!ok,detail:detail,soft:!!soft}); }
+  ck("cells","hull has cubes", r.cells>0, r.cells+" placed, 0 is not a ship");
+  ck("thrust","at least one engine", r.engines>0,
+     r.engines+" x SubKind::Thruster. Losing the last live one costs 100 percent of thrust, so a hull with none never had any");
+  ck("arms","at least one turret", r.turrets>0,
+     r.turrets+" mount"+(r.turrets===1?"":"s")+". The Freighter ships zero on purpose, but this berth is a warship berth");
+  ck("connected","one solid piece", groups<=1,
+     groups<=1 ? "single group" : r.orphans.length+" cube"+(r.orphans.length===1?"":"s")+" in "+(groups-1)+" detached group"+(groups>2?"s":"")+", ringed red on the slice");
+  ck("mass","inside the frigate berth", r.mass<=MASS_MAX+1e-6,
+     r.mass.toFixed(3)+" of "+MASS_MAX.toFixed(2)+" mass units. terran_frigate is 1.0, the Freighter is 2.0 and berths elsewhere");
+  ck("power","reactors cover the draw", r.power.margin>=0,
+     r.power.supply+" supplied against "+r.power.draw+" drawn", true);
+  ck("heat","sinks cover the load", r.heat.margin>=0,
+     r.heat.cap+" capacity against "+r.heat.load+" load", true);
+
+  r.legal=true;
+  for(i=0;i<r.checks.length;i++) if(!r.checks[i].ok) r.legal=false;
+
+  // deltas against terran_frigate, so the sign is decided here too and the page
+  // only picks a colour from it.
+  function dl(v,s){ var d=v-s; return {v:v, delta:d, dir:(Math.abs(d)<1e-4?0:(d>0?1:-1))}; }
+  r.delta={hull:dl(r.hull,STOCK.hull), mass:dl(r.mass,STOCK.mass),
+    radius:dl(r.radius,STOCK.radius), accelFwd:dl(r.accelFwd,STOCK.accelFwd),
+    accelRetro:dl(r.accelRetro,STOCK.accelRetro), accelLat:dl(r.accelLat,STOCK.accelLat),
+    yaw:dl(r.yaw,STOCK.yaw), pitch:dl(r.pitch,STOCK.pitch),
+    maxSpeed:dl(r.maxSpeed,STOCK.maxSpeed), reach:dl(r.reach,44.44)};
+  return r;
+}
+// ======================= end of the boundary ===============================
+
+// ---- state ---------------------------------------------------------------
+var KINDS=["engine","reactor","heatsink","armor","beam","cannon","missile"];
+var S={cells:{}, kind:"armor", erase:false, layer:0, panel:null, preset:"frigate"};
+var undoStack=[];
+var lastCore=null;
+
+function ck(i,j,k){ return i+","+j+","+k; }
+function placements(){
+  var out=[],key;
+  for(key in S.cells) if(S.cells.hasOwnProperty(key)){
+    var p=key.split(",");
+    out.push({i:+p[0], j:+p[1], k:+p[2], kind:S.cells[key], key:key});
+  }
+  // Sorted so the order handed across the boundary is the order the core would
+  // have built it in, never the order the object happens to enumerate.
+  out.sort(function(a,b){ return (a.k-b.k)||(a.j-b.j)||(a.i-b.i); });
+  return out;
+}
+
+// ---- the four states worth showing --------------------------------------
+// Rows are written top row first, j=3 down to j=0, so the literal below looks
+// like the slice does on screen.
+var LETTER={E:"engine",R:"reactor",H:"heatsink",A:"armor",B:"beam",C:"cannon",M:"missile"};
+var FRIGATE=[
+  ["....",".EE.",".EE.","...."],
+  ["....","AHHA","ARRA","...."],
+  [".AA.","AHHA","AMMA","...."],
+  [".AA.","A..A","A..A","...."],
+  [".BB.","A..A","ACCA","...."],
+  ["....",".AA.",".AA.","...."],
+  ["....",".BB.",".AA.","...."]
+];
+var MIDEDIT=[
+  ["....",".EE.",".EE.","...."],
+  ["....","AHHA","ARRA","...."],
+  [".AA.","AHHA","A..A","...."],
+  ["....","A..A","A..A","...."],
+  ["....","....","....","...."],
+  ["....","....","....","...."],
+  ["....","....","....","...."]
+];
+function fromLiteral(lit){
+  var cells={},k,row,i,chn;
+  for(k=0;k<lit.length;k++) for(row=0;row<4;row++) for(i=0;i<4;i++){
+    chn=lit[k][row].charAt(i);
+    if(chn!=="."&&LETTER[chn]) cells[ck(i,3-row,k)]=LETTER[chn];
+  }
+  return cells;
+}
+var PRESETS=[
+  {id:"empty", label:"empty", note:"Nothing placed. The core still answers, it just answers with zeros, and every check that can fail is failing.",
+   build:function(){ return {}; }, layer:0},
+  {id:"frigate", label:"legal", note:"A Terran pattern frigate: four engines aft, two reactors and four sinks amidships, an armour belt, four beam mounts and two projectile mounts. Hull and mass land next to the stock terran_frigate on purpose.",
+   build:function(){ return fromLiteral(FRIGATE); }, layer:3},
+  {id:"midedit", label:"mid edit", note:"Half built. The keel and the drive are in, the armour belt stops at slice 4 and no mount has been placed yet, so the design is legal in every way except that it cannot shoot.",
+   build:function(){ return fromLiteral(MIDEDIT); }, layer:3},
+  {id:"orphan", label:"illegal", note:"Three failures at once: the engine block was deleted, a cube was left floating off the bow with no face touching the hull, and a reactor was pulled while two more beams were hung on, so the draw now runs past the supply.",
+   build:function(){
+     var c=fromLiteral(FRIGATE), key;
+     for(key in c) if(c.hasOwnProperty(key) && c[key]==="engine") delete c[key];
+     c[ck(2,1,1)]="armor";          // one reactor pulled to save mass
+     c[ck(0,3,6)]="armor";          // floating, no face neighbour
+     c[ck(0,2,4)]="beam"; c[ck(3,2,4)]="beam";
+     return c;
+   }, layer:6}
+];
+function setPreset(id){
+  var p,i;
+  for(i=0;i<PRESETS.length;i++) if(PRESETS[i].id===id) p=PRESETS[i];
+  if(!p) return;
+  pushUndo();
+  S.cells=p.build(); S.preset=id; S.layer=p.layer;
+  document.getElementById("presetNote").textContent=p.note;
+  refresh();
+}
+function pushUndo(){
+  undoStack.push(JSON.stringify(S.cells));
+  if(undoStack.length>40) undoStack.shift();
+}
+
+// ---- palette -------------------------------------------------------------
+function buildPalette(){
+  var M=askTheCore([]).modules, wrap=document.getElementById("palette"), i;
+  wrap.innerHTML="";
+  function chip(kind,label,colour,glyph,num){
+    var b=document.createElement("button");
+    b.className="chip"; b.dataset.kind=kind; b.type="button";
+    b.innerHTML='<span class="sw" style="background:'+colour+'">'+glyph+'</span>'+
+      '<span class="nm">'+label+'</span>'+(num?'<span class="num">'+num+'</span>':'');
+    b.onclick=function(){ S.erase=(kind==="erase"); if(kind!=="erase") S.kind=kind; syncPalette(); };
+    wrap.appendChild(b);
+  }
+  for(i=0;i<KINDS.length;i++){
+    var d=M[KINDS[i]];
+    chip(KINDS[i], d.label, d.col, d.ch, d.mass.toFixed(3));
+  }
+  chip("erase","erase","#2b3d52","x","");
+}
+function syncPalette(){
+  var b=document.getElementById("palette").children,i;
+  for(i=0;i<b.length;i++){
+    var k=b[i].dataset.kind;
+    b[i].className="chip"+(((k==="erase")===S.erase && (S.erase||k===S.kind))?" on":"");
+  }
+}
+
+// ---- the slice grid ------------------------------------------------------
+var gridEl=document.getElementById("grid");
+function buildGrid(){
+  var row,i,b;
+  gridEl.innerHTML="";
+  for(row=0;row<NY;row++) for(i=0;i<NX;i++){
+    var j=NY-1-row;
+    b=document.createElement("button");
+    b.className="cell"; b.type="button"; b.dataset.i=i; b.dataset.j=j;
+    b.innerHTML='<span class="gh"></span><span class="gl"></span><span class="tk"></span>';
+    gridEl.appendChild(b);
+  }
+}
+function paintGrid(core){
+  var M=core.modules, kids=gridEl.children, n, orph={}, x;
+  for(x=0;x<core.orphans.length;x++) orph[core.orphans[x]]=1;
+  for(n=0;n<kids.length;n++){
+    var el=kids[n], i=+el.dataset.i, j=+el.dataset.j;
+    var key=ck(i,j,S.layer), kind=S.cells[key];
+    var gh=el.querySelector(".gh"), gl=el.querySelector(".gl"), tk=el.querySelector(".tk");
+    el.className="cell"+(kind?" filled":"")+(orph[key]?" orphan":"");
+    if(kind){
+      el.style.background=M[kind].col;
+      gl.textContent=M[kind].ch;
+    } else {
+      el.style.background="";
+      gl.textContent="";
+    }
+    // the slice beneath, meaning one step aft
+    var below=S.layer>0?S.cells[ck(i,j,S.layer-1)]:null;
+    if(below && !kind){ gh.style.display="block"; gh.style.color=M[below].col; gh.className="gh"; }
+    else if(below && kind){ gh.style.display="none"; }
+    else { gh.style.display="none"; }
+    // the run through this column, one tick per slice
+    var html="",z;
+    for(z=0;z<NZ;z++){
+      var f=S.cells[ck(i,j,z)]?" f":"";
+      html+='<i class="'+(f?"f":"")+(z===S.layer?" here":"")+'"></i>';
+    }
+    tk.innerHTML=html;
+  }
+}
+// Placement. The client owns exactly this: which cell a finger landed on.
+function paintCell(i,j){
+  var key=ck(i,j,S.layer), before=S.cells[key];
+  if(S.erase){ if(before===undefined) return false; delete S.cells[key]; }
+  else { if(before===S.kind) return false; S.cells[key]=S.kind; }
+  S.preset="custom";
+  return true;
+}
+var painting=false, changedThisStroke=false;
+function cellAt(x,y){
+  var el=document.elementFromPoint(x,y);
+  while(el && el!==gridEl){ if(el.classList && el.classList.contains("cell")) return el; el=el.parentNode; }
+  return null;
+}
+gridEl.addEventListener("pointerdown",function(e){
+  var el=cellAt(e.clientX,e.clientY); if(!el) return;
+  e.preventDefault();
+  pushUndo(); painting=true; changedThisStroke=false;
+  if(gridEl.setPointerCapture) { try{ gridEl.setPointerCapture(e.pointerId); }catch(err){} }
+  if(paintCell(+el.dataset.i,+el.dataset.j)){ changedThisStroke=true; refresh(); }
+});
+gridEl.addEventListener("pointermove",function(e){
+  if(!painting) return;
+  var el=cellAt(e.clientX,e.clientY); if(!el) return;
+  if(paintCell(+el.dataset.i,+el.dataset.j)){ changedThisStroke=true; refresh(); }
+});
+function endStroke(){
+  if(!painting) return;
+  painting=false;
+  if(!changedThisStroke) undoStack.pop();
+}
+gridEl.addEventListener("pointerup",endStroke);
+gridEl.addEventListener("pointercancel",endStroke);
+window.addEventListener("pointerup",endStroke);
+
+// ---- layer rail and filmstrip -------------------------------------------
+function buildLayerRail(){
+  var rail=document.getElementById("lrail"), film=document.getElementById("film"), z;
+  rail.innerHTML=""; film.innerHTML="";
+  for(z=0;z<NZ;z++){
+    (function(zz){
+      var b=document.createElement("button");
+      b.className="lz"; b.type="button"; b.dataset.z=zz;
+      b.innerHTML='<span class="bar"></span><span class="n">'+(zz+1)+'</span>';
+      b.onclick=function(){ S.layer=zz; refresh(); };
+      rail.appendChild(b);
+      var m=document.createElement("button");
+      m.className="mini"; m.type="button"; m.dataset.z=zz;
+      m.innerHTML='<span class="mg"></span><span class="lb">Z'+(zz+1)+'</span>';
+      m.onclick=function(){ S.layer=zz; refresh(); };
+      film.appendChild(m);
+    })(z);
+  }
+}
+function paintProjections(core){
+  var M=core.modules, side="", plan="", i,j,k,kind,found;
+  for(j=NY-1;j>=0;j--) for(k=0;k<NZ;k++){
+    found=null;
+    for(i=0;i<NX && !found;i++) if(S.cells[ck(i,j,k)]) found=S.cells[ck(i,j,k)];
+    side+='<i class="'+(k===S.layer?"here":"")+'" style="background:'+(found?M[found].col:"#141d29")+'"></i>';
+  }
+  for(i=NX-1;i>=0;i--) for(k=0;k<NZ;k++){
+    found=null;
+    for(j=NY-1;j>=0 && !found;j--) if(S.cells[ck(i,j,k)]) found=S.cells[ck(i,j,k)];
+    plan+='<i class="'+(k===S.layer?"here":"")+'" style="background:'+(found?M[found].col:"#141d29")+'"></i>';
+  }
+  document.getElementById("pgSide").innerHTML=side;
+  document.getElementById("pgPlan").innerHTML=plan;
+}
+function syncLayers(core){
+  paintProjections(core);
+  var M=core.modules, rail=document.getElementById("lrail").children;
+  var film=document.getElementById("film").children, z,i,row,count;
+  for(z=0;z<NZ;z++){
+    count=0;
+    for(i=0;i<NX;i++) for(row=0;row<NY;row++) if(S.cells[ck(i,row,z)]) count++;
+    rail[z].className="lz"+(z===S.layer?" on":"");
+    rail[z].querySelector(".bar").style.height=Math.round(100*count/(NX*NY))+"%";
+    var mg=film[z].querySelector(".mg"), html="";
+    for(row=NY-1;row>=0;row--) for(i=0;i<NX;i++){
+      var kind=S.cells[ck(i,row,z)];
+      html+='<i style="background:'+(kind?M[kind].col:"#141d29")+'"></i>';
+    }
+    mg.innerHTML=html;
+    film[z].className="mini"+(z===S.layer?" on":"");
+  }
+  document.getElementById("lNow").textContent=(S.layer+1);
+  document.getElementById("vTag").textContent=(S.layer+1);
+  document.getElementById("axZ").textContent=
+    S.layer===0?"aft, Z1":(S.layer===NZ-1?"bow, Z7":"Z"+(S.layer+1));
+  document.getElementById("bPrev").disabled=(S.layer<=0);
+  document.getElementById("bNext").disabled=(S.layer>=NZ-1);
+}
+
+// ---- the core readout ----------------------------------------------------
+function fmt(v,dp){ return v.toFixed(dp); }
+function row(k,v,d,zero){
+  var cls=d?(d.dir>0?"up":(d.dir<0?"dn":"")):"";
+  var dtx=d?((d.delta>0?"+":"")+d.delta.toFixed(d.dp===undefined?2:d.dp)):"";
+  return '<div class="r'+(zero?" zero":"")+'"><span class="k">'+k+'</span>'+
+    '<span class="v">'+v+'</span><span class="d '+cls+'">'+dtx+'</span></div>';
+}
+function renderCore(core){
+  var h="",i,c;
+  h+='<h2>Checks</h2><div class="checks">';
+  for(i=0;i<core.checks.length;i++){
+    c=core.checks[i];
+    h+='<div class="ck'+(c.ok?"":" no")+'"><span class="mk">'+(c.ok?"+":"!")+'</span>'+
+      '<span class="bd"><span class="h">'+c.label+(c.soft?' <span class="tag warn">not in core yet</span>':'')+
+      '</span><span class="s">'+c.detail+'</span></span></div>';
+  }
+  h+='</div>';
+
+  h+='<h2 style="margin-top:12px">Hull</h2><div class="rows">';
+  h+=row("cubes", core.cells, null, core.cells===0);
+  h+=row("hull", fmt(core.hull,0), {delta:core.delta.hull.delta, dir:core.delta.hull.dir, dp:0});
+  h+=row("mass", fmt(core.mass,3), {delta:core.delta.mass.delta, dir:-core.delta.mass.dir, dp:3});
+  h+=row("radius u", fmt(core.radius,2), {delta:core.delta.radius.delta, dir:0, dp:2});
+  h+=row("extent xyz", core.extent[0]+" x "+core.extent[1]+" x "+core.extent[2], null);
+  h+=row("armour plates", core.plates+(core.plates?" at "+fmt(core.blockPct,0)+"%":""), null, core.plates===0);
+  h+='</div>';
+
+  h+='<h2>Flight</h2><div class="rows">';
+  h+=row("accel fwd", fmt(core.accelFwd,2)+" u/s2", {delta:core.delta.accelFwd.delta, dir:core.delta.accelFwd.dir}, core.accelFwd===0);
+  h+=row("accel retro", fmt(core.accelRetro,2)+" u/s2", {delta:core.delta.accelRetro.delta, dir:core.delta.accelRetro.dir}, core.accelRetro===0);
+  h+=row("accel lat", fmt(core.accelLat,2)+" u/s2", {delta:core.delta.accelLat.delta, dir:core.delta.accelLat.dir}, core.accelLat===0);
+  h+=row("yaw", fmt(core.yaw,1)+" deg/s", {delta:core.delta.yaw.delta, dir:core.delta.yaw.dir, dp:1});
+  h+=row("pitch", fmt(core.pitch,1)+" deg/s", {delta:core.delta.pitch.delta, dir:core.delta.pitch.dir, dp:1});
+  h+=row("max speed", fmt(core.maxSpeed,1)+" u/s", {delta:core.delta.maxSpeed.delta, dir:core.delta.maxSpeed.dir, dp:1}, core.maxSpeed===0);
+  h+=row("reach, 10 s", fmt(core.reach,1)+" u", {delta:core.delta.reach.delta, dir:core.delta.reach.dir, dp:1}, core.reach===0);
+  h+='</div>';
+
+  h+='<h2>Mounts</h2>';
+  if(core.mounts.length===0) h+='<p class="note">No mount placed. The Freighter is the only class in data.rs with an empty mount table.</p>';
+  for(i=0;i<core.mounts.length;i++){
+    var m=core.mounts[i];
+    h+='<div class="wrow"><span class="k" style="color:'+core.modules[m.kind].col+'">'+m.n+' x '+m.label+'</span>'+
+      '<span class="m">'+fmt(m.dmg,1)+' dmg &middot; '+m.range+' u &middot; '+fmt(m.cd,1)+' s &middot; arc '+
+      (m.arcH>=360?"full":"&plusmn;"+m.arcH+" / &plusmn;"+m.arcV)+(m.batch>1?" &middot; batch "+m.batch:"")+'</span></div>';
+  }
+
+  h+='<h2 style="margin-top:12px">Power and heat <span class="tag warn">no such system in the core yet</span></h2><div class="rows">';
+  h+=row("power supply", core.power.supply, null);
+  h+=row("power draw", core.power.draw, null);
+  h+=row("power margin", (core.power.margin>0?"+":"")+core.power.margin, null, core.power.margin<0);
+  h+=row("heat capacity", core.heat.cap, null);
+  h+=row("heat load", core.heat.load, null);
+  h+=row("heat margin", (core.heat.margin>0?"+":"")+core.heat.margin, null, core.heat.margin<0);
+  h+='</div>';
+  h+='<p class="note">The two rows above are why a REACTOR and a HEATSINK cube exist at all: '+
+     'nothing in <b>sim_core</b> reads them today. They are a proposal with numbers attached, '+
+     'and if they are built they are built in Rust like everything else here.</p>';
+  document.getElementById("coreBody").innerHTML=h;
+  document.getElementById("core").className=core.legal?"":"bad";
+  document.getElementById("cmT").textContent=core.legal
+    ? "every number below comes from the core"
+    : "the core refuses this design";
+}
+
+// ---- header --------------------------------------------------------------
+function renderHeader(core){
+  document.getElementById("hCells").textContent=core.cells;
+  document.getElementById("hMass").textContent=core.mass.toFixed(3);
+  document.getElementById("hHull").textContent=core.hull.toFixed(0);
+  var v=document.getElementById("hVerdict"), bad=0,i;
+  for(i=0;i<core.checks.length;i++) if(!core.checks[i].ok) bad++;
+  if(core.cells===0){ v.className="verdict"; v.textContent="no hull"; }
+  else if(core.legal){ v.className="verdict ok"; v.textContent="legal"; }
+  else { v.className="verdict bad"; v.textContent="illegal, "+bad+" failed"; }
+}
+
+// ---- 3D preview ----------------------------------------------------------
+var view=document.getElementById("view"), cv=document.getElementById("cv");
+var renderer=new THREE.WebGLRenderer({canvas:cv, antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x070a0f);
+var camera=new THREE.PerspectiveCamera(42,1,0.1,400);
+scene.add(new THREE.AmbientLight(0x8fa6bd,0.75));
+var key=new THREE.DirectionalLight(0xffffff,0.9); key.position.set(4,7,6); scene.add(key);
+var fill=new THREE.DirectionalLight(0x35C7FF,0.35); fill.position.set(-5,-2,-4); scene.add(fill);
+var shipGroup=new THREE.Group(); scene.add(shipGroup);
+var boxGeo=new THREE.BoxGeometry(CELL*0.92,CELL*0.92,CELL*0.92);
+var edgeGeo=new THREE.EdgesGeometry(boxGeo);
+var matCache={}, ghostCache={};
+// Camera at +Z looking back at the ship is exactly the frame the flat grid is
+// drawn in: screen right is +X, screen up is +Y. That is what makes "bow on"
+// the answer to "where am I in the solid".
+// Zoom is a factor on a FITTED distance, not a distance. The preview column is
+// tall and narrow on a desktop and short and wide on a phone, and a fixed
+// distance frames the hull in one of those and crops it in the other: the
+// horizontal field of a 42 degree vertical fov is only 4.5 units across at
+// 374 x 854. So the distance is derived from whichever axis is tighter.
+var cam={yaw:0.62, pitch:0.42, zoom:1};
+var FIT_R=4.6;   // half diagonal of the 4 x 4 x 7 berth at 0.98 u a cell
+function camDist(){
+  var half=camera.fov*Math.PI/360, d=FIT_R/Math.tan(half);
+  if(camera.aspect<1) d/=camera.aspect;
+  return d*cam.zoom;
+}
+function camApply(){
+  var cp=Math.cos(cam.pitch), dist=camDist();
+  camera.position.set(Math.sin(cam.yaw)*cp*dist, Math.sin(cam.pitch)*dist, Math.cos(cam.yaw)*cp*dist);
+  camera.lookAt(0,0,0);
+}
+function zoomBy(f){ cam.zoom=Math.max(0.45,Math.min(2.6,cam.zoom*f)); }
+function cellPos(i,j,k){
+  return [ (i-(NX-1)/2)*CELL, (j-(NY-1)/2)*CELL, (k-(NZ-1)/2)*CELL ];
+}
+function lattice(){
+  var pts=[], x0=-NX*CELL/2, x1=NX*CELL/2, y0=-NY*CELL/2, y1=NY*CELL/2, z0=-NZ*CELL/2, z1=NZ*CELL/2;
+  function seg(a,b){ pts.push(a[0],a[1],a[2],b[0],b[1],b[2]); }
+  var c=[[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+  var e=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  for(var i=0;i<e.length;i++) seg(c[e[i][0]],c[e[i][1]]);
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  return new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x1E2A3A}));
+}
+scene.add(lattice());
+// The bow marker, so an orbited view never leaves you guessing which end is
+// which: +Z is forward everywhere in the core.
+(function(){
+  var g=new THREE.ConeGeometry(0.28,0.9,10);
+  var m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x35C7FF}));
+  m.rotation.x=Math.PI/2; m.position.set(0,0,NZ*CELL/2+0.85); scene.add(m);
+})();
+// The collision sphere the core hands the contact solver, drawn faint: it is
+// worth seeing next to the hull and not worth looking at instead of it.
+var sphere=new THREE.Mesh(new THREE.SphereGeometry(1,16,10),
+  new THREE.MeshBasicMaterial({color:0x13303f,wireframe:true,transparent:true,opacity:0.32}));
+scene.add(sphere);
+var slicePlane=new THREE.LineSegments(new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({color:0x35C7FF,transparent:true,opacity:0.9}));
+scene.add(slicePlane);
+function buildSlicePlane(){
+  var pts=[], z=cellPos(0,0,S.layer)[2], x0=-NX*CELL/2, x1=NX*CELL/2, y0=-NY*CELL/2, y1=NY*CELL/2, t;
+  for(t=0;t<=NX;t++){ var x=x0+t*CELL; pts.push(x,y0,z, x,y1,z); }
+  for(t=0;t<=NY;t++){ var y=y0+t*CELL; pts.push(x0,y,z, x1,y,z); }
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.Float32BufferAttribute(pts,3));
+  slicePlane.geometry.dispose(); slicePlane.geometry=g;
+}
+function mat(col,active){
+  var cache=active?matCache:ghostCache, m=cache[col];
+  if(!m){
+    m=active? new THREE.MeshLambertMaterial({color:col})
+            : new THREE.MeshLambertMaterial({color:col,transparent:true,opacity:0.3,depthWrite:false});
+    cache[col]=m;
+  }
+  return m;
+}
+function rebuild3D(core){
+  var i,p;
+  while(shipGroup.children.length){
+    var ch=shipGroup.children.pop();
+    if(ch.geometry && ch.geometry!==boxGeo && ch.geometry!==edgeGeo) ch.geometry.dispose();
+  }
+  var pl=placements(), orph={};
+  for(i=0;i<core.orphans.length;i++) orph[core.orphans[i]]=1;
+  for(i=0;i<pl.length;i++){
+    p=pl[i];
+    var active=(p.k===S.layer);
+    var col=core.modules[p.kind].col;
+    var m=new THREE.Mesh(boxGeo, mat(col, active));
+    var q=cellPos(p.i,p.j,p.k); m.position.set(q[0],q[1],q[2]);
+    shipGroup.add(m);
+    if(active||orph[p.key]){
+      var e=new THREE.LineSegments(edgeGeo,new THREE.LineBasicMaterial({
+        color: orph[p.key]?0xFF4B4B:0xD8E2EC, transparent:true, opacity: orph[p.key]?1:0.55}));
+      e.position.set(q[0],q[1],q[2]); shipGroup.add(e);
+    }
+  }
+  sphere.scale.setScalar(core.radius>0?core.radius:0.001);
+  sphere.visible=core.radius>0;
+  buildSlicePlane();
+}
+// Framing, which is the client's job: how big to draw the grid in the box it
+// was given. Measured rather than guessed, and re-measured on every resize.
+var gridWrap=document.getElementById("gridwrap");
+function fitGrid(){
+  var w=gridWrap.clientWidth, h=gridWrap.clientHeight;
+  if(w<=0||h<=0) return;
+  gridEl.style.width=Math.max(120,Math.min(w,h))+"px";
+}
+if(window.ResizeObserver) new ResizeObserver(fitGrid).observe(gridWrap);
+function resize(){
+  fitGrid();
+  var w=view.clientWidth||300, h=view.clientHeight||200;
+  renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+}
+if(window.ResizeObserver) new ResizeObserver(resize).observe(view);
+window.addEventListener("resize",resize);
+// Orbit. One finger drags on a phone, two fingers pinch to zoom, and the four
+// buttons do the same job for anyone who would rather tap than drag.
+var drag=null, pinch=null, pts={};
+cv.addEventListener("pointerdown",function(e){
+  cv.setPointerCapture(e.pointerId); pts[e.pointerId]={x:e.clientX,y:e.clientY};
+  var ids=Object.keys(pts);
+  if(ids.length===1) drag={x:e.clientX,y:e.clientY};
+  else if(ids.length===2){ drag=null; pinch=dist2(); }
+  e.preventDefault();
+});
+function dist2(){
+  var ids=Object.keys(pts); if(ids.length<2) return 0;
+  var a=pts[ids[0]], b=pts[ids[1]];
+  return Math.sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+}
+cv.addEventListener("pointermove",function(e){
+  if(!pts[e.pointerId]) return;
+  pts[e.pointerId]={x:e.clientX,y:e.clientY};
+  var ids=Object.keys(pts);
+  if(ids.length>=2){
+    var d=dist2();
+    if(pinch&&d>0){ zoomBy(pinch/d); pinch=d; }
+    return;
+  }
+  if(!drag) return;
+  cam.yaw-=(e.clientX-drag.x)*0.008;
+  cam.pitch=Math.max(-1.35,Math.min(1.35,cam.pitch+(e.clientY-drag.y)*0.008));
+  drag={x:e.clientX,y:e.clientY};
+});
+function upP(e){ delete pts[e.pointerId]; if(Object.keys(pts).length<2) pinch=null;
+  if(Object.keys(pts).length===0) drag=null; }
+cv.addEventListener("pointerup",upP);
+cv.addEventListener("pointercancel",upP);
+cv.addEventListener("wheel",function(e){
+  e.preventDefault();
+  zoomBy(e.deltaY>0?1.09:0.92);
+},{passive:false});
+
+// ---- refresh -------------------------------------------------------------
+function refresh(){
+  var core=askTheCore(placements());
+  lastCore=core;
+  paintGrid(core);
+  syncLayers(core);
+  renderHeader(core);
+  renderCore(core);
+  rebuild3D(core);
+  syncPalette();
+  syncPresets();
+}
+function syncPresets(){
+  var b=document.getElementById("presets").children,i;
+  for(i=0;i<b.length;i++) b[i].className=(b[i].dataset.id===S.preset)?"on":"";
+}
+
+// ---- controls ------------------------------------------------------------
+document.getElementById("bPrev").onclick=function(){ if(S.layer>0){S.layer--;refresh();} };
+document.getElementById("bNext").onclick=function(){ if(S.layer<NZ-1){S.layer++;refresh();} };
+document.getElementById("bUndo").onclick=function(){
+  if(!undoStack.length) return;
+  S.cells=JSON.parse(undoStack.pop()); S.preset="custom"; refresh();
+};
+document.getElementById("bClearLayer").onclick=function(){
+  pushUndo();
+  var i,j; for(i=0;i<NX;i++) for(j=0;j<NY;j++) delete S.cells[ck(i,j,S.layer)];
+  S.preset="custom"; refresh();
+};
+document.getElementById("bClearAll").onclick=function(){ pushUndo(); S.cells={}; S.preset="custom"; refresh(); };
+document.getElementById("bBow").onclick=function(){ cam.yaw=0; cam.pitch=0; cam.zoom=0.92; };
+document.getElementById("bIso").onclick=function(){ cam.yaw=0.62; cam.pitch=0.42; cam.zoom=1; };
+document.getElementById("bIn").onclick=function(){ zoomBy(0.85); };
+document.getElementById("bOut").onclick=function(){ zoomBy(1.18); };
+(function(){
+  var wrap=document.getElementById("presets"),i;
+  for(i=0;i<PRESETS.length;i++)(function(p){
+    var b=document.createElement("button");
+    b.textContent=p.label; b.dataset.id=p.id; b.type="button";
+    b.onclick=function(){ setPreset(p.id); };
+    wrap.appendChild(b);
+  })(PRESETS[i]);
+})();
+
+// Panels. Only one is ever open, and the tab that opened it closes it, so a
+// phone never ends up with two of them stacked.
+function openPanel(id){
+  S.panel=(S.panel===id)?null:id;
+  var map={core:"core", film:"panelFilm", presets:"panelPresets"};
+  var tabs={core:"tCore", film:"tFilm", presets:"tPresets"}, k;
+  for(k in map) if(map.hasOwnProperty(k)){
+    document.getElementById(map[k]).classList.toggle("open", S.panel===k);
+    document.getElementById(tabs[k]).className=(S.panel===k)?"on":"";
+  }
+  if(S.panel) resize();
+}
+document.getElementById("tCore").onclick=function(){ openPanel("core"); };
+document.getElementById("tFilm").onclick=function(){ openPanel("film"); };
+document.getElementById("tPresets").onclick=function(){ openPanel("presets"); };
+document.getElementById("bCloseCore").onclick=function(){ openPanel("core"); };
+document.getElementById("bCloseFilm").onclick=function(){ openPanel("film"); };
+document.getElementById("bClosePresets").onclick=function(){ openPanel("presets"); };
+document.getElementById("hVerdict").onclick=function(){
+  if(window.matchMedia("(max-width:900px)").matches) openPanel("core");
+};
+
+// Keyboard is a convenience on a desktop and never the only route: every one
+// of these has a button on screen.
+window.addEventListener("keydown",function(e){
+  if(e.key==="ArrowLeft"||e.key==="["){ if(S.layer>0){S.layer--;refresh();} }
+  else if(e.key==="ArrowRight"||e.key==="]"){ if(S.layer<NZ-1){S.layer++;refresh();} }
+});
+
+function frame(){ requestAnimationFrame(frame); camApply(); renderer.render(scene,camera); }
+
+buildPalette(); buildGrid(); buildLayerRail();
+setPreset("frigate");
+resize(); frame();
+
+// Read only, for the harness. It observes and never drives: a harness that can
+// write state stops testing the page and starts testing itself.
+window.ftDesigner={
+  state:function(){ return {cells:JSON.parse(JSON.stringify(S.cells)), layer:S.layer,
+    kind:S.kind, erase:S.erase, panel:S.panel}; },
+  core:function(){ return lastCore; }
+};
+})();
+</script>

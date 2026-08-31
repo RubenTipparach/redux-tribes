@@ -14,7 +14,17 @@
 :root {
   --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
   --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  /* The same yellow the tracers and hit sparks are drawn in, so a shot already
+     placed reads as the same thing on the map and in a fire slot. */
+  --amber:#FFD24B;
   --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+  /* How tall a phone's bottom sheet is. Named because the canvas controls
+     have to step over exactly this much when one is open. */
+  --sheeth:min(56dvh, 440px);
+  /* How far the on canvas controls step up to clear the review panel. Set
+     from the panel's measured height while it is open, zero otherwise: a
+     guessed number is a control half covered at some width. */
+  --lift:0px;
 }
 * { box-sizing:border-box; }
 body { margin:0; background:var(--ground); color:var(--ink);
@@ -61,19 +71,126 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 #cv.rotating { cursor:none; }
 
 footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px;
-  background:var(--panel2); border-top:1px solid var(--line);
+  background:var(--panel2); border-top:1px solid var(--line); position:relative;
   -webkit-user-select:none; user-select:none; }
-#slots { display:flex; gap:3px; }
-.slot { width:30px; height:30px; border:1px solid var(--line); border-radius:3px;
+/* The scrubber and the seconds it scrubs through, stacked and sharing a width.
+   Each slot is placed at the position the thumb takes for that second, so the
+   two line up by construction: laying them out with flex only put them in the
+   right ORDER, and on a wide window they packed together at the left while the
+   thumb ran the whole width.
+   The thumb's travel is half a thumb in from each end, so the tick for second
+   k sits at thumb/2 + (W - thumb) * k/10. That needs the thumb's width to be a
+   number we know, which is why the scrubber is drawn here rather than by the
+   UA: its default thumb size is not exposed and differs between browsers, and
+   an alignment resting on a guess is one that is wrong somewhere. */
+#timeline { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;
+  --thumb:16px; --slotw:26px;
+  /* Room for the half slot that overhangs at each end. */
+  padding:0 calc((var(--slotw) - var(--thumb)) / 2); }
+#slots { position:relative; height:24px; }
+#scrub { -webkit-appearance:none; appearance:none; width:100%; margin:0;
+  height:var(--thumb); background:transparent; }
+#scrub::-webkit-slider-runnable-track { height:4px; border-radius:2px; background:var(--line); }
+#scrub::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+  width:var(--thumb); height:var(--thumb); border-radius:50%; background:var(--cyan);
+  margin-top:calc((4px - var(--thumb)) / 2); }
+#scrub::-moz-range-track { height:4px; border-radius:2px; background:var(--line); }
+#scrub::-moz-range-thumb { width:var(--thumb); height:var(--thumb); border:0;
+  border-radius:50%; background:var(--cyan); }
+#scrub:disabled::-webkit-slider-thumb { background:var(--muted); }
+#scrub:disabled::-moz-range-thumb { background:var(--muted); }
+.slot { position:absolute; top:0; transform:translateX(-50%);
+  width:var(--slotw); height:24px; border:1px solid var(--line); border-radius:3px;
   display:flex; align-items:center; justify-content:center;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
-  color:var(--muted); cursor:pointer; position:relative; background:var(--panel); }
+  color:var(--muted); cursor:pointer; background:var(--panel); }
 .slot:hover { border-color:var(--cyan); }
 .slot.q { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
-.slot.mark::after { content:""; position:absolute; bottom:2px; left:50%;
-  transform:translateX(-50%); width:5px; height:5px; border-radius:50%; background:var(--orange); }
-#scrub { flex:1; }
+/* Where the scrubber is standing. The preview on screen is this second, so the
+   slot that names it is lit whether or not anything is queued in it. */
+.slot.now { color:var(--ink); border-color:var(--ink); background:#16202e; }
+.slot.cd { opacity:.3; cursor:not-allowed; border-style:dashed; }
+.slot.cd:hover { border-color:var(--line); }
+.slot.mark::after { content:""; position:absolute; bottom:1px; left:50%;
+  transform:translateX(-50%); width:5px; height:5px; border-radius:50%;
+  background:var(--orange); }
+#scrub { width:100%; margin:0; }
 input[type=range] { width:100%; accent-color:var(--cyan); }
+
+/* What can be done in one second of the turn. Above the footer rather than
+   inside it, so eleven of these do not have to fit side by side. */
+#slotMenu { position:absolute; bottom:calc(100% + 6px); left:8px; right:8px;
+  max-width:340px; margin:0 auto;
+  max-height:min(46vh, 320px); overflow-y:auto; z-index:12; padding:7px;
+  background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
+  box-shadow:0 -12px 34px #000c; }
+#slotMenu.hidden, #slotNote.hidden { display:none; }
+.smhead { display:flex; align-items:center; justify-content:space-between;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.1em; color:var(--cyan); padding:0 2px 5px; }
+.smx { width:24px; height:24px; padding:0; font-size:15px; line-height:1;
+  border-radius:4px; }
+/* Where on the target the shots go. A wrapping row of chips rather than a
+   dropdown: a select on a phone is a modal over the map, and this has to sit
+   next to the mounts it changes. */
+.smaim { display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+  padding:0 2px 6px; margin-bottom:5px; border-bottom:1px solid var(--line); }
+.smaim .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
+  font-size:11px; letter-spacing:.1em; color:var(--muted); margin-right:2px; }
+.aimc { padding:5px 8px; font-size:10px; border-radius:4px; min-height:28px; }
+.aimc.on { border-color:var(--orange); color:var(--orange); background:#2a1607; }
+.aimc.gone { opacity:.4; text-decoration:line-through; cursor:not-allowed; }
+.srow { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:7px 8px; border:1px solid var(--line); border-radius:4px;
+  margin-bottom:4px; cursor:pointer; font-size:11px; color:var(--muted); }
+.srow:hover { border-color:var(--cyan); }
+.srow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.06em; color:var(--ink); }
+/* Queued here already, so this row takes the shot back. */
+.srow.on { border-color:var(--orange); background:#2a1607; }
+.srow.on .k { color:var(--orange); }
+/* Cannot fire in this second, and says which rule stopped it. */
+.srow.off { opacity:.5; cursor:not-allowed; }
+.srow.off:hover { border-color:var(--line); }
+/* The two refusals are not the same thing and no longer look it. Red is a
+   mount inside its own cooldown, which is a wait. Yellow is a mount being held
+   for a shot the player has already placed, which is a plan. Full opacity on
+   both, because a colour dimmed to .5 stops being a colour. */
+.srow.off.wait { opacity:1; border-color:#4a1f1f; background:#230d0d; }
+.srow.off.wait .k, .srow.off.wait span:last-child { color:var(--red); }
+.srow.off.soon { opacity:1; border-color:#4a3f16; background:#221c07; }
+.srow.off.soon .k, .srow.off.soon span:last-child { color:var(--amber); }
+#slotNote { position:absolute; bottom:calc(100% + 6px); left:50%;
+  transform:translateX(-50%); z-index:11; padding:5px 11px; border-radius:6px;
+  background:#2a1607; border:1px solid var(--orange); color:var(--orange);
+  font-size:11px; white-space:nowrap; }
+.slot.open { border-color:var(--cyan); box-shadow:0 0 0 1px var(--cyan); }
+
+/* The review panel. Same anchor and same z as the slot menu, for the same
+   reason: it has to sit over the canvas and above a bottom sheet, or its
+   controls are visible, enabled and swallowed. */
+#reviewPanel { position:absolute; bottom:calc(100% + 6px); left:8px; right:8px;
+  max-width:390px; margin:0 auto;
+  max-height:min(46vh, 340px); overflow-y:auto; z-index:12; padding:8px;
+  background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
+  box-shadow:0 -12px 34px #000c; }
+#reviewPanel.hidden { display:none; }
+.rprow { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+.rprow:last-child { margin-bottom:0; }
+.rprow button { padding:6px 10px; font-size:11px; }
+.rprow .rpgap { flex:1; }
+/* Which turn the transport is aimed at. Tabular, so stepping through a long
+   match does not shuffle the buttons either side of it. */
+#rpTurn { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; color:var(--ink); min-width:34px; text-align:center;
+  font-variant-numeric:tabular-nums; }
+/* Aimed at a past turn but not yet playing it: the match has not moved. */
+#reviewPanel.armed #rpTurn { color:var(--amber); }
+#reviewPanel .hint { font-size:11px; color:var(--muted); }
+/* Enough rows to see a long match, and it scrolls rather than growing the
+   panel past a phone. */
+#turns { max-height:74px; overflow-y:auto; margin-bottom:7px; }
+#turns button { padding:4px 8px; font-size:11px; }
 
 #log { font-size:12px; line-height:1.5; }
 #log div { padding:1px 0; border-bottom:1px solid #131c29; color:var(--muted); }
@@ -92,6 +209,10 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 .shipRow.tg .nm { color:var(--orange); }
 .shipRow .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
   letter-spacing:.06em; }
+/* Who this hull is aiming at. Red for ours, matching the line drawn from it;
+   orange for a hostile, matching theirs. */
+.sub.aim span:last-child { color:var(--red); }
+.enemy .sub.aim span:last-child { color:var(--orange); }
 .bar { height:4px; background:#1a2634; border-radius:2px; margin-top:3px; overflow:hidden; }
 .bar i { display:block; height:100%; background:var(--cyan); }
 .enemy .bar i { background:var(--orange); }
@@ -102,19 +223,31 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
   cursor:pointer; }
 .wrow.armed { border-color:var(--cyan); background:#0d2231; }
 .wrow.spent { opacity:.4; cursor:default; }
-.wrow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.06em; }
+.wrow .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.06em;
+  flex:0 0 auto; margin-right:8px; }
+.wrow span:last-child { text-align:right; }
 .hint { font-size:11px; color:var(--muted); line-height:1.5; }
 .modes { display:flex; flex-wrap:wrap; gap:4px; }
 .tune { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
   margin-bottom:3px; }
 .tune span { flex:0 0 62px; }
 .tune input { flex:1; }
-.tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600; }
+.tune b { flex:0 0 34px; text-align:right; color:var(--ink); font-weight:600;
+  font-variant-numeric:tabular-nums; }
+/* Locked: the row keeps its shape so the panel does not jump between a real
+   match and a sandbox, and the rule takes the space the slider had. */
+.tune.locked i { flex:1; height:1px; background:var(--line); }
+select { font-family:"Exo 2",system-ui,sans-serif; font-size:13px; width:100%;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:4px; padding:7px 8px; margin-top:4px; }
+select:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
+.rebuild { color:var(--cyan); font-size:11px; letter-spacing:.04em; margin-top:5px; }
+.rbar { display:block; height:2px; background:var(--line); border-radius:1px;
+  overflow:hidden; margin-top:4px; }
+.rbar i { display:block; height:100%; background:var(--cyan); transition:width .15s linear; }
+@media(prefers-reduced-motion:reduce){ .rbar i { transition:none; } }
 kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   padding:0 4px; font-size:11px; }
-#lPlay { margin-left:10px; }
-#turns { margin-bottom:8px; }
-#turns button { padding:4px 8px; font-size:11px; }
 
 /* --------------------------------------------------------------- mobile --
    Below 900px the three pane console collapses to a canvas first shell: the
@@ -127,13 +260,83 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    construction rather than by arithmetic. */
 #toolbar { display:flex; align-items:center; gap:6px;
   grid-column:2; grid-row:2; align-self:end; justify-self:center;
-  z-index:6; margin-bottom:12px; pointer-events:none; }
+  z-index:6; margin-bottom:calc(12px + var(--lift)); pointer-events:none; }
 #toolbar button { pointer-events:auto; flex:0 0 auto;
   width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
   background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
 #toolbar button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
 #toolbar button.off { opacity:.28; }
 .tbsep { width:1px; height:24px; background:var(--line); flex:0 0 auto; }
+/* Move mode, over the canvas. Top centre, which is the one band no rail,
+   sheet, toolbar, readout or dial uses at any size, so the control that
+   decides what all the others mean is always in sight. */
+#modes { grid-column:2; grid-row:2; align-self:start; justify-self:center;
+  z-index:6; margin-top:10px; justify-content:center; pointer-events:none; }
+#modes button { pointer-events:auto; padding:6px 11px; font-size:11px;
+  border-radius:7px; background:#111823dd;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#modes button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+
+/* The working altitude, above the toolbar rather than in it: at 390px the row
+   is already seven 44px targets wide, and a readout inside it would push the
+   row past the viewport. Hidden at zero, so it appears only once it means
+   something. */
+#pAlt { grid-column:2; grid-row:2; align-self:end; justify-self:center;
+  z-index:6; margin-bottom:calc(62px + var(--lift)); pointer-events:none;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.1em; color:var(--green); background:#111823cc; border-radius:9px;
+  padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#pAlt.zero { display:none; }
+
+/* The heading dials, over the canvas. Bottom left, which is the one corner no
+   rail, sheet, toolbar or readout uses at any size. */
+#attitude { grid-column:2; grid-row:2; align-self:end; justify-self:start;
+  z-index:6; margin:0 0 calc(12px + var(--lift)) 12px; display:flex; gap:8px;
+  pointer-events:none; }
+#attitude.off { display:none; }
+.dial { position:relative; width:92px; height:92px; pointer-events:auto;
+  border-radius:50%; background:#111823cc; touch-action:none; cursor:grab;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+.dial:active { cursor:grabbing; }
+.dial svg { width:100%; height:100%; display:block; overflow:visible; }
+.dial .face { fill:none; stroke:#2b3b50; stroke-width:1.5; }
+.dial .arc { fill:none; stroke:#3d5266; stroke-width:2.5; }
+.dial .ticks line { stroke:var(--line); stroke-width:1.5; }
+/* Shorter and dimmer than they were, so the rim stops counting hours. */
+.dial#atRoll .ticks line { stroke-width:1.2; opacity:.7; }
+/* Where it was TOLD to point: the thing under the finger. */
+.dial .cmd { stroke:var(--cyan); stroke-width:2.5; }
+.dial .knob { fill:var(--cyan); }
+/* Not commandable. The CONTROL parts go quiet, but the hull does not: while a
+   turn plays back the silhouette is the only thing showing the roll being
+   flown, and at 35 percent on a phone it was a smudge. */
+.dial.numb { pointer-events:none; }
+.dial.numb .ticks, .dial.numb .face, .dial.numb .arc,
+.dial.numb .level, .dial.numb .cmd, .dial.numb .knob { opacity:.3; }
+.dial.numb .plane { opacity:.9; }
+/* The readout sits UNDER the face, not in it. Inside, a hull rolled onto its
+   wingtip put a wing through the number, and the box a drag measures its angle
+   from has to be the circle alone: a label inside it moves the centre. */
+.gauge { display:flex; flex-direction:column; align-items:center; gap:3px;
+  pointer-events:none; }
+.glabel { display:flex; align-items:baseline; gap:5px;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; line-height:1; }
+.glabel b { font-size:14px; color:var(--ink); }
+.glabel span { font-size:9px; letter-spacing:.14em; color:var(--muted); }
+/* Where the hull IS. Brighter than the other dial's dim needle because it is
+   a shape rather than a line, and a shape at 40 percent reads as a smudge.
+   Three tones, because one flat tone let the fin and the wings read as a pair
+   of matching hands. */
+.dial .plane .belly { fill:#23303f; }
+.dial .plane .horiz { stroke:#6d88a5; stroke-width:1.8; }
+.dial .plane .wing { fill:#8b9db1; }
+.dial .plane .body { fill:#9fb2c6; }
+/* Only the roll dial's rim counts all the way round; the pitch scale is a
+   half and its marks are the pitch they stand for. */
+.dial#atPitch .ticks line { stroke-width:1.2; opacity:.7; }
+.dial .plane .fin { fill:#c3d4e6; }
+.dial .plane .canopy { fill:#141c27; }
+.dial .level { stroke:var(--muted); stroke-width:2; opacity:.5; }
 
 @media (max-width: 900px) {
   #app { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr) auto auto; }
@@ -148,14 +351,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      the sheet, which is why queueing a shot looked impossible on a phone. */
   footer { grid-column:1; grid-row:3; height:auto; flex-wrap:wrap; padding:7px 10px;
     gap:8px 10px; min-width:0; position:relative; z-index:9; }
-  #slots { overflow-x:auto; scrollbar-width:none; padding-bottom:2px; min-width:0; flex:1 1 0; }
-  #slots::-webkit-scrollbar { display:none; }
-  #lPlay { flex:0 0 100%; height:0; margin:0; overflow:hidden; }
-  #scrub { min-width:130px; }
+  /* The timeline takes a row of its own, so eleven seconds fit across a phone
+     without the sideways scroll the old strip needed. That scroll was the
+     reason the strip was cramped: a control you have to scroll to reach is one
+     you cannot tap by position. */
+  #timeline { flex:1 1 100%; }
 
   #left, #right { position:fixed; left:0; right:0; top:auto;
     bottom:calc(var(--tabh) + var(--safe));
-    height:min(56dvh, 440px); z-index:7; border:0; border-top:1px solid var(--line);
+    height:var(--sheeth); z-index:7; border:0; border-top:1px solid var(--line);
     box-shadow:0 -14px 34px #000a;
     /* Clears the tallest the footer wraps to, so no sheet content is trapped
        underneath the row that now sits on top of it. */
@@ -171,13 +375,50 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     background:transparent; color:var(--muted); font-size:11px; }
   #tabbar button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 2px 0 var(--cyan); }
 
-  #toolbar { grid-column:1; }
+  /* One column here, so the readout follows the toolbar out of column 2.
+     Left behind, it opens an implicit second column and shoves the row. */
+  #toolbar, #pAlt, #attitude, #modes { grid-column:1; }
+  /* The toolbar owns the bottom of the canvas on a phone and is centred, so
+     the dials cannot share that line at any width: they sit above it. 44px of
+     button plus its 12px margin plus a gap. */
+  #attitude { margin-bottom:calc(66px + var(--lift)); }
+  .dial { width:72px; height:72px; }
+  .glabel b { font-size:12px; }
+  /* Above the gauges, which are a readout tall now that the numbers sit under
+     the faces rather than across them. */
+  #pAlt { margin-bottom:calc(84px + var(--lift)); }
   button { padding:10px 13px; }
-  .slot { width:40px; height:40px; font-size:12px; flex:0 0 auto; }
+  #timeline { --slotw:22px; }
+  #slots, .slot { height:26px; }
   .shipRow { padding:9px 8px; margin-bottom:7px; }
   .wrow { padding:8px 6px; }
   .modes { gap:6px; }
   input[type=range] { height:36px; }
+}
+
+/* Phone held upright, where the sheets rise from the BOTTOM.
+   A sheet owns that half of the screen while it is open, and a z-index alone
+   would only float the canvas controls over its contents. So they step UP and
+   sit above it. They were silently underneath before: a finger on a dial
+   landed on the sheet, the dial did not move, and nothing said why.
+
+   Fixed rather than a bigger margin, and measured from the same edge the sheet
+   is, so the lift is exact instead of guessing how tall the footer wrapped to
+   this time. The offsets keep the order they already sit in. */
+@media (max-width: 900px) and (min-height: 561px) {
+  #app:has(> #left.open) #toolbar, #app:has(> #right.open) #toolbar,
+  #app:has(> #left.open) #pAlt, #app:has(> #right.open) #pAlt,
+  #app:has(> #left.open) #attitude, #app:has(> #right.open) #attitude {
+    position:fixed; left:0; right:0; z-index:8; margin:0;
+    justify-content:center; }
+  #app:has(> #left.open) #toolbar, #app:has(> #right.open) #toolbar {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 12px); }
+  #app:has(> #left.open) #pAlt, #app:has(> #right.open) #pAlt {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 62px);
+    width:max-content; margin:0 auto; }
+  #app:has(> #left.open) #attitude, #app:has(> #right.open) #attitude {
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 96px);
+    justify-content:flex-start; padding-left:12px; }
 }
 
 /* Phone held sideways: only about 390px of height exists and stacked chrome
@@ -192,14 +433,31 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   #tabbar button { flex:0 0 auto; height:52px; font-size:10px; }
   #tabbar button.on { box-shadow:inset 2px 0 0 var(--cyan); }
   footer { grid-column:2; grid-row:3; flex-wrap:nowrap; height:46px; padding:0 10px; gap:9px; }
-  #lSlots, #lPlay { display:none; }
-  .slot { width:32px; height:32px; }
-  input[type=range] { height:30px; }
+  /* 46px of footer holds the scrubber over a 22px tick row. Narrower slots
+     here too: the timeline shares its row with the speed button and the clock,
+     so eleven of them have about 215px to sit in without touching. */
+  #timeline { flex:1 1 auto; --slotw:18px; }
+  #slots, .slot { height:22px; }
   #left, #right { left:54px; right:auto; top:40px; bottom:0;
     width:min(330px, 54vw); height:auto; border-top:0; border-right:1px solid var(--line);
     box-shadow:14px 0 34px #000a; transform:translateX(-110%); }
   #left.open, #right.open { transform:none; }
-  #toolbar { grid-column:2; grid-row:2; margin-bottom:8px; gap:5px; }
+  /* Sideways the sheets come in from the LEFT and run the whole height, so
+     stepping over one is not possible the way it is in portrait: the canvas
+     controls move to the right strip instead, which is the part of the map a
+     sheet never covers. */
+  #toolbar { grid-column:2; grid-row:2; margin:0 10px calc(8px + var(--lift)) 0;
+    gap:5px; justify-self:end; }
+  #attitude { grid-column:2; grid-row:2; margin:0 10px calc(54px + var(--lift)) 0;
+    justify-self:end; }
+  /* Above the gauges, not across them: both are right aligned here, and a
+     gauge is its dial plus the readout under it. */
+  #pAlt { grid-column:2; grid-row:2; margin:0 10px calc(146px + var(--lift)) 0;
+    justify-self:end; }
+  /* Wraps into the strip the sheet leaves rather than running under it. */
+  #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
+    max-width:calc(100% - min(330px, 54vw) - 20px); justify-content:flex-end; }
+  .dial { width:64px; height:64px; }
   #toolbar button { width:38px; height:38px; font-size:13px; }
 }
 
@@ -209,6 +467,245 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    A full screen layer over the console rather than a separate page: the game
    is already loaded and the wasm already instantiated behind it, so entering a
    match is a class change and not a navigation. */
+/* ------------------------------------------------------------ shipyard --
+   Same full screen mechanism as the lobby, one z above it so opening the yard
+   from the lobby does not need the lobby taken down first. */
+#designer { position:fixed; inset:0; z-index:21; background:var(--ground);
+  display:grid; grid-template-columns:minmax(0,1fr) 350px;
+  grid-template-rows:48px minmax(0,1fr); grid-template-areas:"h h" "view side"; }
+#designer.hidden { display:none; }
+
+#dzHead { grid-area:h; display:flex; align-items:center; gap:11px; padding:0 14px;
+  background:var(--panel2); border-bottom:1px solid var(--line); min-width:0;
+  overflow:hidden; -webkit-user-select:none; user-select:none; }
+#dzHead h2 { font-family:Michroma,"Rajdhani",sans-serif; font-size:12px; font-weight:400;
+  letter-spacing:.12em; color:var(--cyan); margin:0; white-space:nowrap; }
+.dzstat { font-family:Rajdhani,system-ui,sans-serif; font-weight:600; font-size:12px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--muted); white-space:nowrap; }
+.dzstat b { color:var(--ink); font-weight:700; font-variant-numeric:tabular-nums; }
+.dzgap { flex:1; min-width:0; }
+.dzv { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
+  letter-spacing:.12em; text-transform:uppercase; border:1px solid var(--line);
+  border-radius:4px; padding:4px 9px; background:var(--panel); color:var(--muted);
+  white-space:nowrap; }
+.dzv.ok { color:var(--green); border-color:#1f6b40; background:#0c1d16; }
+.dzv.bad { color:var(--red); border-color:#6b2020; background:#1d0f0f; }
+
+#dzView { grid-area:view; position:relative; min-width:0; min-height:0; background:#070a0f; }
+#dzCanvas { display:block; width:100%; height:100%; touch-action:none;
+  -webkit-user-select:none; user-select:none; }
+/* On canvas, because the class is the first decision and a control that only
+   exists in a sheet is one nothing on screen says exists. */
+.dzclasses { position:absolute; top:9px; left:9px; right:9px; z-index:3;
+  display:flex; flex-wrap:wrap; gap:5px; pointer-events:none; }
+#dzTools { top:auto; bottom:9px; left:auto; right:9px; justify-content:flex-end; }
+.dzclasses button { pointer-events:auto; padding:7px 11px; font-size:11px;
+  background:#111823dd; border-radius:6px;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+.dzclasses button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+/* The same chips, in the flow of a panel rather than floating over the canvas.
+   Reusing .dzclasses here put an absolutely positioned row on top of the one
+   above it, and the buried row still swallowed every tap. */
+.dzchips { display:flex; flex-wrap:wrap; gap:5px; margin:2px 0 6px; }
+.dzchips button { padding:7px 11px; font-size:11px; background:#111823dd; border-radius:6px; }
+.dzchips button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+#dzHint { position:absolute; left:10px; bottom:9px; z-index:3; font-size:10px;
+  color:var(--muted); pointer-events:none; }
+
+#dzSide { grid-area:side; background:var(--panel2); border-left:1px solid var(--line);
+  display:flex; flex-direction:column; min-height:0; min-width:0; }
+#dzTabs { display:flex; border-bottom:1px solid var(--line); flex:0 0 auto; }
+#dzTabs button { flex:1; border:0; border-radius:0; background:transparent;
+  color:var(--muted); padding:11px 0; font-size:11px; }
+/* Not a tab: the sheet collapses so the model has the screen. Desk sizes have
+   the panel beside the view, so it is a phone control. */
+#dzGrow { display:none; }
+#dzTabs button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 -2px 0 var(--cyan); }
+.dzpane { flex:1; min-height:0; overflow-y:auto; padding:12px; }
+.dzpane.hidden { display:none; }
+.dzfoot { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:6px; padding:9px 12px;
+  border-top:1px solid var(--line); }
+.dzfoot button { flex:1 1 96px; font-size:11px; }
+
+.dzgrp { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:10px;
+  letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:14px 0 6px; }
+.dzgrp:first-child { margin-top:0; }
+.dznote { font-size:11px; line-height:1.5; color:var(--muted); margin:0 0 10px; }
+.dzrow { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
+.dzsock { padding:5px 8px; font-size:10px; letter-spacing:.04em;
+  font-family:ui-monospace,Menlo,Consolas,monospace; text-transform:none;
+  min-height:28px; }
+.dzsock.full { border-color:#2b3d52; color:var(--ink); }
+.dzsock.on { border-color:var(--amber); color:var(--amber); background:#221c07; }
+
+.dzpart { display:grid; grid-template-columns:18px 1fr auto; gap:7px;
+  align-items:center; width:100%; text-align:left; padding:7px 9px;
+  margin-bottom:4px; text-transform:none; letter-spacing:0; font-size:12px;
+  font-family:"Exo 2",system-ui,sans-serif; font-weight:600; }
+.dzpart .sw { width:16px; height:16px; border-radius:3px; border:1px solid #0006; }
+.dzpart .nm { color:var(--ink); min-width:0; }
+.dzpart .num { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); font-variant-numeric:tabular-nums; }
+.dzpart .sub { grid-column:2/4; font-size:10px; color:var(--muted); line-height:1.4;
+  font-weight:400; }
+.dzpart.on { border-color:var(--cyan); background:#0d2231; }
+.dzpart.clear .nm { color:var(--muted); }
+
+.dzslider { display:grid; grid-template-columns:96px 1fr 26px 38px; gap:8px;
+  align-items:center; font-size:11px; color:var(--muted); margin-bottom:7px; }
+.dzslider .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase; }
+.dzslider input { width:100%; accent-color:var(--cyan); min-height:26px; }
+.dzslider b { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--ink);
+  text-align:right; font-variant-numeric:tabular-nums; }
+.dzslider .pc { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--cyan); text-align:right; }
+
+.dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
+.dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
+.dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+.dzslice { margin-top:2px; }
+.dzslice .row { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+.dzslice .row .gap { flex:1; }
+.dzslice .row .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:600;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.dzslice .row .s { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); }
+.dzslice input[type=range] { flex:1; min-width:0; accent-color:var(--cyan); }
+.dzslice button { padding:6px 10px; font-size:11px; }
+.dzslice button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+.dzslice b { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+  color:var(--cyan); min-width:22px; text-align:right; }
+#dzSliceCanvas { display:block; width:100%; height:auto; aspect-ratio:1;
+  border:1px solid var(--line); border-radius:5px; background:#070a0f;
+  touch-action:none; margin-bottom:8px; image-rendering:pixelated; }
+#dzDrawCount { font-size:10px; color:var(--muted); }
+
+.dzsave { display:flex; gap:6px; padding:9px 12px 0; }
+.dzsave.hidden { display:none; }
+.dzsave input { flex:1; min-width:0; padding:8px 10px; font-size:12px;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:5px; font-family:"Exo 2",system-ui,sans-serif; }
+.dzsave button { padding:8px 11px; font-size:11px; }
+.dzsaid { font-size:11px; color:var(--muted); padding:6px 12px 0; min-height:0; }
+.dzsaid:empty { display:none; }
+.dzsaid.bad { color:var(--red); }
+.dzturn { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
+.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
+.dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
+.dzturn b { font-size:12px; color:var(--cyan); min-width:34px; }
+#dzPick { position:absolute; left:9px; bottom:26px; z-index:4;
+  max-width:min(380px, calc(100% - 140px)); padding:8px 10px; border-radius:7px;
+  background:#0d141dee; border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+#dzPick.hidden { display:none; }
+#dzPick .hd { display:flex; align-items:center; gap:7px; }
+#dzPick .dot { width:11px; height:11px; border-radius:3px; flex:0 0 auto; }
+#dzPick .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--ink); }
+#dzPick .id { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); }
+#dzPick .x { margin-left:auto; padding:3px 7px; font-size:10px; border-radius:4px; }
+#dzPick .sub { margin:4px 0 0; font-size:11px; line-height:1.45; color:var(--muted); }
+#dzPick .sub b { color:var(--cyan); font-weight:700; }
+#dzPlate.ghost { border-color:var(--amber); color:var(--amber); background:#221c07ee; }
+.dzkeys { display:flex; flex-wrap:wrap; gap:5px 10px; margin:2px 0 4px; }
+.dzkey { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--dim); }
+.dzkey .sw { width:11px; height:11px; border-radius:2px; display:inline-block; }
+
+.dzseam { border:1px solid #1d4a5f; background:#0a1a22; border-radius:4px;
+  padding:8px 10px; margin-bottom:11px; }
+.dzseam .t { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:10px;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--cyan); margin-bottom:3px; }
+.dzseam p { margin:0; font-size:11px; line-height:1.5; color:var(--muted); }
+.dzseam code { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--ink);
+  font-size:10px; }
+
+.dzchecks { display:flex; flex-direction:column; gap:4px; margin-bottom:6px; }
+.dzck { display:flex; gap:7px; padding:5px 7px; border-radius:4px; background:#0e141d;
+  border-left:2px solid var(--green); }
+.dzck.no { border-left-color:var(--red); background:#170e12; }
+.dzck .mk { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--green); }
+.dzck.no .mk { color:var(--red); }
+.dzck .bd { min-width:0; flex:1; }
+.dzck .h { display:block; font-family:Rajdhani,system-ui,sans-serif; font-weight:700;
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink); }
+.dzck.no .h { color:var(--red); }
+.dzck .s { display:block; font-size:10px; color:var(--muted); line-height:1.4; }
+
+.dzrows { display:flex; flex-direction:column; gap:2px; }
+.dzr { display:flex; align-items:baseline; gap:8px; padding:3px 6px; border-radius:3px;
+  background:#0e141d; }
+.dzr .k { flex:1; min-width:0; font-family:Rajdhani,system-ui,sans-serif; font-weight:600;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.dzr .v { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+  color:var(--ink); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.dzr.zero .v { color:var(--red); }
+
+/* A phone gets the view on top and the panel under it, with the tabs as the
+   only chrome. Same shape as the console's own sheets. */
+@media (max-width: 900px) {
+  /* The ship gets what is left, and the sheet under it is capped rather than
+     the other way round. A fixed 240 pixel band gave the model 28 percent of a
+     390x844 phone and the panel the rest, which is backwards: the model is the
+     thing being edited and the panel is the tool. */
+  #designer { grid-template-columns:minmax(0,1fr);
+    grid-template-rows:44px minmax(0,1fr) min(46vh, 430px);
+    grid-template-areas:"h" "view" "side"; }
+  /* Collapsed: just the tab bar, and the model has the whole screen. */
+  #designer.wide { grid-template-rows:44px minmax(0,1fr) 45px; }
+  #designer.wide .dzpane, #designer.wide .dzfoot { display:none; }
+  #dzHead { padding:0 10px; gap:8px; }
+  #dzHead h2 { font-size:10px; }
+  .dzstat { font-size:10px; letter-spacing:.05em; }
+  #dzPartsWrap { display:none; }
+  #dzSide { border-left:0; border-top:1px solid var(--line); }
+  #dzView { border-bottom:1px solid var(--line); }
+  .dzslider { grid-template-columns:80px 1fr 24px 34px; }
+  #designer button { padding:9px 12px; }
+  .dzsock { padding:8px 10px; }
+  .dzfoot { padding-bottom:calc(9px + var(--safe)); }
+  /* Above the button row, not across it: full width at 390 the card sat on
+     top of the plate toggle and swallowed every tap on it. */
+  /* Above the button row, not across it: full width at 390 the card sat on
+     top of the plate toggle and swallowed every tap on it. And compact,
+     because the canvas band is 240 pixels and the card was eating most of it. */
+  #dzPick { max-width:none; right:9px; bottom:48px; padding:5px 7px; }
+  #dzPick .nm { font-size:11px; }
+  #dzPick .id { font-size:9px; }
+  #dzPick .x { padding:2px 6px; font-size:9px; }
+  #dzPick .sub { font-size:10px; line-height:1.35; margin-top:2px; }
+  /* One row of class chips rather than two, at every phone width. */
+  .dzclasses { gap:4px; }
+  .dzclasses button { padding:5px 8px; font-size:10px; }
+  /* Three tool buttons share this line on a phone, so the hint gives way
+     rather than running underneath them. */
+  #dzHint { font-size:9px; max-width:35%; }
+  #dzGrow { display:block; flex:0 0 44px; font-size:10px; color:var(--muted); }
+  #designer.wide #dzGrow { color:var(--cyan); }
+}
+
+/* At a phone's width the header ran past its own right edge and took Close
+   with it: 333 to 408 in a 390 viewport, on a bar with overflow hidden, so
+   the only way out of the shipyard was off screen. The stats are the part
+   that gives way, because the verdict and the way out are not optional. */
+@media (max-width: 460px) {
+  #dzHead { gap:7px; padding:0 8px; }
+  #dzHead h2 { display:none; }
+  #dzHullWrap { display:none; }
+  #designer #dzHead button { padding:6px 9px; font-size:10px; }
+  .dzv { padding:4px 7px; font-size:10px; }
+}
+@media (max-width: 900px) and (max-height: 600px) {
+  #designer { grid-template-rows:38px minmax(0,1fr) min(56vh, 300px); }
+  #designer.wide { grid-template-rows:38px minmax(0,1fr) 40px; }
+  /* At 390x560 the wrapped chip row ate most of a 150 pixel viewport and the
+     ship drew in the sliver underneath, so a tap at the centre of the canvas
+     hit nothing at all. */
+  .dzclasses button { padding:4px 6px; font-size:9px; }
+  #dzPick { bottom:42px; padding:4px 6px; }
+}
+
 #lobby { position:fixed; inset:0; z-index:20; background:var(--ground);
   display:flex; flex-direction:column; overflow-y:auto;
   padding:max(24px, env(safe-area-inset-top)) 20px calc(24px + var(--safe)); }
@@ -242,6 +739,39 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .seatRow .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
 .seatRow.rdy .dot { background:var(--green); }
 .seatRow .empty { color:var(--muted); font-style:italic; }
+/* One button a practice level, wrapping to whatever the width allows. */
+.picks { display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr));
+  gap:6px; margin-top:10px; }
+.picks button { text-align:left; padding:9px 11px; text-transform:none;
+  letter-spacing:0; font-family:"Exo 2",system-ui,sans-serif; }
+.picks button .n { display:block; font-family:Rajdhani,system-ui,sans-serif;
+  font-weight:700; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink); }
+.picks button .d { display:block; font-size:10px; color:var(--muted); margin-top:2px;
+  line-height:1.35; }
+
+/* The hull chooser: narrower cards than a level, because a name and a class
+   is less to read than a level and its blurb. */
+.picks.hulls { grid-template-columns:repeat(auto-fill, minmax(122px, 1fr)); }
+.picks.hulls button.on { border-color:var(--cyan); background:#0d2231; }
+.picks.hulls button.on .n { color:var(--cyan); }
+#practiceHullNote { margin-top:6px; }
+
+/* Which design the fleet was taken out in, on the panel that lists it. */
+#hullNote { float:right; font-size:9px; letter-spacing:.06em; color:var(--cyan);
+  text-transform:none; font-weight:400; max-width:60%; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+
+.libRow { display:flex; align-items:center; gap:9px; padding:8px 10px; margin-top:6px;
+  border:1px solid var(--line); border-radius:5px; background:var(--panel); }
+.libRow .bd { flex:1; min-width:0; }
+.libRow .n { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.04em; color:var(--ink); }
+.libRow .n .me { color:var(--cyan); font-size:10px; letter-spacing:.1em; margin-left:6px; }
+.libRow .s { font-size:10px; color:var(--muted); line-height:1.4; }
+.libRow button { padding:6px 10px; font-size:10px; }
+.libRow .bad { color:var(--red); }
+
 #lobbyErr { color:var(--red); font-size:12px; min-height:16px; margin-top:8px; }
 #lobby input[type=text] { background:var(--panel); color:var(--ink);
   border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:13px;
@@ -255,6 +785,141 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 </style>
 </head>
 <body>
+<!-- The shipyard. A full screen over the console, the same mechanism the
+     lobby uses, so entering it is a class change rather than a navigation. -->
+<div id="designer" class="hidden">
+  <header id="dzHead">
+    <h2>Shipyard</h2>
+    <span class="dzstat">mass <b id="dzMass">0</b></span>
+    <span class="dzstat" id="dzHullWrap">hull <b id="dzHull">0</b></span>
+    <span class="dzstat" id="dzPartsWrap">parts <b id="dzParts">0</b></span>
+    <span class="dzgap"></span>
+    <span class="dzv" id="dzVerdict">no hull</span>
+    <button id="dzClose">Close</button>
+  </header>
+
+  <section id="dzView">
+    <canvas id="dzCanvas"></canvas>
+    <div id="dzClasses" class="dzclasses"></div>
+    <!-- On canvas, not in a sheet: taking the plate off to see what is under
+         it is the single most used action in a voxel editor. -->
+    <div id="dzTools" class="dzclasses"><button id="dzArcs">Arcs</button><button id="dzTrack">Target</button><button id="dzPlate" class="on">Plate on</button></div>
+    <!-- What you just tapped. On canvas because that is where you tapped, and
+         because a card that only lives in a sheet is one nothing says exists. -->
+    <div id="dzPick" class="hidden"></div>
+    <div id="dzHint">tap a part to name it &middot; drag to orbit &middot; pinch or wheel to zoom</div>
+  </section>
+
+  <aside id="dzSide">
+    <nav id="dzTabs">
+      <button id="dzTabParts">Parts</button>
+      <button id="dzTabArmour">Armour</button>
+      <button id="dzTabStats">Readout</button>
+      <button id="dzGrow" title="Give the model the whole screen">&#9650;</button>
+    </nav>
+
+    <div id="dzPaneParts" class="dzpane">
+      <p class="dznote" id="dzFrameNote"></p>
+      <div id="dzSockets"></div>
+      <div id="dzPalette"></div>
+    </div>
+
+    <div id="dzPaneArmour" class="dzpane hidden">
+      <div class="dzgrp">Exterior</div>
+      <div id="dzMode" class="dzchips"></div>
+      <p class="dznote" id="dzModeNote"></p>
+      <div class="dzgrp">Layers</div>
+      <p class="dznote">Plate is authored one face at a time. Layers set what a
+      face absorbs, and a gun with penetration is scored against fewer of them,
+      so a belt that stops a beam is porous to a shell. The frame under it is
+      not editable in either mode.</p>
+      <div id="dzArmour"></div>
+      <div class="dzgrp">Paint</div>
+      <p class="dznote">Armour only, and all eight of a faction's swatches are on
+      the hull at once: plating panels, a dark underside, a dorsal spine, a stripe
+      along the waist, a nose flash and a transom band. Picking a swatch sets the
+      primary; the other seven roles hold, so the scheme survives a re-tint.
+      Everything else on the ship is coloured by what it does, so a drive is orange
+      and a gun is red whoever built them. Cosmetic either way: never hashed, never
+      sent to the core, so two players who painted the same hull differently cannot
+      read as a desync.</p>
+      <div id="dzFactions" class="dzchips"></div>
+      <div id="dzPaint" class="dzpaint"></div>
+      <div class="dzgrp">Colour key</div>
+      <div id="dzKey" class="dzkeys"></div>
+
+      <div class="dzgrp">Draw armour</div>
+      <p class="dznote">One slab at a time, on top of whatever the sliders
+      built. Drag to paint a run. You are drawing plate and nothing else: the
+      frame and the fitted parts are shown so you can work around them, and
+      neither can be touched. Thick cuts the hull into deeper slabs rather than
+      overlapping slices, so there are fewer of them to walk through and a run
+      paints the whole depth. The slab you are standing in is boxed on the
+      model. Mirror is off until you ask for it, and only x and y. A turret
+      swings through its own box, hatched in red: nothing may be drawn there,
+      and the generated exterior carves round it.</p>
+      <div class="dzslice">
+        <div class="row">
+          <button id="dzSliceDown">&lt;</button>
+          <input id="dzSliceAt" type="range" min="0" max="63" step="1" value="32">
+          <button id="dzSliceUp">&gt;</button>
+          <b id="dzSliceNum">32</b>
+        </div>
+        <canvas id="dzSliceCanvas" width="320" height="320"></canvas>
+        <div class="row">
+          <button id="dzBrushAdd" class="on">Add</button>
+          <button id="dzBrushCut">Cut</button>
+          <span class="gap"></span>
+          <button id="dzSliceClear">Clear slab</button>
+          <button id="dzDrawClear">Clear all</button>
+        </div>
+        <div class="row">
+          <span class="k">Onion</span>
+          <input id="dzOnion" type="range" min="0" max="4" step="1" value="1">
+          <b id="dzOnionN">1</b>
+          <span class="k">Thick</span>
+          <input id="dzDepth" type="range" min="1" max="8" step="1" value="1">
+          <b id="dzDepthN">1</b>
+        </div>
+        <div class="row">
+          <span class="k">Mirror</span>
+          <button id="dzMirrorX">X</button>
+          <button id="dzMirrorY">Y</button>
+          <span class="gap"></span>
+          <span class="s" id="dzSliceSpan"></span>
+        </div>
+        <div class="s" id="dzDrawCount"></div>
+      </div>
+    </div>
+
+    <div id="dzPaneStats" class="dzpane hidden">
+      <div class="dzseam">
+        <div class="t">Every number here comes from one call</div>
+        <p><code>derive()</code> in <code>design.ts</code>, standing in for
+        <code>ft_read_design</code>. It is the only place a derived number is
+        produced, so moving it to Rust is one call site rather than a hunt.</p>
+      </div>
+      <div id="dzStats"></div>
+    </div>
+
+    <!-- Naming a design happens here rather than in a browser prompt: a
+         modal the page does not own cannot be checked, styled, or reached the
+         same way on every phone. -->
+    <div class="dzsave hidden" id="dzSaveBar">
+      <input id="dzSaveName" type="text" maxlength="48" placeholder="Name this hull">
+      <button id="dzSaveGo" class="primary">Save</button>
+      <button id="dzSaveNo">Cancel</button>
+    </div>
+    <div class="dzsaid" id="dzSaid"></div>
+    <div class="dzfoot">
+      <button id="dzSave">Save as</button>
+      <button id="dzReset">Reset to stock</button>
+      <button id="dzBare">Strip armour</button>
+      <button id="dzStrip">Strip bare</button>
+    </div>
+  </aside>
+</div>
+
 <div id="lobby">
   <div class="wrap">
     <h2>FALLEN TRIBES</h2>
@@ -269,8 +934,38 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
             <div class="t">Practice</div>
             <div class="s">Play the AI offline. Nothing is sent anywhere.</div>
           </div>
-          <button id="bPractice" class="primary">Play</button>
         </div>
+        <!-- Which hull you take in, above the levels rather than beside each
+             one: it is one choice that applies to whichever you tap, and a
+             copy of it per level would be seven controls saying one thing. -->
+        <div class="dzgrp" style="margin-top:10px">Your hull</div>
+        <div id="practiceHull" class="picks hulls"></div>
+        <div id="practiceHullNote" class="s"></div>
+        <!-- One button a level. A dropdown beside a Play button hid six of
+             the seven behind a gesture nobody makes on a phone. -->
+        <div id="practiceList" class="picks"></div>
+        <div class="row" style="margin-top:12px">
+          <div class="grow">
+            <div class="t">Shipyard</div>
+            <div class="s">Design a hull: fit parts to a frame, plate it, paint it.</div>
+          </div>
+          <button id="bShipyard">Open</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="t">Ship library</div>
+            <div class="s" id="libNote">Everyone's designs. Open one to look at it,
+              then Save as to keep your own copy.</div>
+          </div>
+          <button id="bLibMine">Mine</button>
+          <button id="bLibAll" class="primary">All</button>
+        </div>
+        <div id="libList"></div>
+        <div class="s" id="libEmpty">Nothing saved yet. Open the shipyard and
+          save a hull.</div>
       </div>
 
       <div class="card">
@@ -327,12 +1022,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   </header>
 
   <div id="left">
-    <div class="sect">Fleet</div>
+    <div class="sect">Fleet<span id="hullNote"></span></div>
     <div id="fleet"></div>
     <div class="sect">Hostiles</div>
     <div id="hostiles"></div>
-    <div class="sect">Selected &middot; Move Mode</div>
-    <div class="modes" id="modes"></div>
     <div class="sect">Movement Envelope</div>
     <div id="env" class="hint"></div>
     <div class="sect">Flight Envelope</div>
@@ -353,7 +1046,6 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   <div id="right">
     <div class="sect">Events</div>
-    <div class="modes" id="turns"></div>
     <div id="log"></div>
   </div>
 
@@ -363,23 +1055,153 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <button id="tFit">Fit view</button>
   </div>
 
+  <!-- Move mode, over the viewport rather than in the fleet rail.
+       It decides what every other planning control means, so it cannot live
+       behind a tab: on a phone the rail is a sheet, and a mode you can only
+       reach by opening one is a mode you forget you are in. -->
+  <div id="modes" class="modes" aria-label="Move mode"></div>
+
+  <!-- Heading, over the viewport. Two dials, one per axis the core can be
+       told about, sitting on the canvas rather than in a rail: a heading is
+       aimed at something on screen, so the control belongs on screen. -->
+  <div id="attitude" aria-label="Heading">
+    <div class="gauge">
+      <div class="dial" id="atRoll" role="slider" aria-label="Roll"
+           aria-valuemin="-180" aria-valuemax="180" aria-valuenow="0" tabindex="0">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <circle class="face" cx="0" cy="0" r="45"/>
+          <g class="ticks" id="atRollTicks"></g>
+          <!-- A fixed level reference. It does not rotate, so the hull is
+               tilted against something rather than floating. -->
+          <g class="level">
+            <line x1="-45" y1="0" x2="-34" y2="0"/>
+            <line x1="34" y1="0" x2="45" y2="0"/>
+          </g>
+          <!-- The hull seen head on, tilted by its own roll, standing on its own
+               horizon: the shaded half is the side the belly is on, and it
+               turns with the ship.
+               The horizon is what makes the reading instant. A silhouette
+               alone was read first as clock hands and then, once it had a
+               fin, as a three blade propeller, because three limbs off a hub
+               is a propeller whatever their tones. A tilted straight edge
+               across the whole face cannot be mistaken for either. -->
+          <g id="atRollNow" class="plane">
+            <path class="belly" d="M -44 0 A 44 44 0 0 0 44 0 Z"/>
+            <line class="horiz" x1="-44" y1="0" x2="44" y2="0"/>
+            <path class="wing" d="M -37 -1 L -10 -3 L 10 -3 L 37 -1 L 37 6 L 10 5 L -10 5 L -37 6 Z"/>
+            <path class="fin" d="M -3.2 -7 L 3.2 -7 L 1.2 -19 L -1.2 -19 Z"/>
+            <ellipse class="body" cx="0" cy="-0.5" rx="7.4" ry="10.5"/>
+            <circle class="canopy" cx="0" cy="-5" r="2.8"/>
+          </g>
+          <!-- Zero roll is wings level, where the hull's own up IS world up, so
+               the ball sits at the top of the dial and travels round with
+               it. It used to rest at three o'clock while a drag measured from
+               twelve, so grabbing the ball where it sat snapped the roll 90
+               degrees before the finger had moved. -->
+          <g id="atRollCmd">
+            <line class="cmd" x1="0" y1="0" x2="0" y2="-36"/>
+            <circle class="knob" cx="0" cy="-36" r="6.5"/>
+          </g>
+        </svg>
+      </div>
+      <div class="glabel"><b id="atRollV">0</b><span>ROLL</span></div>
+    </div>
+    <div class="gauge">
+      <div class="dial" id="atPitch" role="slider" aria-label="Pitch"
+           aria-valuemin="-80" aria-valuemax="80" aria-valuenow="0" tabindex="0">
+        <svg viewBox="-50 -50 100 100" aria-hidden="true">
+          <circle class="face" cx="0" cy="0" r="45"/>
+          <!-- The half the pitch order can point into. Heavier than the rim it
+               sits on, because it is the scale and the rim is only an edge. -->
+          <path class="arc" d="M 0 -45 A 45 45 0 0 1 0 45"/>
+          <g class="ticks" id="atPitchTicks"></g>
+          <!-- Level, and world fixed, so the nose is climbing against
+               something. On the left, where the hull's tail leaves room. -->
+          <g class="level"><line x1="-45" y1="0" x2="-36" y2="0"/></g>
+          <!-- The same hull as the roll dial, seen from the side instead of
+               head on, standing on the same horizon and drawn in the same
+               tones. A line from the middle to the rim said the angle and
+               nothing else: which way is up, whether that is a climb or a
+               dive, and how steep it is next to level were all left to the
+               number underneath. -->
+          <g id="atPitchNow" class="plane">
+            <path class="belly" d="M -44 0 A 44 44 0 0 0 44 0 Z"/>
+            <line class="horiz" x1="-44" y1="0" x2="44" y2="0"/>
+            <path class="wing" d="M 4 5 L -12 5 L -19 14 L -3 14 Z"/>
+            <path class="fin" d="M -21 -5 L -13 -5 L -19 -21 L -24 -21 Z"/>
+            <path class="body" d="M 31 0 L 10 -5.5 L -20 -6 L -27 -3 L -27 3 L -20 6 L 10 5.5 Z"/>
+            <ellipse class="canopy" cx="11" cy="-2.4" rx="5.6" ry="1.9"/>
+          </g>
+          <g id="atPitchCmd">
+            <line class="cmd" x1="0" y1="0" x2="38" y2="0"/>
+            <circle class="knob" cx="38" cy="0" r="6.5"/>
+          </g>
+        </svg>
+      </div>
+      <div class="glabel"><b id="atPitchV">0</b><span>PITCH</span></div>
+    </div>
+  </div>
+
+  <div id="pAlt" class="zero" aria-live="polite">ALT 0</div>
+
   <div id="toolbar" aria-label="Camera and ship controls">
     <button id="cMode" title="One finger on empty space orbits. Tap to pan instead. Mouse: left pans, right orbits.">&#10227;</button>
     <button id="cCentre" title="Centre the camera on the selected ship">&#8853;</button>
     <span class="tbsep"></span>
-    <button id="pUp" class="shipctl" title="Working altitude +5 (E)">&#9650;</button>
-    <button id="pDown" class="shipctl" title="Working altitude -5 (Q)">&#9660;</button>
+    <button id="pUp" class="shipctl" title="Working altitude up (E). Hold to keep going.">&#9650;</button>
+    <button id="pDown" class="shipctl" title="Working altitude down (Q). Hold to keep going.">&#9660;</button>
     <button id="pCCW" class="shipctl" title="Swing heading 15 degrees left (A)">&#8634;</button>
     <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">&#8635;</button>
     <button id="pFace" class="shipctl" title="Face the target (F)">&#9678;</button>
   </div>
 
   <footer>
-    <span class="stat" id="lSlots">fire slot</span>
-    <div id="slots"></div>
-    <span class="stat" id="lPlay">playback</span>
+    <!-- Anchored to the footer so it sits over the canvas and never under a
+         sheet: arming happened in one place and firing in another, and a sheet
+         between them is how queueing a shot became impossible on a phone. -->
+    <div id="slotMenu" class="hidden" role="dialog" aria-label="Fire slot"></div>
+    <div id="slotNote" class="hidden"></div>
+    <!-- Anchored here for the same reason the slot menu is: over the canvas,
+         above the sheets, and reachable by thumb at 390px. -->
+    <div id="reviewPanel" class="hidden" role="dialog" aria-label="Battle review">
+      <div class="smhead">
+        <span>Battle review</span>
+        <button id="rpClose" class="smx" title="Close and return to the live turn">&#215;</button>
+      </div>
+      <div class="rprow">
+        <button id="rpPrev" title="The turn before">&#9666;</button>
+        <b id="rpTurn">--</b>
+        <button id="rpNext" title="The turn after">&#9656;</button>
+        <span class="rpgap"></span>
+        <button id="rpWatch">Watch</button>
+        <button id="rpAuto">Auto</button>
+        <button id="rpLive">Live</button>
+      </div>
+      <!-- Every recorded turn, so a long match does not have to be stepped
+           through one arrow at a time. -->
+      <div class="modes" id="turns"></div>
+      <div class="rprow">
+        <button id="rpTrail">Trail 1</button>
+        <span class="hint" id="rpHint"></span>
+      </div>
+    </div>
+    <!-- Watching, not planning. One button, because reviewing is a MODE and
+         the transport it needs (which turn, watch it, run on, come back, how
+         much track to leave) is five controls that have no business on screen
+         while a turn is being planned. They live in the panel this opens.
+         The button itself stays, disabled until there is something to watch:
+         a control that only appears once it works is one nobody learns
+         exists. -->
     <button id="bSpeed">1x</button>
-    <input type="range" id="scrub" min="0" max="600" value="0">
+    <button id="bReview">Review</button>
+    <!-- One control, not two. The slots ARE the timeline's seconds, so they sit
+         under the scrubber at the positions they name rather than in a separate
+         strip that happens to count the same thing. -->
+    <div id="timeline">
+      <input type="range" id="scrub" min="0" max="600" value="0"
+             aria-label="Scrub the turn">
+      <div id="slots" aria-label="Fire slots, one per second of the turn"></div>
+    </div>
     <span class="stat"><b id="hSec">0.0</b>s</span>
   </footer>
 </div>

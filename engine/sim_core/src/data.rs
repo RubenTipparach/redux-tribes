@@ -75,7 +75,12 @@ pub struct WeaponDef {
     pub dmg: f32,
     pub mult: f32,
     pub range: f32,
-    pub cooldown_turns: i32,
+    /// Seconds between two shots from the same mount, measured on the match
+    /// clock rather than per turn, so a shot at the end of one turn still
+    /// holds the mount into the next one. The archive counted whole turns,
+    /// which made every cooldown either 0 or 1 and therefore no cooldown at
+    /// all: a turn always advances by one.
+    pub cooldown_secs: f32,
     pub arc_h: (f32, f32),
     pub arc_v: (f32, f32),
     pub batch: i32,
@@ -94,7 +99,11 @@ static W_BEAM: WeaponDef = WeaponDef {
     dmg: 5.0,
     mult: 5.5,
     range: 300.0,
-    cooldown_turns: 0,
+    // Three seconds, so a beam mount is free on four of a turn's eleven fire
+    // slots rather than six, and picking a second is a choice rather than a
+    // formality. Measured on the match clock, so a shot at second 9 still
+    // holds the mount into second 2 of the next turn.
+    cooldown_secs: 3.0,
     arc_h: (-110.0, 110.0),
     arc_v: (-60.0, 60.0),
     batch: 1,
@@ -104,7 +113,7 @@ static W_CANNON: WeaponDef = WeaponDef {
     dmg: 5.0,
     mult: 5.5,
     range: 200.0,
-    cooldown_turns: 1,
+    cooldown_secs: 4.0,
     arc_h: (-90.0, 90.0),
     arc_v: (-60.0, 60.0),
     batch: 1,
@@ -114,7 +123,7 @@ static W_MISSILE: WeaponDef = WeaponDef {
     dmg: 25.0,
     mult: 1.0,
     range: 250.0,
-    cooldown_turns: 1,
+    cooldown_secs: 6.0,
     arc_h: (-360.0, 360.0),
     arc_v: (-360.0, 360.0),
     batch: 2,
@@ -139,11 +148,33 @@ pub fn weapon_key_name(key: WeaponKey) -> &'static str {
     }
 }
 
+/// What a hit volume DOES, which is the whole of the damage model: a volume
+/// with no consequence is just a smaller hull.
+///
+/// Order matters. The client mirrors these discriminants by position, so a new
+/// kind goes on the end rather than in the middle.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SubKind {
     Armor,
     Thruster,
+    /// Attitude authority. With every one of them out, the hull keeps its
+    /// engines and loses the ability to point them anywhere.
+    Rcs,
+    /// The weapon bay. With every one of them out, no mount on the ship fires.
+    Weapon,
+    /// The pile. Breaching it does not disable anything: it ends the ship, and
+    /// takes a share of whatever is standing near it.
+    Reactor,
 }
+
+/// A reactor breach.
+///
+/// The blast damages hulls only, never subsystems, and that is deliberate
+/// rather than a simplification: a breach that could reach another reactor
+/// would chain, and a chain is a recursion with no bound written anywhere.
+/// Falls off linearly to nothing at the edge.
+pub const CRITICAL_RADIUS: f32 = 14.0;
+pub const CRITICAL_DAMAGE: f32 = 140.0;
 
 pub struct SubDef {
     pub id: &'static str,
@@ -175,7 +206,17 @@ pub struct ShipClass {
     pub name: &'static str,
     pub hull: f32,
     pub radius: f32,
+    /// The class's mass, which is ALSO the berth a design of this class is
+    /// built inside: the authored ships come out at 75 to 90 percent of it.
     pub mass: f32,
+    /// The world size of one lattice cell for this class, which is what makes
+    /// a freighter's plate cost more than a frigate's for the same cell count.
+    pub rung_cell: f32,
+    /// What the bare frame carries before a single part is fitted. Everything
+    /// above these comes from barracks, airlocks and clamps.
+    pub base_reach: f32,
+    pub base_marines: i32,
+    pub base_capacity: i32,
     pub flight: Flight,
     pub boarding_range: f32,
     pub marines: i32,
@@ -186,7 +227,14 @@ pub struct ShipClass {
 
 /// Subsystem offsets are deterministic hit volume centres: a shot damages
 /// whichever volume it reaches first, so the layout IS the damage model.
-const fn frigate_subs(armor_block: f32) -> [SubDef; 3] {
+///
+/// The two belts sit outboard and the reactor sits deep amidships behind
+/// them, which is the whole of the protection it gets. Nothing declares the
+/// reactor "shielded": a shot from abeam meets a belt first because a belt is
+/// in the way, and a shot down the throat of a hull whose belts are gone does
+/// not. Geometry rather than a rule is what makes closing on a damaged flank
+/// worth doing.
+const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
     [
         SubDef {
             id: "armor_l",
@@ -212,21 +260,68 @@ const fn frigate_subs(armor_block: f32) -> [SubDef; 3] {
             offset: V3::new(0.0, 0.0, -2.6),
             radius: 1.4,
         },
+        // Forward and ventral, where the attitude quads are drawn on the hull.
+        // Thin, because a jet is a nozzle and a tank rather than a citadel.
+        SubDef {
+            id: "rcs",
+            kind: SubKind::Rcs,
+            hp: 60.0,
+            block_pct: 40.0,
+            offset: V3::new(0.0, -1.0, 1.5),
+            radius: 1.0,
+        },
+        // The battery, dorsal and forward, where the turrets are.
+        SubDef {
+            id: "weapons",
+            kind: SubKind::Weapon,
+            hp: 80.0,
+            block_pct: 50.0,
+            offset: V3::new(0.0, 1.0, 1.2),
+            radius: 1.1,
+        },
+        SubDef {
+            id: "reactor",
+            kind: SubKind::Reactor,
+            hp: 90.0,
+            block_pct: 45.0,
+            offset: V3::new(0.0, 0.0, -0.6),
+            radius: 1.0,
+        },
     ]
 }
 
-static TERRAN_SUBS: [SubDef; 3] = frigate_subs(80.0);
-static KARISEN_SUBS: [SubDef; 3] = frigate_subs(75.0);
-static ROGUE_SUBS: [SubDef; 3] = frigate_subs(90.0);
-static BENEFACTOR_SUBS: [SubDef; 3] = frigate_subs(80.0);
-static FREIGHTER_SUBS: [SubDef; 1] = [SubDef {
-    id: "engines",
-    kind: SubKind::Thruster,
-    hp: 100.0,
-    block_pct: 60.0,
-    offset: V3::new(0.0, 0.0, -3.4),
-    radius: 1.6,
-}];
+static TERRAN_SUBS: [SubDef; 6] = frigate_subs(80.0);
+static KARISEN_SUBS: [SubDef; 6] = frigate_subs(75.0);
+static ROGUE_SUBS: [SubDef; 6] = frigate_subs(90.0);
+static BENEFACTOR_SUBS: [SubDef; 6] = frigate_subs(80.0);
+/// No weapon bay, because the hull has no mounts to lose. A subsystem whose
+/// loss changes nothing is a hit box that teaches a player the wrong lesson.
+static FREIGHTER_SUBS: [SubDef; 3] = [
+    SubDef {
+        id: "engines",
+        kind: SubKind::Thruster,
+        hp: 100.0,
+        block_pct: 60.0,
+        offset: V3::new(0.0, 0.0, -3.4),
+        radius: 1.6,
+    },
+    SubDef {
+        id: "rcs",
+        kind: SubKind::Rcs,
+        hp: 60.0,
+        block_pct: 40.0,
+        offset: V3::new(0.0, -1.2, 2.0),
+        radius: 1.2,
+    },
+    SubDef {
+        id: "reactor",
+        kind: SubKind::Reactor,
+        hp: 120.0,
+        block_pct: 45.0,
+        offset: V3::new(0.0, 0.0, -1.0),
+        radius: 1.2,
+    },
+];
 
 static TERRAN_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.0, 0.4, 2.2) },
@@ -255,6 +350,10 @@ static C_TERRAN_FRIGATE: ShipClass = ShipClass {
     hull: 300.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 6.0,
         pitch_rate: 4.0,
@@ -277,6 +376,10 @@ static C_KARISEN_FRIGATE: ShipClass = ShipClass {
     hull: 250.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 6.5,
         pitch_rate: 4.0,
@@ -301,6 +404,10 @@ static C_ROGUE_FRIGATE: ShipClass = ShipClass {
     hull: 180.0,
     radius: 3.2,
     mass: 0.9,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 9.0,
         pitch_rate: 6.0,
@@ -323,6 +430,10 @@ static C_BENEFACTOR_FRIGATE: ShipClass = ShipClass {
     hull: 250.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 5.0,
         pitch_rate: 3.5,
@@ -345,6 +456,10 @@ static C_FREIGHTER: ShipClass = ShipClass {
     hull: 600.0,
     radius: 4.5,
     mass: 2.0,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 2.5,
         pitch_rate: 1.5,

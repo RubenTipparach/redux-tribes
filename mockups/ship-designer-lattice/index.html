@@ -1,0 +1,993 @@
+<title>Lattice Yard</title>
+<meta name="description" content="Variant A of the ship designer: an explicit 4 x 3 x 7 build lattice at true frigate scale, where an active slab makes every cell in empty space pickable without guessing, and every derived number comes back from the core.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
+<!--THREE-->
+<style>
+/* Tokens copied from web/index.html so the yard reads as the same console.
+   The three shipped faces (Michroma, Exo 2, Rajdhani) are named first and then
+   fall back to system UI: a mockup takes no network, so no remote font. */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --amber:#FFD24B;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+  --sheeth:min(56dvh, 420px);
+  --disp:Michroma,"Rajdhani",system-ui,sans-serif;
+  --ui:"Exo 2",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --lbl:Rajdhani,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:14px;
+  overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+
+/* minmax(0,1fr) on both axes: a bare 1fr carries a min-content minimum, and one
+   wide child would then push the layout off a phone screen. */
+#app{display:grid;grid-template-columns:262px minmax(0,1fr) 300px;
+  grid-template-rows:46px minmax(0,1fr);height:100vh;height:100dvh;min-width:0}
+
+header{grid-column:1/4;display:flex;align-items:center;gap:12px;padding:0 12px;
+  background:var(--panel2);border-bottom:1px solid var(--line);
+  -webkit-user-select:none;user-select:none;min-width:0}
+header h1{font-family:var(--disp);font-size:12px;font-weight:400;letter-spacing:.12em;
+  margin:0;color:var(--cyan);white-space:nowrap}
+.hgap{flex:1}
+.stat{font-family:var(--lbl);font-weight:600;font-size:12px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.stat b{color:var(--ink);font-family:var(--mono);font-weight:400}
+.verdict{font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.12em;
+  border:1px solid var(--green);color:var(--green);background:#0e2418;
+  border-radius:4px;padding:4px 9px;white-space:nowrap}
+.verdict.bad{border-color:var(--red);color:var(--red);background:#2a1013}
+
+button{font-family:var(--lbl);font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  font-size:12px;touch-action:manipulation;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:7px 10px;cursor:pointer}
+button:hover{border-color:var(--cyan);color:var(--cyan)}
+button.on{background:#0d2231;border-color:var(--cyan);color:var(--cyan)}
+button.primary{background:var(--cyan);color:#04131c;border-color:var(--cyan)}
+button.primary:hover{color:#04131c;filter:brightness(1.1)}
+button.danger{background:var(--red);color:#1b0709;border-color:var(--red)}
+button.danger:hover{color:#1b0709;filter:brightness(1.1)}
+button:disabled{opacity:.35;cursor:default}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
+.rail{background:var(--panel2);padding:12px;overflow-y:auto;-webkit-overflow-scrolling:touch;min-width:0}
+#build{border-right:1px solid var(--line)}
+#core{border-left:1px solid var(--line)}
+h2{font-family:var(--lbl);font-size:10px;font-weight:700;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin:16px 0 8px}
+h2:first-child{margin-top:0}
+.note{font-size:11.5px;line-height:1.55;color:var(--muted);margin:8px 0 0}
+.note b{color:var(--ink);font-weight:600}
+.src{font-family:var(--mono);font-size:11px;color:var(--cyan);background:#08131c;
+  border:1px solid #14384c;border-radius:4px;padding:6px 8px;margin-bottom:10px;
+  word-break:break-all}
+.src i{display:block;font-style:normal;color:var(--muted);margin-top:3px;font-size:10.5px}
+
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chips button{padding:6px 8px;font-size:10.5px;letter-spacing:.06em}
+
+.palette{display:flex;flex-direction:column;gap:5px}
+.palette button{display:flex;align-items:center;gap:8px;text-align:left;padding:7px 8px;
+  line-height:1.25;width:100%}
+.sw{width:14px;height:14px;border-radius:3px;flex:0 0 auto;border:1px solid #0006}
+.palette .tx{min-width:0}
+.palette .tx u{display:block;text-decoration:none;font-size:11.5px;letter-spacing:.06em}
+.palette .tx i{display:block;font-style:normal;font-family:var(--ui);font-weight:400;
+  text-transform:none;letter-spacing:0;font-size:10.5px;color:var(--muted);margin-top:2px}
+.palette button.on .tx i{color:#9dd9f5}
+
+.row{display:flex;align-items:center;gap:6px}
+.row .lab{font-family:var(--lbl);font-weight:600;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted);flex:1}
+.row .val{font-family:var(--mono);font-size:12px;color:var(--ink)}
+.seg{display:flex;gap:4px}
+.seg button{flex:1;padding:7px 4px}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+td{padding:3px 0;vertical-align:baseline}
+td.k{font-family:var(--lbl);font-weight:600;font-size:11px;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted)}
+td.v{font-family:var(--mono);text-align:right;color:var(--ink);white-space:nowrap}
+td.r{font-family:var(--mono);text-align:right;color:#4a5a6d;white-space:nowrap;padding-left:8px}
+tr.hd td{color:#4a5a6d;font-family:var(--lbl);font-size:9.5px;letter-spacing:.14em;
+  text-transform:uppercase;border-bottom:1px solid var(--line);padding-bottom:4px}
+tr.sep td{border-top:1px solid var(--line);padding-top:6px}
+td.v.warn{color:var(--amber)}
+td.v.bad{color:var(--red)}
+
+.check{display:flex;gap:7px;align-items:flex-start;padding:5px 0;border-bottom:1px solid #131c28}
+.check .mk{font-family:var(--mono);font-size:12px;line-height:1.35;flex:0 0 auto}
+.check.ok .mk{color:var(--green)}
+.check.no .mk{color:var(--red)}
+.check .tx{min-width:0}
+.check .tx u{display:block;text-decoration:none;font-family:var(--lbl);font-weight:700;
+  font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.check.ok .tx u{color:var(--ink)}
+.check.no .tx u{color:var(--red)}
+.check .tx i{display:block;font-style:normal;font-size:11px;color:var(--muted);
+  line-height:1.45;margin-top:2px}
+.tag{font-family:var(--lbl);font-weight:700;font-size:9px;letter-spacing:.12em;
+  color:var(--amber);border:1px solid #4a3a10;background:#241d08;border-radius:3px;
+  padding:1px 4px;margin-left:5px;white-space:nowrap}
+
+#view{position:relative;min-width:0;overflow:hidden;background:#070a0f}
+canvas{display:block;touch-action:none;width:100%;height:100%}
+
+#cursorChip{position:absolute;left:8px;top:8px;z-index:20;pointer-events:none;
+  background:#0a121bE6;border:1px solid var(--line);border-radius:5px;padding:6px 9px;
+  font-family:var(--mono);font-size:11px;line-height:1.5;max-width:min(64vw,260px)}
+#cursorChip b{color:var(--amber);font-weight:400}
+#cursorChip s{display:block;text-decoration:none;color:var(--muted);font-size:10.5px}
+
+#hint{position:absolute;left:8px;right:8px;top:64px;z-index:20;pointer-events:none;
+  text-align:center;font-family:var(--lbl);font-weight:700;font-size:11px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--amber);opacity:0;transition:opacity .18s}
+#hint.show{opacity:1}
+
+/* The on canvas controls are the touch route for everything a desktop would do
+   with a keyboard or a second mouse button. They step over an open sheet by
+   exactly its height, so a tap on them always ARRIVES. */
+#controls{position:absolute;left:8px;right:8px;bottom:calc(8px + var(--safe));z-index:20;
+  display:flex;flex-direction:column;gap:6px}
+.cbar{display:flex;gap:6px;align-items:stretch}
+.cbar button{background:#0a121bF2;backdrop-filter:blur(2px)}
+.slabChip{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+  background:#0a121bF2;border:1px solid var(--line);border-radius:4px;padding:0 6px;
+  font-family:var(--mono);font-size:11.5px;color:var(--ink);white-space:nowrap;min-width:0}
+.slabChip em{font-style:normal;color:var(--muted);font-size:10px;
+  font-family:var(--lbl);font-weight:700;letter-spacing:.12em}
+.sq{width:38px;flex:0 0 auto;padding:7px 0;font-size:14px}
+#bAct{flex:1}
+
+#tabs{display:none}
+
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr);grid-template-rows:46px minmax(0,1fr) auto}
+  .hideSm{display:none}
+  .rail{position:fixed;left:0;right:0;bottom:calc(var(--tabh) + var(--safe));
+    height:var(--sheeth);z-index:30;border-top:1px solid var(--line);
+    border-left:none;border-right:none;transform:translateY(105%);
+    transition:transform .18s ease;padding-bottom:16px}
+  .rail.open{transform:translateY(0)}
+  #controls{bottom:calc(var(--tabh) + var(--safe) + 8px)}
+  body.sheet #controls{bottom:calc(var(--sheeth) + var(--tabh) + var(--safe) + 8px)}
+  #tabs{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:40;height:calc(var(--tabh) + var(--safe));
+    padding-bottom:var(--safe);background:var(--panel2);border-top:1px solid var(--line)}
+  #tabs button{flex:1;border:none;border-radius:0;background:transparent;color:var(--muted);
+    font-size:12px;letter-spacing:.14em}
+  #tabs button.on{color:var(--cyan);background:#0d2231;box-shadow:inset 0 2px 0 var(--cyan)}
+  #view{grid-row:2}
+  #cursorChip{max-width:calc(100vw - 16px)}
+}
+@media (max-width:900px) and (max-height:620px){
+  :root{--sheeth:min(52dvh,250px);--tabh:44px}
+  header{height:42px}
+  #hint{top:56px}
+}
+</style>
+
+<div id="app">
+  <header>
+    <h1>Lattice Yard</h1>
+    <span class="stat">cells <b id="hCells">0</b>/84</span>
+    <span class="stat hideSm">mass <b id="hMass">0.00</b></span>
+    <span class="stat hideSm">hull <b id="hHull">0</b></span>
+    <span class="hgap"></span>
+    <span class="verdict" id="hVerdict">EMPTY</span>
+  </header>
+
+  <aside class="rail" id="build">
+    <h2>States to look at</h2>
+    <div class="chips" id="presets"></div>
+    <p class="note" id="presetNote"></p>
+
+    <h2>Palette</h2>
+    <div class="palette" id="palette"></div>
+
+    <h2>Build slab</h2>
+    <div class="row"><span class="lab">Axis</span></div>
+    <div class="seg" id="axisSeg"></div>
+    <div class="row" style="margin-top:8px"><span class="lab">Layer</span><span class="val" id="layerVal">-</span></div>
+    <div class="seg" style="margin-top:4px">
+      <button id="bLayerDn">&lt; back</button><button id="bLayerUp">fwd &gt;</button>
+    </div>
+    <p class="note">The lattice is <b>4 x 3 x 7 cells of 1.0 u</b>, sized from
+      ship_1.fbx at 6.9 x 3.4 x 4.0 u. <b>+Z is the bow</b>, so weapons look forward and
+      the drive sits at the stern, matching the mount offsets in data.rs.</p>
+
+    <h2>How a cell is picked</h2>
+    <p class="note">A tap on a 2D screen names a ray, not a point, so an empty lattice
+      has no single answer. Two rules remove the ambiguity, and both are visible:</p>
+    <p class="note"><b>1. The slab.</b> Exactly one layer is live at a time. The ray is
+      intersected with that one plane, so the depth is chosen by you, not guessed.
+      Off slab cells are drawn faint and cannot be picked.</p>
+    <p class="note"><b>2. Faces.</b> A tap on a placed cube takes the cell across the
+      face you touched, which is exact at any angle, and the slab snaps to it.</p>
+    <p class="note"><b>Nearest wins.</b> Slab and cube are both solid, so a tap
+      resolves to whichever is closer to you. A cube behind the slab cannot steal a
+      tap, and the slab cannot be reached through a cube in front of it.</p>
+    <p class="note">Then <b>aim, then commit</b>: the first tap only moves the cursor and
+      shows a ghost with its cost, a second tap on the same cell or the big button
+      commits. A misjudged tap costs nothing.</p>
+    <p class="note">When the slab is close to edge on the ray barely crosses it, so the
+      pick is refused and the hint says so rather than dropping a cube somewhere
+      plausible.</p>
+  </aside>
+
+  <div id="view">
+    <canvas id="cv"></canvas>
+    <div id="cursorChip"></div>
+    <div id="hint"></div>
+    <div id="controls">
+      <div class="cbar">
+        <button id="bMode" class="on">Build</button>
+        <button class="sq" id="bDn">-</button>
+        <div class="slabChip"><em id="scAxis">Z</em><span id="scVal">1/7</span></div>
+        <button class="sq" id="bUp">+</button>
+        <button class="sq" id="bAxis">XYZ</button>
+      </div>
+      <div class="cbar">
+        <button id="bAct" class="primary" disabled>Pick a cell</button>
+        <button class="sq" id="bZoomOut">-</button>
+        <button class="sq" id="bZoomIn">+</button>
+        <button class="sq" id="bSpin" title="face the slab">&#8635;</button>
+      </div>
+    </div>
+  </div>
+
+  <aside class="rail" id="core">
+    <h2>Stat readout</h2>
+    <div class="src">ft_read_design(ship) -&gt; DesignReadout
+      <i>Every number on this panel came back from the core. The client drew it and
+      computed none of it.</i></div>
+    <div id="verdictBox"></div>
+    <table id="stats"></table>
+    <h2>Weapons</h2>
+    <table id="weps"></table>
+    <h2>Legality</h2>
+    <div id="checks"></div>
+    <p class="note">The core owns legality for the same reason it owns damage: a rule
+      the client evaluated is a rule two clients can disagree about, and that reads as
+      a desync on the first turn.</p>
+  </aside>
+
+  <nav id="tabs">
+    <button id="tBuild">Build</button>
+    <button id="tCore">Core</button>
+  </nav>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// Numbers from the real project (GUIDELINES 2.1):
+//   engine/sim_core/src/data.rs - terran_frigate: hull 300, radius 3.5, mass 1.0,
+//     flight yaw 6.0 / pitch 4.0 / fwd 0.9 / retro 0.35 / lat 0.25 / max 8.0,
+//     subsystems frigate_subs(80.0), SubKind::{Armor,Thruster}
+//   data.rs W_BEAM / W_CANNON / W_MISSILE: dmg 5.0 x mult 5.5 = 27.5, missile
+//     25.0 x 1.0 = 25.0, cooldown_secs 3.0 / 4.0 / 6.0, range 300 / 200 / 250,
+//     arcs (-110,110)/(-60,60), (-90,90)/(-60,60), full sphere for missiles, batch 2
+//   prototype/sim/data.js - TURN_SECONDS 10, nominalReach()
+//   ship_1.fbx measures 6.9 x 3.4 x 4.0 u (docs/DESIGN.md asset inventory), so a
+//   1.0 u cell gives a 4 x 3 x 7 lattice.
+
+var NX=4, NY=3, NZ=7, CELL=1.0, NCELL=NX*NY*NZ;
+var TURN_SECONDS=10;
+
+// ===========================================================================
+// BOUNDARY. In the real client this whole block is one wasm call,
+//   ft_read_design(ship) -> DesignReadout,
+// and the table it reads is data.rs, next to SHIP_CLASSES. Nothing below may be
+// reimplemented in TypeScript: mass, hull, thrust, power, heat, weapon output
+// and legality are rules, and a rule in the client is a rule two clients can
+// disagree about, which lockstep reports as a desync (CLAUDE.md, ADR-6).
+// It moves to Rust as written. askTheCore() is the ONLY place in this file
+// where a derived number is produced; everything else reads its result.
+// ===========================================================================
+function askTheCore(placements){
+
+  // ---- would-be data.rs: MODULE_DEFS, one row per cube kind ----------------
+  // mass is in ShipClass mass units (terran_frigate mass = 1.0).
+  // hp feeds the hull pool; block_pct is the SubDef field, armour only.
+  // power and heat describe systems the core does NOT have yet: this table is
+  // the argument for building them, not a claim that they exist.
+  var M = {
+    engine:  {mass:0.07, hp:12, power:-6,  heat:6,  sink:0,  block:0,  sub:"Thruster"},
+    reactor: {mass:0.08, hp:12, power:18,  heat:0,  sink:0,  block:0,  sub:null},
+    heatsink:{mass:0.04, hp:10, power:-1,  heat:0,  sink:55, block:0,  sub:null},
+    armor:   {mass:0.06, hp:30, power:0,   heat:0,  sink:0,  block:80, sub:"Armor"},
+    beam:    {mass:0.05, hp:10, power:-5,  heat:24, sink:0,  block:0,  sub:null},
+    cannon:  {mass:0.06, hp:12, power:-3,  heat:16, sink:0,  block:0,  sub:null},
+    missile: {mass:0.05, hp:10, power:-2,  heat:8,  sink:0,  block:0,  sub:null}
+  };
+  // data.rs:97-131 verbatim. Plasma is a cannon with different FX.
+  var W = {
+    beam:   {kind:"Beam",    dmg:5.0,  mult:5.5, range:300, cd:3.0, arcH:110, arcV:60,  batch:1},
+    cannon: {kind:"Cannon",  dmg:5.0,  mult:5.5, range:200, cd:4.0, arcH:90,  arcV:60,  batch:1},
+    missile:{kind:"Missile", dmg:25.0, mult:1.0, range:250, cd:6.0, arcH:360, arcV:360, batch:2}
+  };
+  // Per engine flight contribution, at unit mass. Two engines on a 1.0 mass
+  // hull reproduce terran_frigate exactly: 0.9 / 0.35 / 0.25.
+  var E_FWD=0.45, E_RETRO=0.175, E_LAT=0.125;
+  var YAW_REF=6.0, PITCH_REF=4.0, REF_LEN=7, SPEED_REF=8.0, SPEED_CAP=12.0;
+  var MASS_MAX=1.20; // a frigate berth: freighter mass is 2.0 and is a different yard
+
+  var r = {cells:placements.length, mass:0, hull:0, plates:0, blockPct:0,
+    powerSupply:0, powerDraw:0, heatCap:0, heatLoad:0,
+    engines:0, turrets:0, counts:{}, orphans:[], legal:false, checks:[]};
+
+  var i, p, d;
+  for(i=0;i<placements.length;i++){
+    p=placements[i]; d=M[p.kind]; if(!d) continue;
+    r.counts[p.kind]=(r.counts[p.kind]||0)+1;
+    r.mass+=d.mass; r.hull+=d.hp;
+    r.heatCap+=d.sink; r.heatLoad+=d.heat;
+    if(d.power>0) r.powerSupply+=d.power; else r.powerDraw+=-d.power;
+    if(d.block>0){ r.plates++; r.blockPct=d.block; }
+    if(p.kind==="engine") r.engines++;
+    if(W[p.kind]) r.turrets++;
+  }
+
+  // extent, and the collision radius the core would hand the contact solver.
+  var lo=[99,99,99], hi=[-99,-99,-99];
+  for(i=0;i<placements.length;i++){
+    p=placements[i];
+    var c=[p.i,p.j,p.k];
+    for(var a=0;a<3;a++){ if(c[a]<lo[a])lo[a]=c[a]; if(c[a]>hi[a])hi[a]=c[a]; }
+  }
+  var ex=[0,0,0];
+  if(placements.length) for(i=0;i<3;i++) ex[i]=hi[i]-lo[i]+1;
+  r.extent=ex;
+  r.radius = placements.length ? Math.max(ex[0],ex[1],ex[2])*CELL/2 : 0;
+
+  // flight
+  var m = r.mass>0 ? r.mass : 1;
+  r.accelFwd   = E_FWD  *r.engines/m;
+  r.accelRetro = E_RETRO*r.engines/m;
+  r.accelLat   = E_LAT  *r.engines/m;
+  r.maxSpeed   = r.accelFwd>0 ? Math.min(SPEED_CAP, SPEED_REF*Math.sqrt(r.accelFwd/0.9)) : 0;
+  var lenF = ex[2]>0 ? REF_LEN/ex[2] : 0;
+  r.yawRate   = YAW_REF  *lenF/m;
+  r.pitchRate = PITCH_REF*lenF/m;
+  // prototype/sim/data.js nominalReach(), the distance a turn buys from rest.
+  if(r.accelFwd>0){
+    var tA=Math.min(TURN_SECONDS, r.maxSpeed/r.accelFwd);
+    r.reach = 0.5*r.accelFwd*tA*tA + r.maxSpeed*(TURN_SECONDS-tA);
+  } else r.reach=0;
+
+  // weapons
+  r.weapons=[]; r.alpha=0;
+  var order=["beam","cannon","missile"];
+  for(i=0;i<order.length;i++){
+    var k=order[i], n=r.counts[k]||0; if(!n) continue;
+    var w=W[k], each=w.dmg*w.mult, salvo=each*w.batch*n;
+    r.alpha+=salvo;
+    r.weapons.push({key:k, kind:w.kind, n:n, each:each, batch:w.batch,
+      cd:w.cd, range:w.range, arcH:w.arcH, arcV:w.arcV, salvo:salvo});
+  }
+
+  // structure: one connected body, face adjacency only.
+  var idx={}, key;
+  for(i=0;i<placements.length;i++){ p=placements[i]; idx[p.i+","+p.j+","+p.k]=i; }
+  var seen={}, q=[], nb=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  if(placements.length){
+    q.push(0); seen[0]=1;
+    while(q.length){
+      var ci=q.pop(); p=placements[ci];
+      for(i=0;i<6;i++){
+        key=(p.i+nb[i][0])+","+(p.j+nb[i][1])+","+(p.k+nb[i][2]);
+        var t=idx[key];
+        if(t!==undefined && !seen[t]){ seen[t]=1; q.push(t); }
+      }
+    }
+    for(i=0;i<placements.length;i++) if(!seen[i]) r.orphans.push(i);
+  }
+
+  function chk(id,label,ok,detail,proposed){
+    r.checks.push({id:id,label:label,ok:ok,detail:detail,proposed:!!proposed});
+  }
+  chk("hull","Has a hull", placements.length>0,
+    placements.length>0 ? r.cells+" cells placed" : "an empty lattice is not a ship");
+  chk("drive","Has a drive", r.engines>0,
+    r.engines>0 ? r.engines+" engine cubes, SubKind::Thruster"
+      : "no SubKind::Thruster: losing the last live one already costs 100% of thrust, and a hull with none has none to lose");
+  chk("guns","Has a weapon", r.turrets>0,
+    r.turrets>0 ? r.turrets+" mounts" : "no mount, so no fire slot could ever be filled");
+  chk("struct","One connected body", r.orphans.length===0,
+    r.orphans.length===0 ? "every cube shares a face with the body"
+      : r.orphans.length+" cube(s) touch nothing, drawn in red: a hull is one rigid body, and a detached volume has no way to transmit thrust");
+  chk("mass","Within the mass budget", r.mass<=MASS_MAX+1e-6,
+    r.mass.toFixed(2)+" of "+MASS_MAX.toFixed(2)+" (terran_frigate is 1.00, freighter 2.00)");
+  chk("power","Power balances", r.powerDraw<=r.powerSupply,
+    r.powerSupply+" supplied, "+r.powerDraw+" drawn", true);
+  chk("heat","Heat sinks the turn", r.heatLoad<=r.heatCap,
+    r.heatCap+" capacity, "+r.heatLoad+" per turn at full output", true);
+
+  r.legal=true; r.failed=0;
+  for(i=0;i<r.checks.length;i++) if(!r.checks[i].ok){ r.legal=false; r.failed++; }
+  r.massMax=MASS_MAX;
+  return r;
+}
+// ===================== end of the boundary ================================
+
+// Appearance only: colour, name and the label a player reads. No number here
+// reaches a stat, and nothing here decides an outcome.
+var KINDS=[
+  {id:"engine",  name:"Engine",            hex:"#FA6A0A", note:"thrust, SubKind::Thruster"},
+  {id:"reactor", name:"Reactor",           hex:"#35C7FF", note:"power, no such system in the core yet"},
+  {id:"heatsink",name:"Heatsink",          hex:"#7C8B9D", note:"heat capacity, no such system yet"},
+  {id:"armor",   name:"Armor",             hex:"#4CD97B", note:"hit volume, block_pct 80"},
+  {id:"beam",    name:"Turret beam",       hex:"#FFD24B", note:"27.5 dmg, 3.0 s, 300 u"},
+  {id:"cannon",  name:"Turret projectile", hex:"#FF4B4B", note:"27.5 dmg, 4.0 s, 200 u"},
+  {id:"missile", name:"Turret missile",    hex:"#D8E2EC", note:"25.0 x2, 6.0 s, 250 u"}
+];
+var KIND={}; for(var ki=0;ki<KINDS.length;ki++) KIND[KINDS[ki].id]=KINDS[ki];
+
+// ---- presets, the states worth looking at --------------------------------
+function C(i,j,k,kind){ return {i:i,j:j,k:k,kind:kind}; }
+var FRIGATE=[
+  C(1,1,0,"engine"),  C(2,1,0,"engine"),
+  C(1,1,1,"reactor"), C(2,1,1,"reactor"),
+  C(1,1,2,"heatsink"),C(2,1,2,"heatsink"),
+  C(1,1,3,"armor"),   C(2,1,3,"armor"),
+  C(1,1,4,"armor"),   C(2,1,4,"armor"),
+  C(1,1,5,"armor"),   C(2,1,5,"armor"),
+  C(1,2,3,"missile"),
+  C(1,0,4,"cannon"),  C(2,0,4,"cannon"),
+  C(1,1,6,"beam"),    C(2,1,6,"beam")
+];
+function clone(a){ var o=[],i; for(i=0;i<a.length;i++) o.push(C(a[i].i,a[i].j,a[i].k,a[i].kind)); return o; }
+function without(a,kind){ var o=[],i; for(i=0;i<a.length;i++) if(a[i].kind!==kind) o.push(C(a[i].i,a[i].j,a[i].k,a[i].kind)); return o; }
+var OVER=(function(){ var a=clone(FRIGATE),z;
+  for(z=2;z<=5;z++){ a.push(C(0,1,z,"armor")); a.push(C(3,1,z,"armor")); }
+  return a; })();
+var PRESETS=[
+  {id:"empty", label:"Empty", cells:[], note:"The lattice with nothing in it. The buildable volume is never a mystery: 84 cells, all of them visible, none of them guessed at."},
+  {id:"frigate", label:"Legal frigate", cells:clone(FRIGATE), note:"17 cubes that land on terran_frigate: mass 1.01, hull 302, 0.89 u/s2 forward, 7.9 u/s top speed. Every check passes."},
+  {id:"nodrive", label:"No drive", cells:without(FRIGATE,"engine"), note:"The same hull with both engine cubes deleted. It still looks like a ship and it cannot move, so the core refuses it."},
+  {id:"adrift", label:"Floating cube", cells:clone(FRIGATE).concat([C(0,2,6,"armor")]), note:"One armour cube placed in open space at the bow. It is drawn in red because the core reported it as an orphan, and the client only drew what came back."},
+  {id:"overbuilt", label:"Over mass", cells:OVER, note:"Eight more armour plates down both flanks. Nothing is illegal about the shape: it is 1.49 against a 1.20 berth, and the readout says which number failed."}
+];
+
+// ---- state ---------------------------------------------------------------
+var S={
+  cells:{},            // "i,j,k" -> kind
+  kind:"armor",
+  axis:2, layer:[1,1,3],
+  mode:"build",
+  cursor:null,
+  preset:"frigate"
+};
+function ck(i,j,k){ return i+","+j+","+k; }
+function inb(c){ return c.i>=0&&c.i<NX&&c.j>=0&&c.j<NY&&c.k>=0&&c.k<NZ; }
+function placements(){
+  var out=[],k;
+  for(k in S.cells){ var p=k.split(","); out.push({i:+p[0],j:+p[1],k:+p[2],kind:S.cells[k]}); }
+  out.sort(function(a,b){ return (a.k-b.k)||(a.j-b.j)||(a.i-b.i); });
+  return out;
+}
+function setPreset(id){
+  var i,pr=null;
+  for(i=0;i<PRESETS.length;i++) if(PRESETS[i].id===id) pr=PRESETS[i];
+  if(!pr) return;
+  S.cells={}; S.preset=id; S.cursor=null;
+  for(i=0;i<pr.cells.length;i++) S.cells[ck(pr.cells[i].i,pr.cells[i].j,pr.cells[i].k)]=pr.cells[i].kind;
+  document.getElementById("presetNote").textContent=pr.note;
+  refresh();
+}
+
+// ---- three.js scene ------------------------------------------------------
+var view=document.getElementById("view"), cv=document.getElementById("cv");
+var renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+var scene=new THREE.Scene();
+scene.background=new THREE.Color(0x070a0f);
+var camera=new THREE.PerspectiveCamera(45,1,0.1,400);
+scene.add(new THREE.AmbientLight(0xffffff,0.55));
+var key=new THREE.DirectionalLight(0xffffff,0.85); key.position.set(6,9,7); scene.add(key);
+var fill=new THREE.DirectionalLight(0x6fb6ff,0.35); fill.position.set(-7,-3,-5); scene.add(fill);
+
+var cam={yaw:0.72, pitch:0.42, dist:15.5};
+var lift=0; // px of canvas an open sheet covers, measured from the sheet
+var vDir=new THREE.Vector3(), vRight=new THREE.Vector3(), vUp=new THREE.Vector3(),
+    vPos=new THREE.Vector3(), vTgt=new THREE.Vector3();
+function place(){
+  var cp=Math.cos(cam.pitch);
+  vPos.set(cam.dist*cp*Math.sin(cam.yaw), cam.dist*Math.sin(cam.pitch), cam.dist*cp*Math.cos(cam.yaw));
+  vTgt.set(0,0,0);
+  if(lift>0 && cv.clientHeight>0){
+    // shift the whole camera rig down along screen up, so the ship rides up
+    // into the strip of canvas the sheet left visible.
+    var perPx=2*cam.dist*Math.tan(45*Math.PI/360)/cv.clientHeight;
+    var s=(lift*0.7)*perPx; // centres the ship in the strip, controls included
+    vDir.copy(vPos).multiplyScalar(-1).normalize();
+    vRight.crossVectors(vDir,new THREE.Vector3(0,1,0)).normalize();
+    vUp.crossVectors(vRight,vDir).normalize();
+    vPos.addScaledVector(vUp,-s); vTgt.addScaledVector(vUp,-s);
+  }
+  camera.position.copy(vPos);
+  camera.lookAt(vTgt);
+}
+function cellPos(i,j,k){
+  return new THREE.Vector3((i-(NX-1)/2)*CELL, (j-(NY-1)/2)*CELL, (k-(NZ-1)/2)*CELL);
+}
+function axisN(){ return new THREE.Vector3(S.axis===0?1:0, S.axis===1?1:0, S.axis===2?1:0); }
+function axisSize(a){ return [NX,NY,NZ][a]; }
+function slabCoord(){ var n=[NX,NY,NZ][S.axis]; return (S.layer[S.axis]-(n-1)/2)*CELL; }
+
+var gWireOff=null, gWireOn=null, gCubes=new THREE.Group(), gEdges=null, gOrph=null,
+    gSlab=null, gGhost=null, gCur=null;
+scene.add(gCubes);
+
+function boxEdges(arr,c,h){
+  var x=c.x,y=c.y,z=c.z;
+  var v=[[-h,-h,-h],[h,-h,-h],[h,h,-h],[-h,h,-h],[-h,-h,h],[h,-h,h],[h,h,h],[-h,h,h]];
+  var e=[0,1,1,2,2,3,3,0,4,5,5,6,6,7,7,4,0,4,1,5,2,6,3,7];
+  for(var i=0;i<e.length;i++) arr.push(x+v[e[i]][0], y+v[e[i]][1], z+v[e[i]][2]);
+}
+function lines(arr,colour,opacity){
+  var g=new THREE.BufferGeometry();
+  g.setAttribute("position",new THREE.BufferAttribute(new Float32Array(arr),3));
+  return new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:colour,transparent:true,opacity:opacity}));
+}
+function dispose(o){
+  if(!o) return;
+  scene.remove(o);
+  if(o.geometry) o.geometry.dispose();
+  if(o.material) o.material.dispose();
+}
+
+var boxGeo=new THREE.BoxGeometry(CELL*0.9,CELL*0.9,CELL*0.9);
+var matCache={};
+function mat(hex,opacity){
+  var k=hex+"|"+opacity;
+  if(!matCache[k]) matCache[k]=new THREE.MeshLambertMaterial({color:new THREE.Color(hex),
+    transparent:opacity<1, opacity:opacity});
+  return matCache[k];
+}
+
+function rebuild(core){
+  var off=[], on=[], fe=[], oe=[], i,j,k;
+  var orph={};
+  var pl=placements();
+  for(i=0;i<core.orphans.length;i++){ var o=pl[core.orphans[i]]; orph[ck(o.i,o.j,o.k)]=1; }
+
+  while(gCubes.children.length) gCubes.remove(gCubes.children[0]);
+  for(i=0;i<NX;i++) for(j=0;j<NY;j++) for(k=0;k<NZ;k++){
+    var c=cellPos(i,j,k), id=ck(i,j,k), kind=S.cells[id];
+    var live=[i,j,k][S.axis]===S.layer[S.axis];
+    if(kind){
+      var m=new THREE.Mesh(boxGeo, mat(KIND[kind].hex,1));
+      m.position.copy(c); m.userData.cell={i:i,j:j,k:k};
+      gCubes.add(m);
+      if(orph[id]) boxEdges(oe,c,CELL*0.47); else boxEdges(fe,c,CELL*0.451);
+    } else {
+      boxEdges(live?on:off, c, CELL*0.44);
+    }
+  }
+  dispose(gWireOff); dispose(gWireOn); dispose(gEdges); dispose(gOrph);
+  gWireOff=lines(off,0x2a3a4e,0.34); scene.add(gWireOff);
+  gWireOn =lines(on, 0x35C7FF,0.62); scene.add(gWireOn);
+  gEdges  =lines(fe, 0x05090e,0.9);  scene.add(gEdges);
+  gOrph   =lines(oe, 0xFF4B4B,1);    scene.add(gOrph);
+
+  // the live slab as a face, so it reads as a surface you are picking on
+  dispose(gSlab);
+  var w=[NX,NY,NZ], a=S.axis, u=(a+1)%3, v=(a+2)%3;
+  var pg=new THREE.PlaneGeometry(w[u]*CELL, w[v]*CELL);
+  gSlab=new THREE.Mesh(pg,new THREE.MeshBasicMaterial({color:0x35C7FF,transparent:true,
+    opacity:0.055,side:THREE.DoubleSide,depthWrite:false}));
+  if(a===0){ gSlab.rotation.y=Math.PI/2; gSlab.position.x=slabCoord(); }
+  else if(a===1){ gSlab.rotation.x=Math.PI/2; gSlab.position.y=slabCoord(); }
+  else { gSlab.position.z=slabCoord(); }
+  scene.add(gSlab);
+
+  // cursor and ghost
+  dispose(gCur); dispose(gGhost); gCur=null; gGhost=null;
+  if(S.cursor){
+    var cc=cellPos(S.cursor.i,S.cursor.j,S.cursor.k);
+    var filled=!!S.cells[ck(S.cursor.i,S.cursor.j,S.cursor.k)];
+    var ce=[]; boxEdges(ce,cc,CELL*0.5);
+    gCur=lines(ce, filled&&S.mode==="erase"?0xFF4B4B:0xFFD24B,1); scene.add(gCur);
+    if(!filled && S.mode==="build"){
+      gGhost=new THREE.Mesh(boxGeo, mat(KIND[S.kind].hex,0.42));
+      gGhost.position.copy(cc); scene.add(gGhost);
+    }
+  }
+}
+
+// bow marker so +Z is never in doubt
+(function(){
+  var g=new THREE.ConeGeometry(0.34,0.9,4);
+  var m=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x35C7FF,transparent:true,opacity:0.7}));
+  m.rotation.x=Math.PI/2; m.position.set(0,0,NZ*CELL/2+0.9); scene.add(m);
+  var arr=[]; arr.push(0,0,-NZ*CELL/2-0.6, 0,0,NZ*CELL/2+0.5);
+  scene.add(lines(arr,0x35C7FF,0.35));
+})();
+
+function resize(){
+  var w=view.clientWidth, h=view.clientHeight;
+  if(!w||!h) return;
+  // setSize must update the style too: with updateStyle false the canvas lays
+  // out at its backing store size, so on a devicePixelRatio 2 phone the element
+  // is twice its container and the picture is a cropped quarter.
+  renderer.setSize(w,h);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  if(!userZoomed) cam.dist=fitDist();
+}
+window.addEventListener("resize",resize);
+if(window.ResizeObserver) new ResizeObserver(resize).observe(view);
+
+// ---- picking -------------------------------------------------------------
+var ray=new THREE.Raycaster();
+function ndc(x,y){
+  var r=cv.getBoundingClientRect();
+  return new THREE.Vector2(((x-r.left)/r.width)*2-1, -((y-r.top)/r.height)*2+1);
+}
+var hintEl=document.getElementById("hint"), hintT=0;
+function hint(msg){
+  hintEl.textContent=msg||"";
+  hintEl.className=msg?"show":"";
+  clearTimeout(hintT);
+  if(msg) hintT=setTimeout(function(){ hintEl.className=""; },2600);
+}
+function snapSlab(c){ S.layer[S.axis]=[c.i,c.j,c.k][S.axis]; }
+
+function pick(x,y){
+  ray.setFromCamera(ndc(x,y),camera);
+
+  // Two candidate surfaces, and the NEAREST one wins. That single rule is what
+  // makes an empty lattice pickable: the live slab is a solid drawing surface
+  // at a depth you chose, and a cube is solid at the depth it sits at, so a tap
+  // resolves to whichever you would have touched first with a finger.
+  var cubeHit=null, cubeD=Infinity;
+  var hits=ray.intersectObjects(gCubes.children,false);
+  if(hits.length){ cubeHit=hits[0]; cubeD=cubeHit.distance; }
+
+  var slabCell=null, slabD=Infinity, n=axisN(), edgeOn=false;
+  if(Math.abs(ray.ray.direction.dot(n))<0.12){ edgeOn=true; }
+  else {
+    var p=ray.ray.intersectPlane(new THREE.Plane(n,-slabCoord()),new THREE.Vector3());
+    if(p){
+      var c={i:Math.round(p.x/CELL+(NX-1)/2), j:Math.round(p.y/CELL+(NY-1)/2), k:Math.round(p.z/CELL+(NZ-1)/2)};
+      c[["i","j","k"][S.axis]]=S.layer[S.axis];
+      if(inb(c)){ slabCell=c; slabD=ray.ray.origin.distanceTo(p); }
+    }
+  }
+
+  if(cubeHit && cubeD<=slabD){
+    var hc=cubeHit.object.userData.cell;
+    if(S.mode==="erase"){ aim(hc); return; }
+    var f=cubeHit.face.normal;
+    var t={i:hc.i+Math.round(f.x), j:hc.j+Math.round(f.y), k:hc.k+Math.round(f.z)};
+    if(inb(t) && !S.cells[ck(t.i,t.j,t.k)]){ aim(t); return; }
+    hint(inb(t)?"that face is already built on":"that face is at the lattice edge");
+    aim(hc); return;
+  }
+  if(slabCell){ aim(slabCell); return; }
+  if(edgeOn){ hint("slab is edge on, orbit or switch axis"); return; }
+  hint("outside the lattice, move the slab or orbit");
+}
+function aim(c){
+  // aim, then commit: a second tap on the same cell is the commit.
+  if(S.cursor && S.cursor.i===c.i && S.cursor.j===c.j && S.cursor.k===c.k){ act(); return; }
+  S.cursor={i:c.i,j:c.j,k:c.k};
+  snapSlab(c);
+  refresh();
+}
+function act(){
+  if(!S.cursor) return;
+  var id=ck(S.cursor.i,S.cursor.j,S.cursor.k), filled=!!S.cells[id];
+  if(S.mode==="build"){
+    if(filled){ hint("that cell is taken, switch to erase"); return; }
+    S.cells[id]=S.kind;
+  } else {
+    if(!filled){ hint("nothing there to remove"); return; }
+    delete S.cells[id];
+  }
+  S.preset="custom";
+  document.getElementById("presetNote").textContent="Edited by hand. The stat panel and the legality list are the core's answer for exactly these cubes.";
+  refresh();
+}
+
+// ---- orbit, zoom, tap ----------------------------------------------------
+var ptrs={}, drag=false, last=null, startT=0, pinch=0;
+cv.addEventListener("pointerdown",function(e){
+  cv.setPointerCapture(e.pointerId);
+  ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+  if(Object.keys(ptrs).length===1){ drag=false; last={x:e.clientX,y:e.clientY}; startT=Date.now(); }
+  else pinch=0;
+  e.preventDefault();
+});
+cv.addEventListener("pointermove",function(e){
+  if(!ptrs[e.pointerId]) return;
+  ptrs[e.pointerId]={x:e.clientX,y:e.clientY};
+  var ids=Object.keys(ptrs);
+  if(ids.length>=2){
+    var a=ptrs[ids[0]], b=ptrs[ids[1]];
+    var d=Math.sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y));
+    if(pinch) zoom((pinch-d)*0.02);
+    pinch=d; drag=true; return;
+  }
+  if(!last) return;
+  var dx=e.clientX-last.x, dy=e.clientY-last.y;
+  if(Math.abs(dx)+Math.abs(dy)>7) drag=true;
+  if(drag){
+    cam.yaw-=dx*0.008;
+    cam.pitch=Math.max(-1.35,Math.min(1.35,cam.pitch+dy*0.008));
+  }
+  last={x:e.clientX,y:e.clientY};
+});
+function up(e){
+  if(ptrs[e.pointerId]){
+    if(!drag && Object.keys(ptrs).length===1 && Date.now()-startT<700) pick(e.clientX,e.clientY);
+    delete ptrs[e.pointerId];
+  }
+  if(!Object.keys(ptrs).length){ drag=false; last=null; pinch=0; }
+}
+cv.addEventListener("pointerup",up);
+cv.addEventListener("pointercancel",up);
+cv.addEventListener("wheel",function(e){ zoom(e.deltaY*0.01); e.preventDefault(); },{passive:false});
+cv.addEventListener("contextmenu",function(e){ e.preventDefault(); });
+var userZoomed=false;
+function zoom(d){ userZoomed=true; cam.dist=Math.max(6,Math.min(34,cam.dist+d)); }
+function fitDist(){
+  // The lattice is long and low, so it needs more room across than down. Fit
+  // each screen axis to its own apparent half extent, or a phone in portrait
+  // pushes the whole yard into the far distance to satisfy a height it has
+  // plenty of.
+  var needH=4.2, needV=3.1, ty=Math.tan(45*Math.PI/360);
+  var v=needV/ty, hz=needH/(ty*Math.max(camera.aspect,0.001));
+  return Math.max(10,Math.min(34,Math.max(v,hz)));
+}
+
+// ---- readout -------------------------------------------------------------
+function f(n,d){ return n.toFixed(d===undefined?2:d); }
+var statsEl=document.getElementById("stats"), wepsEl=document.getElementById("weps"),
+    checksEl=document.getElementById("checks"), vbox=document.getElementById("verdictBox");
+
+function row(k,v,r,cls){
+  return "<tr"+(cls?' class="'+cls+'"':"")+'><td class="k">'+k+'</td><td class="v'+
+    (cls==="warnv"?" warn":cls==="badv"?" bad":"")+'">'+v+'</td><td class="r">'+(r===undefined?"":r)+"</td></tr>";
+}
+function draw(core,preview){
+  document.getElementById("hCells").textContent=core.cells;
+  document.getElementById("hMass").textContent=f(core.mass);
+  document.getElementById("hHull").textContent=core.hull;
+  var hv=document.getElementById("hVerdict");
+  if(core.cells===0){ hv.textContent="EMPTY LATTICE"; hv.className="verdict bad"; }
+  else if(core.legal){ hv.textContent="LEGAL"; hv.className="verdict"; }
+  else { hv.textContent="ILLEGAL x"+core.failed; hv.className="verdict bad"; }
+
+  var bad=[],bi;
+  for(bi=0;bi<core.checks.length;bi++) if(!core.checks[bi].ok) bad.push(core.checks[bi].label.toLowerCase());
+  vbox.innerHTML = core.legal
+    ? '<div class="check ok"><span class="mk">[ok]</span><span class="tx"><u>Design accepted</u><i>All 7 checks pass. These are the numbers the match would run with.</i></span></div>'
+    : '<div class="check no"><span class="mk">[!]</span><span class="tx"><u>'+
+      (core.cells?core.failed+" check"+(core.failed>1?"s":"")+" failed":"Nothing placed")+
+      '</u><i><b style="color:#FF4B4B">'+bad.join(", ")+
+      '.</b> The readout below is still what the core computes for this shape. It is reported, not hidden: a designer needs to see how close a rejected hull came.</i></span></div>';
+
+  var mcls=core.mass>core.massMax?"badv":"";
+  var h="<tr class='hd'><td>quantity</td><td>this design</td><td>terran frigate</td></tr>";
+  h+=row("Cells",core.cells+" / "+NCELL,"-");
+  h+=row("Mass",f(core.mass)+" / "+f(core.massMax),"1.00",mcls);
+  h+=row("Hull",core.hull.toFixed(0),"300");
+  h+=row("Radius",f(core.radius,2)+" u","3.50");
+  h+=row("Armour plates",core.plates+(core.plates?" at "+core.blockPct.toFixed(0)+"%":""),"2 at 80%");
+  h+=row("Accel fwd",f(core.accelFwd)+" u/s2","0.90","sep");
+  h+=row("Accel retro",f(core.accelRetro)+" u/s2","0.35");
+  h+=row("Accel lat",f(core.accelLat)+" u/s2","0.25");
+  h+=row("Max speed",f(core.maxSpeed,1)+" u/s","8.0");
+  h+=row("Yaw rate",f(core.yawRate,1)+" deg/s","6.0");
+  h+=row("Pitch rate",f(core.pitchRate,1)+" deg/s","4.0");
+  h+=row("Reach, 10 s turn",f(core.reach,1)+" u","44.4");
+  h+=row("Power",core.powerSupply+" / "+core.powerDraw+" drawn","-",
+    core.powerDraw>core.powerSupply?"badv":"sep");
+  h+=row("Heat, per turn",core.heatCap+" cap / "+core.heatLoad,"-",
+    core.heatLoad>core.heatCap?"badv":"");
+  h+=row("Alpha strike",f(core.alpha,1)+" dmg","-");
+  statsEl.innerHTML=h;
+
+  if(!core.weapons.length){
+    wepsEl.innerHTML="<tr><td class='k'>none mounted</td></tr>";
+  } else {
+    var w="<tr class='hd'><td>mount</td><td>salvo</td><td>cd / range</td></tr>",i;
+    for(i=0;i<core.weapons.length;i++){
+      var x=core.weapons[i];
+      w+="<tr><td class='k'>"+x.n+" x "+x.kind+"</td><td class='v'>"+f(x.salvo,1)+
+        "</td><td class='r'>"+f(x.cd,1)+" s / "+x.range+" u</td></tr>";
+      w+="<tr><td class='k' style='color:#4a5a6d'>&nbsp;&nbsp;arc "+x.arcH+" h, "+x.arcV+" v</td><td class='r' colspan='2'>"+
+        f(x.each,1)+" dmg x"+x.batch+"</td></tr>";
+    }
+    wepsEl.innerHTML=w;
+  }
+
+  var c="",i2;
+  for(i2=0;i2<core.checks.length;i2++){
+    var ch=core.checks[i2];
+    c+='<div class="check '+(ch.ok?"ok":"no")+'"><span class="mk">'+(ch.ok?"[ok]":"[!]")+
+      '</span><span class="tx"><u>'+ch.label+(ch.proposed?'<span class="tag">proposed system</span>':"")+
+      '</u><i>'+ch.detail+"</i></span></div>";
+  }
+  checksEl.innerHTML=c;
+
+  // cursor chip: the mid edit state, with the cost of the pending cube.
+  var chip=document.getElementById("cursorChip");
+  if(!S.cursor){
+    chip.innerHTML='<b>no cell picked</b><s>tap the lit slab, or a cube face</s>';
+  } else {
+    var id=ck(S.cursor.i,S.cursor.j,S.cursor.k), occ=S.cells[id];
+    var t="<b>cell "+S.cursor.i+","+S.cursor.j+","+S.cursor.k+"</b>";
+    if(occ) t+="<s>holds "+KIND[occ].name.toLowerCase()+"</s>";
+    else if(preview) t+="<s>"+KIND[S.kind].name.toLowerCase()+" pending: mass "+f(core.mass)+
+      " to "+f(preview.mass)+", hull "+core.hull+" to "+preview.hull+"</s>";
+    else t+="<s>empty</s>";
+    chip.innerHTML=t;
+  }
+
+  var act=document.getElementById("bAct");
+  if(!S.cursor){ act.textContent="Pick a cell"; act.disabled=true; act.className=""; }
+  else if(S.mode==="erase"){
+    var f2=!!S.cells[ck(S.cursor.i,S.cursor.j,S.cursor.k)];
+    act.textContent=f2?"Remove cube":"Nothing here"; act.disabled=!f2; act.className=f2?"danger":"";
+  } else {
+    var f3=!!S.cells[ck(S.cursor.i,S.cursor.j,S.cursor.k)];
+    act.textContent=f3?"Cell is taken":"Place "+KIND[S.kind].name.toLowerCase();
+    act.disabled=f3; act.className=f3?"":"primary";
+  }
+}
+
+var lastCore=null;
+function refresh(){
+  var pl=placements();
+  var core=askTheCore(pl);
+  var preview=null;
+  if(S.cursor && S.mode==="build" && !S.cells[ck(S.cursor.i,S.cursor.j,S.cursor.k)]){
+    preview=askTheCore(pl.concat([{i:S.cursor.i,j:S.cursor.j,k:S.cursor.k,kind:S.kind}]));
+  }
+  lastCore=core;
+  draw(core,preview);
+  rebuild(core);
+  syncSlab();
+  syncPresets();
+}
+
+// ---- controls ------------------------------------------------------------
+var AX=["X","Y","Z"];
+function syncSlab(){
+  var n=axisSize(S.axis), L=S.layer[S.axis];
+  document.getElementById("scAxis").textContent=AX[S.axis];
+  document.getElementById("scVal").textContent=(L+1)+"/"+n;
+  document.getElementById("layerVal").textContent=AX[S.axis]+" "+(L+1)+" of "+n;
+  var seg=document.getElementById("axisSeg").children,i;
+  for(i=0;i<seg.length;i++) seg[i].className=(i===S.axis)?"on":"";
+  document.getElementById("bDn").disabled=(L<=0);
+  document.getElementById("bUp").disabled=(L>=n-1);
+}
+function syncPresets(){
+  var b=document.getElementById("presets").children,i;
+  for(i=0;i<b.length;i++) b[i].className=(b[i].dataset.id===S.preset)?"on":"";
+}
+(function buildUI(){
+  var pw=document.getElementById("presets"),i;
+  for(i=0;i<PRESETS.length;i++){
+    (function(p){
+      var b=document.createElement("button");
+      b.textContent=p.label; b.dataset.id=p.id;
+      b.onclick=function(){ setPreset(p.id); };
+      pw.appendChild(b);
+    })(PRESETS[i]);
+  }
+  var pal=document.getElementById("palette");
+  for(i=0;i<KINDS.length;i++){
+    (function(k){
+      var b=document.createElement("button");
+      b.dataset.id=k.id;
+      b.innerHTML='<span class="sw" style="background:'+k.hex+'"></span><span class="tx"><u>'+
+        k.name+'</u><i>'+k.note+"</i></span>";
+      b.onclick=function(){
+        S.kind=k.id;
+        var all=pal.children,j;
+        for(j=0;j<all.length;j++) all[j].className=(all[j].dataset.id===k.id)?"on":"";
+        if(S.mode!=="build") setMode("build");
+        refresh();
+      };
+      if(k.id===S.kind) b.className="on";
+      pal.appendChild(b);
+    })(KINDS[i]);
+  }
+  var seg=document.getElementById("axisSeg");
+  for(i=0;i<3;i++){
+    (function(a){
+      var b=document.createElement("button");
+      b.textContent=AX[a]+" slab";
+      b.onclick=function(){ S.axis=a; refresh(); };
+      seg.appendChild(b);
+    })(i);
+  }
+})();
+function step(d){
+  var n=axisSize(S.axis);
+  S.layer[S.axis]=Math.max(0,Math.min(n-1,S.layer[S.axis]+d));
+  refresh();
+}
+function setMode(m){
+  S.mode=m;
+  var b=document.getElementById("bMode");
+  b.textContent=(m==="build")?"Build":"Erase";
+  b.className=(m==="build")?"on":"danger";
+  refresh();
+}
+document.getElementById("bDn").onclick=function(){ step(-1); };
+document.getElementById("bUp").onclick=function(){ step(1); };
+document.getElementById("bLayerDn").onclick=function(){ step(-1); };
+document.getElementById("bLayerUp").onclick=function(){ step(1); };
+document.getElementById("bAxis").onclick=function(){ S.axis=(S.axis+1)%3; refresh(); };
+document.getElementById("bMode").onclick=function(){ setMode(S.mode==="build"?"erase":"build"); };
+document.getElementById("bAct").onclick=function(){ act(); };
+document.getElementById("bZoomIn").onclick=function(){ zoom(-2.2); };
+document.getElementById("bZoomOut").onclick=function(){ zoom(2.2); };
+document.getElementById("bSpin").onclick=function(){
+  // square up on the live slab, the touch route for "look along the axis"
+  if(S.axis===0){ cam.yaw=Math.PI/2; cam.pitch=0.25; }
+  else if(S.axis===1){ cam.yaw=0.0; cam.pitch=1.15; }
+  else { cam.yaw=0.0; cam.pitch=0.22; }
+};
+// Keyboard is a desktop convenience only: every one of these has a button.
+window.addEventListener("keydown",function(e){
+  if(e.key==="[") step(-1);
+  else if(e.key==="]") step(1);
+  else if(e.key==="x"||e.key==="X") { S.axis=(S.axis+1)%3; refresh(); }
+  else if(e.key==="Enter"||e.key===" ") { act(); e.preventDefault(); }
+  else if(e.key==="e"||e.key==="E") setMode(S.mode==="build"?"erase":"build");
+});
+
+// ---- sheets --------------------------------------------------------------
+var TABS=[["tBuild","build"],["tCore","core"]];
+function openSheet(id){
+  var i,open=false;
+  for(i=0;i<TABS.length;i++){
+    var t=document.getElementById(TABS[i][0]), r=document.getElementById(TABS[i][1]);
+    var on=(TABS[i][1]===id);
+    t.className=on?"on":""; r.className=on?"rail open":"rail";
+    if(on) open=true;
+  }
+  document.body.className=open?"sheet":"";
+  setTimeout(function(){
+    resize();
+    var r=document.querySelector(".rail.open");
+    lift=r?r.getBoundingClientRect().height:0;
+  },220);
+}
+document.getElementById("tBuild").onclick=function(){ openSheet(document.getElementById("build").classList.contains("open")?null:"build"); };
+document.getElementById("tCore").onclick=function(){ openSheet(document.getElementById("core").classList.contains("open")?null:"core"); };
+
+// ---- frame ---------------------------------------------------------------
+function frame(){ requestAnimationFrame(frame); place(); renderer.render(scene,camera); }
+
+// Observation only, for the playthrough harness. It reads state and projects a
+// cell to the screen so a test can aim a real tap; it can place nothing.
+window.ftDebug={
+  core:function(){ return lastCore; },
+  cursor:function(){ return S.cursor; },
+  cells:function(){ return placements(); },
+  mode:function(){ return S.mode; },
+  slab:function(){ return {axis:S.axis, layer:S.layer[S.axis]}; },
+  camera:function(){ return {pos:camera.position.toArray(), dist:cam.dist, lift:lift}; },
+  project:function(i,j,k){
+    var p=cellPos(i,j,k).project(camera), r=cv.getBoundingClientRect();
+    return {x:r.left+(p.x*0.5+0.5)*r.width, y:r.top+(-p.y*0.5+0.5)*r.height};
+  }
+};
+
+resize();
+setPreset("frigate");
+frame();
+})();
+</script>

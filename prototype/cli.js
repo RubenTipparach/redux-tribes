@@ -7,7 +7,8 @@
 
 const sim = require("./sim/sim.js");
 const snap = require("./sim/snapshot.js");
-const { V } = require("./sim/dmath.js");
+const { V, Q } = require("./sim/dmath.js");
+const dmath = require("./sim/dmath.js");
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -139,6 +140,54 @@ function tests() {
     const lockedDist = V.dist(lockedShip.pos, locked.target);
     check("holding a heading shortens a lateral move (nose locked, RCS only)",
       freeNose > lockedDist * 1.5, "free " + freeNose.toFixed(1) + " vs slide " + lockedDist.toFixed(1));
+
+    // 6. MOVE_AND_TURN auto-faces the travel direction (DESIGN 3.2). It used to
+    //    aim the nose at the thrust vector, which falls to -vel on arrival, so
+    //    every move ended pointing back the way it came. Asked for courses
+    //    inside the hull's 60 degrees of yaw and 40 of pitch, so a rate limit
+    //    is not what is being measured.
+    const heading = (dir) => {
+      const sh = lone("terran_frigate");
+      const want = V.norm(V.v3(dir[0], dir[1], dir[2]));
+      const r = sim.flyTurn(sh, [want.x * 20, want.y * 20, want.z * 20], "MOVE_AND_TURN", {});
+      const got = Q.forward(r.endQuat);
+      return dmath.dacos(Math.max(-1, Math.min(1, V.dot(got, want)))) * 180 / Math.PI;
+    };
+    let worst = 0;
+    for (const d of [[0, 0, 1], [0.5, 0, 1], [-0.5, 0, 1], [0, 0.4, 1], [0, -0.4, 1]]) {
+      worst = Math.max(worst, heading(d));
+    }
+    check("a move ends facing the way it went (MOVE_AND_TURN auto-faces travel)",
+      worst < 5, "worst " + worst.toFixed(1) + " degrees off course");
+
+    // 7. a commanded roll is flown to, and rate limited like the other axes.
+    //    Roll MOVES the reachable set, which is easy to argue it cannot: x and
+    //    y are spent against the same lateral cap, so the budget looks
+    //    rotationally symmetric about the nose. The cap is a BOX, and a box has
+    //    corners, so rolling turns it under the wanted thrust.
+    const rolled = lone("terran_frigate");
+    const rr = sim.flyTurn(rolled, [0, 0, 20], "TURN_SLIDE", { face: [0, 0, 1], roll: 0.5 });
+    const gotRoll = sim.rollOf(rr.endQuat);
+    check("a commanded roll is flown to (attitude has three axes)",
+      gotRoll !== null && Math.abs(gotRoll - 0.5) < 0.05,
+      "asked 0.5 rad, got " + (gotRoll === null ? "null" : gotRoll.toFixed(3)));
+
+    const levelShip = lone("terran_frigate");
+    const levelEnd = sim.flyTurn(levelShip, [400, 0, 0], "TURN_SLIDE", { face: [0, 0, 1], roll: 0 });
+    const rollShip = lone("terran_frigate");
+    const rollEnd = sim.flyTurn(rollShip, [400, 0, 0], "TURN_SLIDE", { face: [0, 0, 1], roll: Math.PI / 4 });
+    const moved = V.dist(levelEnd.endPos, rollEnd.endPos);
+    check("rolling moves the reachable set (the lateral cap is a box, not a disc)",
+      moved > 1, "rolling moved the arrival point by " + moved.toFixed(2));
+
+    // 8. and the pitch axis is not inverted: a climb ends above the start, not
+    //    below it. The sign was flipped, so a nose told to come up went down
+    //    and spent its whole pitch authority doing it.
+    const climb = lone("terran_frigate");
+    const climbed = sim.flyTurn(climb, [0, 8, 20], "MOVE_AND_TURN", {});
+    check("a climb ends nose up, not nose down (pitch sign)",
+      Q.forward(climbed.endQuat).y > 0.2,
+      "end forward y " + Q.forward(climbed.endQuat).y.toFixed(3));
   }
 
   console.log("\n== slot endpoints (the Unity slot-10 bug, fixed by construction) ==");
@@ -234,6 +283,59 @@ function tests() {
     if (rd.events.some(e => e.type === "ShipDrifting" && e.ship === "E1")) drifted = true;
   }
   check("focused engine fire puts the target adrift", drifted, "enemy engine hp: " + enemy.subsystems.find(x => x.type === "thruster").hp);
+
+  console.log("\n== aimed shots reach the volume they were aimed at ==");
+  // The defect this pins: a subsystem sits INSIDE the hull sphere, so a single
+  // nearest-wins pass over both always returned the sphere and every carefully
+  // aimed shot landed on the hull. Which SHIP is nearest and WHAT it hit are
+  // two questions.
+  const aState = sim.createSkirmish("seed-aimed", {
+    player: [{ classKey: "terran_frigate", pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) }],
+    enemy: [{ classKey: "karisen_frigate", pos: V.v3(0, 0, 40), facing: V.v3(0, 0, -1) }],
+  });
+  aState.ships.forEach(sh => { sh.ai.enabled = false; });
+  const aRes = sim.resolveTurn(aState, {
+    P1: { move: { mode: "FULL_STOP" },
+      weapons: [{ weaponIndex: 0, second: 1, targetShipId: "E1", targetSub: "weapons" }] },
+    E1: { move: { mode: "FULL_STOP" } },
+  }, {});
+  const onBay = aRes.events.some(e => e.type === "Damage" && e.ship === "E1" && e.sub === "weapons");
+  check("a shot aimed at the bay damages the bay, not the hull", onBay);
+
+  console.log("\n== the bay silences every mount, and a breach takes the neighbours ==");
+  const bay = aState.ships.find(s => s.id === "E1").subsystems.find(x => x.type === "weapon");
+  bay.hp = 0; bay.dead = true;
+  const silent = sim.resolveTurn(aState, {
+    P1: { move: { mode: "FULL_STOP" } },
+    E1: { move: { mode: "FULL_STOP" },
+      weapons: [{ weaponIndex: 0, second: 1, targetShipId: "P1" }] },
+  }, {});
+  check("a mount with no bay behind it does not fire",
+    silent.events.some(e => e.type === "ShotSkippedOffline" && e.ship === "E1"));
+
+  const critState = sim.createSkirmish("seed-critical", {
+    player: [{ classKey: "terran_frigate", pos: V.v3(0, -30, 0), facing: V.v3(0, 1, 0) }],
+    enemy: [
+      { classKey: "freighter", pos: V.v3(0, 0, 0), facing: V.v3(0, 0, 1) },
+      { classKey: "karisen_frigate", pos: V.v3(8, 0, 0), facing: V.v3(0, 0, 1) },
+    ],
+  });
+  critState.ships.forEach(sh => { sh.ai.enabled = false; });
+  const near = critState.ships.find(s => s.id === "E2");
+  const nearBefore = near.hull;
+  let critical = false;
+  for (let t = 0; t < 20 && !critical; t++) {
+    const rc = sim.resolveTurn(critState, {
+      P1: { move: { mode: "FULL_STOP" },
+        weapons: [0, 1, 2].map(i => ({ weaponIndex: i, second: 1 + i, targetShipId: "E1", targetSub: "reactor" })) },
+      E1: { move: { mode: "FULL_STOP" } },
+      E2: { move: { mode: "FULL_STOP" } },
+    }, {});
+    if (rc.events.some(e => e.type === "ShipCritical" && e.ship === "E1")) critical = true;
+  }
+  check("a breached reactor goes critical", critical);
+  check("and the blast reaches a hull eight units away", near.hull < nearBefore,
+    "neighbour hull: " + near.hull.toFixed(1) + " from " + nearBefore.toFixed(1));
 
   console.log("\n" + pass + " passed, " + fail + " failed");
   return fail === 0;

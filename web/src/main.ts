@@ -10,13 +10,17 @@
 
 import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
-import { View } from './app/view.js';
+import * as THREE from 'three';
+import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
+import { Designer } from './app/designer.js';
+import { mountsOf, partsOf, rasterise, stockFor, useCore, type Design } from './app/design.js';
 import { Api } from './net/api.js';
 import {
-  type Flight, type PlannedOrder, type ShipState, type SimEvent,
-  CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
-  TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
+  type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
+  type SubState, type Vec3,
+  CLASS_KEYS, CLASS_NAMES, classIndexOf, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
+  SCENARIO_BY_NAME, SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -47,10 +51,66 @@ const STAT_ROWS: Array<[keyof Flight, string, number, number, number]> = [
 const canvas = $<HTMLCanvasElement>('cv');
 const sim = await Sim.load('./sim_core.wasm');
 const match: Match = sim.match();
+// The editor asks the core what a design is, rather than working it out. Wired
+// once, here, because `design.ts` should not know the wasm module exists: it
+// measures a picture and hands the counts over. There is deliberately no
+// fallback, so a boot that failed to wire this fails loudly at the first
+// derivation instead of quietly showing numbers nobody computed.
+useCore((cls, geo, parts) => sim.derive(cls, geo, parts));
 const view = new View(canvas, match, sim);
 
 let seed = randomSeed();
 let ships: ShipState[] = [];
+/**
+ * Every ship's hit volumes, read beside the ships themselves.
+ *
+ * Read rather than derived: what a hull carries, how each volume is doing and
+ * where it is are the core's answers, and a client that kept its own copy
+ * would be a client that can disagree with the thing resolving the turn.
+ */
+let subs: SubState[] = [];
+function readShips(): void {
+  ships = match.ships();
+  subs = match.subs();
+}
+const subsOf = (shipId: number): SubState[] => subs.filter(x => x.ship === shipId);
+
+/**
+ * What to call one volume on one ship.
+ *
+ * A frigate carries two belts, and two chips both reading "armour" is a choice
+ * a player cannot make. Repeated kinds are numbered in the core's own order,
+ * so the label, the row in the rail and the index a shot carries all agree.
+ * One helper, because three near copies of a naming rule is three chances for
+ * the rail and the chip to disagree about which one is which.
+ */
+function volumeName(shipId: number, index: number): string {
+  const all = subsOf(shipId);
+  const v = all.find(x => x.index === index);
+  if (!v) return `sub ${index}`;
+  const same = all.filter(x => x.kind === v.kind);
+  const label = SUB_LABEL[v.kind] ?? '?';
+  return same.length > 1 ? `${label} ${same.indexOf(v) + 1}` : label;
+}
+
+/**
+ * Which volume the next shot is aimed at, or null for the hull.
+ *
+ * Held as a KIND and which one of that kind, not as an index, because index 5
+ * on a frigate is its reactor and on a freighter there is no index 5 at all.
+ * "Keep shooting at the engines" is the thing a player means, and it survives
+ * changing target, which an index would not.
+ *
+ * The client's own, like the target itself: a thing being planned. It reaches
+ * the core as the `targetSub` on each queued shot, resolved against whoever is
+ * being shot at, at the moment the shot goes in the slot.
+ */
+let aim: { kind: number; nth: number } | null = null;
+function aimSubFor(targetId: number): number {
+  if (!aim) return -1;
+  const v = subsOf(targetId).filter(x => x.kind === aim!.kind)[aim.nth];
+  return v && !v.dead ? v.index : -1;
+}
 let selected = -1;
 /**
  * The hostile that weapons, boarding and Face Target all aim at.
@@ -58,15 +118,165 @@ let selected = -1;
  * -1 means "whichever enemy is still alive", which is what the whole client
  * used to do in three separate places. Now it is chosen, and chosen once.
  */
-let target = -1;
-/** Which weapon is armed for the next fire slot click, or -1. */
-let armedWeapon = -1;
+/**
+ * Who each of my ships is aiming at, by ship id.
+ *
+ * Per ship, not one pick for the fleet. A frigate on the left flank and one on
+ * the right rarely want the same hostile, and the orders already carry a target
+ * per SHOT, so a single fleet wide pick was a narrower thing than the model
+ * underneath it.
+ */
+const targets = new Map<number, number>();
+
+/**
+ * The heading each ship is trying to come round to, by ship id.
+ *
+ * A standing order, not a per turn one. A hull turns at 6 degrees a second and
+ * a turn is ten seconds, so 60 degrees is all it gets: asking for more than
+ * that used to be forgotten the moment the turn resolved, because orders are
+ * cleared once they are spent and the heading went with them. The ship stopped
+ * part way round and stayed there. The heading is re-issued each turn instead,
+ * so a hull keeps coming about until it is pointed where it was told.
+ *
+ * Move mode drops it, because that mode faces its own course (DESIGN 3.2) and
+ * a commanded heading means nothing there. Coming back to slide takes the
+ * heading the ship is ACTUALLY on at that moment, so the nose never jumps to
+ * an order given before the ship spent two turns flying somewhere else.
+ */
+const standingFace = new Map<number, Vec3>();
+
+/**
+ * The roll each ship is trying to come round to, by ship id.
+ *
+ * Standing for the same reason a heading is: a hull rolls at its yaw rate, so
+ * 60 degrees is all it gets in a turn and anything more has to survive the
+ * resolve. Roll does move the reachable set, because the lateral cap is a box
+ * and rolling turns that box under the thrust the controller wants, so the
+ * envelope carries it too.
+ */
+const standingRoll = new Map<number, number>();
+
+/** Set the climb, keeping the compass heading it is already on. */
+function setPitch(id: number, deg: number): void {
+  const cur = standingFace.get(id) ?? match.order(id).face ?? match.forward(id);
+  const a = (Math.max(-80, Math.min(80, deg)) * Math.PI) / 180;
+  const l = Math.hypot(cur.x, cur.z) || 1;
+  const c = Math.cos(a);
+  faceToward(id, { x: (cur.x / l) * c, y: Math.sin(a), z: (cur.z / l) * c });
+}
+
+/**
+ * Put a yaw onto the pitch this ship already holds.
+ *
+ * A heading is one direction, so yaw and pitch live in the same vector: the
+ * ring sets where the nose points on the compass and must not flatten whatever
+ * climb was asked for while doing it.
+ */
+function keepPitch(id: number, flat: Vec3): Vec3 {
+  const cur = standingFace.get(id) ?? match.order(id).face;
+  const rise = cur ? cur.y : 0;
+  const l = Math.hypot(flat.x, flat.z) || 1;
+  const c = Math.sqrt(Math.max(0, 1 - rise * rise));
+  return { x: (flat.x / l) * c, y: rise, z: (flat.z / l) * c };
+}
+
+/** Command a roll about the nose, in degrees from wings level. */
+function rollTo(id: number, deg: number): void {
+  const rad = (((deg + 180) % 360 + 360) % 360 - 180) * Math.PI / 180;
+  const o = match.order(id);
+  o.roll = rad;
+  standingRoll.set(id, rad);
+  if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
+}
+
+/** Command a heading for this ship, which slide mode will hold and keep. */
+function faceToward(id: number, dir: Vec3): void {
+  const l = Math.hypot(dir.x, dir.y, dir.z) || 1;
+  const unit = { x: dir.x / l, y: dir.y / l, z: dir.z / l };
+  const o = match.order(id);
+  o.face = unit;
+  standingFace.set(id, unit);
+  // Only slide reads a face, so commanding one is what puts a ship in it.
+  if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
+}
+
+/**
+ * Re-issue standing headings on a fresh turn, and seed one for a ship that has
+ * just entered slide mode from where its nose actually is.
+ */
+function restoreFacing(): void {
+  for (const s of ships) {
+    if (!mine(s) || s.destroyed) continue;
+    const want = standingFace.get(s.id);
+    // No standing heading means nothing to restore. A fresh order defaults to
+    // Move, so reading the mode here and skipping would have skipped every
+    // ship: the standing heading IS the slide order, and re-issuing one means
+    // re-issuing both.
+    if (!want) continue;
+    const o = match.order(s.id);
+    o.face = want;
+    o.mode = Mode.TurnSlide;
+    const r = standingRoll.get(s.id);
+    if (r !== undefined) o.roll = r;
+  }
+}
+/**
+ * Which second's fire slot is open, or null.
+ *
+ * Arming a weapon and then hunting for a slot is gone. It was a mode: the
+ * console looked identical whether or not one was armed, so a slot tap did
+ * nothing at all when nothing was, which is most of the time. A slot now opens
+ * the list of mounts that could fire in it, and says why any of them cannot.
+ */
+let openSlot: number | null = null;
 /** null while planning; a tick while a resolved turn is being played back. */
 let playTick: number | null = null;
 let playing = false;
 let speed = 1;
-/** null means live; a number means a past turn is being reviewed. */
-let reviewTurn: number | null = null;
+/**
+ * The review panel: watching turns already fought instead of planning one.
+ *
+ * `at` indexes `match.history`. `auto` says whether reaching the end of that
+ * turn runs on to the next recorded one. `live` is the world as it stood when
+ * a past turn was first restored, and is null while the panel is merely OPEN
+ * and aimed: aiming must not move the match, so opening the panel and stepping
+ * the picker leave the plan being written untouched.
+ *
+ * This is one state where there were two. A turn strip in the rail chose which
+ * turn the event log showed, and a Replay button in the footer re-flew the
+ * whole match from turn zero, and neither knew about the other: picking a turn
+ * and then hitting Replay watched something else. One object, one picked turn,
+ * and both buttons aim at it.
+ */
+let review: { at: number; auto: boolean; live: Float32Array | null } | null = null;
+
+/** Watching a past world, as opposed to merely having the panel open. */
+const watching = (): boolean => !!review && review.live !== null;
+/**
+ * The selected hull's attitude at the tick on screen, while one is playing
+ * back. Null when planning, where the dials read the turn boundary instead.
+ */
+let atAttitude: { forward: Vec3; roll: number } | null = null;
+/**
+ * What the AI intends this turn, by ship id, cached for the turn.
+ *
+ * The planner is a pure function of the boundary state and that state does not
+ * move while a player plans, so this is asked once rather than per scrub: a
+ * drag would otherwise re-plan every hostile per pointer event.
+ */
+let aiPlans = new Map<number, PlannedOrder & { aiTarget: number }>();
+
+/**
+ * Where hulls have been, by ship id, one entry per turn flown.
+ *
+ * Sampled from the poses the core reported for the turn that just resolved,
+ * not re-flown: the client draws history, it does not compute it.
+ */
+const trails = new Map<number, Array<{ turn: number; points: Vec3[] }>>();
+/** How much of that history is drawn. */
+let trailScope: 'off' | 'turn' | 'all' = 'turn';
+/** One sample every this many ticks. 600 ticks a turn, so 61 points a ship. */
+const TRAIL_STEP = 10;
 let flightOverride = new Map<number, Flight>();
 /** How this match was entered, which decides how its turns are resolved. */
 let launch: Launch = { kind: 'offline', seed: '', scenario: 'skirmish', humanSides: 0b01, side: 0 };
@@ -80,22 +290,71 @@ let waiting = false;
 const mine = (s: ShipState): boolean => s.side === launch.side;
 
 function start(): void {
-  match.start(seed, Scenario.Skirmish, launch.humanSides);
+  // The lobby has always carried a scenario name and this always ignored it,
+  // so every match was a skirmish however it was entered.
+  const scenario = SCENARIO_BY_NAME[launch.scenario] ?? Scenario.Skirmish;
+  // A hull picked in the lobby applies to the side that picked it, and it is
+  // the DESIGN that crosses, not its class: the core derives what it weighs,
+  // what it can take and how it flies, and hashes the result. The client's
+  // only contribution is measuring its own picture.
+  match.clearHulls();
+  const picked = launch.hull as Design | undefined;
+  let flying = '';
+  if (picked) {
+    const r = rasterise(picked);
+    const took = match.setHull(launch.side, classIndexOf(picked.classKey), {
+      plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
+    }, partsOf(picked), mountsOf(picked));
+    // The core refuses an illegal hull, and saying so beats spawning the class
+    // hull and letting a player wonder why their ship is somebody else's.
+    flying = took ? `in ${launch.hullName ?? 'your design'}`
+      : `${launch.hullName ?? 'that design'} is not legal, flying the class hull`;
+  }
+  match.start(seed, scenario, launch.humanSides);
+  // What each ship is flying, so the map draws the hull rather than a stand in
+  // for it: the picked design for the side that picked it, and each class's
+  // stock hull for everyone else.
+  const hullOf = new Map<number, Design>();
+  for (const s of match.ships()) {
+    hullOf.set(s.id, picked && s.side === launch.side
+      ? picked
+      : stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
+  }
+  view.setDesigns(hullOf);
+  // Say what was taken out, on the panel that lists it. A design picked in the
+  // lobby and never mentioned again is a pick a player cannot check.
+  $('hullNote').textContent = flying;
+  // The rings compare the field against the drive of a hull actually in the
+  // match, so they mean something for the ships being flown.
+  const own = match.ships().find(mine);
+  const drive = own ? flightOf(own.id).accelFwd : 0;
+  view.setWells(match.wells(), drive);
   view.mySide = launch.side;
   waiting = false;
   banner(false);
   flightOverride = new Map();
-  ships = match.ships();
+  readShips();
   selected = ships.find(mine)?.id ?? -1;
-  target = -1;
-  armedWeapon = -1;
+  targets.clear();
+  standingFace.clear();
+  standingRoll.clear();
+  trails.clear();
+  review = null;
+  atAttitude = null;
+  aiPlans = new Map();
+  openSlot = null;
   playTick = null;
   playing = false;
-  reviewTurn = null;
   view.setShips(ships);
   view.setSelection(selected);
   view.fit();
+  restoreFacing();
+  refreshAiPlans();
   view.invalidateEnvelope();
+  planTurnEnvelopes();
+  previewTick = TICKS_PER_TURN;
+  view.setGhosts([]);
+  view.setPaths([]);
   refreshAll();
 }
 
@@ -112,8 +371,9 @@ const selectedShip = (): ShipState | undefined => ships.find(s => s.id === selec
  * search had grown, which is exactly the divergent path GUIDELINES 5.1 calls a
  * defect.
  */
-function targetShip(): ShipState | undefined {
-  const picked = ships.find(t => t.id === target && !mine(t) && !t.destroyed);
+function targetShip(of = selected): ShipState | undefined {
+  const want = targets.get(of);
+  const picked = ships.find(t => t.id === want && !mine(t) && !t.destroyed);
   return picked ?? ships.find(t => !mine(t) && !t.destroyed);
 }
 
@@ -129,10 +389,16 @@ function flightOf(id: number): Flight {
 const shipName = (s: ShipState): string =>
   `${mine(s) ? 'P' : 'E'}${s.id + 1} ${CLASS_NAMES[s.cls] ?? '?'}`;
 
+/** The same, by id, for anything holding an order rather than a ship. */
+const nameOf = (id: number): string => {
+  const s = ships.find(x => x.id === id);
+  return s ? shipName(s) : `ship ${id + 1}`;
+};
+
 /** Planning is only possible on a live player ship, on the live turn. */
 const canPlan = (): boolean => {
   const s = selectedShip();
-  return reviewTurn === null && playTick === null && !waiting && !!s && mine(s) && !s.destroyed;
+  return !watching() && playTick === null && !waiting && !!s && mine(s) && !s.destroyed;
 };
 
 // ------------------------------------------------------------- panels --
@@ -152,8 +418,12 @@ function renderFleet(): void {
         + `${!enemy && s.id === selected ? ' sel' : ''}${isAimed ? ' tg' : ''}`
         + `${s.destroyed ? ' gone' : ''}`;
       const hullPct = Math.max(0, (100 * s.hull) / s.hullMax);
-      const subs = s.subs
-        .map((x, i) => `<div class="sub${x.dead ? ' dead' : ''}"><span>sub ${i}</span><span>${x.hp.toFixed(0)}</span></div>`)
+      // Named, because "sub 2" is a number and "engines" is a decision. The
+      // order is the core's, so the label and the index a shot carries cannot
+      // drift apart.
+      const volumes = subsOf(s.id)
+        .map(x => `<div class="sub${x.dead ? ' dead' : ''}"><span>${volumeName(s.id, x.index)}</span>`
+          + `<span>${x.dead ? 'out' : x.hp.toFixed(0)}</span></div>`)
         .join('');
       div.innerHTML =
         `<div class="nm">${shipName(s)}${isAimed ? ' &middot; TARGET' : ''}`
@@ -161,11 +431,20 @@ function renderFleet(): void {
         + `<div class="bar"><i style="width:${hullPct.toFixed(0)}%"></i></div>`
         + `<div class="sub"><span>hull ${s.hull.toFixed(0)}</span><span>${FACTION_NAMES[s.faction] ?? '?'}</span></div>`
         + `<div class="sub"><span>marines ${s.marines}</span><span>${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s</span></div>`
-        + subs;
+        // Who this hull is aiming at, on the hull's own row, because targeting
+        // is per ship: one pick for the whole fleet was narrower than the
+        // orders underneath it, which already carry a target per SHOT. For a
+        // hostile it is `aiTarget`, which the core keeps and reports, so the
+        // row says what the enemy is set on rather than guessing.
+        + (s.destroyed ? '' : `<div class="sub aim"><span>${enemy ? 'hunting' : 'target'}</span>`
+          + `<span>${enemy
+            ? (s.aiTarget >= 0 ? nameOf(s.aiTarget) : 'nobody yet')
+            : (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')}</span></div>`)
+        + volumes;
       div.onclick = () => {
         if (enemy) {
-          if (s.destroyed) return;
-          target = s.id;
+          if (s.destroyed || selected < 0) return;
+          targets.set(selected, s.id);
           refreshAll();
         } else {
           select(s.id);
@@ -194,19 +473,56 @@ function renderModes(): void {
       // A committed mode has a single outcome, so a destination it cannot
       // influence would be a lie on screen.
       if (isCommitted(mode)) delete o.target;
-      view.invalidateEnvelope();
+      if (mode === Mode.TurnSlide) {
+        // Entering slide takes the heading the nose is ACTUALLY on, so there
+        // is a heading to see and turn from at once, and so the ship never
+        // snaps to an order given before it flew somewhere else.
+        faceToward(selected, standingFace.get(selected) ?? match.forward(selected));
+      } else {
+        // Move faces its own course, so a commanded heading means nothing in
+        // it and is dropped rather than kept to surprise a later slide.
+        delete o.face;
+        delete o.roll;
+        standingFace.delete(selected);
+        standingRoll.delete(selected);
+      }
       refreshAll();
     };
     host.appendChild(b);
   }
 }
 
+/**
+ * The flight stats.
+ *
+ * Read only in a real match. A hull behaves the way its class says it does,
+ * and the numbers are still worth showing, because what a ship can do is what
+ * planning a turn is about. Sliders only in a sandbox.
+ *
+ * The lock is the CORE's: `ft_set_flight` refuses outside a sandbox, because
+ * the stats are in the state hash and a seat that could change them mid match
+ * could part two clients on its own. This asks whether it would be accepted
+ * rather than deciding for itself.
+ */
 function renderTuning(): void {
   const host = $('envTune');
   host.innerHTML = '';
   const s = selectedShip();
   if (!s) return;
   const f = flightOf(s.id);
+  if (!match.sandbox) {
+    for (const [k, label] of STAT_ROWS) {
+      const row = document.createElement('div');
+      row.className = 'tune locked';
+      row.innerHTML = `<span>${label}</span><i></i><b>${f[k].toFixed(2)}</b>`;
+      host.appendChild(row);
+    }
+    const note = document.createElement('div');
+    note.className = 'hint';
+    note.textContent = 'Class stats, fixed for the match. Start a Sandbox to change them.';
+    host.appendChild(note);
+    return;
+  }
   for (const [k, label, min, max, step] of STAT_ROWS) {
     const row = document.createElement('div');
     row.className = 'tune';
@@ -225,7 +541,6 @@ function renderTuning(): void {
       flightOverride.set(s.id, next);
       match.setFlight(s.id, next);
       out.textContent = Number(input.value).toFixed(2);
-      view.invalidateEnvelope();
       draw();
     };
     row.appendChild(input);
@@ -244,18 +559,35 @@ function renderWeapons(): void {
   for (let i = 0; i < info.mountCount; i++) {
     const m = match.mount(s.cls, i);
     if (!m) continue;
-    const queued = order.weapons.find(w => w.weaponIndex === i);
-    // Whether a mount can fire is the resolver's rule, so it is asked for
-    // rather than recomputed here.
+    const shots = order.weapons.filter(w => w.weaponIndex === i)
+      .sort((a, b) => a.second - b.second);
+    // Whether a mount can fire, and when it is next free, are the resolver's
+    // rules, so both are asked for rather than recomputed here.
     const spent = !match.canFire(s.id, i);
+    // A mount can fire more than once a turn now, so the row says how many
+    // slots are still open to it rather than just whether one is.
+    const last = shots.length ? shots[shots.length - 1]!.second : -1;
+    const nextFree = match.nextFreeSecond(s.id, i, last);
+    const room = nextFree <= TURN_SECONDS;
     const div = document.createElement('div');
-    div.className = `wrow${armedWeapon === i ? ' armed' : ''}${spent ? ' spent' : ''}`;
+    div.className = `wrow${spent || !room ? ' spent' : ''}`;
+    // A mount with no bay behind it is not cooling, and telling a player to
+    // wait for it is telling them to wait for nothing.
+    const bay = match.weaponBay(s.id);
+    const when = shots.length
+      ? ` &middot; t+${shots.map(w => w.second).join(', ')}s`
+      : !bay ? ' &middot; weapon bay out'
+      : spent ? ` &middot; ready t+${nextFree}s`
+      : '';
     div.innerHTML =
       `<span class="k">${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}</span>`
-      + `<span>${(+m.damage.toFixed(1))} dmg &middot; ${m.range.toFixed(0)} u`
-      + `${queued ? ` &middot; t+${queued.second}s` : spent ? ' &middot; cooling' : ''}</span>`;
-    if (!spent && canPlan()) {
-      div.onclick = () => { armedWeapon = armedWeapon === i ? -1 : i; refreshAll(); };
+      + `<span>${(+m.damage.toFixed(1))} dmg &middot; ${m.range.toFixed(0)} u `
+      + `&middot; ${m.cooldown.toFixed(0)}s cd${when}</span>`;
+    if (!spent && room && canPlan()) {
+      // Queues where the scrubber is standing (DESIGN 2.2), which is the
+      // second the preview on screen is showing. No arming step, so the row
+      // does the thing it names rather than putting the console in a mode.
+      div.onclick = () => { queueShot(scrubbedSecond(), i); };
     }
     host.appendChild(div);
   }
@@ -264,43 +596,274 @@ function renderWeapons(): void {
   const note = document.createElement('div');
   note.className = 'hint';
   note.textContent = !aimed ? 'No hostiles left.'
-    : armedWeapon >= 0 ? `Armed. Now tap a fire slot below to shoot ${shipName(aimed)}.`
-    : `Firing at ${shipName(aimed)}. Tap a hostile to switch.`;
+    : `Firing at ${shipName(aimed)} at t+${scrubbedSecond()}s. `
+      + 'Tap a hostile to switch, or a fire slot to pick the second.';
   host.appendChild(note);
 }
+
+/**
+ * Why this second is not free for this mount, or null when it is.
+ *
+ * Two refusals wear the same word and are not the same thing, which is what
+ * made a rail of three mounts all reading "cooling" useless: one mount had
+ * fired and was recovering, and the others were being held for a shot the
+ * player had already placed a second later. Neither said which, or how long.
+ *
+ * - `after`: the mount fired, or is set to fire earlier in this turn, and is
+ *   still inside its cooldown. `at` is the second it comes back.
+ * - `before`: nothing is cooling, but a shot IS already queued later and
+ *   firing here would push it outside its own cooldown. `at` is that shot.
+ *
+ * The core answers both: `nextFreeSecond` is asked once for the gap before the
+ * candidate and once for the shot after it, so the cooldown arithmetic is
+ * never done here. A slot the planner offers is a slot the resolver honours,
+ * because both ask the same gate.
+ */
+interface SlotBlock { kind: 'after' | 'before' | 'taken' | 'offline'; at: number }
+
+function slotBlock(
+  ship: number, weapon: number, sec: number, queued: readonly PlannedShot[],
+): SlotBlock | null {
+  const mine = queued.filter(w => w.weaponIndex === weapon).map(w => w.second).sort((a, b) => a - b);
+  if (mine.includes(sec)) return { kind: 'taken', at: sec };
+  if (!match.weaponBay(ship)) return { kind: 'offline', at: 0 };
+  const before = mine.filter(s => s < sec).pop() ?? -1;
+  const ready = match.nextFreeSecond(ship, weapon, before);
+  if (sec < ready) return { kind: 'after', at: ready };
+  const after = mine.find(s => s > sec);
+  // The shot after it has to survive too, or queuing this one would silently
+  // invalidate a shot the player already placed.
+  if (after !== undefined && after < match.nextFreeSecond(ship, weapon, sec)) {
+    return { kind: 'before', at: after };
+  }
+  return null;
+}
+
+/**
+ * The refusal, in words, with the number that makes it actionable.
+ *
+ * A countdown for a mount still recovering, because what a player wants to
+ * know is how much longer; the second itself for one being held for a shot
+ * already placed, because that is a slot they can go and look at.
+ */
+function slotBlockText(b: SlotBlock, sec: number): string {
+  if (b.kind === 'taken') return 'already firing here';
+  if (b.kind === 'offline') return 'weapon bay out';
+  return b.kind === 'after'
+    ? `-${b.at - sec}s to fire &middot; ready t+${b.at}s`
+    : `firing in ${b.at - sec}s`;
+}
+
+/** The second the scrubber is standing on, which is what the preview shows. */
+/**
+ * Move the scrubber, the preview and the range input together.
+ *
+ * One function, because they are one position: setting the preview without the
+ * input leaves the thumb pointing at a second the console is not showing.
+ */
+function scrubTo(tick: number): void {
+  const t = Math.max(0, Math.min(TICKS_PER_TURN, tick));
+  if (playTick !== null) {
+    playing = false;
+    playTick = t;
+    showTick(t);
+    return;
+  }
+  if (!canPlan()) return;
+  previewTick = t;
+  $<HTMLInputElement>('scrub').value = String(t);
+  showPreview();
+}
+
+function scrubbedSecond(): number {
+  const t = playTick ?? previewTick;
+  return Math.max(0, Math.min(TURN_SECONDS, Math.round(t / TICKS_PER_SECOND)));
+}
+
+/**
+ * Put a shot in a slot, or say why it cannot go there.
+ *
+ * The one place a shot is queued, reached from the mount list and from the
+ * slot's own menu. Two ways in, one implementation: a second copy of this is a
+ * second set of rules about when a mount may fire.
+ */
+function queueShot(sec: number, weaponIndex: number): void {
+  if (!canPlan() || selected < 0) return;
+  const t = targetShip();
+  if (!t) { flash('Nothing left to shoot at.'); return; }
+  const o = match.order(selected);
+  const block = slotBlock(selected, weaponIndex, sec, o.weapons);
+  if (block) {
+    // The same words the row shows, so the toast and the list never disagree
+    // about why a slot was refused.
+    flash(`t+${sec}s: ${slotBlockText(block, sec).replace(/&middot;/g, '.')}`);
+    return;
+  }
+  // A mount may fire more than once in a turn, so a second shot is ADDED
+  // rather than replacing the first. It used to replace it, which is what
+  // "weapons queuing is not working" looked like.
+  o.weapons.push({ weaponIndex, second: sec, targetShip: t.id, targetSub: aimSubFor(t.id) });
+  o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
+  refreshAll();
+}
+
+/**
+ * Take a shot back out of a slot.
+ *
+ * Always allowed. Whether a mount COULD fire at a second is a question about
+ * adding a shot; removing one it already has can never be refused, or a plan
+ * could be walked into a state it cannot be walked out of.
+ */
+function unqueueShot(sec: number, weaponIndex: number): void {
+  if (!canPlan() || selected < 0) return;
+  const o = match.order(selected);
+  const at = o.weapons.findIndex(w => w.second === sec && w.weaponIndex === weaponIndex);
+  if (at < 0) return;
+  o.weapons.splice(at, 1);
+  refreshAll();
+}
+
+/** A one line note under the slots, for a tap that could not do what it meant. */
+function flash(msg: string): void {
+  const el = $('slotNote');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+  clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => el.classList.add('hidden'), 2600);
+}
+let flashTimer = 0;
 
 function renderSlots(): void {
   const host = $('slots');
   host.innerHTML = '';
   const order = selected >= 0 ? match.order(selected) : null;
+  const now = scrubbedSecond();
   for (let sec = 0; sec <= TURN_SECONDS; sec++) {
     const div = document.createElement('div');
     div.className = 'slot';
     div.textContent = String(sec);
+    // Where the scrubber's thumb sits for this second. Its centre travels from
+    // half a thumb in to half a thumb from the far end, so the slot is placed
+    // on that same line rather than merely in the same order.
+    div.style.left = `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${sec} / ${TURN_SECONDS})`;
     const queued = order?.weapons.filter(w => w.second === sec) ?? [];
     if (queued.length) div.classList.add('q', 'mark');
+    if (sec === now) div.classList.add('now');
+    if (sec === openSlot) div.classList.add('open');
     div.title = queued.length
       ? queued.map(w => `weapon ${w.weaponIndex} at ship ${w.targetShip + 1}`).join(', ')
       : `second ${sec}`;
+    // A slot is a point on the timeline first, so a tap always moves the
+    // preview there. Then it offers what can be done at that second, rather
+    // than depending on a mode set somewhere else on screen.
     div.onclick = () => {
-      if (!canPlan()) return;
-      const o = match.order(selected);
-      if (armedWeapon < 0) {
-        // No weapon armed: a click clears whatever is in the slot, which is
-        // the only way to take a shot back.
-        o.weapons = o.weapons.filter(w => w.second !== sec);
-        refreshAll();
-        return;
-      }
-      const t = targetShip();
-      if (!t) return;
-      o.weapons = o.weapons.filter(w => w.weaponIndex !== armedWeapon);
-      o.weapons.push({ weaponIndex: armedWeapon, second: sec, targetShip: t.id, targetSub: -1 });
-      armedWeapon = -1;
+      scrubTo(sec * TICKS_PER_SECOND);
+      openSlot = openSlot === sec ? null : sec;
       refreshAll();
     };
     host.appendChild(div);
   }
+  renderSlotMenu();
+}
+
+/**
+ * What each mount can do in the open slot.
+ *
+ * ONE row per mount, always, in mount order. It used to list the queued shots
+ * first and then every mount, so a mount that had just fired appeared twice at
+ * the same second: once as the shot, and again underneath saying "cooling",
+ * which is the shot's own cooldown reported as though it were a second mount
+ * being refused. The list also changed length as shots went in and came out,
+ * so the row under your finger moved.
+ *
+ * A row is one of three things, and never two: the shot queued here, an offer
+ * to queue, or the reason it cannot be.
+ */
+function renderSlotMenu(): void {
+  const menu = $('slotMenu');
+  const s = selectedShip();
+  if (openSlot === null || !s || !canPlan()) {
+    menu.classList.add('hidden');
+    menu.innerHTML = '';
+    return;
+  }
+  const sec = openSlot;
+  const o = match.order(s.id);
+  const info = match.classInfo(s.cls);
+  const aimed = targetShip();
+  const rows: string[] = [
+    `<div class="smhead">t+${sec}s &middot; ${aimed ? shipName(aimed) : 'no target'}`
+    + `<button class="smx" id="smClose" aria-label="Close">&times;</button></div>`,
+  ];
+
+  // Where on the target the shots go. On the slot menu rather than in a sheet,
+  // because this is where a shot is queued and a control that only exists in a
+  // sheet is one nothing on screen says exists. Dead volumes are still listed,
+  // greyed: knowing the engines are already gone is worth a line.
+  if (aimed) {
+    const at = aimSubFor(aimed.id);
+    const seen = new Map<number, number>();
+    const chips = [
+      `<button class="aimc${at < 0 ? ' on' : ''}" data-aim="-1">hull</button>`,
+      ...subsOf(aimed.id).map(v => {
+        const nth = seen.get(v.kind) ?? 0;
+        seen.set(v.kind, nth + 1);
+        return `<button class="aimc${v.index === at ? ' on' : ''}${v.dead ? ' gone' : ''}"`
+          + `${v.dead ? ' disabled' : ` data-aim="${v.kind}:${nth}"`}>`
+          + `${volumeName(aimed.id, v.index)}`
+          + `${v.dead ? '' : ` ${Math.round(100 * v.hp / v.hpMax)}%`}</button>`;
+      }),
+    ].join('');
+    rows.push(`<div class="smaim"><span class="k">aim</span>${chips}</div>`);
+  }
+  for (let i = 0; i < info.mountCount; i++) {
+    const m = match.mount(s.cls, i);
+    if (!m) continue;
+    const here = o.weapons.filter(w => w.weaponIndex === i && w.second === sec);
+    const name = `${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}`;
+    if (here.length) {
+      // Queued here, so this row takes it back. Its own cooldown is not a
+      // reason to refuse anything: it is the consequence of this very shot.
+      const at = nameOf(here[0]!.targetShip);
+      // Where each queued shot is pointed, not where the picker is standing
+      // now: a shot keeps the aim point it was queued with.
+      const where = here[0]!.targetSub >= 0
+        ? volumeName(here[0]!.targetShip, here[0]!.targetSub)
+        : '';
+      rows.push(
+        `<div class="srow on" data-drop="${i}">`
+        + `<span class="k">${name}</span>`
+        + `<span>at ${at}${where ? `&rsquo;s ${where}` : ''}`
+        + `${here.length > 1 ? ` x${here.length}` : ''} &middot; remove</span></div>`);
+      continue;
+    }
+    const block = aimed ? slotBlock(s.id, i, sec, o.weapons) : null;
+    const why = !aimed ? 'no target' : block ? slotBlockText(block, sec) : '';
+    // Red for a wait, yellow for a plan. Same colours the map uses: a shot
+    // already placed is the yellow the tracers are drawn in.
+    const tone = block?.kind === 'after' ? ' wait' : block?.kind === 'before' ? ' soon' : '';
+    rows.push(
+      `<div class="srow${why ? ' off' : ''}${tone}"${why ? '' : ` data-add="${i}"`}>`
+      + `<span class="k">${name}</span>`
+      + `<span>${why || `queue &middot; ${(+m.damage.toFixed(1))} dmg`}</span></div>`);
+  }
+  if (!info.mountCount) rows.push('<div class="hint">no mounts</div>');
+  menu.innerHTML = rows.join('');
+  menu.classList.remove('hidden');
+  $('smClose').onclick = () => { openSlot = null; refreshAll(); };
+  menu.querySelectorAll<HTMLElement>('[data-add]').forEach(el => {
+    el.onclick = () => queueShot(sec, Number(el.dataset.add));
+  });
+  menu.querySelectorAll<HTMLElement>('[data-drop]').forEach(el => {
+    el.onclick = () => unqueueShot(sec, Number(el.dataset.drop));
+  });
+  menu.querySelectorAll<HTMLElement>('[data-aim]').forEach(el => {
+    el.onclick = () => {
+      const [kind, nth] = String(el.dataset.aim).split(':').map(Number);
+      aim = (kind ?? -1) < 0 ? null : { kind: kind as number, nth: nth ?? 0 };
+      refreshAll();
+    };
+  });
 }
 
 function renderBoard(): void {
@@ -328,27 +891,93 @@ function renderBoard(): void {
   };
 }
 
+/**
+ * The whole review panel: which turns exist, which one is aimed at, and what
+ * the transport is offering to do with it.
+ *
+ * Drawn only while the panel is open, because when it is shut none of this is
+ * in the document's flow at all.
+ */
+function renderReview(): void {
+  const panel = $('reviewPanel');
+  const open = review !== null;
+  panel.classList.toggle('hidden', !open);
+  const rb = $<HTMLButtonElement>('bReview');
+  rb.classList.toggle('on', open);
+  rb.disabled = !open && match.history.length === 0;
+  rb.title = match.history.length === 0
+    ? 'Nothing to watch yet: fight a turn first'
+    : open ? 'Close the review and return to the live turn'
+    : `Watch turns already fought, all ${match.history.length} of them`;
+  // The controls under it step up by exactly this, measured rather than
+  // guessed: the panel floats over the canvas, and a control it covers is
+  // visible, enabled and swallowing every tap. That is how the fire slots
+  // became unreachable on a phone, and it is not happening twice.
+  document.documentElement.style.setProperty('--lift',
+    open ? `${panel.offsetHeight + 10}px` : '0px');
+  if (!open || !review) return;
+
+  const rec = match.history[review.at];
+  const last = match.history.length - 1;
+  const lastRec = match.history[last];
+  const endName = lastRec ? `T${lastRec.turn}` : '--';
+  panel.classList.toggle('armed', !watching());
+  $('rpTurn').textContent = rec ? `T${rec.turn}` : '--';
+  $<HTMLButtonElement>('rpPrev').disabled = review.at <= 0;
+  $<HTMLButtonElement>('rpNext').disabled = review.at >= last;
+
+  // Watch becomes Pause once it is running, because the button under the
+  // finger has to name what the next press does, not what the last one did.
+  const running = watching() && playing;
+  const wb = $<HTMLButtonElement>('rpWatch');
+  wb.textContent = running && !review.auto ? 'Pause' : 'Watch';
+  wb.classList.toggle('on', watching() && !review.auto);
+  wb.title = 'Play this one turn';
+  const ab = $<HTMLButtonElement>('rpAuto');
+  ab.textContent = running && review.auto ? 'Pause' : 'Auto';
+  ab.classList.toggle('on', watching() && review.auto);
+  ab.title = rec ? `Play from T${rec.turn} through to ${endName}` : '';
+  const lb = $<HTMLButtonElement>('rpLive');
+  lb.disabled = !watching();
+  lb.title = 'Put the live turn back and stop watching';
+
+  const tb = $<HTMLButtonElement>('rpTrail');
+  tb.textContent = trailScope === 'off' ? 'Trails' : trailScope === 'turn' ? 'Trail 1' : 'Trail all';
+  tb.classList.toggle('on', trailScope !== 'off');
+  tb.title = 'Where hulls have been: off, the last turn, or the whole match';
+  $('rpHint').textContent = !watching()
+    ? 'aimed only: the match has not moved'
+    : review.auto ? `auto, running to ${endName}`
+    : playing ? 'watching this turn' : 'paused';
+
+  renderTurnStrip();
+  // The strip has just changed height, so the lift is re-read from the panel
+  // as it now stands rather than as it stood before the chips went in.
+  document.documentElement.style.setProperty('--lift', `${panel.offsetHeight + 10}px`);
+}
+
 function renderTurnStrip(): void {
   const host = $('turns');
   host.innerHTML = '';
-  const mk = (label: string, on: boolean, fn: () => void) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    if (on) b.classList.add('on');
-    b.onclick = fn;
-    host.appendChild(b);
-  };
-  for (const h of match.history) {
-    mk(`T${h.turn}`, reviewTurn === h.turn, () => { reviewTurn = h.turn; refreshAll(); });
-  }
-  if (match.history.length) {
-    mk('live', reviewTurn === null, () => { reviewTurn = null; refreshAll(); });
-  } else {
+  if (!match.history.length) {
     host.innerHTML = '<span class="hint">no turns resolved yet</span>';
+    return;
+  }
+  for (let i = 0; i < match.history.length; i++) {
+    const h = match.history[i];
+    if (!h) continue;
+    const b = document.createElement('button');
+    b.textContent = `T${h.turn}`;
+    if (review?.at === i) b.classList.add('on');
+    b.onclick = () => aimReview(i);
+    host.appendChild(b);
   }
 }
 
 function describe(e: SimEvent): { text: string; cls: string } | null {
+  /** " engines", or nothing when the shot took the hull rather than a volume. */
+  const volume = (shipId: number, index: number) =>
+    index < 0 ? '' : ` ${volumeName(shipId, index)}`;
   const who = (i: number) => {
     const s = ships.find(x => x.id === i);
     return s ? shipName(s) : `#${i}`;
@@ -356,18 +985,24 @@ function describe(e: SimEvent): { text: string; cls: string } | null {
   const t = `${(e.tick / 60).toFixed(1)}s `;
   switch (e.kind) {
     case EventKind.ShotFired: return { text: `${t}${who(e.ship)} fires`, cls: '' };
-    case EventKind.ShotHit: return { text: `${t}${who(e.other)} hits ${who(e.ship)}${e.aux >= 0 ? ` sub ${e.aux}` : ''}`, cls: 'hit' };
+    case EventKind.ShotHit: return { text: `${t}${who(e.other)} hits ${who(e.ship)}${volume(e.ship, e.aux)}`, cls: 'hit' };
     case EventKind.ShotMiss: return { text: `${t}${who(e.ship)} misses`, cls: '' };
     case EventKind.ShotSkippedRange: return { text: `${t}${who(e.ship)} out of range`, cls: 'warn' };
     case EventKind.ShotSkippedArc: return { text: `${t}${who(e.ship)} out of arc`, cls: 'warn' };
     case EventKind.Damage: return { text: `${t}${who(e.ship)} takes ${e.amount.toFixed(1)}`, cls: 'hit' };
-    case EventKind.SubsystemDestroyed: return { text: `${t}${who(e.ship)} sub ${e.aux} destroyed`, cls: 'warn' };
+    case EventKind.SubsystemDestroyed:
+      return { text: `${t}${who(e.ship)}${volume(e.ship, e.aux) || ' subsystem'} destroyed`, cls: 'warn' };
     case EventKind.ShipDrifting: return { text: `${t}${who(e.ship)} adrift`, cls: 'warn' };
     case EventKind.ShipDestroyed: return { text: `${t}${who(e.ship)} destroyed`, cls: 'bad' };
     case EventKind.Collision: return { text: `${t}${who(e.ship)} rams ${who(e.other)} for ${e.amount.toFixed(0)}`, cls: 'bad' };
     case EventKind.BoardingStarted: return { text: `${t}${who(e.other)} sends ${e.aux} marines to ${who(e.ship)}`, cls: 'good' };
     case EventKind.BoardingTick: return { text: `${t}${who(e.ship)} boarding: ${e.amount.toFixed(0)} vs ${e.aux}`, cls: '' };
     case EventKind.ShipCaptured: return { text: `${t}${who(e.ship)} captured`, cls: 'good' };
+    case EventKind.ShotSkippedCooldown: return { text: `${t}${who(e.ship)} mount still cooling`, cls: 'warn' };
+    case EventKind.ShotSkippedOffline:
+      return { text: `${t}${who(e.ship)} has no weapon bay left to fire from`, cls: 'warn' };
+    case EventKind.ShipCritical:
+      return { text: `${t}${who(e.ship)} REACTOR BREACH`, cls: 'bad' };
     case EventKind.GameOver: {
       const won = e.aux === launch.side;
       return { text: won ? 'VICTORY' : 'DEFEAT', cls: won ? 'good' : 'bad' };
@@ -379,9 +1014,9 @@ function describe(e: SimEvent): { text: string; cls: string } | null {
 function renderLog(): void {
   const host = $('log');
   host.innerHTML = '';
-  const entry = reviewTurn !== null
-    ? match.history.find(h => h.turn === reviewTurn)
-    : match.history[match.history.length - 1];
+  // The panel picks which turn the log reads, so the events beside the map are
+  // the events of the turn on the map.
+  const entry = review ? match.history[review.at] : match.history[match.history.length - 1];
   if (!entry) { host.innerHTML = '<div class="hint">plan a turn, then End Turn</div>'; return; }
 
   // The stored hash is a free self check: it was computed by the core at the
@@ -409,15 +1044,24 @@ function renderHeader(): void {
   // gameOver reports the winning SIDE, not a verdict: which of those is a
   // victory depends on the seat, and only the client knows the seat.
   const over = match.gameOver;
-  $('hPhase').textContent = over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
-    : reviewTurn !== null ? `REVIEW T${reviewTurn}`
+  // Watching a past turn is the phase that outranks the rest, because the turn
+  // number in the header would otherwise name a turn nobody is looking at.
+  const watched = watching() && review ? match.history[review.at] : undefined;
+  $('hPhase').textContent = watched
+    ? `WATCHING T${watched.turn}${review?.auto ? ' \u00b7 AUTO' : playing ? '' : ' \u00b7 PAUSED'}`
+    : over >= 0 ? (over === launch.side ? 'VICTORY' : 'DEFEAT')
     : waiting ? 'COMMITTED'
     : playTick !== null ? 'PLAYBACK'
     : 'PLANNING';
-  $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || reviewTurn !== null;
-  // Nothing to scrub until a turn has been resolved, and an enabled control
-  // that traps the app is worse than one that is plainly unavailable.
-  $<HTMLInputElement>('scrub').disabled = playTick === null;
+  $<HTMLButtonElement>('bEnd').disabled = over >= 0 || playTick !== null || watching();
+  renderReview();
+  // Live during playback AND during planning, but they are two states on one
+  // control: playback scrubs the turn that was resolved, planning scrubs a
+  // preview of the plan. Only the playback one touches playTick, which is the
+  // state that used to trap the console.
+  const sc = $<HTMLInputElement>('scrub');
+  sc.disabled = playTick === null && !canPlan();
+  if (playTick === null && canPlan()) sc.value = String(previewTick);
 }
 
 function renderHelp(): void {
@@ -429,8 +1073,9 @@ function renderHelp(): void {
     + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
     + '<kbd>F</kbd> face the target.<br><br>'
     + '<b>To shoot:</b> tap a hostile to make it the target, tap a weapon to arm it, '
-    + 'then tap a <b>fire slot</b> (0 to 9, the second of the turn to fire at). '
-    + 'Tap a slot with nothing armed to take the shot back.<br><br>'
+    + 'then tap a <b>fire slot</b> under the timeline to pick the second, and '
+    + 'choose a mount from the list it opens. A shot already queued there is in '
+    + 'the same list, and tapping it takes the shot back.<br><br>'
     + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
     + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
     + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
@@ -445,9 +1090,13 @@ function refreshAll(): void {
   renderWeapons();
   renderSlots();
   renderBoard();
-  renderTurnStrip();
+  // The turn strip is the review panel's, and `renderHeader` draws the panel,
+  // so it is not listed here as well: two callers for one widget is how one of
+  // them ends up drawing a state the other has moved on from.
+  renderAttitude();
   renderLog();
   renderHeader();
+  renderTrails();
   draw();
   const s = selectedShip();
   $('env').innerHTML = s ? view.envelopeSummary(s, flightOf(s.id)) : 'no ship selected';
@@ -466,27 +1115,221 @@ function draw(): void {
   if (!s) return;
   const order: PlannedOrder = selected >= 0 ? match.order(selected) : { mode: Mode.MoveAndTurn, weapons: [] };
   view.drawPlan(canPlan() ? s : undefined, order);
+  showPreview();
   envelopeWanted = true;
+}
+
+/** Units the working plane moves per step, and per step of a long press. */
+const ALT_STEP = 1;
+const ALT_FAST = 5;
+
+/**
+ * Move the working plane, and say where it now is.
+ *
+ * The step used to be 5, which is the contour interval, so the plane could
+ * only ever sit on the same ladder of heights and a target between two rungs
+ * was unpickable. A unit step reaches every height; the readout carries the
+ * value, since a plane you can put anywhere is one you can lose track of.
+ */
+function nudgeAlt(dir: number, step = ALT_STEP): void {
+  view.workAlt += dir * step;
+  view.clampWorkAlt();
+  view.setSelection(selected);
+  draw();
+  const a = view.workAlt;
+  const el = $('pAlt');
+  el.textContent = `ALT ${a > 0 ? '+' : ''}${a.toFixed(0)}`;
+  el.classList.toggle('zero', Math.abs(a) < 1e-6);
+}
+
+/**
+ * Tap for one unit, hold to keep going.
+ *
+ * A unit step is precise and slow: crossing a frigate's envelope is about
+ * forty of them. So a press held past 350 ms repeats every 90 ms, and widens
+ * to 5 units after a second, which crosses the shape in about the time the
+ * old single step took to press eight times. The click that ends a long press
+ * is swallowed, or the hold would land one extra step on release.
+ */
+function holdRepeat(el: HTMLElement, dir: number): void {
+  let delay = 0;
+  let timer = 0;
+  let ticks = 0;
+  let repeated = false;
+  const stop = (): void => {
+    clearTimeout(delay);
+    clearInterval(timer);
+    delay = 0;
+    timer = 0;
+  };
+  el.addEventListener('pointerdown', () => {
+    stop();
+    repeated = false;
+    ticks = 0;
+    delay = window.setTimeout(() => {
+      repeated = true;
+      timer = window.setInterval(() => {
+        ticks++;
+        nudgeAlt(dir, ticks > 11 ? ALT_FAST : ALT_STEP);
+      }, 90);
+    }, 350);
+  });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    el.addEventListener(ev, stop);
+  }
+  el.addEventListener('click', () => {
+    if (repeated) { repeated = false; return; }
+    nudgeAlt(dir);
+  });
+}
+
+/**
+ * Where the planning preview sits, in ticks.
+ *
+ * Defaults to the END of the turn, so the ghost shows the orientation a plan
+ * arrives with WITHOUT anyone having to scrub for it: where the nose ends up
+ * is the whole point of a slide order, and a preview you have to go looking
+ * for is one nobody sees. Scrubbing moves it; committing resets it.
+ *
+ * Separate from `playTick` on purpose, since this previews a plan that has not
+ * been committed and must never gate End Turn.
+ */
+let previewTick = TICKS_PER_TURN;
+
+/**
+ * Fly the plan and show where the ship would be, nose included.
+ *
+ * Only OUR hulls move. Before a turn is committed the other side's orders do
+ * not exist: against the AI they are planned during resolution, and against a
+ * person they have not been released. Ghosting a hostile here would be
+ * inventing its orders, and against the AI it would leak them, so the hostiles
+ * stay where they are and this stays a preview of the plan rather than a
+ * preview of the turn.
+ */
+/**
+ * Ask the AI what it means to do, once, for the turn now open.
+ *
+ * Once and not per frame: the planner is a pure function of the boundary
+ * state, that state does not move while a player plans, and a scrub calls
+ * `showPreview` per pointer event.
+ */
+function refreshAiPlans(): void {
+  aiPlans = new Map();
+  if (match.gameOver >= 0) return;
+  for (const s of ships) {
+    if (s.destroyed || mine(s)) continue;
+    const plan = match.aiPreview(s.id);
+    if (plan) aiPlans.set(s.id, plan);
+  }
+}
+
+function showPreview(): void {
+  if (!canPlan()) { view.setGhosts([]); view.setPaths([]); return; }
+  // What each hull will fly: my order for mine, the AI's own plan for one it
+  // flies. A hostile used to be drawn coasting, because the AI planned during
+  // resolution and there was no earlier answer to draw. It plans from the
+  // boundary state and writes nothing, so there is one now, and it is the very
+  // order the resolver will use rather than a guess at it.
+  const orderFor = (s: ShipState): PlannedOrder =>
+    mine(s) ? match.order(s.id) : aiPlans.get(s.id) ?? { mode: Mode.Drift, weapons: [] };
+
+  const ghosts = ships
+    .filter(s => !s.destroyed && (mine(s) || aiPlans.has(s.id)))
+    .map(s => ({
+      id: s.id, side: s.side,
+      pose: match.previewPose(s.id, orderFor(s), previewTick),
+    }))
+    .filter((g): g is { id: number; side: number; pose: Pose } => !!g.pose);
+  view.setGhosts(ghosts);
+
+  // The dials read the ghost, not the hull. Scrubbing a plan is watching the
+  // turn before it happens, so the attitude they report has to be the attitude
+  // at the second on screen: the silhouette sat at the turn boundary while the
+  // ghost it was meant to describe flew off without it.
+  const meGhost = ghosts.find(g => g.id === selected);
+  atAttitude = meGhost ? match.attitudeOf(meGhost.pose.quat) : null;
+  renderAttitude();
+
+  const paths = ships.filter(s => !s.destroyed).map(s => ({
+    id: s.id,
+    estimated: !mine(s),
+    pts: match.preview(s.id, orderFor(s), 48),
+  }));
+  view.setPaths(paths);
+
+  // Who is aiming at whom. Ours is the pick for the ship being flown; theirs
+  // is `aiTarget`, which the core keeps on the hull and reports, so a line is
+  // drawn only where the core says there is one.
+  const live = ships.filter(x => !x.destroyed);
+  const posOf = (id: number) => live.find(x => x.id === id)?.pos;
+  const links: { from: Vec3; to: Vec3; mine: boolean }[] = [];
+  const meAt = selectedShip();
+  const myTarget = meAt ? targetShip(meAt.id) : undefined;
+  if (meAt && myTarget) links.push({ from: meAt.pos, to: myTarget.pos, mine: true });
+  for (const e of live) {
+    if (mine(e)) continue;
+    // The plan for THIS turn where the AI has one, which is what a player
+    // wants to know; `aiTarget` on the hull is who it last retaliated against
+    // and is the fallback for a hull the AI is not flying.
+    const at = posOf(aiPlans.get(e.id)?.aiTarget ?? e.aiTarget);
+    if (at) links.push({ from: e.pos, to: at, mine: false });
+  }
+  view.setAiming(links);
+  // One readout for both states. It used to be two, and the planning one was
+  // an element the footer no longer has, so every preview refresh threw and
+  // took the click that asked for it with it.
+  $('hSec').textContent = ((previewTick / TICKS_PER_TURN) * TURN_SECONDS).toFixed(1);
 }
 
 let envelopeWanted = false;
 
+/**
+ * Ask for every one of this side's envelopes at the start of a turn.
+ *
+ * Reachability is fixed when a turn opens, so this is the honest moment to
+ * compute it: selecting another hull then shows a shape that is already there
+ * rather than starting a probe under the player's finger.
+ */
+function planTurnEnvelopes(): void {
+  view.planTurn(ships, orderOf, flightOf, launch.side);
+}
+
+const orderOf = (id: number): PlannedOrder => match.order(id);
+const shipOf = (id: number): ShipState | undefined => ships.find(x => x.id === id);
+
+/**
+ * One level of one ship's envelope per frame, plus the drawing.
+ *
+ * The probe never runs inline with a click or a drag. It runs here, so a heavy
+ * level costs one frame rather than blocking the gesture that asked for it,
+ * and the shape is on screen from the first coarse pass.
+ */
 function probeEnvelopeIfWanted(): void {
-  if (!envelopeWanted) return;
+  const stillGoing = view.stepShells(orderOf, flightOf, shipOf);
+  if (!envelopeWanted && !stillGoing && !view.rebuilding) return;
   envelopeWanted = false;
   const s = selectedShip();
   if (!s) return;
   const order: PlannedOrder = selected >= 0 ? match.order(selected) : { mode: Mode.MoveAndTurn, weapons: [] };
   view.drawEnvelope(canPlan() ? s : undefined, order, flightOf(s.id));
   view.drawPlaneShape(canPlan() ? s : undefined, order, flightOf(s.id));
-  $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id));
+  $('env').innerHTML = view.envelopeSummary(s, flightOf(s.id))
+    + envelopeProgress(s.id);
+  showPreview();
+}
+
+/** Say that the volume is still sharpening, and how far it has got. */
+function envelopeProgress(shipId: number): string {
+  const p = view.shellProgress(shipId);
+  if (p.done) return '';
+  return `<div class="rebuild">rebuilding &middot; ${p.at} of ${p.of} rays</div>`
+    + `<span class="rbar"><i style="width:${Math.round(p.frac * 100)}%"></i></span>`;
 }
 
 function select(id: number): void {
   selected = id;
-  armedWeapon = -1;
+  openSlot = null;
   view.setSelection(id);
-  view.invalidateEnvelope();
   refreshAll();
 }
 
@@ -497,8 +1340,9 @@ interface Drag {
   x: number;
   y: number;
   moved: boolean;
-  /** 'plan' issues a move order, 'heading' swings the nose, else camera. */
-  kind: 'plan' | 'heading' | 'pan' | 'orbit';
+  /** 'plan' issues a move order, 'yaw' drags the ring knob on the map,
+   * 'heading' swings the nose from anywhere on the plane, else camera. */
+  kind: 'plan' | 'yaw' | 'heading' | 'pan' | 'orbit';
 }
 let drag: Drag | null = null;
 const pointers = new Map<number, { x: number; y: number }>();
@@ -535,6 +1379,15 @@ canvas.addEventListener('pointerdown', ev => {
     return;
   }
 
+  // The yaw ring is a control sitting in the scene, so it is tested before
+  // anything that treats a press as a click on the world.
+  if (canPlan() && view.onYawKnob(ev.clientX, ev.clientY)) {
+    canvas.classList.add('rotating');
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'yaw' };
+    view.setLiveHeading(true);
+    return;
+  }
+
   const picked = view.pickShip(ev.clientX, ev.clientY);
   if (picked >= 0 && picked !== selected) { select(picked); }
 
@@ -548,7 +1401,7 @@ canvas.addEventListener('pointerdown', ev => {
   const p = view.planePoint(ev.clientX, ev.clientY);
   const s = selectedShip();
   let kind: Drag['kind'] = 'pan';
-  if (canPlan() && p && s && view.canReachPoint(s, flightOf(s.id), match.order(s.id), p)) {
+  if (canPlan() && p && s && view.sliceContains(p)) {
     kind = ev.shiftKey ? 'heading' : 'plan';
   } else if (ev.pointerType !== 'mouse' && !view.panMode) {
     // Touch has no second button, so the toolbar toggle still decides what one
@@ -577,6 +1430,12 @@ canvas.addEventListener('pointermove', ev => {
   drag.y = ev.clientY;
   if (Math.abs(dx) + Math.abs(dy) > 1) drag.moved = true;
 
+  if (drag.kind === 'yaw') {
+    const s = selectedShip();
+    const dir = view.yawFromPointer(ev.clientX, ev.clientY);
+    if (s && dir) { faceToward(s.id, keepPitch(s.id, dir)); refreshAll(); }
+    return;
+  }
   if (drag.kind === 'pan') { view.pan(dx, dy); return; }
   if (drag.kind === 'orbit') { view.orbit(dx, dy); return; }
 
@@ -591,7 +1450,11 @@ canvas.addEventListener('pointermove', ev => {
     // unstuck; walking in from a reachable point keeps it under the finger and
     // lands it exactly on the edge. Either way the plan on screen is always a
     // plan the ship could fly, because the point comes from the core.
-    const q = view.clampToReach(s, flightOf(s.id), o, p);
+    // Clamped into the area drawn at this elevation, so the marker cannot
+    // leave the highlight, and always AT that elevation: a target off the
+    // slice plane is not a target on the plane the section describes. No point
+    // means no update, rather than moving the plan somewhere arbitrary.
+    const q = view.clampToSlice(p);
     if (!q) return;
     o.target = q;
     // A commanded destination with a held heading is a slide; asking for both
@@ -606,7 +1469,6 @@ canvas.addEventListener('pointermove', ev => {
       if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
     }
   }
-  view.invalidateEnvelope();
   draw();
 });
 
@@ -615,10 +1477,50 @@ function endPointer(ev: PointerEvent): void {
   if (pointers.size < 2) pinchDist = 0;
   if (drag && drag.id === ev.pointerId) {
     canvas.classList.remove('rotating');
-    const wasPlan = drag.kind === 'plan' || drag.kind === 'heading';
+    const wasPlan = drag.kind === 'plan' || drag.kind === 'heading' || drag.kind === 'yaw';
+    const kind = drag.kind;
     drag = null;
+    // The hand is off, so the boundary may sharpen to the full ladder again.
+    // Before the refresh, so the request that follows is not still capped.
+    if (kind === 'yaw' || kind === 'heading') view.setLiveHeading(false);
     if (wasPlan) refreshAll();
+    if (kind === 'plan') logPlacement();
   }
+}
+
+/**
+ * Say where the plan ended up, once the hand comes off it.
+ *
+ * Printed on release rather than per pointer move, which would be a line a
+ * pixel. The estimate is one flight of the planned order through the core, so
+ * it is what the ship will actually do rather than what was asked for: those
+ * differ by however much of the turn the hull could not deliver.
+ *
+ * The target's y must equal the slice elevation exactly. It is the plane the
+ * highlighted area is a section of, so a target off it is a target outside the
+ * region that was drawn to place it.
+ */
+function logPlacement(): void {
+  const s = selectedShip();
+  if (!s) return;
+  const o = match.order(s.id);
+  const y = view.planeY();
+  if (!o.target) {
+    console.log(`FT place | elevation ${y.toFixed(3)} | no target`);
+    return;
+  }
+  const est = match.previewPose(s.id, o, TICKS_PER_TURN)?.pos;
+  const t = o.target;
+  console.log(
+    `FT place | elevation ${y.toFixed(3)}`
+    + ` | target (${t.x.toFixed(3)}, ${t.y.toFixed(3)}, ${t.z.toFixed(3)})`
+    + ` | ship est ${est
+      ? `(${est.x.toFixed(3)}, ${est.y.toFixed(3)}, ${est.z.toFixed(3)})`
+      : 'none'}`
+    + ` | ship now (${s.pos.x.toFixed(3)}, ${s.pos.y.toFixed(3)}, ${s.pos.z.toFixed(3)})`
+    + ` | inside ${view.sliceContains(t)}`
+    + (t.y === y ? '' : `  OFF PLANE by ${(t.y - y).toFixed(4)}`),
+  );
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
@@ -634,27 +1536,20 @@ addEventListener('keydown', ev => {
   const nudgeHeading = (deg: number) => {
     if (!canPlan()) return;
     const o = match.order(s.id);
-    const cur = o.face ?? match.forward(s.id);
+    const cur = o.face ?? standingFace.get(s.id) ?? match.forward(s.id);
     const a = Math.atan2(cur.x, cur.z) + (deg * Math.PI) / 180;
-    o.face = { x: Math.sin(a), y: 0, z: Math.cos(a) };
-    if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
-    view.invalidateEnvelope();
+    faceToward(s.id, { x: Math.sin(a), y: 0, z: Math.cos(a) });
     refreshAll();
   };
   switch (ev.key.toLowerCase()) {
-    case 'q': view.workAlt -= 5; view.setSelection(selected); draw(); break;
-    case 'e': view.workAlt += 5; view.setSelection(selected); draw(); break;
+    case 'q': nudgeAlt(-1); break;
+    case 'e': nudgeAlt(1); break;
     case 'a': nudgeHeading(-15); break;
     case 'd': nudgeHeading(15); break;
     case 'f': {
       const t = targetShip();
       if (!t || !canPlan()) break;
-      const o = match.order(s.id);
-      const d = { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z };
-      const l = Math.hypot(d.x, d.z) || 1;
-      o.face = { x: d.x / l, y: 0, z: d.z / l };
-      if (o.mode === Mode.MoveAndTurn) o.mode = Mode.TurnSlide;
-      view.invalidateEnvelope();
+      faceToward(s.id, { x: t.pos.x - s.pos.x, y: 0, z: t.pos.z - s.pos.z });
       refreshAll();
       break;
     }
@@ -684,7 +1579,7 @@ $('bEnd').onclick = () => { void endTurn(); };
  * discover about itself.
  */
 async function endTurn(): Promise<void> {
-  if (match.gameOver >= 0 || playTick !== null || reviewTurn !== null || waiting) return;
+  if (match.gameOver >= 0 || playTick !== null || watching() || waiting) return;
 
   const turn = match.turn;
   const own = new Map(match.orders);
@@ -720,10 +1615,14 @@ async function endTurn(): Promise<void> {
 
   waiting = false;
   banner(false);
-  ships = match.ships();
+  readShips();
   view.setShips(ships);
+  recordTrails();
   playTick = 0;
   playing = true;
+  previewTick = TICKS_PER_TURN;
+  view.setGhosts([]);
+  view.setPaths([]);
   refreshAll();
 }
 
@@ -774,12 +1673,194 @@ $('cMode').onclick = () => {
     : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
-$('pUp').onclick = () => { view.workAlt += 5; view.setSelection(selected); draw(); };
-$('pDown').onclick = () => { view.workAlt -= 5; view.setSelection(selected); draw(); };
+/**
+ * The heading dials, over the viewport.
+ *
+ * One control per axis the core can be told about, and both read the SHIP:
+ * the dim needle is where the nose is, the bright one is where it was told to
+ * point, so the gap a hull still has to turn through is the thing on screen
+ * rather than a number to work out. A hull gets 60 degrees of yaw a turn, so
+ * that gap is most of what planning a heading is about.
+ *
+ * Dragging anywhere in a dial sets the angle: a dial is an angle, so the whole
+ * face is the target rather than a knob to catch.
+ */
+function dialDrag(id: string, apply: (deg: number, e: PointerEvent) => void): void {
+  const el = $(id);
+  let held = -1;
+  const set = (e: PointerEvent) => {
+    const r = el.getBoundingClientRect();
+    const dx = e.clientX - (r.left + r.width / 2);
+    const dy = e.clientY - (r.top + r.height / 2);
+    // A thumb near the middle has no angle worth reading: a pixel of travel
+    // there swings the value through a whole turn. Below a fifth of the radius
+    // the dial simply waits for the finger to move out.
+    if (Math.hypot(dx, dy) < r.width * 0.1) return;
+    // Zero is straight up, which is where the ball rests and where a hull's
+    // own up points when its wings are level.
+    apply(Math.atan2(dx, -dy) * 180 / Math.PI, e);
+  };
+  el.addEventListener('pointerdown', e => {
+    if (!canPlan() || selected < 0) return;
+    e.preventDefault();
+    held = e.pointerId;
+    try { el.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ }
+    // A heading is moving, so the envelope follows at a fixed rate rather than
+    // once per event. Released below, which the dial had no handler for at all
+    // before: it tracked the finger and never told anything the drag was over.
+    view.setLiveHeading(true);
+    set(e);
+  });
+  el.addEventListener('pointermove', e => {
+    // Only while held. `buttons` covers mouse and touch alike.
+    if (e.pointerId !== held || e.buttons === 0 || !canPlan() || selected < 0) return;
+    set(e);
+  });
+  const release = (e: PointerEvent) => {
+    if (e.pointerId !== held) return;
+    held = -1;
+    view.setLiveHeading(false);
+    refreshAll();
+  };
+  for (const ev of ['pointerup', 'pointercancel'] as const) el.addEventListener(ev, release);
+}
+
+dialDrag('atRoll', deg => {
+  const s = selectedShip();
+  if (!s) return;
+  rollTo(s.id, deg);
+  refreshAll();
+});
+dialDrag('atPitch', deg => {
+  const s = selectedShip();
+  if (!s) return;
+  // The pitch dial is the right half of a circle, so the pointer angle from
+  // straight up maps to a climb of 90 minus that. Clamped to what the arc
+  // shows, since past vertical the heading has no bearing left to hold.
+  setPitch(s.id, Math.max(-80, Math.min(80, 90 - deg)));
+  refreshAll();
+});
+
+/** Tick marks, drawn once: they never move. */
+(() => {
+  const g = $('atRollTicks');
+  // Eight, not twelve. Twelve marks round a circle is an hour ring, and with a
+  // two part silhouette inside it the whole dial was being read as a clock.
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    // Only the quarters are long, so up, down and the two beam ends stand out.
+    const long = i % 2 === 0;
+    const r0 = long ? 38 : 42;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(Math.sin(a) * r0));
+    line.setAttribute('y1', String(-Math.cos(a) * r0));
+    line.setAttribute('x2', String(Math.sin(a) * 45));
+    line.setAttribute('y2', String(-Math.cos(a) * 45));
+    g.appendChild(line);
+  }
+})();
+
+/**
+ * The pitch scale, drawn once.
+ *
+ * Marked in the units it reports rather than in even slices of a circle: every
+ * 20 degrees of climb, long at the multiples of 40, so the ends of the arc are
+ * the clamp the dial actually enforces and the middle one is level.
+ */
+(() => {
+  const g = $('atPitchTicks');
+  for (let p = -80; p <= 80; p += 20) {
+    const a = (p * Math.PI) / 180;
+    const long = p % 40 === 0;
+    const r0 = long ? 38 : 42;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(Math.cos(a) * r0));
+    line.setAttribute('y1', String(-Math.sin(a) * r0));
+    line.setAttribute('x2', String(Math.cos(a) * 45));
+    line.setAttribute('y2', String(-Math.sin(a) * 45));
+    g.appendChild(line);
+  }
+})();
+
+/**
+ * Point both dials at what the ship is doing.
+ *
+ * The needles are set from the SHIP, never from the last drag, so a heading
+ * that came from Face Target or from a standing order left over from an
+ * earlier turn shows up on them like any other.
+ */
+function renderAttitude(): void {
+  const s = selectedShip();
+  const on = !!s && canPlan();
+  $('attitude').classList.toggle('off', !s);
+  for (const d of ['atRoll', 'atPitch']) $(d).classList.toggle('numb', !on);
+  if (!s) return;
+  // While a turn plays back the hull is posed from the recorded track, so the
+  // dials read THAT rather than the turn boundary: a silhouette frozen at the
+  // start of a turn is not showing the roll being flown in front of it.
+  const now = atAttitude ? atAttitude.forward : match.forward(s.id);
+  // Playing back a resolved turn there is no order left to command, so the
+  // bright needle follows the hull. While planning the order is exactly what
+  // the bright needle is for, even though the dim one now moves with the scrub.
+  const spent = playTick !== null;
+  const cmd = spent ? now : (standingFace.get(s.id) ?? match.order(s.id).face ?? now);
+  const climb = (v: Vec3) => (Math.asin(Math.max(-1, Math.min(1, v.y))) * 180) / Math.PI;
+  const rollNow = ((atAttitude ? atAttitude.roll : match.rollOf(s.id)) * 180) / Math.PI;
+  const rollCmd = spent ? rollNow * Math.PI / 180
+    : (standingRoll.get(s.id) ?? match.order(s.id).roll);
+  const rollDeg = rollCmd === undefined ? rollNow : (rollCmd * 180) / Math.PI;
+
+  // Both start upright, where a hull's own up is world up, so a roll turns
+  // them by the roll itself. Positive, NOT negated: a drag reads its angle
+  // clockwise from twelve and an SVG rotate turns clockwise too, so negating
+  // put the ball on the opposite side of the dial from the finger that had
+  // just placed it. The value was right and the picture was mirrored.
+  $('atRollNow').setAttribute('transform', `rotate(${rollNow.toFixed(2)})`);
+  $('atRollCmd').setAttribute('transform', `rotate(${rollDeg.toFixed(2)})`);
+  $('atRollV').textContent = `${Math.round(rollDeg)}`;
+  $('atRoll').setAttribute('aria-valuenow', String(Math.round(rollDeg)));
+
+  // The pitch hull and its needle start pointing along +X, so a climb rotates
+  // them the other way: on screen up is negative y.
+  $('atPitchNow').setAttribute('transform', `rotate(${(-climb(now)).toFixed(2)})`);
+  $('atPitchCmd').setAttribute('transform', `rotate(${(-climb(cmd)).toFixed(2)})`);
+  const p = Math.round(climb(cmd));
+  $('atPitchV').textContent = `${p > 0 ? '+' : ''}${p}`;
+  $('atPitch').setAttribute('aria-valuenow', String(p));
+}
+
+holdRepeat($('pUp'), 1);
+holdRepeat($('pDown'), -1);
 $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
 $('pCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
 $('pFace').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
 
+// The one always visible entry point. Everything else about reviewing lives
+// inside the panel it opens.
+$('bReview').onclick = () => { if (review) closeReview(); else openReview(); };
+$('rpClose').onclick = closeReview;
+$('rpPrev').onclick = () => { if (review) aimReview(review.at - 1); };
+$('rpNext').onclick = () => { if (review) aimReview(review.at + 1); };
+// Watch and Auto are the same act aimed at the same turn, differing only in
+// whether the end of it runs on. Pressing either while it is already running
+// that way pauses, so one button says both what it will do and what it is
+// doing.
+const transport = (auto: boolean) => () => {
+  if (!review) return;
+  if (watching() && review.auto === auto && playing) { playing = false; renderHeader(); return; }
+  if (watching() && review.auto === auto && playTick !== null) {
+    review.auto = auto; playing = true; renderHeader(); return;
+  }
+  watchTurn(review.at, auto);
+  refreshAll();
+};
+$('rpWatch').onclick = transport(false);
+$('rpAuto').onclick = transport(true);
+$('rpLive').onclick = () => { backToLive(); refreshAll(); };
+$('rpTrail').onclick = () => {
+  trailScope = trailScope === 'turn' ? 'all' : trailScope === 'all' ? 'off' : 'turn';
+  refreshAll();
+};
 $('bSpeed').onclick = () => {
   speed = speed === 1 ? 2 : speed === 2 ? 4 : 1;
   $('bSpeed').textContent = `${speed}x`;
@@ -792,11 +1873,21 @@ const scrub = $<HTMLInputElement>('scrub');
 // never finished, never returned to planning, and End Turn stayed disabled
 // forever. The scrubber is also inert outside playback, so a stray thumb on a
 // phone cannot enter that state from the planning phase at all.
+// Two independent states on one control. During PLAYBACK it scrubs the turn
+// that was resolved; during PLANNING it scrubs a preview of the plan. The
+// planning one must never touch playTick: `playing = false` with a tick set is
+// a state nothing could leave, since the frame loop only advances while
+// playing, and that is exactly the freeze that took End Turn with it.
 scrub.oninput = () => {
-  if (playTick === null) return;
-  playing = false;
-  playTick = Number(scrub.value);
-  showTick(playTick);
+  if (playTick !== null) {
+    playing = false;
+    playTick = Number(scrub.value);
+    showTick(playTick);
+    return;
+  }
+  if (!canPlan()) return;
+  previewTick = Number(scrub.value);
+  showPreview();
 };
 scrub.onchange = () => {
   if (playTick === null) return;
@@ -822,45 +1913,380 @@ $('tFit').onclick = () => view.fit();
 
 // ------------------------------------------------------------ playback --
 
-function showTick(tick: number): void {
-  view.setPoses(match.poses(tick));
-  view.setProjectiles(match.trackProjectiles(tick));
-
-  // Beams last one tick in the simulation, so they are drawn from the event
-  // stream for the tick being shown rather than kept as objects.
-  const entry = match.history[match.history.length - 1];
-  const beams = (entry?.events ?? [])
-    .filter(e => e.kind === EventKind.ShotFired && Math.abs(e.tick - tick) < 6)
-    .map(e => ({ from: e.pos, to: e.to }));
-  view.setBeams(beams);
-
-  scrub.value = String(tick);
-  $('hSec').textContent = (tick / 60).toFixed(1);
+/** The turn whose track and events are on screen: the one being watched in
+ * the review panel, else the one just resolved. */
+function shownRecord(): typeof match.history[number] | undefined {
+  return match.history[shownIndex()];
 }
 
+/** Which turn record is on screen, as an index into the history. */
+function shownIndex(): number {
+  return watching() && review ? review.at : match.history.length - 1;
+}
+
+function showTick(tick: number): void {
+  const poses = match.poses(tick);
+  view.setPoses(poses);
+  // The dials follow the hull through the turn rather than sitting at the
+  // attitude it started from. Asked of the core per tick, because forward and
+  // wings level are its conventions and a renderer holding a second opinion
+  // about either is how two clients start disagreeing.
+  const me = poses.find(p => p.id === selected && !p.destroyed);
+  atAttitude = me ? match.attitudeOf(me.quat) : null;
+  renderAttitude();
+  view.setProjectiles(match.trackProjectiles(tick));
+
+  // Beams last one tick in the simulation, so what is on screen is drawn from
+  // the event stream for the tick being shown rather than kept as an object.
+  // Blasts come off the same stream. Both carry an age, so both can be
+  // scrubbed backwards.
+  const events = shownRecord()?.events ?? [];
+  view.setBeams(events
+    .filter(e => e.kind === EventKind.ShotFired
+                 && tick >= e.tick && tick < e.tick + BEAM_TICKS)
+    .map(e => ({ from: e.pos, to: e.to, age: (tick - e.tick) / BEAM_TICKS })));
+  view.setBlasts(blastsAt(events, tick));
+  // What the turn has taken off each hull, and the chunks still in the air.
+  // Both are drawn from the same event stream, so scrubbing back puts the
+  // cells back and a re-watch throws the same debris.
+  // One monotone axis for the whole match, so a scar from turn three is still
+  // there in turn four and scrubbing backwards puts cells back: a turn index
+  // and a tick inside it, which the view compares against the same number.
+  view.setDamage(carveHistory(), shownIndex() * TICKS_PER_TURN + tick);
+
+  // The tail past the end of the turn is effects finishing, not time passing,
+  // so the scrubber and the clock both stop at the turn's own length.
+  const shown = Math.min(TICKS_PER_TURN, tick);
+  scrub.value = String(shown);
+  $('hSec').textContent = (shown / 60).toFixed(1);
+}
+
+/**
+ * How far past the end of a turn its playback has to run for every effect to
+ * finish, in ticks.
+ *
+ * A hull killed at second 9.5 used to be a flash and a cut: the turn ended at
+ * 600 and took the fireball with it, and in a battle replay the next turn
+ * started over the top of it. So playback holds at the final pose for exactly
+ * as long as something is still burning, and not one tick longer when nothing
+ * is.
+ */
+function tailFor(events: readonly SimEvent[]): number {
+  let need = 0;
+  for (const e of events) {
+    const life = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision ? KILL_TICKS
+      : e.kind === EventKind.ShotHit ? HIT_TICKS
+      : e.kind === EventKind.ShotFired ? BEAM_TICKS
+      : 0;
+    if (life) need = Math.max(need, e.tick + life - TICKS_PER_TURN);
+  }
+  return Math.max(0, Math.min(FX_TICKS, need));
+}
+
+/**
+ * Keep the track the turn that just resolved was flown along.
+ *
+ * Taken from the core's own poses, once, rather than re-derived whenever the
+ * overlay is drawn: the track is a fact about a turn that has happened, and
+ * asking again per frame would be several hundred boundary crossings to be
+ * told the same thing.
+ */
+function recordTrails(): void {
+  const turn = match.history.length - 1;
+  if (turn < 0) return;
+  const leg = new Map<number, Vec3[]>();
+  for (let t = 0; t <= TICKS_PER_TURN; t += TRAIL_STEP) {
+    for (const p of match.poses(t)) {
+      // A wreck's track stops where it died rather than running on.
+      if (p.destroyed) continue;
+      let pts = leg.get(p.id);
+      if (!pts) leg.set(p.id, pts = []);
+      pts.push(p.pos);
+    }
+  }
+  for (const [id, points] of leg) {
+    let byShip = trails.get(id);
+    if (!byShip) trails.set(id, byShip = []);
+    // Keyed by turn rather than pushed, because a ship that dies stops adding
+    // legs and its list would otherwise stop lining up with the turn numbers.
+    byShip.push({ turn, points });
+  }
+}
+
+/**
+ * Watch the whole match back, from the records rather than from a second copy
+ * of what happened.
+ *
+ * Each turn is restored from the snapshot it began at and resolved again in
+ * place, which is the same thing `replay` does to check a hash, so the track
+ * on screen is the core re-flying the turn rather than a recording of pixels.
+ * It costs one resolve per turn, about half a millisecond each.
+ *
+ * The live world is stashed first and put back when it ends, however it ends.
+ */
+/** Open the panel, aimed at the turn just fought, without moving the match. */
+function openReview(): void {
+  if (match.history.length === 0) return;
+  // A bottom sheet and this panel both want the bottom of a phone, and the one
+  // that loses is the one whose taps land somewhere else. The sheet goes down.
+  for (const id of ['left', 'right']) $(id).classList.remove('open');
+  for (const id of ['tShips', 'tLog']) {
+    $(id).classList.remove('on');
+    $(id).setAttribute('aria-pressed', 'false');
+  }
+  review = { at: match.history.length - 1, auto: false, live: null };
+  refreshAll();
+}
+
+/** Shut the panel. Whatever it was watching, the live turn comes back first. */
+function closeReview(): void {
+  if (!review) return;
+  backToLive();
+  review = null;
+  refreshAll();
+}
+
+/**
+ * Aim the transport at another recorded turn.
+ *
+ * If a turn is already being watched this jumps to that one and keeps playing,
+ * so stepping the picker mid replay does what it looks like it does. If the
+ * panel is only open, it re aims and nothing else: the match has not moved and
+ * the plan being written is still there.
+ */
+function aimReview(index: number): void {
+  if (!review || !match.history[index]) return;
+  const wasWatching = watching();
+  const auto = review.auto;
+  review.at = index;
+  if (wasWatching) watchTurn(index, auto);
+  else refreshAll();
+}
+
+/**
+ * Restore the world to the start of a recorded turn and re-fly it.
+ *
+ * Each turn is restored from the snapshot it began at and resolved again in
+ * place, which is the same thing `replay` does to check a hash, so the track on
+ * screen is the core re-flying the turn rather than a recording of pixels. It
+ * costs one resolve per turn, about half a millisecond each.
+ *
+ * The live world is stashed on the first restore and put back by `backToLive`,
+ * however the watching ends.
+ */
+function watchTurn(index: number, auto: boolean): void {
+  const rec = match.history[index];
+  if (!review || !rec) { closeReview(); return; }
+  if (review.live === null) {
+    const live = match.snapshot();
+    if (!live) return;
+    review.live = live;
+  }
+  if (!match.restore(rec.before)) { backToLive(); refreshAll(); return; }
+  match.resolveInPlace(rec.orders);
+  review.at = index;
+  review.auto = auto;
+  readShips();
+  view.setShips(ships);
+  playTick = 0;
+  playing = true;
+  showTick(0);
+  renderTrails();
+  renderHeader();
+}
+
+/**
+ * Put the live world back, leaving the panel open and still aimed where it was.
+ *
+ * Separate from closing on purpose: the common move after watching a turn is to
+ * watch another one, and having to reopen the panel to do it is a tax.
+ */
+function backToLive(): void {
+  if (!review || review.live === null) return;
+  match.restore(review.live);
+  review.live = null;
+  review.auto = false;
+  playTick = null;
+  playing = false;
+  view.setBeams([]);
+  view.setBlasts([]);
+  view.setProjectiles([]);
+  readShips();
+  view.setShips(ships);
+  view.setSelection(selected);
+  atAttitude = null;
+  refreshAiPlans();
+  view.invalidateEnvelope();
+  planTurnEnvelopes();
+}
+
+/** Draw as much of that history as the scope asks for. */
+function renderTrails(): void {
+  const upTo = watching() && review ? review.at : match.history.length - 1;
+  if (trailScope === 'off' || upTo < 0) { view.setTrails([]); return; }
+  // While a past turn is being watched, show only what had happened by it on
+  // screen: a track running ahead of the playback spoils the thing being
+  // watched.
+  const first = trailScope === 'all' ? 0 : upTo;
+  const out = [];
+  for (const [id, legs] of trails) {
+    const side = ships.find(s => s.id === id)?.side ?? 0;
+    for (const leg of legs) {
+      if (leg.turn < first || leg.turn > upTo) continue;
+      out.push({ points: leg.points, side, age: upTo - leg.turn });
+    }
+  }
+  view.setTrails(out);
+}
+
+/**
+ * Which blasts are burning at this tick, and how far through each is.
+ *
+ * Derived rather than spawned, so scrubbing back through a kill runs it
+ * backwards and holding on a tick holds the flame where it was.
+ */
+/**
+ * Where each hit landed on the hull it hit, in that hull's own space.
+ *
+ * Worked out once per turn record rather than per tick: it costs a pose lookup
+ * per event, and a playback asks sixty times a second. The pose is the one the
+ * ship was in AT THE TICK, because a hull that has moved on since is a hull
+ * whose scar would be in the wrong place.
+ */
+const carveCache = new WeakMap<object, HullHit[]>();
+
+/**
+ * Every hit of the match so far, on the one axis the view scrubs along.
+ *
+ * A hull shot to pieces in turn three is still in pieces in turn four, so the
+ * carve cannot be a function of the turn on screen alone. Turns before the one
+ * being watched contribute all of their hits; the one being watched
+ * contributes the hits up to the tick.
+ */
+let carveAll: { upTo: number; len: number; list: HullHit[] } | null = null;
+function carveHistory(): HullHit[] {
+  const upTo = shownIndex();
+  // Rebuilt when the turn on screen changes, not sixty times a second: the
+  // list is the same list all the way through a turn.
+  if (carveAll && carveAll.upTo === upTo && carveAll.len === match.history.length) {
+    return carveAll.list;
+  }
+  const list: HullHit[] = [];
+  for (let n = 0; n <= upTo && n < match.history.length; n++) {
+    const rec = match.history[n];
+    if (!rec) continue;
+    for (const h of carveHits(rec)) list.push({ ...h, tick: n * TICKS_PER_TURN + h.tick });
+  }
+  carveAll = { upTo, len: match.history.length, list };
+  return list;
+}
+
+function carveHits(rec: { events: readonly SimEvent[] } | null | undefined): HullHit[] {
+  if (!rec) return [];
+  const found = carveCache.get(rec);
+  if (found) return found;
+  const out: HullHit[] = [];
+  const q = new THREE.Quaternion();
+  const v = new THREE.Vector3();
+  for (const e of rec.events) {
+    const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.ShipCritical;
+    if (!kill && e.kind !== EventKind.ShotHit && e.kind !== EventKind.Collision) continue;
+    if (e.ship < 0) continue;
+    const pose = match.poses(e.tick).find(p => p.id === e.ship);
+    if (!pose) continue;
+    q.set(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w).invert();
+    v.set(e.pos.x - pose.pos.x, e.pos.y - pose.pos.y, e.pos.z - pose.pos.z).applyQuaternion(q);
+    out.push({
+      ship: e.ship,
+      local: [v.x, v.y, v.z],
+      world: e.pos,
+      tick: e.tick,
+      // A kill opens the hull up; a shot takes a bite out of it.
+      radius: kill ? 2.2 : e.kind === EventKind.Collision ? 1.1 : 0.55,
+    });
+  }
+  carveCache.set(rec, out);
+  return out;
+}
+
+function blastsAt(events: readonly SimEvent[], tick: number)
+  : Array<{ pos: Vec3; age: number; radius: number; kill: boolean }> {
+  const out = [];
+  for (const e of events) {
+    const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision;
+    if (!kill && e.kind !== EventKind.ShotHit) continue;
+    const life = kill ? KILL_TICKS : HIT_TICKS;
+    const age = (tick - e.tick) / life;
+    if (age < 0 || age > 1) continue;
+    const hull = ships.find(x => x.id === e.ship)?.radius ?? 2;
+    out.push({ pos: e.pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill });
+  }
+  return out;
+}
+
+/**
+ * One frame.
+ *
+ * The next frame is booked in a `finally`, so nothing inside can stop the
+ * clock. It used to be the last statement, and the battle replay returned
+ * early from the middle of this function to move to the next turn: that return
+ * skipped the booking and the loop simply stopped. Everything froze, not just
+ * the replay, and because `playing` was still true and the tick still had a
+ * value the console looked busy rather than dead. An exception anywhere in
+ * here would have done the same, which is why the fix is the `finally` rather
+ * than deleting two returns.
+ */
 function frame(): void {
+  try {
+    frameBody();
+  } finally {
+    requestAnimationFrame(frame);
+  }
+}
+
+function frameBody(): void {
   view.resize();
   probeEnvelopeIfWanted();
   if (playTick !== null && playing) {
-    playTick = Math.min(TICKS_PER_TURN, playTick + speed);
+    const end = TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []);
+    playTick = Math.min(end, playTick + speed);
     showTick(playTick);
-    if (playTick >= TICKS_PER_TURN) {
+    if (playTick >= end) {
+      // Auto runs on to the next recorded turn rather than handing the console
+      // back, and stops at the last turn actually fought: the one being planned
+      // has no record to fly.
+      if (watching() && review) {
+        if (review.auto && review.at + 1 < match.history.length) {
+          watchTurn(review.at + 1, true);
+          return;
+        }
+        // Watching one turn ends on its last frame rather than snapping back,
+        // so the thing being reviewed is still on screen to look at. The world
+        // is only put down by Live or by closing the panel.
+        playing = false;
+        renderHeader();
+        return;
+      }
       playing = false;
       playTick = null;
       view.setBeams([]);
+      view.setBlasts([]);
       view.setProjectiles([]);
-      ships = match.ships();
+      readShips();
       view.setShips(ships);
       if (!ships.some(s => s.id === selected && !s.destroyed)) {
         selected = ships.find(s => mine(s) && !s.destroyed)?.id ?? selected;
       }
       view.setSelection(selected);
+      atAttitude = null;
+      restoreFacing();
+      refreshAiPlans();
       view.invalidateEnvelope();
+      planTurnEnvelopes();
       refreshAll();
     }
   }
   view.render();
-  requestAnimationFrame(frame);
 }
 
 /**
@@ -878,10 +2304,77 @@ Object.defineProperty(window, 'ftDebug', {
     order: () => (selected < 0 ? null : structuredClone(match.order(selected))),
     selected: () => selected,
     target: () => targetShip()?.id ?? -1,
+    /** Where the next shot is pointed on the CURRENT target, or -1 for hull. */
+    aimSub: () => { const t = targetShip(); return t ? aimSubFor(t.id) : -1; },
+    aimKind: () => (aim ? aim.kind : -1),
+    subs: () => subs.map(v => ({ ...v })),
+    /** Where the selected hull's nose actually points, for checking that a
+     * commanded heading is being turned INTO over several turns. */
+    forward: () => (selected < 0 ? null : match.forward(selected)),
+    /** Whether a screen point lands on the map's yaw knob. Observation only,
+     * and the same test the pointer router runs. */
+    onYawKnob: (x: number, y: number) => view.onYawKnob(x, y),
     playing: () => playTick,
+    /** Whether playback is advancing, as against paused on a tick. */
+    running: () => playing,
     side: () => launch.side,
     kind: () => launch.kind,
+    // Observation only, like everything else here. A harness that could WRITE
+    // state would stop testing the app and start testing itself.
+    scenario: () => launch.scenario,
+    shipCount: () => match.shipCount,
+    wells: () => match.wells(),
+    paths: () => view.pathStats(),
+    ghosts: () => view.ghostCount(),
+    /** Every hull's position right now, for checking a preview against what
+     * the turn actually did. */
+    poses: () => ships.map(s => ({ id: s.id, side: s.side, destroyed: s.destroyed, pos: s.pos })),
+    /** Where a ship is on screen, so a harness can aim at one. */
+    screenOf: (id: number) => {
+      const s = ships.find(x => x.id === id);
+      return s ? view.screenOf(s.pos) : null;
+    },
+    /** What has been shot off the hulls, and what is still in the air. */
+    damage: () => view.damageState(),
+    /** What the hulls cost to draw, and a switch to weigh it against. */
+    hullQuads: () => view.hullQuads(),
+    hullsVisible: (on: boolean) => view.hullsVisible(on),
+    /** Who is in the match and what they are flying. */
+    ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull })),
+    /** What the effects layer is drawing right now, and how far the biggest
+     * blast has grown, so "bigger and more visible" is a measurement. */
+    fx: () => view.fxStats(),
+    /** Which recorded turn is being WATCHED, or null when none is: the panel
+     * being open and aimed is not the same thing as a past world being on
+     * screen, and a harness that conflated them would pass on a review that
+     * never played. */
+    battle: () => (watching() && review ? review.at : null),
+    /** The review panel: whether it is open, what it is aimed at, and whether
+     * that turn is actually loaded. */
+    review: () => (review ? { at: review.at, auto: review.auto, watching: watching() } : null),
+    /** The selected hull's attitude at the tick on screen while a turn plays,
+     * so a harness can watch the dials follow it. */
+    attitude: () => atAttitude,
+    /** What the AI means to do this turn, by ship id. */
+    aiPlans: () => [...aiPlans].map(([id, p]) => ({ id, mode: p.mode, target: p.target ?? null,
+                                                    aiTarget: p.aiTarget })),
+    /** The last tick this turn's playback runs to: the turn's own length plus
+     * whatever tail its effects still need. */
+    playEnd: () => TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []),
+    trailScope: () => trailScope,
+    /** Turn index and event kinds only: enough to find a kill, not a second
+     * copy of the match. */
+    history: () => match.history.map(h => ({
+      turn: h.turn,
+      events: h.events.map(e => ({ kind: e.kind, tick: e.tick, ship: e.ship })),
+    })),
+    /** How far the selected hull's reachable volume has sharpened, so a
+     * harness can see that a heading under a finger is not re-probing it and
+     * that letting go finishes the ladder. */
+    envelope: () => (selected < 0 ? null : view.shellProgress(selected)),
     canPlan,
+    /** The shipyard, read only. */
+    designer: () => (designer.visible ? designer.debug() : null),
   },
 });
 
@@ -890,6 +2383,35 @@ const lobby = new Lobby(api, (l: Launch) => {
   launch = l;
   seed = l.seed;
   start();
+});
+
+// The shipyard sits over the lobby rather than replacing it, so closing it
+// puts the player back where they opened it from.
+const designer = new Designer(() => { if (!lobby.visible) lobby.show(); });
+$('bShipyard').onclick = () => designer.show();
+
+// The seam between the shipyard and the library. The editor knows nothing
+// about the network and the lobby knows nothing about hulls; this is the one
+// place that knows both.
+designer.onSave(async req => {
+  const saved = req.designId
+    ? await api.updateDesign(req.designId, {
+      name: req.name, design: req.design,
+      mass: req.mass, hull: req.hull, legal: req.legal,
+    })
+    : await api.saveDesign({
+      name: req.name, design: req.design, from: req.from,
+      mass: req.mass, hull: req.hull, legal: req.legal,
+    });
+  void lobby.refreshLibrary();
+  return { designId: saved.designId, name: saved.name, mine: true, owner: saved.owner.name };
+});
+
+lobby.onOpenDesign(d => {
+  designer.show();
+  designer.loadDesign(d.design as Design, {
+    designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
+  });
 });
 
 renderHelp();

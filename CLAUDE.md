@@ -73,6 +73,14 @@ checked, not assumed:
 - Every control a player needs is reachable by thumb. The side rails are bottom
   sheets on a tab bar; the nudges that are keyboard only on a desktop (elevation,
   heading, face target) have on canvas buttons, because a phone has no Q/E/A/D/F.
+- **Reachable means the tap ARRIVES.** A control drawn over the map can sit under
+  an open sheet: visible, enabled, and swallowing every touch. The fire slots went
+  that way first and the heading dials went the same way after. And a control that
+  is only in a sheet is worse, because nothing on screen says it exists: move mode
+  was in the fleet rail, so on a phone you could not change it without opening a
+  tab you had no reason to open. The playthrough checks the class now, on both
+  sizes: with a sheet open, the centre of every on canvas control must hit that
+  control and not something over it.
 - Touch does what a mouse does. There is no second mouse button on a phone, so any
   gesture given to the right button needs a touch route as well: one finger, the
   orbit and pan toggle, or a control.
@@ -101,15 +109,22 @@ $ curl -sS https://redux-tribes.fly.dev/healthz
 All four must pass before a push:
 
 ```sh
-node prototype/cli.js test                  # 21, the JS design reference
-cd engine/sim_core && cargo test            # 31, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 21, the wasm boundary
-npm --prefix server test                    # 9, the lobby and the lockstep API
+node prototype/cli.js test                  # 29, the JS design reference
+cd engine/sim_core && cargo test            # 69, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 43, the wasm boundary
+npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
 `npm --prefix server test` builds first on purpose. It used to run straight
 against `dist/`, so a change to the server could pass a suite that had never
 seen it.
+
+The server suite covers the lockstep gate and the ship library. The library is
+storage and provenance only: it never interprets a design, because what a
+design means is the core's business and the core does not run there. Everything
+in it is public to read, anyone may clone anything, and a clone is a COPY with
+a `from` stamp rather than a reference, so a hull you are working from cannot
+change under you.
 
 ### And one that plays the game
 
@@ -126,12 +141,39 @@ node web/tests/playthrough.mjs            # desktop
 node web/tests/playthrough.mjs --mobile   # 390x844, touch
 ```
 
-It drives the real console (target a hostile, arm a mount, drop it in a fire
-slot, end the turn, watch the playback out) until the header says VICTORY, and
-exits non zero if it cannot get there. It needs a browser, so it is not in CI;
+It drives the real console (target a hostile, aim at one of its volumes, arm a
+mount, drop it in a fire slot, end the turn, watch the playback out) until the
+header says VICTORY, and exits non zero if it cannot get there. It also checks
+that the map is drawing SHIPS: a quad count per hull, which would go back to
+zero the day the cone returned, and cells actually coming off them with chunks
+in the air. The aim strip is
+checked the only way that means anything: the chip is tapped and the ORDER is
+read back, because a chip that highlights and still sends the hull across the
+boundary is a light rather than a feature. It needs a browser, so it is not in CI;
 run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
+
+### And one for the shipyard
+
+```sh
+node web/tests/shipyard.mjs   # 1280x900, 390x844 and 390x560
+```
+
+Same rules, different screen. It opens the designer at all three sizes and
+checks what only a browser can answer: no horizontal scroll, the centre of
+every control hits THAT control and not something drawn over it, all five
+classes legal out of the box, all eight of a faction's swatches actually on
+the hull, every enclosed mount inside the hull, both exteriors, the plate
+toggle cycling on / ghost / off, a tap that names the part it landed on, a
+selection that outlines it, a turret that turns 90 degrees and takes its
+cells with it, a saved hull taken out of the library into a practice level and
+actually spawned, a turret whose box has nothing standing in it and a pencil
+that refuses to put anything there, and the armour pencil: a run that is fully reversible, a cell
+that reaches nothing refused with a reason, slabs that TILE the lattice rather
+than overlapping, the slab drawn on the model at the thickness the slider says,
+and the optional x and y mirrors turning one tap into two and then four. Run it
+after touching `design.ts`, `designer.ts` or the designer's markup.
 
 ## The boundary: the core simulates, the client draws
 
@@ -141,7 +183,10 @@ a hard line, not a preference, and it is what lets a native Rust client replace
 
 **In the core.** Every rule and every number that decides an outcome: movement,
 weapons, arcs, damage, subsystems, boarding, contact, AI, turn order, the RNG,
-the state hash, and the authored data all of it reads.
+the state hash, the authored data all of it reads, and what a DESIGN comes out
+as: the parts table and the arithmetic that turns parts and plate into a ship
+live in `design.rs`, and the editor asks for its own readout rather than
+working it out beside the thing that will have to agree with it.
 
 **In the client.** Meshes, cameras, panels, input routing, playback, formatting.
 Nothing that changes what happens.
@@ -307,11 +352,115 @@ Rules that came out of actually measuring this repo:
 - **Numbers in the commit message.** "Faster" is not a result; 16 ms to 0.4 ms
   is. If it was not measured, do not claim it.
 
-Current figures, worth not regressing: wasm 118667 bytes as CI builds and ships
-it (45224 gzipped), a turn resolved in 452 microseconds, envelope 96 shell cells
-at 7.9 units, 61 fps while planning. Quote the shipped size rather than a local
-one: the same source on rustc 1.94.1 here comes out 120249, and a figure nobody
+Current figures, worth not regressing: a turn resolved in 452 microseconds,
+envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 149537
+bytes locally (57325 gzipped) after the damage model and the design derivation;
+quote what CI ships rather than a local build when it matters, since the same
+source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
+one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
+
+Attribute growth to the change that caused it, not to the branch it landed on.
+Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
+either side of the commit. Reading it off the shipped figure instead would have
+charged it 14002, which is gravity, the reach chart and the scenario table as
+well.
+
+## The battlefield draws the ship you built
+
+Every hull on the map used to be a five sided cone. It reads at a glance and it
+is a lie: a player spends an hour in the shipyard and then flies a triangle.
+The map draws the design now, and a hit takes cells off it.
+
+**Faces, greedily merged, not a cube per cell.** A box per cell is twelve
+triangles whichever way it is turned: 4644 cells and 55728 triangles for one
+Terran, and four of those took a headless frame from 22 fps to 2.2. What can be
+seen is the faces between a solid cell and the space OUTSIDE, which is 4064 of
+them, and merging runs of one colour into rectangles brings that to 1303 quads.
+Four hulls are 7200 quads and cost about a fifth of a headless software frame
+(15.2 fps against 19.3 with them hidden). Outside is a flood fill from the edge of
+the lattice, not "any empty neighbour": a frigate is full of gaps between its
+frame and its parts, and counting those drew most of the ship twice.
+
+**Cells coming off is the CLIENT's, and deliberately so.** What a hole means is
+already the subsystem model's job; the cells follow the damage rather than
+deciding it, so none of this is hashed and none of it crosses the boundary. Two
+screens still agree, because both draw the same event stream and the chunks'
+drift is hashed from the event rather than rolled. It is a pure function of
+(turn, tick): scrubbing back puts cells on and takes chunks out of the air, and
+a scar from turn three is still there in turn four.
+
+**A hit event lands on the collision SPHERE, not on the hull.** The sphere
+circumscribes the long axis, so on a Terran it is 3.29 units against a hull 1.2
+by 0.76 by 3.2, and a carve measured from the event's own position took nothing
+at all: every shot landed in space beside the ship. The carve starts from the
+nearest cell to it instead, which is the cell the shot came in at, because the
+sphere point is in the direction the shot arrived from.
+
+## Damage is spatial: the layout IS the damage model
+
+A shot is not scored against a health bar. It is aimed at a point, it travels,
+and it damages whatever volume it physically reaches first. Every hull carries
+six of them (three on the freighter), and each one does something when it dies:
+
+| volume | on death |
+| --- | --- |
+| armour, two belts | absorbs its block share until it goes, then stops absorbing |
+| engines | the ship is adrift, from that tick, for the rest of the match |
+| jets | attitude authority gone: the drive still works, the hull cannot turn |
+| weapons | one bay feeds every mount, so all of them fall silent at once |
+| reactor | the ship goes critical: hull to zero, and a blast to everything within 14 units |
+
+Two rules keep it honest. **Effects are derived, never written back into the
+authored stats**: losing the jets does not zero `flight.yaw_rate`, it makes
+`effective_flight()` report zero, so the class table still says what the class
+is and one function says what this hull can do right now. And **one gate, asked
+twice**: `fire_gate` is what the planner offers slots from and what the resolver
+checks at the moment of firing, so a bay that is gone greys the mount out in the
+client because the client ASKED, not because someone wrote the rule twice.
+
+The blast damages hulls only, never volumes. A breach that could reach another
+reactor would chain, and a chain is a recursion with no bound written anywhere.
+
+**The reactor is protected by geometry, not by a rule.** The belts sit outboard
+at x +/- 1.6 and the bay sits forward and dorsal, so a shot from ahead or abeam
+meets one of them first and a shot from below does not. Attacking from a high or
+low aspect is therefore worth doing, and nothing in the code says so.
+
+### The defect this exposed, worth not writing again
+
+`raycast_ships` compared subsystem distances against hull distances in one
+nearest-wins pass. It reads as obviously right and it made the whole model
+inert: a volume sits INSIDE the hull sphere, so the sphere is always entered
+first and always won, and every carefully aimed shot landed on the hull. Aiming
+at the engines had done nothing since the day it was written, in the Rust core
+AND in the JS reference, and every suite passed throughout because they all
+asserted on the hull.
+
+They are two questions. WHICH ship is nearest is decided by where the segment
+enters. WHAT it hit on that ship is the first live volume along the segment
+inside it. Ask them separately.
+
+## A hull a side fields is a match fact too
+
+The practice screen lets a player take a saved design into a level. What
+crosses is `ft_hull_choice(side, class)` before `ft_match_new`, and the class
+index is hashed, for the same reason sides are: a seat that fielded a Rogue
+against one that spawned a Terran would agree for as long as the two happened
+to fly alike, and part several turns later.
+
+The design's own numbers cross too, and the core is what turns them into a
+ship. `design.rs` holds the parts table and the arithmetic; `ft_derive` answers
+with mass, hull, the envelope, marines, boarding and seven gate bits; the
+editor's `derive()` no longer computes anything, it rasterises and asks. What
+the client still contributes is what it MEASURED off its own voxel grid: plate
+cells, extent, bounding radius, where each gun sits. Counts, not rules, and
+they stop being an input the day the rasteriser moves too.
+
+Mass, radius, boarding range and boarding capacity are per SHIP now, not per
+class, joining hull and the flight envelope, and all four are hashed. A design
+that set them on one seat and not the other would ram differently and shoot
+past.
 
 ## Sides are a match fact, not a point of view
 

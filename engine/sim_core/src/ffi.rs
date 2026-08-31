@@ -17,6 +17,8 @@
 //!       16      1 if a target was given, else 0
 //!       17      1 if a facing was commanded, else 0
 //!       18..23  flight stats: yaw, pitch, fwd, retro, lat, max speed
+//!       24      commanded roll about the nose, radians from wings level
+//!       25      1 if a roll was commanded, else 0
 //!
 //!   OUT 32..34  end position
 //!       35..37  end velocity
@@ -43,12 +45,12 @@
 //!   pose    9 slots: id, destroyed, pos(3), quat(4)
 //!   proj    5 slots: id, kind, pos(3)
 
-use crate::data::{class_index, class_from_index, ship_class};
+use crate::data::{class_index, class_from_index, ship_class, WeaponKey, ALL_CLASSES};
 use crate::flight::{
     can_reach, fly_span, fly_turn, Body, Flight, Mode, Well, TICKS_PER_SECOND, TICKS_PER_TURN,
 };
 use crate::math::{Quat, V3};
-use crate::state::{Faction, ProjKind, Sim, SpawnSpec, Winner};
+use crate::state::{Faction, ProjKind, Sim, SpawnSpec, WeaponSlot, Winner};
 use crate::turn::{Event, FireOrder, Order};
 
 /// Sized for the largest single payload the boundary carries, which is the
@@ -57,7 +59,8 @@ const SCRATCH_LEN: usize = 16384;
 static mut SCRATCH: [f32; SCRATCH_LEN] = [0.0; SCRATCH_LEN];
 
 const OUT: usize = 64;
-pub const SHIP_STRIDE: usize = 40;
+pub const SHIP_STRIDE: usize = 34;
+pub const SUB_STRIDE: usize = 11;
 pub const EVENT_STRIDE: usize = 14;
 pub const POSE_STRIDE: usize = 9;
 pub const PROJ_STRIDE: usize = 5;
@@ -183,7 +186,7 @@ pub extern "C" fn ft_scratch_len() -> u32 {
     SCRATCH_LEN as u32
 }
 
-fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
+fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Option<f32>, Flight) {
     let body = Body {
         pos: V3::new(s[0], s[1], s[2]),
         vel: V3::new(s[3], s[4], s[5]),
@@ -191,6 +194,7 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
     };
     let target = if s[16] != 0.0 { Some(V3::new(s[10], s[11], s[12])) } else { None };
     let face = if s[17] != 0.0 { Some(V3::new(s[13], s[14], s[15])) } else { None };
+    let roll = if s[25] != 0.0 { Some(s[24]) } else { None };
     let fl = Flight {
         yaw_rate: s[18],
         pitch_rate: s[19],
@@ -199,7 +203,7 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
         accel_lat: s[22],
         max_speed: s[23],
     };
-    (body, target, face, fl)
+    (body, target, face, roll, fl)
 }
 
 /// Fly one turn. Returns how many path samples were written from slot 64.
@@ -209,11 +213,11 @@ fn read_inputs(s: &[f32]) -> (Body, Option<V3>, Option<V3>, Flight) {
 #[no_mangle]
 pub extern "C" fn ft_fly_turn(mode: u32, steps: u32, sample_stride: u32) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, target, face, fl) = read_inputs(s);
+    let (body, target, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let target = if mode.committed() { None } else { target };
 
-    let flown = fly_turn(body, target, mode, &fl, face, steps, wells());
+    let flown = fly_turn(body, target, mode, &fl, face, roll, steps, wells());
 
     s[32] = flown.end_pos.x;
     s[33] = flown.end_pos.y;
@@ -254,9 +258,9 @@ pub extern "C" fn ft_fly_turn(mode: u32, steps: u32, sample_stride: u32) -> u32 
 #[no_mangle]
 pub extern "C" fn ft_can_reach(mode: u32, eps: f32, steps: u32) -> u32 {
     let s: &[f32] = unsafe { &*(&raw const SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let target = V3::new(s[10], s[11], s[12]);
-    can_reach(body, target, Mode::from_u32(mode), &fl, face, eps, steps, wells()) as u32
+    can_reach(body, target, Mode::from_u32(mode), &fl, face, roll, eps, steps, wells()) as u32
 }
 
 /// Sweep a whole grid of candidate cells in one call, so probing an envelope
@@ -265,7 +269,7 @@ pub extern "C" fn ft_can_reach(mode: u32, eps: f32, steps: u32) -> u32 {
 #[no_mangle]
 pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32, cy: f32, cz: f32, half: f32) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.max(1).min(32) as usize;
     let step = 2.0 * half / n as f32;
@@ -284,7 +288,7 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
             let y = cy - half + (j as f32 + 0.5) * step;
             for k in 0..n {
                 let z = cz - half + (k as f32 + 0.5) * step;
-                if can_reach(body, V3::new(x, y, z), mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, V3::new(x, y, z), mode, &fl, face, roll, eps, steps, wells()) {
                     mask[idx / 32] |= 1 << (idx % 32);
                     hits += 1;
                 }
@@ -313,6 +317,8 @@ pub extern "C" fn ft_reach_grid(mode: u32, eps: f32, steps: u32, n: u32, cx: f32
 /// about 14,600 leaves. Zero initialised, so it lands in .bss and costs the
 /// module nothing.
 const OCT_LEN: usize = 65536;
+/// Bit 8 of word 1: this entry is a uniform block, not a straddling leaf.
+const UNIFORM: u32 = 1 << 8;
 static mut OCT: [u32; OCT_LEN] = [0; OCT_LEN];
 
 #[no_mangle]
@@ -345,9 +351,21 @@ pub extern "C" fn ft_octree_len() -> u32 {
 ///
 /// Writes two words per leaf from `ft_octree_ptr`:
 ///   word 0  i | j<<8 | k<<16 | level<<24, in cells of the FINEST grid
-///   word 1  the eight corner bits, in the corner order below
-/// so a caller has everything it needs to march without probing again.
-/// Returns the leaf count, or 0 if `n` is not a power of two at least `base`.
+///   word 1  bits 0..7 the eight corner values, bit 8 set on a UNIFORM block
+///
+/// A straddling leaf is always at level 0 and carries its real corners. A
+/// uniform block is whatever level the traversal stopped at, and its corners
+/// are all 0 or all 1: that is the interior and the exterior, reported rather
+/// than discarded, because a caller rebuilding a dense field needs them and
+/// the traversal already knows them. Together the two kinds determine every
+/// corner of the grid, so a client can march at a resolution it could never
+/// afford to probe densely.
+///
+/// Returns the entry count, or 0 if `n` is not a power of two at least `base`,
+/// or if the traversal would not FIT. A partial list is worse than none: the
+/// two kinds tile the grid, so a caller that rebuilt a dense field from a
+/// truncated one would be left with holes it marches through as empty space.
+/// Refusing lets the caller drop a level instead of drawing a lie.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn ft_reach_octree(
@@ -357,7 +375,7 @@ pub extern "C" fn ft_reach_octree(
     hr: f32, hu: f32, hf: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.clamp(2, 128) as usize;
     if !n.is_power_of_two() {
@@ -390,7 +408,7 @@ pub extern "C" fn ft_reach_octree(
     let mut corner = |i: usize, j: usize, k: usize| -> bool {
         let idx = (i * side + j) * side + k;
         if seen[idx] == 0 {
-            let hit = can_reach(body, at(i, j, k), mode, &fl, face, eps, steps, wells());
+            let hit = can_reach(body, at(i, j, k), mode, &fl, face, roll, eps, steps, wells());
             seen[idx] = if hit { 2 } else { 1 };
         }
         seen[idx] == 2
@@ -402,6 +420,7 @@ pub extern "C" fn ft_reach_octree(
     ];
     let out: &mut [u32] = unsafe { &mut *(&raw mut OCT) };
     let mut count = 0usize;
+    let mut overflowed = false;
 
     // An explicit stack, because a wasm recursion this deep is a stack the
     // caller cannot see the bottom of.
@@ -429,24 +448,46 @@ pub extern "C" fn ft_reach_octree(
                 _ => {}
             }
         }
-        if size == 1 {
-            if !all_same && count * 2 + 1 < OCT_LEN {
-                let level = size.trailing_zeros();
-                out[count * 2] = (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (level << 24);
-                out[count * 2 + 1] = bits;
+        let mut emit = |lvl: u32, flag: u32| {
+            if count * 2 + 1 < OCT_LEN {
+                out[count * 2] =
+                    (i as u32) | ((j as u32) << 8) | ((k as u32) << 16) | (lvl << 24);
+                out[count * 2 + 1] = bits | flag;
                 count += 1;
+            } else {
+                overflowed = true;
+            }
+        };
+        if size == 1 {
+            if !all_same {
+                emit(0, 0);
+            } else {
+                emit(0, UNIFORM);
             }
             continue;
         }
         if all_same {
-            continue; // the interior and the exterior, each settled in one test
+            // The interior and the exterior, each settled in one test and then
+            // reported at the level it was settled at.
+            emit(size.trailing_zeros(), UNIFORM);
+            continue;
         }
         let h = size / 2;
         for (a, b, d) in CORNERS.iter() {
             stack.push((i + a * h, j + b * h, k + d * h, h));
         }
     }
+    if overflowed {
+        return 0;
+    }
     count as u32
+}
+
+/// How many entries the output buffer can hold, so a caller can pick a level
+/// it knows will fit rather than discovering the refusal.
+#[no_mangle]
+pub extern "C" fn ft_octree_capacity() -> u32 {
+    (OCT_LEN / 2) as u32
 }
 
 /// The boundary as a radius field, for a caller fitting a smooth surface to it.
@@ -468,7 +509,7 @@ pub extern "C" fn ft_reach_radii(
     cx: f32, cy: f32, cz: f32, far: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let nu = nu.clamp(4, 256) as usize;
     let nv = nv.clamp(3, 256) as usize;
@@ -488,13 +529,13 @@ pub extern "C" fn ft_reach_radii(
             let d = V3::new(sp * ct, cp, sp * st);
             let mut lo = 0.0f32;
             let mut hi = far;
-            if can_reach(body, anchor.add(d.scale(hi)), mode, &fl, face, eps, steps, wells()) {
+            if can_reach(body, anchor.add(d.scale(hi)), mode, &fl, face, roll, eps, steps, wells()) {
                 s[64 + u * nv + v] = hi;
                 continue;
             }
             for _ in 0..iters {
                 let m = 0.5 * (lo + hi);
-                if can_reach(body, anchor.add(d.scale(m)), mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, anchor.add(d.scale(m)), mode, &fl, face, roll, eps, steps, wells()) {
                     lo = m;
                 } else {
                     hi = m;
@@ -544,7 +585,7 @@ pub extern "C" fn ft_reach_grid_at(
     hr: f32, hu: f32, hf: f32,
 ) -> u32 {
     let s: &mut [f32] = unsafe { &mut *(&raw mut SCRATCH) };
-    let (body, _t, face, fl) = read_inputs(s);
+    let (body, _t, face, roll, fl) = read_inputs(s);
     let mode = Mode::from_u32(mode);
     let n = n.max(1).min(32) as usize;
     let fwd = V3::new(fx, fy, fz);
@@ -569,7 +610,7 @@ pub extern "C" fn ft_reach_grid_at(
             for k in 0..n {
                 let lz = at(k, hf);
                 let p = centre.add(q.rot(V3::new(lx, ly, lz)));
-                if can_reach(body, p, mode, &fl, face, eps, steps, wells()) {
+                if can_reach(body, p, mode, &fl, face, roll, eps, steps, wells()) {
                     mask[idx / 32] |= 1 << (idx % 32);
                     hits += 1;
                 }
@@ -617,6 +658,174 @@ pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
 /// game against the AI, 3 is two people.
 ///
 /// Returns the number of ships.
+/// Which hull each side fields, or -1 for the one the scenario authored.
+///
+/// A match fact like every other: both seats pass the same pair or they are
+/// playing different matches, which is why it is hashed rather than treated as
+/// a preference. Set before `ft_match_new`, which consumes it; the scenario
+/// still decides where the ships stand and how many there are, because a
+/// player picking a hull is not a player redrawing the engagement.
+static mut HULL_CHOICE: [i32; 2] = [-1, -1];
+
+/// A designed hull per side: what the core derived from it, and the mounts the
+/// client measured off it.
+///
+/// Stored derived rather than raw, so a match applies numbers that were worked
+/// out once, here, by the thing that owns the rules. Cleared by setting a
+/// design with no parts, and consumed by `ft_match_new` like the hull choice.
+static mut HULL_DESIGN: [Option<crate::design::Derived>; 2] = [None, None];
+static mut HULL_MOUNTS: [Vec<(WeaponKey, V3)>; 2] = [Vec::new(), Vec::new()];
+
+/// Derive a design and hold it for one side.
+///
+/// Inputs are `ft_derive`'s, plus the side. The results are written back the
+/// same way too, so a caller can read what its own hull came out as without a
+/// second call.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_hull_design(
+    side: u32,
+    class_idx: u32,
+    plate_cells: i32,
+    ext_x: i32,
+    ext_y: i32,
+    ext_z: i32,
+    radius_cells: f32,
+    fouled: i32,
+    parts: u32,
+) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    if ft_derive(class_idx, plate_cells, ext_x, ext_y, ext_z, radius_cells, fouled, parts) == 0 {
+        return 0;
+    }
+    let s = scratch();
+    let d = crate::design::Derived {
+        mass: s[OUT], hull: s[OUT + 1], radius: s[OUT + 2],
+        accel_fwd: s[OUT + 3], accel_retro: s[OUT + 4], accel_lat: s[OUT + 5],
+        max_speed: s[OUT + 6], yaw_rate: s[OUT + 7], pitch_rate: s[OUT + 8],
+        reach_u: s[OUT + 9], marines: s[OUT + 10] as i32, capacity: s[OUT + 11] as i32,
+        boarding_range: s[OUT + 12], mass_max: s[OUT + 13], parts: s[OUT + 14] as i32,
+        guns: s[OUT + 15] as i32, trunnions: s[OUT + 16] as i32, gates: s[OUT + 17] as u32,
+    };
+    // An illegal hull is not fielded. The gates are the core's, so the refusal
+    // is too: a client that decided for itself which of its own designs were
+    // allowed into a match would be the client that let one through. The stats
+    // are left in the scratch either way, so a caller can read the gate bits
+    // and say WHICH rule refused it.
+    if !d.legal() {
+        return 0;
+    }
+    unsafe {
+        HULL_DESIGN[side as usize] = Some(d);
+        HULL_MOUNTS[side as usize].clear();
+    }
+    // The class comes with it: a design is a hull of its own class, and the
+    // spawn still needs to know which one.
+    ft_hull_choice(side, class_idx as i32);
+    1
+}
+
+/// One gun on a designed hull: what it is and where it sits, in ship units.
+///
+/// Position is measured by the client off the socket the gun was fitted to,
+/// the same way plate cells are counted: a number, not a rule. It decides arcs
+/// and range, so it is hashed with everything else once the ship carries it.
+#[no_mangle]
+pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    let k = match key {
+        1 => WeaponKey::Cannon,
+        2 => WeaponKey::Plasma,
+        3 => WeaponKey::Missile,
+        _ => WeaponKey::Beam,
+    };
+    unsafe {
+        HULL_MOUNTS[side as usize].push((k, V3::new(x, y, z)));
+    }
+    1
+}
+
+/// Forget a side's design, so the next match is flown in the authored hull.
+#[no_mangle]
+pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    unsafe {
+        HULL_DESIGN[side as usize] = None;
+        HULL_MOUNTS[side as usize].clear();
+    }
+    ft_hull_choice(side, -1);
+    1
+}
+
+/// Put a derived hull on every ship of a side.
+///
+/// Hull, mass, radius, the boarding pair and the flight envelope, because
+/// those are what a design changes about a ship. The subsystem LAYOUT stays
+/// the class's: where a reactor sits inside a hull is geometry the rasteriser
+/// owns, and the rasteriser is still on the client.
+fn apply_designs(sim: &mut Sim) {
+    for side in 0..2usize {
+        let Some(d) = (unsafe { HULL_DESIGN[side] }) else { continue };
+        let mounts = unsafe { HULL_MOUNTS[side].clone() };
+        for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
+            ship.hull = d.hull;
+            ship.hull_max = d.hull;
+            ship.mass = d.mass;
+            ship.radius = d.radius;
+            ship.marines = d.marines;
+            ship.boarding_capacity = d.capacity;
+            ship.boarding_range = d.boarding_range;
+            ship.flight = Flight {
+                yaw_rate: d.yaw_rate,
+                pitch_rate: d.pitch_rate,
+                accel_fwd: d.accel_fwd,
+                accel_retro: d.accel_retro,
+                accel_lat: d.accel_lat,
+                max_speed: d.max_speed,
+            };
+            if !mounts.is_empty() {
+                ship.weapons = mounts
+                    .iter()
+                    .map(|(key, at)| WeaponSlot { key: *key, mount: *at, last_fired_tick: -99 })
+                    .collect();
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ft_hull_choice(side: u32, class_idx: i32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    unsafe {
+        HULL_CHOICE[side as usize] = if class_idx < 0 || class_idx as usize >= ALL_CLASSES.len() {
+            -1
+        } else {
+            class_idx
+        };
+    }
+    1
+}
+
+/// Apply the choice to one side's spawn list, in place.
+fn choose_hulls(side: usize, specs: &mut [SpawnSpec]) {
+    let pick = unsafe { HULL_CHOICE[side] };
+    if pick < 0 {
+        return;
+    }
+    let class = crate::data::class_from_index(pick as u32);
+    for s in specs.iter_mut() {
+        s.class = class;
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_sides: u32) -> u32 {
     // Written out by hand rather than with format!, which would drag Rust's
@@ -634,8 +843,14 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_
     let sim = match scenario {
         1 => scenario_duel(seed, mask),
         2 => scenario_convoy(seed, mask),
+        3 => scenario_low_orbit(seed, mask),
+        4 => scenario_binary(seed, mask),
+        5 => scenario_slingshot(seed, mask),
+        6 => scenario_sandbox(seed, mask),
         _ => scenario_skirmish(seed, mask),
     };
+    let mut sim = sim;
+    apply_designs(&mut sim);
     let n = sim.ships.len();
     unsafe {
         MATCH = Some(sim);
@@ -654,15 +869,31 @@ fn spec(class: crate::data::ShipClassId, p: (f32, f32, f32), f: (f32, f32, f32))
     SpawnSpec { class, pos: V3::new(p.0, p.1, p.2), facing: V3::new(f.0, f.1, f.2) }
 }
 
+/// Build a match from two spawn lists, applying each side's hull choice first.
+///
+/// Every scenario goes through here rather than calling `new_skirmish` itself,
+/// so a scenario added later cannot quietly be the one that ignores the pick.
+fn skirmish(
+    seed: &str,
+    mut player: Vec<SpawnSpec>,
+    mut enemy: Vec<SpawnSpec>,
+    faction: Faction,
+    human_sides: u8,
+) -> Sim {
+    choose_hulls(0, &mut player);
+    choose_hulls(1, &mut enemy);
+    Sim::new_skirmish(seed, &player, &enemy, faction, human_sides)
+}
+
 fn scenario_skirmish(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[
+        vec![
             spec(TerranFrigate, (-40.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
             spec(TerranFrigate, (-40.0, 5.0, -15.0), (1.0, 0.0, 0.0)),
         ],
-        &[
+        vec![
             spec(KarisenFrigate, (40.0, 0.0, 5.0), (-1.0, 0.0, 0.0)),
             spec(RogueFrigate, (40.0, -4.0, -10.0), (-1.0, 0.0, 0.0)),
         ],
@@ -673,10 +904,10 @@ fn scenario_skirmish(seed: &str, human_sides: u8) -> Sim {
 
 fn scenario_duel(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[spec(TerranFrigate, (-30.0, 0.0, 0.0), (1.0, 0.0, 0.0))],
-        &[spec(KarisenFrigate, (30.0, 0.0, 0.0), (-1.0, 0.0, 0.0))],
+        vec![spec(TerranFrigate, (-30.0, 0.0, 0.0), (1.0, 0.0, 0.0))],
+        vec![spec(KarisenFrigate, (30.0, 0.0, 0.0), (-1.0, 0.0, 0.0))],
         Faction::Karisen,
         human_sides,
     )
@@ -686,19 +917,158 @@ fn scenario_duel(seed: &str, human_sides: u8) -> Sim {
 /// objects. The boarding rules only bite when there is a hull worth boarding.
 fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[
+        vec![
             spec(RogueFrigate, (-35.0, 0.0, -10.0), (1.0, 0.0, 0.0)),
             spec(TerranFrigate, (-35.0, 4.0, 10.0), (1.0, 0.0, 0.0)),
         ],
-        &[
+        vec![
             spec(Freighter, (40.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
             spec(BenefactorFrigate, (30.0, -3.0, 18.0), (-1.0, 0.0, 0.0)),
         ],
         Faction::Benefactor,
         human_sides,
     )
+}
+
+/// Fought over something heavy. The well pulls at 0.096 u/s^2 at the start
+/// line, which is a ninth of the main drive and about a third of the lateral
+/// thrusters: enough to lean the reachable set without outgunning the RCS.
+///
+/// It used to pull 0.192, which is 77 percent of the lateral budget, and the
+/// lean showed it. Probing straight up and straight down from a start:
+///
+/// ```text
+/// no field      14 u up, 14 u down
+/// 0.192 u/s^2    5 u up, 23 u down     4.6 to 1
+/// 0.096 u/s^2    9 u up, 19 u down     2.1 to 1
+/// ```
+///
+/// Five units of uphill reach is barely a hull length, so climbing was not a
+/// choice a player could make. At half the pull the field still leans the
+/// envelope two to one and a hull can still fly out of it.
+///
+/// The field is on the MATCH, so it is in the state hash and in the snapshot,
+/// and both seats get it from the scenario id rather than from a client that
+/// might have set it up differently.
+fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = skirmish(
+        seed,
+        vec![
+            spec(TerranFrigate, (-40.0, 20.0, 0.0), (1.0, 0.0, 0.0)),
+            spec(TerranFrigate, (-40.0, 26.0, -15.0), (1.0, 0.0, 0.0)),
+        ],
+        vec![
+            spec(KarisenFrigate, (40.0, 22.0, 5.0), (-1.0, 0.0, 0.0)),
+            spec(RogueFrigate, (40.0, 16.0, -10.0), (-1.0, 0.0, 0.0)),
+        ],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(0.0, -300.0, 0.0), 10000.0, 20.0));
+    sim
+}
+
+/// The skirmish, with the ship stats unlocked.
+///
+/// A sandbox is not a different battle, it is the same one with the numbers
+/// exposed, so it reuses the skirmish layout rather than inventing a set of
+/// positions nobody balanced. What it changes is what the core will ACCEPT:
+/// `ft_set_flight` is refused everywhere else.
+///
+/// A scenario rather than a client side switch, because the stats are in the
+/// state hash. A flag the client owned could differ between two seats, and the
+/// first slider either of them touched would part the match; coming from the
+/// scenario id, both seats get it from the same place they get the field and
+/// the starting positions.
+fn scenario_sandbox(seed: &str, human_sides: u8) -> Sim {
+    let mut sim = scenario_skirmish(seed, human_sides);
+    sim.sandbox = true;
+    sim
+}
+
+/// A binary, one either side. The pulls cancel on the centre line and add
+/// further out, so a single number at the hull says nothing: sitting between
+/// them the field reads zero while the envelope is stretched along the axis
+/// joining them and squeezed across it.
+///
+/// 0.104 u/s^2 net at the start line, down from 0.255. That figure is the one
+/// that made this scenario unflyable rather than tense: the lateral thrusters
+/// are 0.25, so the field was taking a hull sideways faster than it could push
+/// back.
+fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = skirmish(
+        seed,
+        vec![spec(TerranFrigate, (0.0, 0.0, -35.0), (0.0, 0.0, 1.0))],
+        vec![spec(KarisenFrigate, (0.0, 0.0, 35.0), (0.0, 0.0, -1.0))],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(-160.0, 0.0, 0.0), 6500.0, 20.0));
+    sim.wells.push(Well::new(V3::new(160.0, 0.0, 0.0), 6500.0, 20.0));
+    sim
+}
+
+/// A well close enough to matter, off the line the two sides start on. At 0.09
+/// u/s^2 it perturbs rather than dominates, which is the interesting band: 1.03
+/// was measured and empties the reachable set entirely.
+fn scenario_slingshot(seed: &str, human_sides: u8) -> Sim {
+    use crate::data::ShipClassId::*;
+    let mut sim = skirmish(
+        seed,
+        vec![spec(TerranFrigate, (-55.0, 0.0, -30.0), (1.0, 0.0, 0.3))],
+        vec![
+            spec(KarisenFrigate, (55.0, 0.0, -30.0), (-1.0, 0.0, 0.3)),
+            spec(RogueFrigate, (60.0, 8.0, -45.0), (-1.0, 0.0, 0.3)),
+        ],
+        Faction::Karisen,
+        human_sides,
+    );
+    sim.wells.push(Well::new(V3::new(0.0, 0.0, 60.0), 1000.0, 15.0));
+    sim
+}
+
+/// The match's field, for a client drawing it: five floats a well from slot 64,
+/// x, y, z, mu, soft. Returns the count.
+#[no_mangle]
+pub extern "C" fn ft_wells_read() -> u32 {
+    let w = wells();
+    let s = scratch();
+    for (i, g) in w.iter().enumerate() {
+        let b = 64 + i * 5;
+        if b + 5 > SCRATCH_LEN {
+            return i as u32;
+        }
+        s[b] = g.pos.x;
+        s[b + 1] = g.pos.y;
+        s[b + 2] = g.pos.z;
+        s[b + 3] = g.mu;
+        s[b + 4] = g.soft;
+    }
+    w.len() as u32
+}
+
+/// The earliest second of this turn at which a mount may fire, given a shot
+/// already planned at `prev_second` (negative for none).
+///
+/// The planner walks its own queue and asks this per weapon, so the spacing
+/// itself is never computed in the renderer: the client owns WHAT is queued,
+/// the core owns WHEN it is allowed.
+#[no_mangle]
+pub extern "C" fn ft_next_free_second(ship: u32, weapon: u32, prev_second: i32) -> i32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    sim.next_free_second(ship as usize, weapon as usize, prev_second)
+}
+
+/// May this mount fire at this second of the current turn? The same gate the
+/// resolver applies at the moment of firing.
+#[no_mangle]
+pub extern "C" fn ft_fire_gate(ship: u32, weapon: u32, second: i32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    sim.fire_gate(ship as usize, weapon as usize, second) as u32
 }
 
 #[no_mangle]
@@ -744,7 +1114,6 @@ pub extern "C" fn ft_read_ships() -> u32 {
         if b + SHIP_STRIDE > SCRATCH_LEN {
             return i as u32;
         }
-        let cls = ship.class_def();
         s[b] = ship.id as f32;
         s[b + 1] = class_index(ship.class) as f32;
         s[b + 2] = ship.faction.index() as f32;
@@ -765,34 +1134,84 @@ pub extern "C" fn ft_read_ships() -> u32 {
         s[b + 17] = ship.vel.z;
         s[b + 18] = ship.mode as u32 as f32;
         s[b + 19] = ship.drift_active as u32 as f32;
+        // How many volumes, and nothing about them: what each one IS comes
+        // from `ft_read_subs`, which is the only place that answer lives. The
+        // three fixed slots that used to sit here were a second copy of it,
+        // and a second copy is a copy that will be wrong for a six volume hull
+        // while still looking right for a three volume one.
         s[b + 20] = ship.subs.len() as f32;
+        s[b + 21] = ship.weapons.len() as f32;
         for k in 0..3 {
-            let (hp, dead) = match ship.subs.get(k) {
-                Some(x) => (x.hp, x.dead as u32 as f32),
-                None => (0.0, 1.0),
-            };
-            s[b + 21 + k * 2] = hp;
-            s[b + 22 + k * 2] = dead;
+            s[b + 22 + k] = ship.weapons.get(k).map(|w| w.last_fired_tick as f32).unwrap_or(-99.0);
         }
-        s[b + 27] = ship.weapons.len() as f32;
-        for k in 0..3 {
-            s[b + 28 + k] = ship.weapons.get(k).map(|w| w.last_fired_turn as f32).unwrap_or(-99.0);
-        }
-        s[b + 31] = ship.boarding_parties.len() as f32;
+        s[b + 25] = ship.boarding_parties.len() as f32;
         for k in 0..2 {
             let (f, c) = match ship.boarding_parties.get(k) {
                 Some(p) => (p.faction.index() as f32, p.count as f32),
                 None => (-1.0, 0.0),
             };
-            s[b + 32 + k * 2] = f;
-            s[b + 33 + k * 2] = c;
+            s[b + 26 + k * 2] = f;
+            s[b + 27 + k * 2] = c;
         }
-        s[b + 36] = cls.radius;
-        s[b + 37] = ship.flight.max_speed;
-        s[b + 38] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
-        s[b + 39] = cls.boarding_range;
+        // The SHIP's, not the class's: a designed hull carries its own radius
+        // and its own reach, and reporting the class here would draw a ring
+        // round a ship that is not the ring the resolver uses.
+        s[b + 30] = ship.radius;
+        s[b + 31] = ship.flight.max_speed;
+        s[b + 32] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
+        s[b + 33] = ship.boarding_range;
     }
     n as u32
+}
+
+/// Every ship's subsystems, in one call.
+///
+/// What a shot can be aimed at, what it does when it dies, and where it is:
+/// the client needs all three to offer a target and to draw the marker on it,
+/// and asking per ship would be four crossings a frame to save nothing. World
+/// position rather than the class offset, because the volume moves with the
+/// hull and a client that rotated the offset itself would be holding a second
+/// opinion about which way the ship is facing.
+#[no_mangle]
+pub extern "C" fn ft_read_subs() -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let s = scratch();
+    let mut n = 0usize;
+    for (si, ship) in sim.ships.iter().enumerate() {
+        let defs = ship.class_def().subsystems;
+        for (bi, sub) in ship.subs.iter().enumerate() {
+            let b = OUT + n * SUB_STRIDE;
+            if b + SUB_STRIDE > SCRATCH_LEN {
+                return n as u32;
+            }
+            let def = &defs[sub.def];
+            let at = ship.sub_world_pos(sub);
+            s[b] = si as f32;
+            s[b + 1] = bi as f32;
+            s[b + 2] = sub_kind_index(def.kind) as f32;
+            s[b + 3] = sub.hp;
+            s[b + 4] = sub.max_hp;
+            s[b + 5] = sub.dead as u32 as f32;
+            s[b + 6] = at.x;
+            s[b + 7] = at.y;
+            s[b + 8] = at.z;
+            s[b + 9] = def.radius;
+            s[b + 10] = def.block_pct;
+            n += 1;
+        }
+    }
+    n as u32
+}
+
+/// The kind discriminants the client mirrors by position.
+fn sub_kind_index(k: crate::data::SubKind) -> u32 {
+    match k {
+        crate::data::SubKind::Armor => 0,
+        crate::data::SubKind::Thruster => 1,
+        crate::data::SubKind::Rcs => 2,
+        crate::data::SubKind::Weapon => 3,
+        crate::data::SubKind::Reactor => 4,
+    }
 }
 
 /// Flight stats for one ship, into the input slots the flight queries read.
@@ -813,12 +1232,17 @@ pub extern "C" fn ft_load_ship(ship: u32) -> u32 {
     s[7] = sh.quat.y;
     s[8] = sh.quat.z;
     s[9] = sh.quat.w;
-    s[18] = sh.flight.yaw_rate;
-    s[19] = sh.flight.pitch_rate;
-    s[20] = sh.flight.accel_fwd;
-    s[21] = sh.flight.accel_retro;
-    s[22] = sh.flight.accel_lat;
-    s[23] = sh.flight.max_speed;
+    // What it can fly now rather than what its class was authored to fly. A
+    // hull whose jets are gone previews as a hull that cannot turn, which is
+    // the difference between finding out while planning and finding out while
+    // watching the playback.
+    let fl = sh.effective_flight();
+    s[18] = fl.yaw_rate;
+    s[19] = fl.pitch_rate;
+    s[20] = fl.accel_fwd;
+    s[21] = fl.accel_retro;
+    s[22] = fl.accel_lat;
+    s[23] = fl.max_speed;
     1
 }
 
@@ -836,6 +1260,13 @@ pub extern "C" fn ft_set_flight(
     max_speed: f32,
 ) -> u32 {
     let Some(sim) = sim_opt() else { return 0 };
+    // Refused outside a sandbox, and refused HERE rather than by a client
+    // hiding a slider. Flight stats are in the state hash, so a seat that
+    // could change them mid match could part the two clients on its own; a
+    // rule that decides what the simulation accepts belongs in the simulation.
+    if !sim.sandbox {
+        return 0;
+    }
     let Some(sh) = sim.ships.get_mut(ship as usize) else { return 0 };
     sh.flight = Flight {
         yaw_rate: yaw,
@@ -846,6 +1277,16 @@ pub extern "C" fn ft_set_flight(
         max_speed,
     };
     1
+}
+
+/// Whether this match will accept a change to a hull's flight stats.
+///
+/// Asked rather than assumed: the client knows which scenario it launched, but
+/// a console that decided on its own what the core would allow is a second
+/// copy of the rule.
+#[no_mangle]
+pub extern "C" fn ft_sandbox() -> u32 {
+    sim_opt().map(|s| s.sandbox as u32).unwrap_or(0)
 }
 
 // ---------------------------------------------------------------- orders --
@@ -870,6 +1311,8 @@ pub extern "C" fn ft_set_move(
     fx: f32,
     fy: f32,
     fz: f32,
+    has_roll: u32,
+    roll: f32,
 ) -> u32 {
     let o = orders();
     let Some(slot) = o.get_mut(ship as usize) else { return 0 };
@@ -877,6 +1320,7 @@ pub extern "C" fn ft_set_move(
     entry.mode = Some(Mode::from_u32(mode));
     entry.target = if has_target != 0 { Some(V3::new(tx, ty, tz)) } else { None };
     entry.face = if has_face != 0 { Some(V3::new(fx, fy, fz)) } else { None };
+    entry.roll = if has_roll != 0 { Some(roll) } else { None };
     1
 }
 
@@ -1059,8 +1503,9 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
         sh.body(),
         sh.plan_target,
         Mode::from_u32(mode),
-        &sh.flight,
+        &sh.effective_flight(),
         sh.plan_face,
+        sh.plan_roll,
         steps,
         1.0 / TICKS_PER_SECOND as f32,
         wells(),
@@ -1072,6 +1517,78 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
     s[35] = flown.end_vel.x;
     s[36] = flown.end_vel.y;
     s[37] = flown.end_vel.z;
+    1
+}
+
+/// Where a design's part list is written before `ft_derive` reads it.
+///
+/// Past the block the results come back in, so a caller can lay the parts down
+/// once and read the answer without the two treading on each other.
+pub const DERIVE_PARTS: usize = OUT + 32;
+
+/// What a design comes out as: what it weighs, what it can take, how it flies.
+///
+/// The client measures its own voxel grid and passes the counts; every RULE
+/// that turns those counts into a ship is here. It used to be the other way
+/// round, with the editor doing the arithmetic, which is exactly the shortcut
+/// ADR-2 exists to refuse: two clients that derived a design differently would
+/// field two different ships from one record.
+///
+/// Parts are module INDICES into `design::MODULES`, written at `DERIVE_PARTS`
+/// before the call. Results land at `OUT`:
+///
+/// ```text
+///   0 mass          6 max speed    12 boarding range
+///   1 hull          7 yaw rate     13 mass budget
+///   2 radius        8 pitch rate   14 parts
+///   3 accel fwd     9 nominal reach 15 guns
+///   4 accel retro  10 marines      16 trunnions
+///   5 accel lat    11 capacity     17 gate bits, one per check, set when it passes
+/// ```
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_derive(
+    class_idx: u32,
+    plate_cells: i32,
+    ext_x: i32,
+    ext_y: i32,
+    ext_z: i32,
+    radius_cells: f32,
+    fouled: i32,
+    parts: u32,
+) -> u32 {
+    let n = parts as usize;
+    if DERIVE_PARTS + n > SCRATCH_LEN {
+        return 0;
+    }
+    let s = scratch();
+    let list: Vec<usize> = (0..n).map(|i| s[DERIVE_PARTS + i].max(0.0) as usize).collect();
+    let geo = crate::design::Geometry {
+        plate_cells,
+        ext: [ext_x, ext_y, ext_z],
+        radius_cells,
+        fouled,
+    };
+    let d = crate::design::derive(class_from_index(class_idx), &list, geo);
+    let s = scratch();
+    s[OUT] = d.mass;
+    s[OUT + 1] = d.hull;
+    s[OUT + 2] = d.radius;
+    s[OUT + 3] = d.accel_fwd;
+    s[OUT + 4] = d.accel_retro;
+    s[OUT + 5] = d.accel_lat;
+    s[OUT + 6] = d.max_speed;
+    s[OUT + 7] = d.yaw_rate;
+    s[OUT + 8] = d.pitch_rate;
+    s[OUT + 9] = d.reach_u;
+    s[OUT + 10] = d.marines as f32;
+    s[OUT + 11] = d.capacity as f32;
+    s[OUT + 12] = d.boarding_range;
+    s[OUT + 13] = d.mass_max;
+    s[OUT + 14] = d.parts as f32;
+    s[OUT + 15] = d.guns as f32;
+    s[OUT + 16] = d.trunnions as f32;
+    s[OUT + 17] = d.gates as f32;
     1
 }
 
@@ -1109,7 +1626,7 @@ pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
     s[OUT + 1] = wd.kind as u32 as f32;
     s[OUT + 2] = wd.damage();
     s[OUT + 3] = wd.range;
-    s[OUT + 4] = wd.cooldown_turns as f32;
+    s[OUT + 4] = wd.cooldown_secs;
     s[OUT + 5] = wd.arc_h.0;
     s[OUT + 6] = wd.arc_h.1;
     s[OUT + 7] = wd.arc_v.0;
@@ -1132,7 +1649,7 @@ pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
 pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
     sim_opt()
         .and_then(|s| s.ships.get(ship as usize))
-        .map(|sh| sh.flight.nominal_reach())
+        .map(|sh| sh.effective_flight().nominal_reach())
         .unwrap_or(0.0)
 }
 
@@ -1141,6 +1658,20 @@ pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
 #[no_mangle]
 pub extern "C" fn ft_can_fire(ship: u32, weapon: u32) -> u32 {
     sim_opt().map(|s| s.can_fire(ship as usize, weapon as usize) as u32).unwrap_or(0)
+}
+
+/// Has this hull a weapon bay left to fire from?
+///
+/// `ft_can_fire` already returns false for every mount when the bay is gone,
+/// which greys them out. This is the same answer asked separately so the
+/// client can say WHY: a mount that reads "ready in 3s" when the bay is
+/// wrecked sends a player off to wait for a shot that is never coming.
+#[no_mangle]
+pub extern "C" fn ft_weapon_bay(ship: u32) -> u32 {
+    sim_opt()
+        .and_then(|s| s.ships.get(ship as usize))
+        .map(|sh| sh.has_live_weapon_bay() as u32)
+        .unwrap_or(0)
 }
 
 /// May this ship board that one right now? Same reason as above: the button
@@ -1164,6 +1695,83 @@ pub extern "C" fn ft_ship_forward(ship: u32) -> u32 {
     s[32] = f.x;
     s[33] = f.y;
     s[34] = f.z;
+    1
+}
+
+/// A ship's roll about its own nose, in radians from wings level, written to
+/// slot 32. Nose vertical has no wings level to measure from, so it reports 0
+/// and says so with a 0 return rather than handing back an angle off noise.
+///
+/// Asked of the core rather than derived in the renderer for the same reason
+/// forward is: which way is level is a convention the client must not hold a
+/// second opinion about.
+#[no_mangle]
+pub extern "C" fn ft_ship_roll(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    let s = scratch();
+    match crate::flight::roll_of(sh.quat) {
+        Some(r) => { s[32] = r; 1 }
+        None => { s[32] = 0.0; 0 }
+    }
+}
+
+/// The nose direction and roll of a GIVEN orientation, rather than of a ship's
+/// current one.
+///
+/// Playback poses a hull from a recorded track, so the dials that read its
+/// attitude have to read the same track. Deriving forward or roll from the
+/// quaternion in the renderer would be a second opinion about which axis is
+/// forward and which way is level, and those are the core's conventions.
+///
+/// Forward lands in slots 32..34 and roll in 35. Returns 0 when the nose is
+/// vertical, where there is no wings level to measure a roll from.
+#[no_mangle]
+pub extern "C" fn ft_attitude_of(qx: f32, qy: f32, qz: f32, qw: f32) -> u32 {
+    let q = Quat { x: qx, y: qy, z: qz, w: qw }.norm();
+    let f = q.forward();
+    let s = scratch();
+    s[32] = f.x;
+    s[33] = f.y;
+    s[34] = f.z;
+    match crate::flight::roll_of(q) {
+        Some(r) => { s[35] = r; 1 }
+        None => { s[35] = 0.0; 0 }
+    }
+}
+
+/// What the AI will do with this hull this turn, asked BEFORE the turn runs.
+///
+/// The planner is a pure function of the boundary state: it takes `&Sim`, so it
+/// cannot write, and it draws its own RNG stream from the seed, the turn and
+/// the ship index rather than from the match's. Asking it early therefore
+/// changes nothing and returns exactly what the resolver will get, because the
+/// resolver asks it first, from this same untouched state.
+///
+/// Only for a hull the AI actually flies. A seat held by a person plans in
+/// secret, and answering for one would hand a player the other's orders.
+///
+///   32     mode
+///   33..35 destination
+///   36     1 if it has one
+///   37     the ship it means to shoot, or -1
+#[no_mangle]
+pub extern "C" fn ft_ai_preview(ship: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    if sh.destroyed || !sh.ai_enabled {
+        return 0;
+    }
+    let pos = sh.pos;
+    let plan = crate::ai::plan_ship(sim, ship as usize);
+    let s = scratch();
+    s[32] = plan.mode.unwrap_or(Mode::MoveAndTurn).to_u32() as f32;
+    let t = plan.target.unwrap_or(pos);
+    s[33] = t.x;
+    s[34] = t.y;
+    s[35] = t.z;
+    s[36] = if plan.target.is_some() { 1.0 } else { 0.0 };
+    s[37] = plan.ai_target.map(|i| i as f32).unwrap_or(-1.0);
     1
 }
 

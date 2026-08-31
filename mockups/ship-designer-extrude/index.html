@@ -1,0 +1,1154 @@
+<title>Face Extrude</title>
+<meta name="description" content="Ship designer, variant B: tap an exposed face and a cube grows against it. Minecraft rules, no lattice, and a slice plane for the faces you cannot see.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0E14">
+<!--THREE-->
+<style>
+/* Palette and type lifted from web/index.html, the shipped console, so this
+   reads as the same product. Single dark theme on purpose: it is the game's
+   world, not a preference. The three Google faces (Michroma, Exo 2, Rajdhani)
+   cannot be used here because a mockup takes no network, so the same weights
+   and letter spacing are carried on system fallbacks. */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --line:#1E2A3A;
+  --amber:#FFD24B; --faint:#566578; --raised:#16202E;
+  --tabh:52px; --safe:env(safe-area-inset-bottom, 0px);
+  --sheeth:min(54dvh, 400px);
+  --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{max-width:100%;overflow-x:hidden}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--ui);
+  font-size:14px;overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+
+#app{display:grid;grid-template-columns:238px minmax(0,1fr) 300px;
+  grid-template-rows:46px minmax(0,1fr);height:100vh;height:100dvh;min-width:0}
+
+header{grid-column:1/4;grid-row:1;display:flex;align-items:center;gap:10px;padding:0 12px;
+  background:var(--panel2);border-bottom:1px solid var(--line);min-width:0;
+  -webkit-user-select:none;user-select:none}
+header h1{font-size:12px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+  margin:0;color:var(--cyan);white-space:nowrap}
+.hgap{flex:1;min-width:0}
+.pill{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel);
+  border:1px solid var(--line);border-radius:99px;padding:3px 9px;white-space:nowrap}
+.pill b{color:var(--ink)}
+#vpill{font-weight:700;letter-spacing:.08em}
+#vpill.ok{color:#04131c;background:var(--green);border-color:var(--green)}
+#vpill.bad{color:#1a0505;background:var(--red);border-color:var(--red)}
+
+/* The scroller is INSIDE the sheet, not the sheet itself. A fixed element that
+   is its own scroll container gets promoted to a compositing layer, and over a
+   WebGL canvas that shows up as a white rectangle where the ship should be.
+   It also stops the scroll bleeding into the page on iOS. */
+aside{background:var(--panel2);overflow:hidden;min-width:0}
+.sheet{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;padding:10px 11px}
+#left{grid-column:1;grid-row:2;border-right:1px solid var(--line)}
+#right{grid-column:3;grid-row:2;border-left:1px solid var(--line)}
+
+h2{font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--muted);margin:14px 0 7px}
+h2:first-child{margin-top:0}
+h2.core{color:var(--cyan)}
+
+button{font-family:var(--ui);font-size:12px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;touch-action:manipulation;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);border-radius:5px;padding:8px 11px;cursor:pointer}
+button.on{background:#0d2231;border-color:var(--cyan);color:var(--cyan)}
+button:disabled{opacity:.35;cursor:default}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:1px}
+
+/* Palette. Each row carries the numbers the core will read off it, because a
+   cube whose cost is invisible is a cube nobody budgets for. */
+.kinds{display:flex;flex-direction:column;gap:5px}
+.kinds button{display:flex;align-items:center;gap:9px;text-align:left;padding:7px 8px;
+  text-transform:none;letter-spacing:0;font-weight:600;line-height:1.25}
+.sw{flex:0 0 auto;width:15px;height:15px;border-radius:3px;box-shadow:inset 0 0 0 1px #0006}
+.kinds .nm{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  display:block;overflow-wrap:anywhere}
+.kinds .sub{display:block;font-family:var(--mono);font-size:10px;color:var(--muted);
+  margin-top:2px;font-weight:400;letter-spacing:0}
+.kinds button.on .sub{color:#9dd9f5}
+.kinds .txt{min-width:0}
+.warnstub{font-family:var(--mono);font-size:9px;color:var(--orange);letter-spacing:.04em}
+
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.row label{font-size:11px;color:var(--muted)}
+select{font-family:var(--ui);font-size:12px;background:var(--panel);color:var(--ink);
+  border:1px solid var(--line);border-radius:5px;padding:7px 8px;width:100%}
+.btnrow{display:flex;flex-wrap:wrap;gap:5px}
+.btnrow button{flex:1 1 auto;padding:8px 9px;font-size:11px}
+
+table{width:100%;border-collapse:collapse;font-size:11px}
+td{padding:3px 0;border-bottom:1px solid var(--raised);color:var(--muted);vertical-align:top}
+td:last-child{text-align:right;font-family:var(--mono);color:var(--ink);white-space:nowrap}
+tr.head td{color:var(--faint);letter-spacing:.14em;text-transform:uppercase;font-size:9px;
+  border-bottom:0;padding-top:10px}
+tr.warn td:last-child{color:var(--orange)}
+tr.bad td:last-child{color:var(--red)}
+tr.good td:last-child{color:var(--green)}
+#stats.stale td:last-child{color:var(--faint)}
+
+.note{font-size:11px;color:var(--muted);line-height:1.5;background:var(--panel);
+  border-left:2px solid var(--cyan);padding:8px 10px;border-radius:0 4px 4px 0;margin:9px 0}
+.note b{color:var(--ink)}
+.note.core{border-left-color:var(--cyan)}
+#verdict{border-left-color:var(--green)}
+#verdict.bad{border-left-color:var(--red)}
+#verdict .vh{display:block;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  font-size:11px;color:var(--green);margin-bottom:4px}
+#verdict.bad .vh{color:var(--red)}
+#verdict ul{margin:0;padding-left:16px}
+#verdict li{margin-bottom:4px}
+#verdict li.warnli{color:var(--orange)}
+
+/* ---------------------------------------------------------------- canvas -- */
+#view{grid-column:2;grid-row:2;position:relative;min-width:0;min-height:0;overflow:hidden}
+#cv{display:block;width:100%;height:100%;background:var(--ground);touch-action:none;
+  -webkit-user-select:none;user-select:none}
+
+/* Controls drawn over the map. Everything a build needs is here, because a
+   control that lives only inside a sheet is a control nobody knows exists. */
+#kindchip{position:absolute;left:10px;top:10px;z-index:6;display:flex;align-items:center;gap:7px;
+  background:rgba(13,19,29,.92);border:1px solid var(--line);border-radius:6px;padding:6px 9px;
+  cursor:pointer;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink);touch-action:manipulation}
+#kindchip .cyc{color:var(--muted);font-weight:600;letter-spacing:0;text-transform:none;
+  font-family:var(--mono);font-size:10px}
+
+#hud{position:absolute;left:0;right:0;bottom:10px;z-index:6;display:flex;
+  flex-direction:column;align-items:center;gap:7px;pointer-events:none}
+.hudrow{display:flex;gap:6px;pointer-events:auto}
+.hudrow button{background:rgba(13,19,29,.94);min-width:46px;min-height:40px;padding:8px 10px}
+#hud .seg button.on{background:#0d2231}
+#slicebtn .n{font-family:var(--mono);font-size:9px;color:var(--amber);margin-left:4px;
+  letter-spacing:0}
+
+#empty{position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;text-align:center;padding:20px;
+  background:radial-gradient(circle at 50% 45%, #0f1926 0%, #0A0E14 70%)}
+#empty.hidden{display:none}
+#empty p{margin:0;max-width:30ch;color:var(--muted);font-size:12px;line-height:1.6}
+#empty b{color:var(--ink)}
+#empty button{padding:13px 20px;font-size:13px;border-color:var(--cyan);color:var(--cyan);
+  background:#0d2231}
+
+#hint{position:absolute;right:10px;top:10px;z-index:5;max-width:210px;font-size:10px;
+  font-family:var(--mono);color:var(--muted);background:rgba(10,14,20,.82);
+  border:1px solid var(--line);border-radius:5px;padding:6px 8px;line-height:1.6;
+  pointer-events:none}
+
+#tabbar{display:none}
+
+/* ---------------------------------------------------------------- phone -- */
+@media (max-width:900px){
+  #app{grid-template-columns:minmax(0,1fr);grid-template-rows:44px minmax(0,1fr) auto}
+  header{grid-column:1;grid-row:1;height:44px;gap:8px;padding:0 10px}
+  header h1{font-size:11px;letter-spacing:.12em}
+  .deskonly{display:none}
+  #view{grid-column:1;grid-row:2}
+  #hint{display:none}
+
+  aside{position:fixed;left:0;right:0;bottom:calc(var(--tabh) + var(--safe));
+    height:var(--sheeth);z-index:9;border:0;border-top:1px solid var(--line);
+    box-shadow:0 -14px 34px #000a;transform:translateY(112%);transition:transform .18s ease}
+  .sheet{padding-bottom:18px}
+  aside.open{transform:none}
+
+  #tabbar{display:flex;grid-column:1;grid-row:3;z-index:10;
+    height:calc(var(--tabh) + var(--safe));padding-bottom:var(--safe);
+    background:var(--panel2);border-top:1px solid var(--line)}
+  #tabbar button{flex:1;height:100%;padding:0;border:0;border-radius:0;background:transparent;
+    color:var(--muted);font-size:11px;overflow:hidden}
+  .tshort{display:none}
+  #tabbar button.on{color:var(--cyan);background:#0d2231;box-shadow:inset 0 2px 0 var(--cyan)}
+}
+
+/* Upright, where the sheets rise from the BOTTOM. A sheet owns that half of
+   the screen while it is open, so the on canvas controls step UP and sit above
+   it. z-index alone is not enough: the sheet would still eat the touch. */
+@media (max-width:900px) and (min-height:561px){
+  #app:has(aside.open) #hud{position:fixed;left:0;right:0;
+    bottom:calc(var(--tabh) + var(--safe) + var(--sheeth) + 10px)}
+}
+
+/* Sideways, where only about 390px of height exists. The tab bar stands up as
+   a left rail and the sheets slide in from the left, so the controls move to
+   the right strip: the part of the map a sheet never covers. */
+@media (max-width:900px) and (max-height:560px){
+  #app{grid-template-columns:52px minmax(0,1fr);grid-template-rows:38px minmax(0,1fr)}
+  header{grid-column:1/3;grid-row:1;height:38px}
+  #view{grid-column:2;grid-row:2}
+  #tabbar{flex-direction:column;grid-column:1;grid-row:2;width:52px;height:auto;
+    padding-bottom:0;border-top:0;border-right:1px solid var(--line)}
+  /* 52px of rail, so the long label is swapped rather than clipped. */
+  #tabbar button{flex:0 0 auto;height:48px;font-size:10px;letter-spacing:.04em}
+  .tlong{display:none} .tshort{display:inline}
+  #tabbar button.on{box-shadow:inset 2px 0 0 var(--cyan)}
+  aside{left:52px;right:auto;top:38px;bottom:0;width:min(258px,50vw);height:auto;
+    border-top:0;border-right:1px solid var(--line);box-shadow:14px 0 34px #000a;
+    transform:translateX(-115%)}
+  aside.open{transform:none}
+  #hud{left:auto;right:8px;bottom:8px;align-items:flex-end}
+  .hudrow{flex-direction:column}
+  .hudrow button{width:46px;min-height:36px;padding:6px 4px;font-size:10px}
+  .hudlbl{display:none}
+  #kindchip{left:auto;right:8px;top:8px;font-size:10px;padding:5px 7px}
+  #kindchip .cyc{display:none}
+}
+@media (prefers-reduced-motion:reduce){ aside{transition:none} }
+</style>
+
+<div id="app">
+  <header>
+    <h1>Face Extrude</h1>
+    <span class="pill deskonly">cubes <b id="pCubes">0</b></span>
+    <span class="pill deskonly">mass <b id="pMass">0.000</b> / <b id="pBudget">1.000</b></span>
+    <span class="hgap"></span>
+    <span class="pill" id="vpill">empty</span>
+  </header>
+
+  <aside id="left"><div class="sheet">
+    <h2>Cube palette</h2>
+    <div class="kinds" id="kinds"></div>
+
+    <h2>Hull class</h2>
+    <select id="cls"></select>
+    <div class="note" id="clsnote"></div>
+
+    <h2>Load a state</h2>
+    <div class="btnrow" id="presets"></div>
+
+    <h2>How it builds</h2>
+    <div class="note">
+      Tap the exposed <b>face</b> of a cube and a new one grows against it. There is no
+      lattice and no empty cell to hit, so nothing can float: every cube arrives touching
+      the structure. <b>Long press</b> a cube, or switch to DEL, to take one away.
+      <br><br>
+      Deleting is the one move that can break the rule placing cannot: cut the spine and
+      the nose becomes an island. The core catches that, the editor does not prevent it.
+    </div>
+
+    <h2>Reaching a face you cannot see</h2>
+    <div class="note">
+      Three routes, in the order they cost you least.
+      <br><br>
+      <b>1. Turn it.</b> Most occluded faces are outer faces. Drag empty space, or hold
+      TURN, and orbit until the face is front on.
+      <br><br>
+      <b>2. Slice it.</b> SLICE hides everything between the camera and a cut plane and
+      takes it out of the pick as well, so a buried face becomes the front face and one
+      tap builds on it. The hidden cubes stay in the design and are drawn as faint
+      outlines. Minus and plus walk the plane through the hull, and the side is chosen
+      from where the camera is standing, so there is no side control to get wrong.
+      <br><br>
+      <b>3. Peel it.</b> DEL takes the cube in the way off, build behind it, put it back.
+      Destructive, and the only route that needs undo.
+      <br><br>
+      Tap through, where a second tap on the same pixel steps to the next surface along
+      the ray, was tried and dropped: it makes every placement two taps to save one, and
+      this variant is spending its budget on flow.
+    </div>
+  </div></aside>
+
+  <div id="view">
+    <canvas id="cv"></canvas>
+
+    <div id="kindchip"><span class="sw" id="chipsw"></span><span id="chipnm">ENGINE</span><span class="cyc">tap to cycle</span></div>
+
+    <div id="hint">
+      drag empty space: orbit<br>
+      wheel: zoom<br>
+      tap a face: build<br>
+      long press a cube: delete<br>
+      keys 1 to 7: cube kind<br>
+      B / T / X: mode &middot; U: undo
+    </div>
+
+    <div id="hud">
+      <div class="hudrow seg" id="modes"></div>
+      <div class="hudrow">
+        <button id="slicebtn">Slice <span class="hudlbl">off</span><span class="n" id="sliceN"></span></button>
+        <button id="sliceDn" disabled>&minus;</button>
+        <button id="sliceUp" disabled>&plus;</button>
+        <button id="undo" disabled>Undo</button>
+      </div>
+    </div>
+
+    <div id="empty">
+      <p><b>Empty grid.</b> A design starts from one seed cube at the ship origin, and
+      every cube after it is grown off a face of the last.</p>
+      <button id="seed">Place the seed cube</button>
+    </div>
+  </div>
+
+  <aside id="right"><div class="sheet">
+    <h2 class="core">Read from the core</h2>
+    <div class="note core">
+      Every number below comes back from one call, <b>ft_read_design(ship)</b>. The editor
+      owns which cell a finger landed on and what a cube looks like. It computes no mass,
+      no thrust, no legality: a rule with a second implementation in the client is a rule
+      two clients can disagree about, and that is a desync.
+    </div>
+    <div class="note" id="verdict"></div>
+    <table id="stats"></table>
+    <div class="note" id="prov"></div>
+  </div></aside>
+
+  <nav id="tabbar">
+    <button id="tabBuild" class="on">Build</button>
+    <button id="tabPal"><span class="tlong">Palette</span><span class="tshort">Pal</span></button>
+    <button id="tabCore">Core</button>
+  </nav>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+// Numbers from the real project (GUIDELINES.md rule 2.1):
+//   engine/sim_core/src/data.rs  ship classes, W_BEAM / W_CANNON / W_MISSILE,
+//                                frigate_subs(armor_block), ALL_CLASSES order
+//   prototype/sim/data.js        TURN_SECONDS 10, nominalReach, flight defaults
+//   docs/DESIGN.md               ship_1.fbx measures 6.9 x 3.4 x 4.0 u
+// One editor cube is 1.0 u, so a seven cube spine is 7.0 u long and sits inside
+// the r 3.5 sphere the sim already collides with.
+
+const CUBE = 1.0;
+const TURN_SECONDS = 10;      // data.rs CONST TURN_SECONDS
+const FIRE_SLOTS = 11;        // seconds 0..10 inclusive, the turn's fire slots
+
+/* ------------------------------------------------------------------ data --
+   CONFIGS MAY LIVE IN THE CLIENT, LOGIC MAY NOT (CLAUDE.md). These two tables
+   are inert authored numbers, exactly like the flight sliders the console
+   already ships. What any of them MEAN is decided in askTheCore below and, in
+   the real build, in engine/sim_core/src/data.rs beside frigate_subs.        */
+
+const CLASSES = [                                        // ALL_CLASSES order
+  { key:"terran_frigate",     name:"Terran Frigate",     hull:300, radius:3.5, mass:1.0,
+    yaw:6.0,  pitch:4.0, fwd:0.9,  retro:0.35, lat:0.25, maxSpeed:8.0, armorBlock:80 },
+  { key:"karisen_frigate",    name:"Karisen Frigate",    hull:250, radius:3.5, mass:1.0,
+    yaw:6.5,  pitch:4.0, fwd:0.95, retro:0.35, lat:0.25, maxSpeed:8.5, armorBlock:75 },
+  { key:"rogue_frigate",      name:"Rogue Frigate",      hull:180, radius:3.2, mass:0.9,
+    yaw:9.0,  pitch:6.0, fwd:1.1,  retro:0.5,  lat:0.4,  maxSpeed:9.5, armorBlock:90 },
+  { key:"benefactor_frigate", name:"Benefactor Frigate", hull:250, radius:3.5, mass:1.0,
+    yaw:5.0,  pitch:3.5, fwd:0.85, retro:0.35, lat:0.22, maxSpeed:8.0, armorBlock:80 },
+  { key:"freighter",          name:"Freighter",          hull:600, radius:4.5, mass:2.0,
+    yaw:2.5,  pitch:1.5, fwd:0.45, retro:0.18, lat:0.10, maxSpeed:5.0, armorBlock:null }
+];
+
+// W_BEAM / W_CANNON / W_MISSILE, verbatim from data.rs:97-131. Plasma is not
+// its own stat block: "Cannon | Plasma => &W_CANNON".
+const WEAPONS = {
+  beam:    { name:"Beam",    dmg:5.0,  mult:5.5, range:300, cd:3.0, arcH:110, arcV:60,  batch:1 },
+  cannon:  { name:"Cannon",  dmg:5.0,  mult:5.5, range:200, cd:4.0, arcH:90,  arcV:60,  batch:1 },
+  missile: { name:"Missile", dmg:25.0, mult:1.0, range:250, cd:6.0, arcH:360, arcV:360, batch:2 }
+};
+
+const KINDS = [
+  { id:"ENGINE", colour:"#35C7FF", sub:"thrust 0.30 u/s2 &middot; mass 0.040",
+    mass:0.040, hull:12, thrust:0.30, powerDraw:2, heatBurn:6,
+    blurb:"SubKind::Thruster. The core already kills 100% of thrust when the last live one dies." },
+  { id:"REACTOR", colour:"#4CD97B", sub:"power +14 &middot; mass 0.050",
+    mass:0.050, hull:12, power:14, heatBurn:2, stub:true,
+    blurb:"No power system exists in the core yet. This cube is the reason one would be built." },
+  { id:"HEATSINK", colour:"#D8E2EC", sub:"heat cap 30 &middot; mass 0.020",
+    mass:0.020, hull:12, heatCap:30, powerDraw:1, stub:true,
+    blurb:"No heat system exists in the core yet either." },
+  { id:"ARMOR", colour:"#566578", sub:"100 hp volume &middot; mass 0.055",
+    mass:0.055, hull:18, armorHp:100, blurb:"A SubDef hit volume: hp 100, block_pct off the hull class." },
+  { id:"TURRET_BEAM", colour:"#FFD24B", sub:"27.5 dmg &middot; 300 u &middot; cd 3.0 s",
+    mass:0.035, hull:12, weapon:"beam", powerDraw:4, heatShot:2, blurb:"W_BEAM mount." },
+  { id:"TURRET_PROJECTILE", colour:"#FA6A0A", sub:"27.5 dmg &middot; 200 u &middot; cd 4.0 s",
+    mass:0.040, hull:12, weapon:"cannon", powerDraw:3, heatShot:3, blurb:"W_CANNON mount, cannon or plasma." },
+  { id:"TURRET_MISSILE", colour:"#FF4B4B", sub:"25 dmg x2 &middot; 250 u &middot; cd 6.0 s",
+    mass:0.060, hull:12, weapon:"missile", powerDraw:2, heatShot:4, blurb:"W_MISSILE mount, batch 2." }
+];
+const KIND_BY_ID = {}; KINDS.forEach(function(k){ KIND_BY_ID[k.id] = k; });
+
+/* ================================================================ BOUNDARY ==
+   In the real client this whole function is one wasm call, ft_read_design(ship),
+   and every line of it moves to engine/sim_core/src/design.rs next to data.rs.
+   THIS IS THE ONLY PLACE IN THE FILE WHERE A DERIVED NUMBER IS COMPUTED.
+   Nothing outside it may work out what a design weighs, how fast it flies,
+   whether it is legal, or what a module contributes: those are rules, and a
+   rule in the client is a rule two clients can disagree about, which lockstep
+   reports as a desync (CLAUDE.md, ADR-6).
+   The rest of the page reads this object and formats it. That is all.
+============================================================================ */
+function askTheCore(cells, classKey){
+  var cls = CLASSES[0], i, j, c, k;
+  for(i=0;i<CLASSES.length;i++){ if(CLASSES[i].key === classKey) cls = CLASSES[i]; }
+
+  var r = {
+    cls: cls, cubes: cells.length, budget: cls.mass,
+    mass: 0, hull: 0, engines: 0, reactors: 0, heatsinks: 0, armor: 0,
+    armorHp: 0, armorBlock: cls.armorBlock,
+    thrust: 0, power: 0, draw: 0, heat: 0, heatCap: 0,
+    mounts: { beam:0, cannon:0, missile:0 }, dpt: 0, mountCount: 0,
+    accelFwd: 0, accelRetro: 0, accelLat: 0, maxSpeed: cls.maxSpeed,
+    yaw: 0, pitch: 0, reach: 0,
+    bad: {}, errors: [], warnings: [], legal: false, hash: "00000000"
+  };
+  if(cells.length === 0){
+    r.errors.push("Empty design. A hull needs at least a seed cube.");
+    return r;
+  }
+
+  // Composition. Each cube contributes exactly what its authored row says.
+  for(i=0;i<cells.length;i++){
+    c = cells[i]; k = KIND_BY_ID[c.kind];
+    r.mass += k.mass;
+    r.hull += k.hull;
+    if(k.thrust){ r.engines++; r.thrust += k.thrust; }
+    if(k.power){ r.reactors++; r.power += k.power; }
+    if(k.heatCap){ r.heatsinks++; r.heatCap += k.heatCap; }
+    if(k.armorHp){ r.armor++; r.armorHp += k.armorHp; }
+    if(k.powerDraw) r.draw += k.powerDraw;
+    if(k.heatBurn) r.heat += k.heatBurn;
+    if(k.weapon){
+      var w = WEAPONS[k.weapon];
+      r.mounts[k.weapon]++;
+      r.mountCount++;
+      // Fire slots are the turn's whole seconds, 0..10. A mount is free at
+      // second 0 and every cooldown after it, which is why W_BEAM's 3.0 s
+      // comment says a beam is free on four of a turn's eleven slots.
+      var shots = Math.floor((FIRE_SLOTS - 1) / w.cd) + 1;
+      r.dpt += shots * w.batch * (w.dmg * w.mult);
+      r.heat += shots * k.heatShot;
+    }
+  }
+  r.mass = Math.round(r.mass * 1000) / 1000;
+
+  // Flight. accel = thrust / mass, and the two lesser axes keep the ratios the
+  // authored classes carry (retro 0.35/0.9, lateral 0.25/0.9 on the Terran).
+  if(r.mass > 0){
+    r.accelFwd   = r.thrust / r.mass;
+    r.accelRetro = r.accelFwd * (0.35 / 0.9);
+    r.accelLat   = r.accelFwd * (0.25 / 0.9);
+    var agility  = Math.max(0.4, Math.min(1.8, cls.mass / r.mass));
+    r.yaw   = cls.yaw   * agility;
+    r.pitch = cls.pitch * agility;
+  }
+  // nominalReach(fl) from prototype/sim/data.js:90-94.
+  if(r.accelFwd > 0){
+    var tA = Math.min(TURN_SECONDS, r.maxSpeed / r.accelFwd);
+    r.reach = 0.5 * r.accelFwd * tA * tA + r.maxSpeed * (TURN_SECONDS - tA);
+  }
+
+  // Connectivity. Placement cannot float a cube, but deletion can strand one,
+  // so the island count is checked rather than assumed.
+  var occ = {}, key;
+  for(i=0;i<cells.length;i++) occ[cells[i].x+","+cells[i].y+","+cells[i].z] = i;
+  var seen = {}, stack = [0], reached = 0;
+  seen[0] = true;
+  var N = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+  while(stack.length){
+    var idx = stack.pop(); reached++;
+    c = cells[idx];
+    for(j=0;j<6;j++){
+      key = (c.x+N[j][0])+","+(c.y+N[j][1])+","+(c.z+N[j][2]);
+      var n = occ[key];
+      if(n !== undefined && !seen[n]){ seen[n] = true; stack.push(n); }
+    }
+  }
+  var orphans = 0;
+  for(i=0;i<cells.length;i++){ if(!seen[i]){ orphans++; r.bad[i] = "orphan"; } }
+
+  // The hull sphere the sim already collides with: ShipClass.radius.
+  var outside = 0;
+  for(i=0;i<cells.length;i++){
+    c = cells[i];
+    if(Math.sqrt(c.x*c.x + c.y*c.y + c.z*c.z) * CUBE > cls.radius){
+      outside++; if(!r.bad[i]) r.bad[i] = "outside";
+    }
+  }
+
+  // Legality.
+  if(r.engines === 0)
+    r.errors.push("No ENGINE cube. The core zeroes 100% of thrust when the last live Thruster dies, so this hull can never move.");
+  if(r.mountCount === 0)
+    r.errors.push("No turret. FREIGHTER_MOUNTS is the one authored hull with an empty mount list, and it is not designable here.");
+  if(r.mass > cls.mass)
+    r.errors.push("Mass " + r.mass.toFixed(3) + " over the " + cls.mass.toFixed(3) + " budget the " + cls.name + " carries.");
+  if(orphans > 0)
+    r.errors.push(orphans + (orphans === 1 ? " cube is" : " cubes are") + " not connected to the hull. A delete cut the structure into islands.");
+  if(outside > 0)
+    r.errors.push(outside + (outside === 1 ? " cube sits" : " cubes sit") + " outside the r " + cls.radius.toFixed(1) + " collision sphere the sim uses for this class.");
+  if(r.power - r.draw < 0)
+    r.errors.push("Power deficit " + (r.draw - r.power) + ". Add a REACTOR or drop a draw.");
+  if(r.heat > r.heatCap)
+    r.warnings.push("Heat " + r.heat + " over the " + r.heatCap + " a turn of firing can sink. No heat system exists in the core yet, so this is a proposal, not a refusal.");
+  r.legal = r.errors.length === 0;
+
+  // Stand in for ft_state_hash. FNV-1a over the sorted placements, so the same
+  // design hashes the same whatever order it was built in.
+  var flat = cells.map(function(c){ return c.x+","+c.y+","+c.z+","+c.kind; }).sort().join(";") + "|" + cls.key;
+  var h = 0x811c9dc5;
+  for(i=0;i<flat.length;i++){
+    h ^= flat.charCodeAt(i);
+    h = (h + ((h<<1) + (h<<4) + (h<<7) + (h<<8) + (h<<24))) >>> 0;
+  }
+  r.hash = ("0000000" + h.toString(16)).slice(-8);
+  return r;
+}
+/* ============================================================ END BOUNDARY == */
+
+/* ------------------------------------------------------------------ state -- */
+var S = {
+  cells: [],
+  kind: "ENGINE",
+  mode: "build",
+  cls: "terran_frigate",
+  slice: { axis:-1, cut:0, side:1 },
+  shift: 0,
+  cam: { yaw:0.85, pitch:0.42, dist:15 }
+};
+var core = askTheCore([], S.cls);
+var undoStack = [];
+
+function snap(){ return S.cells.map(function(c){ return {x:c.x,y:c.y,z:c.z,kind:c.kind}; }); }
+function pushUndo(){ undoStack.push(snap()); if(undoStack.length > 50) undoStack.shift(); }
+function occupied(x,y,z){
+  for(var i=0;i<S.cells.length;i++){
+    if(S.cells[i].x===x && S.cells[i].y===y && S.cells[i].z===z) return i;
+  }
+  return -1;
+}
+
+/* ------------------------------------------------------------------ three -- */
+var view = document.getElementById("view");
+var cv = document.getElementById("cv");
+var renderer = new THREE.WebGLRenderer({ canvas:cv, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+var scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0A0E14);
+var camera = new THREE.PerspectiveCamera(48, 1, 0.1, 400);
+var camTarget = new THREE.Vector3(0,0,0);
+
+scene.add(new THREE.HemisphereLight(0x9fc6e0, 0x0a0e14, 1.15));
+var key = new THREE.DirectionalLight(0xffffff, 1.05); key.position.set(6, 11, 8); scene.add(key);
+var fill = new THREE.DirectionalLight(0x7fb6dd, 0.35); fill.position.set(-7,-5,-9); scene.add(fill);
+
+var world = new THREE.Group(); scene.add(world);
+var cubeGroup = new THREE.Group(); world.add(cubeGroup);
+var ghostGroup = new THREE.Group(); world.add(ghostGroup);
+
+// The r 3.5 sphere the sim collides with, so the designer can see the class it
+// is drawing inside. Framing, not a rule: the core is what refuses a cube outside it.
+var sphereMat = new THREE.MeshBasicMaterial({ color:0xFA6A0A, wireframe:true, transparent:true, opacity:0.075 });
+var sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 26, 16), sphereMat);
+world.add(sphere);
+
+var nose = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 6.2, 0x35C7FF, 0.7, 0.42);
+nose.line.material.transparent = true; nose.line.material.opacity = 0.5;
+nose.cone.material.transparent = true; nose.cone.material.opacity = 0.5;
+world.add(nose);
+
+var boxGeo = new THREE.BoxGeometry(CUBE*0.97, CUBE*0.97, CUBE*0.97);
+var edgeGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(CUBE, CUBE, CUBE));
+var mats = {}, ghostMats = {};
+KINDS.forEach(function(k){
+  mats[k.id] = new THREE.MeshLambertMaterial({ color:new THREE.Color(k.colour) });
+  ghostMats[k.id] = new THREE.MeshLambertMaterial({ color:new THREE.Color(k.colour), transparent:true, opacity:0.42 });
+});
+var badMat = new THREE.MeshLambertMaterial({ color:new THREE.Color(0xFF4B4B), emissive:new THREE.Color(0x4a0d0d) });
+var edgeMat = new THREE.LineBasicMaterial({ color:0x0A0E14, transparent:true, opacity:0.85 });
+var hiddenEdgeMat = new THREE.LineBasicMaterial({ color:0x35C7FF, transparent:true, opacity:0.16 });
+var pressMat = new THREE.LineBasicMaterial({ color:0xFF4B4B, transparent:true, opacity:0.9 });
+// A face with a cube already behind it has nowhere to grow. Saying so beats a
+// tap that silently does nothing, which is what a slice makes common: the cut
+// surface faces material you have only hidden, not removed.
+var blockedMat = new THREE.LineBasicMaterial({ color:0x7C8B9D, transparent:true, opacity:0.8 });
+
+var pickables = [];
+var pressOutline = null, ghostMesh = null, ghostEdge = null;
+var hiddenCount = 0;
+
+function sliceHides(c){
+  var a = S.slice.axis;
+  if(a < 0) return false;
+  var v = (a === 0) ? c.x : (a === 1 ? c.y : c.z);
+  return S.slice.side > 0 ? v > S.slice.cut : v < S.slice.cut;
+}
+
+function rebuild(){
+  while(cubeGroup.children.length) cubeGroup.remove(cubeGroup.children[0]);
+  pickables = [];
+  pressOutline = null;
+  var hid = 0;
+  for(var i=0;i<S.cells.length;i++){
+    var c = S.cells[i];
+    if(sliceHides(c)){
+      // Still in the design, just out of the picture and out of the pick.
+      var ln = new THREE.LineSegments(edgeGeo, hiddenEdgeMat);
+      ln.position.set(c.x*CUBE, c.y*CUBE, c.z*CUBE);
+      cubeGroup.add(ln); hid++;
+      continue;
+    }
+    var m = new THREE.Mesh(boxGeo, core.bad[i] ? badMat : mats[c.kind]);
+    m.position.set(c.x*CUBE, c.y*CUBE, c.z*CUBE);
+    m.userData.idx = i;
+    cubeGroup.add(m);
+    pickables.push(m);
+    var e = new THREE.LineSegments(edgeGeo, core.bad[i] ? pressMat : edgeMat);
+    e.position.copy(m.position);
+    cubeGroup.add(e);
+  }
+  var r = core.cls.radius;
+  sphere.scale.set(r, r, r);
+  hiddenCount = hid;
+  document.getElementById("empty").className = S.cells.length ? "hidden" : "";
+}
+
+function setGhost(cell){
+  while(ghostGroup.children.length) ghostGroup.remove(ghostGroup.children[0]);
+  ghostMesh = null;
+  if(!cell) return;
+  var probe = snap(); probe.push({ x:cell.x, y:cell.y, z:cell.z, kind:S.kind });
+  // The ghost is tinted by what the CORE says of the design that would result.
+  // The editor is not deciding, it is asking and drawing the answer.
+  var would = askTheCore(probe, S.cls);
+  var mat = would.legal ? ghostMats[S.kind]
+    : new THREE.MeshLambertMaterial({ color:new THREE.Color(0xFF4B4B), transparent:true, opacity:0.4 });
+  ghostMesh = new THREE.Mesh(boxGeo, mat);
+  ghostMesh.position.set(cell.x*CUBE, cell.y*CUBE, cell.z*CUBE);
+  ghostGroup.add(ghostMesh);
+  ghostEdge = new THREE.LineSegments(edgeGeo, new THREE.LineBasicMaterial({
+    color: would.legal ? 0x35C7FF : 0xFF4B4B }));
+  ghostEdge.position.copy(ghostMesh.position);
+  ghostGroup.add(ghostEdge);
+}
+
+function setPressMark(idx, mat){
+  if(pressOutline){ cubeGroup.remove(pressOutline); pressOutline = null; }
+  if(idx < 0 || idx >= S.cells.length) return;
+  var c = S.cells[idx];
+  pressOutline = new THREE.LineSegments(edgeGeo, mat || pressMat);
+  pressOutline.position.set(c.x*CUBE, c.y*CUBE, c.z*CUBE);
+  pressOutline.scale.set(1.1,1.1,1.1);
+  pressOutline.userData.idx = idx;
+  cubeGroup.add(pressOutline);
+}
+
+/* ------------------------------------------------------------------- pick -- */
+var ray = new THREE.Raycaster();
+var ndc = new THREE.Vector2();
+function pick(px, py){
+  var r = cv.getBoundingClientRect();
+  ndc.x = ((px - r.left) / r.width) * 2 - 1;
+  ndc.y = -((py - r.top) / r.height) * 2 + 1;
+  ray.setFromCamera(ndc, camera);
+  var hits = ray.intersectObjects(pickables, false);
+  return hits.length ? hits[0] : null;
+}
+// One place decides what a press is pointing at, so the down and the drag
+// cannot drift apart.
+function aimAt(hit){
+  if(!hit){ setGhost(null); setPressMark(-1); return; }
+  var t = targetOf(hit);
+  setGhost(t);
+  setPressMark(t ? -1 : hit.object.userData.idx, blockedMat);
+}
+function targetOf(hit){
+  if(!hit) return null;
+  var c = S.cells[hit.object.userData.idx];
+  var n = hit.face.normal;   // cubes are axis aligned and unrotated, so local is world
+  var t = { x:c.x + Math.round(n.x), y:c.y + Math.round(n.y), z:c.z + Math.round(n.z) };
+  return occupied(t.x,t.y,t.z) >= 0 ? null : t;
+}
+
+/* ----------------------------------------------------------------- gesture --
+   One finger on a cube in BUILD aims: the ghost follows and the lift commits,
+   so a phone gets what a mouse gets from hover, without hovering. One finger
+   on empty space orbits. Two fingers always orbit and pinch, in any mode. The
+   TURN button is the explicit route for the same thing, because the right
+   mouse button does not exist on a phone.                                    */
+var ptrs = new Map();
+var gesture = null, moved = false, startX = 0, startY = 0;
+var lpFired = false, pressIdx = -1, pressT = 0;
+var pinchD = 0, pinchX = 0, pinchY = 0;
+// How long a press has to hold to become a delete. Counted in the FRAME LOOP,
+// not on a setTimeout: a background or occluded tab has its timers aligned to
+// one second, so a 470 ms timer can arrive after the finger has already lifted
+// and the press silently becomes a placement. One clock for the countdown and
+// the ring that draws it, which is also the only way they can agree.
+var LONG_MS = 470;
+
+function clearPress(){ pressT = 0; setPressMark(-1); }
+
+function tickPress(now){
+  if(gesture !== "aim" || lpFired || !pressT) return;
+  var t = (now - pressT) / LONG_MS;
+  if(t > 0.28){
+    if(!pressOutline || pressOutline.userData.idx !== pressIdx) setPressMark(pressIdx);
+    if(pressOutline){
+      var s = 1.02 + 0.22 * Math.min(1, t);
+      pressOutline.scale.set(s, s, s);
+    }
+  }
+  if(t >= 1){
+    lpFired = true; pressT = 0;
+    setGhost(null);
+    removeAt(pressIdx);
+    setPressMark(-1);
+  }
+}
+
+cv.addEventListener("pointerdown", function(e){
+  cv.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  if(ptrs.size === 2){
+    gesture = "pinch"; clearPress(); setGhost(null);
+    var p = Array.from(ptrs.values());
+    pinchD = Math.hypot(p[0].x-p[1].x, p[0].y-p[1].y);
+    pinchX = (p[0].x+p[1].x)/2; pinchY = (p[0].y+p[1].y)/2;
+    return;
+  }
+  if(ptrs.size !== 1) return;
+  startX = e.clientX; startY = e.clientY; moved = false; lpFired = false;
+
+  if(e.button === 2){ gesture = "orbit"; return; }
+  var hit = pick(e.clientX, e.clientY);
+  if(!hit || S.mode === "orbit"){ gesture = "orbit"; return; }
+  if(S.mode === "delete"){ gesture = "del"; pressIdx = hit.object.userData.idx; setPressMark(pressIdx); return; }
+  gesture = "aim";
+  pressIdx = hit.object.userData.idx;
+  pressT = performance.now();
+  aimAt(hit);
+});
+
+cv.addEventListener("pointermove", function(e){
+  if(!ptrs.has(e.pointerId)) return;
+  var prev = ptrs.get(e.pointerId);
+  var dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  ptrs.set(e.pointerId, { x:e.clientX, y:e.clientY });
+
+  if(gesture === "pinch" && ptrs.size === 2){
+    var p = Array.from(ptrs.values());
+    var d = Math.hypot(p[0].x-p[1].x, p[0].y-p[1].y);
+    var mx = (p[0].x+p[1].x)/2, my = (p[0].y+p[1].y)/2;
+    if(pinchD > 0) S.cam.dist = clamp(S.cam.dist * (pinchD / Math.max(1,d)), 4, 70);
+    orbitBy((mx - pinchX) * 0.006, (my - pinchY) * 0.006);
+    pinchD = d; pinchX = mx; pinchY = my;
+    return;
+  }
+  if(Math.hypot(e.clientX-startX, e.clientY-startY) > 9) moved = true;
+
+  if(gesture === "orbit"){ orbitBy(dx*0.007, dy*0.007); return; }
+  if(gesture === "aim"){
+    if(moved) clearPress();
+    if(lpFired) return;
+    aimAt(pick(e.clientX, e.clientY));
+    return;
+  }
+  if(gesture === "del" && moved){ clearPress(); gesture = "orbit"; }
+});
+
+function endPointer(e){
+  if(!ptrs.has(e.pointerId)) return;
+  ptrs.delete(e.pointerId);
+  if(gesture === "pinch"){ if(ptrs.size === 0) gesture = null; else gesture = "orbit"; return; }
+  clearPress();
+  if(gesture === "aim" && !lpFired){
+    if(ghostMesh){
+      var p = ghostMesh.position;
+      place(Math.round(p.x/CUBE), Math.round(p.y/CUBE), Math.round(p.z/CUBE));
+    }
+  } else if(gesture === "del" && !moved){
+    removeAt(pressIdx);
+  } else if(gesture === "orbit"){
+    reSide();
+  }
+  setGhost(null);
+  gesture = null;
+  if(ptrs.size === 0) render();
+}
+cv.addEventListener("pointerup", endPointer);
+cv.addEventListener("pointercancel", endPointer);
+cv.addEventListener("contextmenu", function(e){ e.preventDefault(); });
+cv.addEventListener("wheel", function(e){
+  e.preventDefault();
+  S.cam.dist = clamp(S.cam.dist * (1 + Math.sign(e.deltaY) * 0.11), 4, 70);
+}, { passive:false });
+
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function orbitBy(dyaw, dpitch){
+  S.cam.yaw += dyaw;
+  S.cam.pitch = clamp(S.cam.pitch + dpitch, -1.45, 1.45);
+}
+
+/* ------------------------------------------------------------------ edits -- */
+function place(x,y,z){
+  if(occupied(x,y,z) >= 0) return;
+  pushUndo();
+  S.cells.push({ x:x, y:y, z:z, kind:S.kind });
+  recompute();
+}
+function removeAt(idx){
+  if(idx < 0 || idx >= S.cells.length) return;
+  pushUndo();
+  S.cells.splice(idx, 1);
+  recompute();
+}
+function undo(){
+  if(!undoStack.length) return;
+  S.cells = undoStack.pop();
+  recompute(true);
+}
+function recompute(noPush){
+  core = askTheCore(S.cells, S.cls);
+  clampSlice();
+  rebuild();
+  paint();
+}
+
+/* ------------------------------------------------------------------ slice -- */
+function extent(axis){
+  var lo = 0, hi = 0;
+  for(var i=0;i<S.cells.length;i++){
+    var v = axis===0 ? S.cells[i].x : (axis===1 ? S.cells[i].y : S.cells[i].z);
+    if(i===0){ lo = hi = v; }
+    lo = Math.min(lo,v); hi = Math.max(hi,v);
+  }
+  return [lo,hi];
+}
+function reSide(){
+  if(S.slice.axis < 0) return;
+  var d = camera.position;
+  var v = S.slice.axis===0 ? d.x : (S.slice.axis===1 ? d.y : d.z);
+  var s = v >= 0 ? 1 : -1;
+  if(s !== S.slice.side){ S.slice.side = s; rebuild(); }
+}
+function clampSlice(){
+  if(S.slice.axis < 0) return;
+  var e = extent(S.slice.axis);
+  S.slice.cut = clamp(S.slice.cut, e[0]-1, e[1]+1);
+}
+function cycleSlice(){
+  S.slice.axis = S.slice.axis >= 2 ? -1 : S.slice.axis + 1;
+  if(S.slice.axis >= 0){
+    var d = camera.position;
+    var v = S.slice.axis===0 ? d.x : (S.slice.axis===1 ? d.y : d.z);
+    S.slice.side = v >= 0 ? 1 : -1;
+    var e = extent(S.slice.axis);
+    S.slice.cut = S.slice.side > 0 ? e[1]-1 : e[0]+1;
+  }
+  rebuild(); paint();
+}
+function stepSlice(d){
+  if(S.slice.axis < 0) return;
+  S.slice.cut += d; clampSlice(); rebuild(); paint();
+}
+
+/* ---------------------------------------------------------------- presets -- */
+function C(x,y,z,k){ return { x:x, y:y, z:z, kind:k }; }
+var FRIGATE = [
+  C(0,0,-3,"ENGINE"), C(0,0,-2,"ENGINE"), C(0,-1,-3,"ENGINE"),
+  C(0,0,-1,"ARMOR"), C(0,0,0,"ARMOR"), C(0,0,1,"ARMOR"), C(0,0,2,"ARMOR"),
+  C(0,1,0,"ARMOR"),
+  C(-1,0,0,"ARMOR"), C(-1,0,1,"ARMOR"), C(1,0,0,"ARMOR"), C(1,0,1,"ARMOR"),
+  C(0,0,3,"TURRET_BEAM"), C(-2,0,1,"TURRET_BEAM"), C(2,0,1,"TURRET_BEAM"),
+  C(0,1,-2,"REACTOR"), C(0,1,-1,"REACTOR"),
+  C(-1,1,-2,"HEATSINK"), C(1,1,-2,"HEATSINK"), C(0,1,-3,"HEATSINK"),
+  C(0,-1,0,"TURRET_MISSILE"), C(0,-1,1,"TURRET_PROJECTILE")
+];
+function cloneCells(a){ return a.map(function(c){ return C(c.x,c.y,c.z,c.kind); }); }
+
+// The case the slice exists for: cell (0,0,0) is walled on all six sides, so no
+// tap from any angle can reach it and no amount of orbiting will help. Slice the
+// near wall out of the picture and the far wall's inward face becomes the front
+// face, one tap away.
+var HOLLOW = [
+  C(-1,-1,0,"ARMOR"), C(0,-1,0,"ARMOR"), C(1,-1,0,"ARMOR"),
+  C(-1,0,0,"ARMOR"),                     C(1,0,0,"ARMOR"),
+  C(-1,1,0,"ARMOR"),  C(0,1,0,"ARMOR"),  C(1,1,0,"ARMOR"),
+  C(0,0,-1,"ARMOR"), C(0,0,1,"ARMOR"), C(1,0,1,"ARMOR"),
+  C(0,0,-2,"ENGINE"), C(0,0,-3,"ENGINE"), C(0,1,-2,"ENGINE"),
+  C(0,-1,-2,"REACTOR"), C(0,-1,-1,"REACTOR"),
+  C(1,0,-1,"HEATSINK"), C(-1,0,-1,"HEATSINK"),
+  C(0,0,2,"TURRET_BEAM")
+];
+
+var PRESETS = [
+  { id:"empty", label:"Empty", cells:function(){ return []; } },
+  { id:"seed", label:"Seed", cells:function(){ return [C(0,0,0,"ARMOR")]; } },
+  { id:"legal", label:"Legal", cells:function(){ return cloneCells(FRIGATE); } },
+  { id:"hollow", label:"Sealed bay", cells:function(){ return cloneCells(HOLLOW); } },
+  { id:"orphan", label:"Orphan", cells:function(){
+      return cloneCells(FRIGATE).filter(function(c){ return !(c.x===0&&c.y===0&&c.z===2); }); } },
+  { id:"heavy", label:"Over mass", cells:function(){
+      var a = cloneCells(FRIGATE);
+      a.push(C(-1,0,-1,"ARMOR"), C(1,0,-1,"ARMOR"), C(-1,0,2,"ARMOR"), C(1,0,2,"ARMOR"),
+             C(-1,-1,0,"ARMOR"), C(1,-1,0,"ARMOR"), C(0,-1,-1,"ARMOR"));
+      return a; } },
+  { id:"noeng", label:"No engine", cells:function(){
+      return cloneCells(FRIGATE).filter(function(c){ return c.kind !== "ENGINE"; }); } }
+];
+function loadPreset(id){
+  for(var i=0;i<PRESETS.length;i++){
+    if(PRESETS[i].id === id){
+      pushUndo();
+      S.cells = PRESETS[i].cells();
+      recompute();
+      frameCamera();
+      return;
+    }
+  }
+}
+function frameCamera(){
+  S.cam.dist = 15;
+  S.cam.yaw = 0.85; S.cam.pitch = 0.42;
+}
+
+/* -------------------------------------------------------------------- ui --- */
+var $ = function(id){ return document.getElementById(id); };
+
+function buildKinds(){
+  var host = $("kinds");
+  host.innerHTML = "";
+  KINDS.forEach(function(k, i){
+    var b = document.createElement("button");
+    b.className = k.id === S.kind ? "on" : "";
+    b.setAttribute("data-kind", k.id);
+    b.innerHTML = '<span class="sw" style="background:' + k.colour + '"></span>' +
+      '<span class="txt"><span class="nm">' + (i+1) + ' &middot; ' + k.id + '</span>' +
+      '<span class="sub">' + k.sub + (k.stub ? ' <span class="warnstub">NO CORE SYSTEM YET</span>' : '') + '</span></span>';
+    b.addEventListener("click", function(){ setKind(k.id); });
+    host.appendChild(b);
+  });
+}
+function setKind(id){
+  S.kind = id;
+  var bs = $("kinds").children;
+  for(var i=0;i<bs.length;i++) bs[i].className = bs[i].getAttribute("data-kind") === id ? "on" : "";
+  var k = KIND_BY_ID[id];
+  $("chipsw").style.background = k.colour;
+  $("chipnm").textContent = id;
+}
+
+var MODES = [["build","Add"],["orbit","Turn"],["delete","Del"]];
+function buildModes(){
+  var host = $("modes"); host.innerHTML = "";
+  MODES.forEach(function(m){
+    var b = document.createElement("button");
+    b.textContent = m[1];
+    b.setAttribute("data-mode", m[0]);
+    b.className = S.mode === m[0] ? "on" : "";
+    b.addEventListener("click", function(){ setMode(m[0]); });
+    host.appendChild(b);
+  });
+}
+function setMode(m){
+  S.mode = m;
+  var bs = $("modes").children;
+  for(var i=0;i<bs.length;i++) bs[i].className = bs[i].getAttribute("data-mode") === m ? "on" : "";
+  cv.style.cursor = m === "delete" ? "not-allowed" : (m === "orbit" ? "grab" : "crosshair");
+}
+
+function buildPresets(){
+  var host = $("presets"); host.innerHTML = "";
+  PRESETS.forEach(function(p){
+    var b = document.createElement("button");
+    b.textContent = p.label;
+    b.id = "preset_" + p.id;
+    b.addEventListener("click", function(){ loadPreset(p.id); });
+    host.appendChild(b);
+  });
+}
+function buildClasses(){
+  var sel = $("cls"); sel.innerHTML = "";
+  CLASSES.forEach(function(c){
+    var o = document.createElement("option");
+    o.value = c.key; o.textContent = c.name + "  (mass " + c.mass.toFixed(1) + ", r " + c.radius.toFixed(1) + ")";
+    sel.appendChild(o);
+  });
+  sel.value = S.cls;
+  sel.addEventListener("change", function(){ S.cls = sel.value; recompute(); });
+}
+
+function n(v, d){ return v.toFixed(d === undefined ? 2 : d); }
+
+function paint(){
+  var c = core;
+  $("pCubes").textContent = String(c.cubes);
+  $("pMass").textContent = n(c.mass, 3);
+  $("pBudget").textContent = n(c.budget, 3);
+  var vp = $("vpill");
+  if(c.cubes === 0){ vp.className = "pill"; vp.textContent = "empty"; }
+  else { vp.className = "pill " + (c.legal ? "ok" : "bad"); vp.textContent = c.legal ? "legal" : "illegal"; }
+
+  var v = $("verdict");
+  var html = '<span class="vh">' + (c.cubes === 0 ? "Empty design" : (c.legal ? "Legal design" : "Illegal design")) + '</span>';
+  if(c.errors.length || c.warnings.length){
+    html += "<ul>";
+    c.errors.forEach(function(e){ html += "<li>" + e + "</li>"; });
+    c.warnings.forEach(function(w){ html += '<li class="warnli">' + w + "</li>"; });
+    html += "</ul>";
+  } else {
+    html += "The core will seat this hull. Every number below is simulated.";
+  }
+  v.innerHTML = html;
+  v.className = "note" + (c.legal && c.cubes ? "" : " bad");
+
+  var rows = [];
+  rows.push(["head","Composition",""]);
+  rows.push(["","cubes", String(c.cubes)]);
+  rows.push([c.mass > c.budget ? "bad" : "", "mass / budget", n(c.mass,3) + " / " + n(c.budget,3)]);
+  rows.push(["","structural hull", n(c.hull,0) + " hp"]);
+  if(c.armor) rows.push(["","armour volumes", c.armor + " x 100 hp @ " + (c.armorBlock === null ? "n/a" : n(c.armorBlock,0) + "%")]);
+  rows.push([c.engines ? "" : "bad", "engines", String(c.engines)]);
+  rows.push([c.power - c.draw < 0 ? "bad" : "good", "power out / draw", c.power + " / " + c.draw]);
+  rows.push([c.heat > c.heatCap ? "warn" : "", "heat turn / sink", c.heat + " / " + c.heatCap]);
+
+  rows.push(["head","Flight (10 s turn)",""]);
+  rows.push(["","accel fwd", n(c.accelFwd,3) + " u/s2"]);
+  rows.push(["","accel retro", n(c.accelRetro,3) + " u/s2"]);
+  rows.push(["","accel lateral", n(c.accelLat,3) + " u/s2"]);
+  rows.push(["","max speed", n(c.maxSpeed,1) + " u/s"]);
+  rows.push(["","yaw / pitch", n(c.yaw,2) + " / " + n(c.pitch,2) + " deg/s"]);
+  rows.push(["","nominal reach", n(c.reach,1) + " u"]);
+
+  rows.push(["head","Mounts",""]);
+  rows.push([c.mountCount ? "" : "bad", "beam / cannon / missile",
+    c.mounts.beam + " / " + c.mounts.cannon + " / " + c.mounts.missile]);
+  rows.push(["","damage a turn", n(c.dpt,1)]);
+
+  rows.push(["head","Identity",""]);
+  rows.push(["","ft_state_hash", c.hash]);
+
+  var t = $("stats");
+  t.className = (c.legal && c.cubes) ? "" : "stale";
+  t.innerHTML = rows.map(function(r){
+    return '<tr class="' + r[0] + '"><td>' + r[1] + '</td><td>' + r[2] + '</td></tr>';
+  }).join("");
+
+  $("prov").innerHTML = (c.legal && c.cubes)
+    ? 'Simulated values. <b>' + c.cls.name + '</b> ships at accel 0.9, yaw 6.0, reach about 45 u, so a design near budget lands where the authored hull does.'
+    : 'The flight block is <b>provisional</b> while the design is illegal: the core will not seat this hull, so nothing here has been through a turn.';
+
+  $("clsnote").innerHTML = "<b>" + c.cls.name + "</b>: hull " + c.cls.hull + ", radius " + n(c.cls.radius,1) +
+    ", mass " + n(c.cls.mass,1) + ". The class sets the mass budget and the collision sphere a design has to fit inside.";
+
+  var sb = $("slicebtn");
+  var ax = S.slice.axis;
+  sb.className = ax >= 0 ? "on" : "";
+  sb.innerHTML = "Slice " + (ax < 0 ? '<span class="hudlbl">off</span>' : ["X","Y","Z"][ax]) +
+    '<span class="n">' + (hiddenCount ? hiddenCount + " hid" : "") + "</span>";
+  $("sliceDn").disabled = ax < 0;
+  $("sliceUp").disabled = ax < 0;
+  $("undo").disabled = undoStack.length === 0;
+}
+
+/* ---------------------------------------------------------------- sheets -- */
+var TABS = [["tabBuild",null],["tabPal","left"],["tabCore","right"]];
+function setTab(id){
+  TABS.forEach(function(t){
+    var on = t[0] === id;
+    $(t[0]).className = on ? "on" : "";
+    if(t[1]) $(t[1]).className = on ? "open" : "";
+  });
+  updateFrameShift();
+}
+TABS.forEach(function(t){ $(t[0]).addEventListener("click", function(){ setTab(t[0]); }); });
+
+/* --------------------------------------------------------------- wiring --- */
+$("kindchip").addEventListener("click", function(){
+  var i = 0;
+  for(var j=0;j<KINDS.length;j++){ if(KINDS[j].id === S.kind) i = j; }
+  setKind(KINDS[(i+1) % KINDS.length].id);
+});
+$("slicebtn").addEventListener("click", cycleSlice);
+$("sliceDn").addEventListener("click", function(){ stepSlice(-1); });
+$("sliceUp").addEventListener("click", function(){ stepSlice(1); });
+$("undo").addEventListener("click", undo);
+$("seed").addEventListener("click", function(){ place(0,0,0); });
+
+window.addEventListener("keydown", function(e){
+  var k = e.key;
+  if(k >= "1" && k <= "7"){ setKind(KINDS[parseInt(k,10)-1].id); return; }
+  if(k === "b" || k === "B") setMode("build");
+  if(k === "t" || k === "T") setMode("orbit");
+  if(k === "x" || k === "X") setMode("delete");
+  if(k === "u" || k === "U") undo();
+  if(k === "s" || k === "S") cycleSlice();
+});
+
+/* ---------------------------------------------------------------- frame --- */
+/* A bottom sheet covers the lower half of the canvas, so the ship would sit
+   behind it. The frame is shifted through the PROJECTION rather than by moving
+   the model: setViewOffset changes what the camera looks at, so the raycast
+   unprojects through the same matrix and a finger still lands where it looks
+   like it lands. Moving the model instead would have desynced the two. */
+function updateFrameShift(){
+  var open = document.querySelector("aside.open");
+  var portrait = window.matchMedia("(max-width:900px) and (min-height:561px)").matches;
+  var h = Math.max(1, view.clientHeight);
+  S.shift = (open && portrait) ? Math.min(open.getBoundingClientRect().height, h) * 0.5 : 0;
+  applyFrameShift();
+}
+function applyFrameShift(){
+  var w = Math.max(1, view.clientWidth), h = Math.max(1, view.clientHeight);
+  if(S.shift > 0) camera.setViewOffset(w, h, 0, S.shift, w, h);
+  else camera.clearViewOffset();
+}
+function resize(){
+  var w = Math.max(1, view.clientWidth), h = Math.max(1, view.clientHeight);
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  updateFrameShift();
+}
+if(window.ResizeObserver) new ResizeObserver(resize).observe(view);
+window.addEventListener("resize", resize);
+
+function render(){
+  var cy = Math.cos(S.cam.yaw), sy = Math.sin(S.cam.yaw);
+  var cp = Math.cos(S.cam.pitch), sp = Math.sin(S.cam.pitch);
+  camera.position.set(S.cam.dist*cp*sy, S.cam.dist*sp, S.cam.dist*cp*cy);
+  camera.lookAt(camTarget);
+  renderer.render(scene, camera);
+}
+function frame(now){ requestAnimationFrame(frame); tickPress(now === undefined ? performance.now() : now); render(); }
+
+/* -------------------------------------------------------- debug, read only --
+   The playthrough harness READS this to observe and never to make progress: a
+   harness that can write state stops testing the app and starts testing itself
+   (CLAUDE.md). Nothing here mutates anything.                                */
+window.ftDebug = {
+  cubes: function(){ return snap(); },
+  stats: function(){ return askTheCore(snap(), S.cls); },
+  mode: function(){ return S.mode; },
+  kind: function(){ return S.kind; },
+  slice: function(){ return { axis:S.slice.axis, cut:S.slice.cut, side:S.slice.side }; },
+  visible: function(){ return pickables.length; },
+  visibleIdx: function(){ return pickables.map(function(m){ return m.userData.idx; }); },
+  // What a tap at this screen point is pointing at right now: the cube the ray
+  // reaches first and the cell that would grow off its face, or null if that
+  // cell is already filled. Observation only, and the harness still has to tap.
+  hitAt: function(px, py){
+    var h = pick(px, py);
+    if(!h) return null;
+    return { idx: h.object.userData.idx, target: targetOf(h) };
+  },
+  // Where a cube centre lands on screen, so a test can aim a real tap at a
+  // real face instead of reaching into the model.
+  screenOf: function(i){
+    var c = S.cells[i]; if(!c) return null;
+    var v = new THREE.Vector3(c.x*CUBE, c.y*CUBE, c.z*CUBE).project(camera);
+    var r = cv.getBoundingClientRect();
+    return { x: r.left + (v.x*0.5+0.5)*r.width, y: r.top + (-v.y*0.5+0.5)*r.height };
+  }
+};
+
+/* ----------------------------------------------------------------- boot --- */
+buildKinds(); buildModes(); buildPresets(); buildClasses();
+setKind("ENGINE"); setMode("build");
+loadPreset("legal");
+resize(); frame();
+
+})();
+</script>
