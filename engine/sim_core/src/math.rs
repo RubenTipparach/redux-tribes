@@ -226,6 +226,36 @@ pub fn bezier2(a: V3, b: V3, c: V3, t: f32) -> V3 {
     a.lerp(b, t).lerp(b.lerp(c, t), t)
 }
 
+/// The resolution of a mount's own arc mask.
+///
+/// A turret is omnidirectional until its own ship gets in the way, and what
+/// gets in the way is geometry rather than a number anybody can author. The
+/// mask is that geometry, sampled: 64 steps of yaw by 32 of pitch, which is
+/// 5.625 degrees a cell and 2048 bits a mount.
+pub const ARC_YAW: usize = 64;
+pub const ARC_PITCH: usize = 32;
+pub const ARC_WORDS: usize = ARC_YAW * ARC_PITCH / 32;
+
+/// Which bit of an arc mask a direction in the SHIP's frame falls in.
+///
+/// The same two angles `arc_test_3d` measures, so a direction that passes the
+/// authored arc and a direction that passes the mask are the same direction.
+pub fn arc_bit(local: V3) -> usize {
+    let hyp = (local.x * local.x + local.z * local.z).sqrt();
+    let yaw = datan2(local.x, local.z) * (180.0 / PI);          // -180 .. 180
+    let pitch = datan2(local.y, hyp) * (180.0 / PI);            // -90 .. 90
+    let yi = (((yaw + 180.0) / 360.0 * ARC_YAW as f32) as i32).clamp(0, ARC_YAW as i32 - 1);
+    let pi = (((pitch + 90.0) / 180.0 * ARC_PITCH as f32) as i32).clamp(0, ARC_PITCH as i32 - 1);
+    pi as usize * ARC_YAW + yi as usize
+}
+
+/// Is this direction blocked by the ship's own hull? A set bit means blocked,
+/// so a mount with no mask at all is a mount with nothing in its way.
+pub fn arc_blocked(mask: &[u32; ARC_WORDS], local: V3) -> bool {
+    let bit = arc_bit(local);
+    (mask[bit >> 5] >> (bit & 31)) & 1 != 0
+}
+
 /// Firing arc gate: is `target` inside the mount's horizontal and vertical
 /// arcs? Measured from +Z in the mount's own frame, per axis independently,
 /// which is what the archive's dot-product-vs-bisector test amounted to.

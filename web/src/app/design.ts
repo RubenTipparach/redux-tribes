@@ -1453,6 +1453,147 @@ export function mountsOf(d: Design): Array<{ key: string; at: [number, number, n
   return out;
 }
 
+/**
+ * The arc mask grid, mirroring `sim_core::math`.
+ *
+ * 64 steps of yaw by 32 of pitch, which is 5.625 degrees a cell and 2048 bits
+ * a mount. Duplicated here for the same reason the scratch slot offsets are:
+ * it is a contract, and the two sides move together.
+ */
+export const ARC_YAW = 64;
+export const ARC_PITCH = 32;
+export const ARC_WORDS = (ARC_YAW * ARC_PITCH) / 32;
+
+/**
+ * Which way each mask cell points, in the ship's frame, asked of the core once.
+ *
+ * NOT computed here. The cells are the mask's own geometry and the resolver
+ * reads them back with `atan2`, so a client that built these angles out of its
+ * platform's `sin` would set a different bit on the boundary from the client
+ * across the table and desync over a shot one seat allowed. `design.ts` calls
+ * no transcendental at all, and this is why it can stay that way.
+ */
+export type CoreArcDirs = () => Float32Array | null;
+export type CoreArcBit = (x: number, y: number, z: number) => number;
+let coreArcDirs: CoreArcDirs | null = null;
+let coreArcBit: CoreArcBit | null = null;
+export function useArcDirs(fn: CoreArcDirs, bit: CoreArcBit): void {
+  coreArcDirs = fn; coreArcBit = bit; arcDirs = null; arcCache = null;
+}
+let arcDirs: Float32Array | null = null;
+
+/** Is this direction blocked for this mount? The bit the core would read, off
+ *  the mask the client scanned. The shipyard draws with it, which is why it is
+ *  here and not a second `atan2` next to the renderer. */
+export function arcBlocked(mask: Uint32Array, x: number, y: number, z: number): boolean {
+  if (!coreArcBit) return false;
+  const bit = coreArcBit(x, y, z);
+  return (((mask[bit >>> 5] ?? 0) >>> (bit & 31)) & 1) !== 0;
+}
+
+/** The scan is only as good as the directions, so a client with no core wired
+ *  scans nothing rather than scanning a guess. */
+const dirs = (): Float32Array | null => {
+  if (!arcDirs && coreArcDirs) arcDirs = coreArcDirs();
+  return arcDirs;
+};
+
+/**
+ * Where a design's own hull stops each of its turrets.
+ *
+ * One mask per gun, in `mountsOf` order, a set bit meaning blocked. A turret
+ * here is omnidirectional: beams, cannons and missiles all traverse freely,
+ * and the only thing that stops one is the ship it is bolted to. Which
+ * directions those are is not a number anybody can author, because the hull is
+ * whatever the player built, so it is MEASURED off the same voxels that were
+ * drawn, the way the plate count is. What a blocked direction MEANS, which is
+ * whether the shot is legal, stays in the core.
+ *
+ * The ray leaves the socket the gun was fitted to, which is where the resolver
+ * fires from, and ignores the turret's own reserved box, which is the volume
+ * it swivels in and cannot shoot itself with.
+ */
+export function arcMasks(d: Design): Uint32Array[] {
+  const sig = rasterSig(d);
+  if (arcCache && arcCache.sig === sig) return arcCache.masks;
+  const table = dirs();
+  const r = rasterise(d);
+  const frame = frameFor(d.classKey);
+  const socks = socketsOf(frame, d.parts);
+  const masks: Uint32Array[] = [];
+  for (let pi = 0; pi < d.parts.length; pi++) {
+    const p = d.parts[pi] as Placement;
+    const m = moduleById(p.module);
+    if (!m?.weapon) continue;
+    const sock = socks.find(k => k.id === p.socket);
+    if (!sock) continue;
+    const mask = new Uint32Array(ARC_WORDS);
+    // Only what stands PROUD is scanned. A trunnion or a gun ring carries a
+    // turret out on the hull and the hull is then in its way, which is the
+    // whole point of this. A missile bay is enclosed by design: it sits inside
+    // the ship and fires through its own doors, so line of sight from its
+    // socket is blocked in every direction at once and scanning it would take
+    // the launcher off two of the five stock frigates for a reason nobody
+    // asked for. What a mount IS remains the core's; which of them have a hull
+    // to see past is a fact about the picture, like the plate count.
+    if (table && isProud(sock.kind)) {
+      const box = r.turrets.find(t => t.part === pi);
+      scanFrom(mask, table, r, pi + 1, box,
+        (sock.at[0] as number) + 0.5, (sock.at[1] as number) + 0.5, (sock.at[2] as number) + 0.5);
+    }
+    masks.push(mask);
+  }
+  arcCache = { sig, masks };
+  return masks;
+}
+
+/** A cache of one, on the same key the raster uses: the scan depends on the
+ *  voxels and on nothing else, so it is stale exactly when they are. */
+let arcCache: { sig: string; masks: Uint32Array[] } | null = null;
+
+/**
+ * March one ray per mask cell and set the bit where the hull is in the way.
+ *
+ * A voxel DDA (Amanatides and Woo): step to whichever axis boundary is nearer
+ * and test the cell entered. Arithmetic and comparisons only, so two engines
+ * running it agree bit for bit, which they must: the mask crosses into the
+ * simulation and decides whether a shot is taken.
+ */
+function scanFrom(mask: Uint32Array, table: Float32Array, r: Raster, own: number,
+  box: TurretBox | undefined, ox: number, oy: number, oz: number): void {
+  const g = r.grid, owns = r.own;
+  const cells = ARC_YAW * ARC_PITCH;
+  for (let bit = 0; bit < cells; bit++) {
+    const dx = table[bit * 3] as number;
+    const dy = table[bit * 3 + 1] as number;
+    const dz = table[bit * 3 + 2] as number;
+    let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
+    const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1, sz = dz > 0 ? 1 : -1;
+    // A ray parallel to an axis never crosses that axis's boundaries, and
+    // Infinity is exactly the right answer for "not before the others".
+    const tdx = dx === 0 ? Infinity : Math.abs(1 / dx);
+    const tdy = dy === 0 ? Infinity : Math.abs(1 / dy);
+    const tdz = dz === 0 ? Infinity : Math.abs(1 / dz);
+    let tx = dx === 0 ? Infinity : ((dx > 0 ? x + 1 - ox : ox - x) / Math.abs(dx));
+    let ty = dy === 0 ? Infinity : ((dy > 0 ? y + 1 - oy : oy - y) / Math.abs(dy));
+    let tz = dz === 0 ? Infinity : ((dz > 0 ? z + 1 - oz : oz - z) / Math.abs(dz));
+    for (;;) {
+      if (tx <= ty && tx <= tz) { x += sx; tx += tdx; }
+      else if (ty <= tz) { y += sy; ty += tdy; }
+      else { z += sz; tz += tdz; }
+      if (x < 0 || x >= NX || y < 0 || y >= NY || z < 0 || z >= NZ) break;  // out, clear
+      const n = x + y * NX + z * NX * NY;
+      if (!g[n]) continue;
+      // Its own gun, and the box that gun swings in, are not in its way.
+      if (owns[n] === own) continue;
+      if (box && x >= box.i0 && x <= box.i1 && y >= box.j0 && y <= box.j1
+        && z >= box.k0 && z <= box.k1) continue;
+      mask[bit >>> 5] = ((mask[bit >>> 5] as number) | (1 << (bit & 31))) >>> 0;
+      break;
+    }
+  }
+}
+
 /** The module indices a design is built from, in the core's own order. */
 export function partsOf(d: Design): number[] {
   const out: number[] = [];

@@ -222,6 +222,78 @@ test('a side fields the design it picked, derived by the core', () => {
   assert.equal(m.hash, hashA, 'exactly, hash and all');
 });
 
+/**
+ * The arc mask, all the way across and back.
+ *
+ * Three things have to survive the trip, and each has already been a way to
+ * get this wrong: the bin geometry has to agree in both directions, a mask
+ * word has to arrive with all 32 of its bits, and the resolver has to be
+ * reading the mask the client sent rather than the empty default.
+ */
+test('a scanned firing arc crosses the boundary bit for bit', () => {
+  const dirs = sim.arcDirs();
+  assert.ok(dirs, 'the core hands out its own mask geometry');
+  assert.equal(dirs.length, 64 * 32 * 3, 'one direction per cell');
+  for (let bit = 0; bit < 64 * 32; bit++) {
+    const [x, y, z] = [dirs[bit * 3], dirs[bit * 3 + 1], dirs[bit * 3 + 2]];
+    assert.ok(Math.abs(Math.hypot(x, y, z) - 1) < 1e-3, `cell ${bit} is a direction`);
+    assert.equal(sim.arcBit(x, y, z), bit, `cell ${bit} bins back to itself`);
+  }
+
+  const parts = [3, 3, 3, 12, 12, 14, 14, 7, 7, 6, 10, 10, 8, 8, 11, 11, 16,
+    17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19];
+  const geo = { plateCells: 1632, ext: [24, 14, 45], radiusCells: 24.315633, fouled: 0 };
+  const mounts = [{ key: 'projectile', at: [0, 0, 1.5] }];
+
+  const bearings = (mask) => {
+    const m = sim.match();
+    m.clearHulls();
+    assert.ok(m.setHull(0, 2, geo, parts, mounts, mask ? [mask] : undefined));
+    m.start('deadbeefcafe0009', 0);
+    const me = m.ships().find(s => s.side === 0);
+    const foe = m.ships().find(s => s.side === 1);
+    return [m, me, foe, m.canBear(me.id, 0, foe.id)];
+  };
+
+  const [live, me, foe, clearShot] = bearings(null);
+  assert.ok(clearShot, 'an unmasked mount bears on a hostile in front of it');
+
+  // The cell the target is actually in, found the way the resolver finds it:
+  // the direction from the mount, in the ship's frame.
+  const fwd = live.forward(me.id);
+  const up = { x: 0, y: 1, z: 0 };
+  const right = { x: up.y * fwd.z - up.z * fwd.y, y: up.z * fwd.x - up.x * fwd.z,
+    z: up.x * fwd.y - up.y * fwd.x };
+  const rl = Math.hypot(right.x, right.y, right.z);
+  const r = { x: right.x / rl, y: right.y / rl, z: right.z / rl };
+  const u = { x: fwd.y * r.z - fwd.z * r.y, y: fwd.z * r.x - fwd.x * r.z,
+    z: fwd.x * r.y - fwd.y * r.x };
+  const d = { x: foe.pos.x - me.pos.x, y: foe.pos.y - me.pos.y, z: foe.pos.z - me.pos.z };
+  const dl = Math.hypot(d.x, d.y, d.z);
+  const local = {
+    x: (d.x * r.x + d.y * r.y + d.z * r.z) / dl,
+    y: (d.x * u.x + d.y * u.y + d.z * u.z) / dl,
+    z: (d.x * fwd.x + d.y * fwd.y + d.z * fwd.z) / dl,
+  };
+  const bit = sim.arcBit(local.x, local.y, local.z);
+
+  // Half a word each way, because the buffer between here and the core is
+  // f32: a whole 32 bit word cannot ride in one slot exactly, so it is split,
+  // and a split that dropped or swapped a half would arrive as an arc nobody
+  // scanned. Set the half the target is in and the shot goes; set the other
+  // half and it still goes.
+  const half = (word, hi) => {
+    const mask = new Uint32Array(64);
+    mask[word] = hi ? 0xffff0000 : 0x0000ffff;
+    return mask;
+  };
+  const word = bit >>> 5, hi = (bit & 31) >= 16;
+  assert.equal(bearings(half(word, hi))[3], false,
+    'the half of the word the target sits in blocks the shot');
+  assert.equal(bearings(half(word, !hi))[3], true,
+    'and the other half of the same word does not');
+});
+
 test('a shot lands on the volume it was aimed at, not the hull in front of it', () => {
   // The defect this pins: a volume sits INSIDE the hull sphere, so a single
   // nearest-wins raycast over both always returned the sphere and every aimed
@@ -337,7 +409,11 @@ test('class and mount metadata cross intact', () => {
   assert.equal(beam.range, 300);
   // 5 base times the 5.5 mount multiplier the archive authored.
   assert.ok(Math.abs(beam.damage - 27.5) < 1e-4, `beam damage ${beam.damage}`);
-  assert.deepEqual(beam.arcH.map(Math.round), [-110, 110]);
+  // Every weapon traverses freely now. What limits a mount is the hull it is
+  // bolted to, which is scanned rather than authored, plus the ten degrees
+  // under its own mount that no turret can shoot through.
+  assert.deepEqual(beam.arcH.map(Math.round), [-360, 360]);
+  assert.deepEqual(beam.arcV.map(Math.round), [-10, 90]);
 
   const karisenLauncher = m.mount(1, 1);
   assert.ok(karisenLauncher, 'the Karisen frigate carries a launcher');

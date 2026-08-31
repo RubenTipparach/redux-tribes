@@ -110,8 +110,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 69, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 43, the wasm boundary
+cd engine/sim_core && cargo test            # 76, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 45, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -354,8 +354,9 @@ Rules that came out of actually measuring this repo:
   is. If it was not measured, do not claim it.
 
 Current figures, worth not regressing: a turn resolved in 452 microseconds,
-envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 149537
-bytes locally (57325 gzipped) after the damage model and the design derivation;
+envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 152822
+bytes locally (58265 gzipped) after the damage model, the design derivation and
+the turret arc scan;
 quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody

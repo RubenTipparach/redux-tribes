@@ -9,6 +9,17 @@
 
 use sim_core::data::ShipClassId;
 use sim_core::design::{derive, Geometry};
+use std::sync::{Mutex, MutexGuard};
+
+/// The hull registry behind `ft_hull_design` is one static per side, because
+/// the boundary is single threaded by construction (one scratch buffer, one
+/// match). Cargo is not: two tests fielding a design at once leave one of them
+/// reading the other's ship, which failed as "a designed hull carries its own
+/// hull: 180" long after the test that caused it had passed.
+static BOUNDARY: Mutex<()> = Mutex::new(());
+fn alone() -> MutexGuard<'static, ()> {
+    BOUNDARY.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 struct Expect {
     mass: f32,
@@ -136,6 +147,7 @@ fn a_designed_hull_flies_and_fights_as_itself() {
     use sim_core::ffi::{ft_hull_clear, ft_hull_design, ft_hull_mount, ft_match_new,
         ft_read_ships, ft_scratch_ptr, DERIVE_PARTS, SHIP_STRIDE};
     const OUT: usize = 64;
+    let _lock = alone();
 
     let read = || {
         let n = ft_read_ships() as usize;
@@ -165,8 +177,8 @@ fn a_designed_hull_flies_and_fights_as_itself() {
     }
     assert_eq!(ft_hull_design(0, 2, 1632, 24, 14, 45, 24.315633, 0, parts.len() as u32), 1);
     // Two plasma up front, which the class does not carry.
-    ft_hull_mount(0, 2, -0.8, 0.2, 1.5);
-    ft_hull_mount(0, 2, 0.8, 0.2, 1.5);
+    ft_hull_mount(0, 2, -0.8, 0.2, 1.5, 0);
+    ft_hull_mount(0, 2, 0.8, 0.2, 1.5, 0);
 
     ft_match_new(0xdead_beef, 0xcafe_0002, 0, 0b01);
     let flown = read();
@@ -198,6 +210,7 @@ fn an_illegal_hull_is_not_fielded() {
     use sim_core::ffi::{ft_hull_clear, ft_hull_design, ft_match_new, ft_read_ships,
         ft_scratch_ptr, DERIVE_PARTS, SHIP_STRIDE};
     const OUT: usize = 64;
+    let _lock = alone();
     let hulls = || {
         let n = ft_read_ships() as usize;
         let s = unsafe { core::slice::from_raw_parts(ft_scratch_ptr(), 16384) };

@@ -304,6 +304,111 @@ async function checkTurrets(page) {
 }
 
 /**
+ * The firing arcs a turret finds for itself.
+ *
+ * Three properties, and none of them is visible to the unit suites. The scan
+ * has to SETTLE rather than run per edit, because it is a frame's work and the
+ * pencil fires an edit per cell dragged through. It has to find something: a
+ * turret bolted to a hull has that hull in its way, and a mask of nothing
+ * would be a scan that silently did nothing. And it has to MOVE with the
+ * metal, which is the one that says the rays are hitting the ship the player
+ * drew rather than a lattice somebody described.
+ */
+async function checkArcScan(page) {
+  await (await page.$$('#dzClasses button'))[0].click();
+  await page.waitForTimeout(500);
+  const settled = async () => {
+    for (let n = 0; n < 60; n++) {
+      const d = await page.evaluate(() => window.ftDebug.designer().arcScan);
+      if (!d.pending) return d;
+      await page.waitForTimeout(120);
+    }
+    return null;
+  };
+  const plated = await settled();
+  if (!plated) { fail('the arc scan never settled on a fresh hull'); return; }
+
+  const clear = plated.blocked.filter(b => b <= 0);
+  const total = plated.blocked.filter(b => b >= 100);
+  if (!plated.blocked.length) fail('no turret was scanned at all');
+  else if (clear.length) fail(`${clear.length} turrets found nothing in the way at all`);
+  else if (total.length) fail(`${total.length} turrets came out unable to fire anywhere`);
+  else ok(`each turret is blocked by its own hull: ${plated.blocked.map(b => b.toFixed(0) + '%').join(', ')}`);
+
+  // The arcs draw the mask itself, so turning them on has to put a shadow on
+  // the screen for every mount that has one.
+  await page.click('#dzArcs');
+  await page.waitForTimeout(500);
+  const drawn = await page.evaluate(() => window.ftDebug.designer().arcScan.drawn);
+  if (drawn !== plated.blocked.length) fail(`${drawn} shadows drawn for ${plated.blocked.length} turrets`);
+  else ok(`the blocked cone is drawn for all ${drawn} turrets`);
+  await page.click('#dzArcs');
+  await page.waitForTimeout(300);
+
+  // Take the plate off and the same turrets see further. This is the check
+  // that the rays are actually crossing the player's own voxels: a mask
+  // computed from the class rather than from the picture would not move.
+  // The Terran is the class for it, because all three of its guns are on
+  // trunnions: a hull with an enclosed launcher carries a mount that is
+  // deliberately not scanned, and comparing a zero against a zero proves
+  // nothing.
+  await page.click('#dzBare');
+  const bare = await settled();
+  if (!bare) fail('the arc scan never settled after the plate came off');
+  else {
+    const widened = bare.blocked.filter((b, n) => b < plated.blocked[n] - 0.5).length;
+    if (widened !== bare.blocked.length) {
+      fail(`the plate coming off freed only ${widened} of ${bare.blocked.length} turrets: `
+        + `${plated.blocked.join(', ')} to ${bare.blocked.join(', ')}`);
+    } else {
+      ok(`taking the plate off opens every arc: ${plated.blocked.map(b => b.toFixed(0)).join('/')}`
+        + ` to ${bare.blocked.map(b => b.toFixed(0)).join('/')} percent blocked`);
+    }
+  }
+  await page.click('#dzReset');
+  await page.waitForTimeout(600);
+
+  // And the debounce, which is the whole reason the scan is affordable. A run
+  // of nine cells is nine edits; it must cost ONE scan, and none of them while
+  // the finger is still down.
+  await page.click('#dzTabArmour');
+  await page.waitForTimeout(300);
+  await page.evaluate(() =>
+    document.getElementById('dzSliceCanvas').scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(250);
+  const scans = async () => page.evaluate(() => window.ftDebug.designer().arcScan.scans);
+  const was = await scans();
+  const b = await (await page.$('#dzSliceCanvas')).boundingBox();
+  const cell = b.width / 32, row = 32 - 1 - 20;
+  await page.mouse.move(b.x + cell * 3.5, b.y + cell * (row + 0.5));
+  await page.mouse.down();
+  for (let n = 4; n < 13; n++) {
+    await page.mouse.move(b.x + cell * (n + 0.5), b.y + cell * (row + 0.5));
+    // Deliberately slower than the settle. A debounce that was only a timer
+    // would fire in the middle of this, which is the failure the flag fixes.
+    await page.waitForTimeout(120);
+  }
+  const during = await page.evaluate(() => window.ftDebug.designer().arcScan);
+  await page.mouse.up();
+  if (during.scans !== was) fail(`the pencil scanned ${during.scans - was} times mid stroke`);
+  else if (!during.pending) fail('a stroke that changed the hull left the arcs claiming to be current');
+  else if (!during.drawing) fail('the pencil was down and the designer did not know it');
+  else ok('nothing is scanned while the pencil is down');
+
+  for (let n = 0; n < 60; n++) {
+    if ((await scans()) > was) break;
+    await page.waitForTimeout(120);
+  }
+  const after = await scans();
+  if (after !== was + 1) fail(`a nine cell run cost ${after - was} scans`);
+  else ok('and one scan lands once the stroke settles');
+  await page.click('#dzReset');
+  await page.waitForTimeout(600);
+  await page.click('#dzTabParts');
+  await page.waitForTimeout(300);
+}
+
+/**
  * The ship library: save a hull, find it in the lobby, open it back.
  *
  * The point is that a design SURVIVES the round trip. A save that returns 201
@@ -823,6 +928,10 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   const ctx = await browser.newContext({ viewport: { width: w, height: h },
     hasTouch: w < 800, isMobile: w < 800 });
   const page = await ctx.newPage();
+  // The real settle is a second and a half by design; a harness that waited it
+  // out on every edit would spend its afternoon doing so. Timing is what is
+  // under test in the debounce check, not the constant.
+  await page.addInitScript(() => { window.ftArcSettle = 250; });
   const errs = [];
   page.on('pageerror', e => errs.push(String(e)));
   console.log(label);
@@ -833,6 +942,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     await checkShips(page);
     await checkGhostAndPicking(page);
     await checkTurrets(page);
+    await checkArcScan(page);
     await checkModesAndRotation(page);
     await checkDrawing(page);
     await checkLibrary(page);

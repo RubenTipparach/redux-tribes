@@ -19,6 +19,7 @@ import {
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
+  arcMasks, arcBlocked, rasterSig, ARC_YAW, ARC_PITCH,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
@@ -49,6 +50,15 @@ interface Rig {
   yaw: number;
   pitch: number;
 }
+
+/**
+ * How long the pencil has to be still before the arcs are rescanned, in ms.
+ *
+ * A few seconds rather than a frame, because a run of armour is one gesture
+ * and not thirty questions about firing arcs. Overridable from the harness,
+ * which cannot sit out a real settle on every edit and should not have to.
+ */
+const ARC_SETTLE = Number((globalThis as { ftArcSettle?: number }).ftArcSettle ?? 1500);
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -106,6 +116,26 @@ export class Designer {
   #arcs = new THREE.Group();
   #slabBox = new THREE.Group();
   #rigs: Rig[] = [];
+  /**
+   * Each turret's blocked directions, scanned off the hull, and the design
+   * they were scanned from.
+   *
+   * Held rather than asked for per frame because the scan is a ray a
+   * direction over 2048 directions a mount, which is a frame's work and not a
+   * frame's budget. `#maskSig` is what they describe: when it is not the
+   * design on screen the arcs draw as they were and a rescan is pending.
+   */
+  #masks: Uint32Array[] = [];
+  #maskSig = '';
+  #maskTimer = 0;
+  /** Whether the pencil is DOWN. A timer alone is not enough: a slow,
+   *  deliberate stroke is quiet for longer than the settle between one cell
+   *  and the next, and a scan landing halfway through a run is exactly what
+   *  the debounce is for. Nothing is scanned until the finger lifts. */
+  #drawing = false;
+  /** How many scans have actually run. The harness reads it to prove the
+   *  pencil did not trigger one per cell. */
+  #maskScans = 0;
   #showArcs = false;
   #showTarget = false;
   #target = new THREE.Vector3();
@@ -735,6 +765,66 @@ export class Designer {
    *  ship is not lost inside its own arcs: about one hull radius. */
   #arcReach(): number { return Math.max(0.6, this.#derived.radius) * 0.72; }
 
+  /**
+   * Where this turret's own hull is in the way, drawn as a shadow on a shell.
+   *
+   * The mask is what the SIMULATION reads, so this draws the mask itself
+   * rather than a picture of what it ought to be: one patch per blocked cell,
+   * on the sphere the turret would otherwise cover. A player who cannot see
+   * why a mount will not shoot astern is a player who thinks the gun is
+   * broken.
+   *
+   * Attached to the hull rather than to the barrel, because that is where the
+   * blockage is: the shadow does not swing when the turret does.
+   */
+  /** How much of a mount's sphere its own hull takes, as a percentage. Every
+   *  cell counts once, which over-weights the poles as the mask itself does:
+   *  the number is here to compare turrets, not to integrate a solid angle. */
+  #blockedPct(mask: Uint32Array): number {
+    let n = 0;
+    for (const w of mask) {
+      let v = w >>> 0;
+      while (v) { n += v & 1; v >>>= 1; }
+    }
+    return (n / (ARC_YAW * ARC_PITCH)) * 100;
+  }
+
+  #buildBlocked(n: number, full: number): void {
+    const mask = this.#masks[n];
+    const r = this.#rigs[n];
+    if (!mask || !r) return;
+    const reach = full * 0.92;
+    const at = (yi: number, pi: number): readonly [number, number, number] => {
+      const yaw = (yi / ARC_YAW) * Math.PI * 2 - Math.PI;
+      const pitch = (pi / ARC_PITCH) * Math.PI - Math.PI / 2;
+      const cp = Math.cos(pitch);
+      return [Math.sin(yaw) * cp * reach, Math.sin(pitch) * reach,
+        Math.cos(yaw) * cp * reach];
+    };
+    const pts: number[] = [];
+    let blocked = 0;
+    for (let pi = 0; pi < ARC_PITCH; pi++) {
+      for (let yi = 0; yi < ARC_YAW; yi++) {
+        const bit = pi * ARC_YAW + yi;
+        if (!(((mask[bit >>> 5] ?? 0) >>> (bit & 31)) & 1)) continue;
+        blocked++;
+        const a = at(yi, pi), b = at(yi + 1, pi);
+        const c = at(yi + 1, pi + 1), d = at(yi, pi + 1);
+        pts.push(...a, ...b, ...c, ...a, ...c, ...d);
+      }
+    }
+    if (!blocked) return;
+    const geo = this.#geo(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const mesh = new THREE.Mesh(geo, this.#mat(new THREE.MeshBasicMaterial({
+      color: 0xE0503A, transparent: true, opacity: 0.2,
+      side: THREE.DoubleSide, depthWrite: false })));
+    mesh.position.copy(r.pivot);
+    mesh.renderOrder = 4;
+    mesh.name = `blocked${n}`;
+    this.#arcs.add(mesh);
+  }
+
   #buildArcs(full: number): void {
     if (!this.#showArcs && !this.#showTarget) return;
     if (this.#showArcs)
@@ -798,6 +888,7 @@ export class Designer {
       };
       fan(r.gun.arcH, false);
       if (!allRound(r.gun.arcV)) fan(r.gun.arcV, true);
+      this.#buildBlocked(this.#rigs.indexOf(r), full);
     } }
 
     if (this.#showTarget) {
@@ -888,7 +979,13 @@ export class Designer {
         const inside = (x: number, a: readonly [number, number]) => allRound(a)
           || (x >= Math.min(a[0] as number, a[1] as number)
             && x <= Math.max(a[0] as number, a[1] as number));
-        r.bears = inside(h, r.gun.arcH) && inside(v, r.gun.arcV);
+        // The authored arc and the scanned one, the same pair the resolver
+        // reads. A turret that swung happily onto a target through its own
+        // engine block would be the designer promising a shot the match then
+        // refuses.
+        const m = this.#masks[this.#rigs.indexOf(r)];
+        r.bears = inside(h, r.gun.arcH) && inside(v, r.gun.arcV)
+          && !(m && arcBlocked(m, d.x, d.y, d.z));
         // A mount that cannot bear returns to rest rather than straining at
         // its stop, which is also what makes "bearing" readable at a glance.
         if (r.bears) {
@@ -918,8 +1015,38 @@ export class Designer {
 
   // -------------------------------------------------------------- panels --
 
+  /**
+   * Rescan every turret's field of fire, once the player has stopped drawing.
+   *
+   * The scan is 2048 rays a mount through a 65536 cell lattice. That is a
+   * frame's work, and the armour pencil fires an edit per cell dragged
+   * through, so scanning inline would have queued one per cell and made the
+   * pencil stutter under its own feedback. The same lesson as the reach
+   * envelope: expensive work happens once things settle, not once per event.
+   *
+   * The delay is deliberately long. A player laying a run of plate is not
+   * asking about arcs; a player who has stopped is.
+   */
+  #scanArcs(): void {
+    const sig = rasterSig(this.#design);
+    if (sig === this.#maskSig) return;
+    if (this.#maskTimer) clearTimeout(this.#maskTimer);
+    this.#maskTimer = 0;
+    if (this.#drawing) return;
+    this.#maskTimer = setTimeout(() => {
+      this.#maskTimer = 0;
+      this.#maskSig = rasterSig(this.#design);
+      this.#masks = arcMasks(this.#design);
+      this.#maskScans++;
+      // The arcs are part of the picture, so a finished scan redraws it.
+      if (this.#showArcs || this.#showTarget) this.#rebuild();
+      this.#renderStats();
+    }, ARC_SETTLE) as unknown as number;
+  }
+
   #refresh(): void {
     this.#derived = derive(this.#design);
+    this.#scanArcs();
     this.#rebuild();
     this.#renderClasses();
     this.#renderSockets();
@@ -1496,11 +1623,17 @@ export class Designer {
     cv.addEventListener('pointerdown', e => {
       cv.setPointerCapture(e.pointerId);
       painting = true; last = -1;
+      this.#drawing = true;
       at(e);
       e.preventDefault();
     });
     cv.addEventListener('pointermove', e => { if (painting) at(e); });
-    const stop = () => { painting = false; last = -1; };
+    // The settle starts when the finger lifts, not when the last cell landed.
+    const stop = () => {
+      painting = false; last = -1;
+      this.#drawing = false;
+      this.#scanArcs();
+    };
     cv.addEventListener('pointerup', stop);
     cv.addEventListener('pointercancel', stop);
 
@@ -1622,6 +1755,7 @@ export class Designer {
   #drawChanged(): void {
     this.#renderSlice();
     if (this.#pending) return;
+    this.#scanArcs();
     this.#pending = requestAnimationFrame(() => {
       this.#pending = 0;
       this.#derived = derive(this.#design);
@@ -1708,6 +1842,23 @@ export class Designer {
         + 'the ship\u2019s rotation and <code>sim_core</code> has no per mount facing yet. '
         + 'Facing sets the model\u2019s rest pose. Turn the arcs on over the model to see '
         + 'them, and Target for something to track.</p>';
+
+      // And the arc this HULL leaves, which is the other half and the half
+      // nobody authored. Scanned off the voxels, so it is a measurement and
+      // says so, and the core reads the same mask when the shot goes off.
+      h += '<div class="dzgrp">Blocked by this hull</div><div class="dzrows">';
+      const stale = this.#maskSig !== rasterSig(this.#design);
+      this.#rigs.forEach((r, n) => {
+        const m = this.#masks[n];
+        h += row(r.label, !m || stale ? 'scanning\u2026'
+          : `${(this.#blockedPct(m)).toFixed(0)}% of the sphere`);
+      });
+      h += '</div>';
+      h += '<p class="dznote">Every weapon here traverses freely, so the only thing '
+        + 'that stops one is the ship it is bolted to. A ray per direction, 64 by 32 '
+        + 'of them, cast through the hull you drew: what comes back is a mask the '
+        + 'resolver reads before it fires. Rescanned a second or so after you stop '
+        + 'drawing, not while you draw.</p>';
 
       // What each gun gets through THIS ship's own belt, which is the whole
       // reason penetration exists as a field.
@@ -1906,6 +2057,16 @@ export class Designer {
         yaw: +(r.group.rotation.y * 180 / Math.PI).toFixed(1),
         pitch: +(r.group.rotation.x * 180 / Math.PI).toFixed(1) })),
       bearing: this.#rigs.filter(r => r.bears).length,
+      // The scan, so the harness can wait for it and read what it found
+      // without ever being able to drive it.
+      arcScan: {
+        pending: this.#maskSig !== rasterSig(this.#design),
+        drawing: this.#drawing,
+        settle: ARC_SETTLE,
+        blocked: this.#masks.map(m => +this.#blockedPct(m).toFixed(2)),
+        drawn: this.#arcs.children.filter(c => c.name.startsWith('blocked')).length,
+        scans: this.#maskScans,
+      },
       showPlate: this.#plate === 'on',
       armour: this.#design.armour,
       slot: this.#slot,

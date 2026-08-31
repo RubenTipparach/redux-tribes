@@ -46,6 +46,7 @@
 //!   proj    5 slots: id, kind, pos(3)
 
 use crate::data::{class_index, class_from_index, ship_class, WeaponKey, ALL_CLASSES};
+use crate::math::ARC_WORDS;
 use crate::flight::{
     can_reach, fly_span, fly_turn, Body, Flight, Mode, Well, TICKS_PER_SECOND, TICKS_PER_TURN,
 };
@@ -674,7 +675,7 @@ static mut HULL_CHOICE: [i32; 2] = [-1, -1];
 /// out once, here, by the thing that owns the rules. Cleared by setting a
 /// design with no parts, and consumed by `ft_match_new` like the hull choice.
 static mut HULL_DESIGN: [Option<crate::design::Derived>; 2] = [None, None];
-static mut HULL_MOUNTS: [Vec<(WeaponKey, V3)>; 2] = [Vec::new(), Vec::new()];
+static mut HULL_MOUNTS: [Vec<(WeaponKey, V3, [u32; ARC_WORDS])>; 2] = [Vec::new(), Vec::new()];
 
 /// Derive a design and hold it for one side.
 ///
@@ -727,13 +728,22 @@ pub extern "C" fn ft_hull_design(
     1
 }
 
-/// One gun on a designed hull: what it is and where it sits, in ship units.
+/// One gun on a designed hull: what it is, where it sits, and where its own
+/// ship is in the way.
 ///
 /// Position is measured by the client off the socket the gun was fitted to,
-/// the same way plate cells are counted: a number, not a rule. It decides arcs
-/// and range, so it is hashed with everything else once the ship carries it.
+/// and the arc mask is scanned off the same voxels it drew: both are numbers,
+/// not rules. What they MEAN, which is whether a shot is legal, stays here.
+///
+/// The mask is `ARC_WORDS * 2` values written at `DERIVE_PARTS` before the
+/// call, one bit per direction, set where the hull blocks it. HALF a word per
+/// slot, low then high: the scratch buffer is f32 and carries whole numbers
+/// exactly only to 2^24, so a word with its top bit set would arrive rounded
+/// and the mount would come out blocked in directions nobody scanned. A caller
+/// with nothing to say passes `masked = 0` and the mount has a clear field of
+/// fire.
 #[no_mangle]
-pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32) -> u32 {
+pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32, masked: u32) -> u32 {
     if side > 1 {
         return 0;
     }
@@ -743,8 +753,17 @@ pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32) -> 
         3 => WeaponKey::Missile,
         _ => WeaponKey::Beam,
     };
+    let mut mask = [0u32; ARC_WORDS];
+    if masked != 0 {
+        let s = scratch();
+        for (i, w) in mask.iter_mut().enumerate() {
+            let lo = s[DERIVE_PARTS + i * 2].clamp(0.0, 65535.0) as u32;
+            let hi = s[DERIVE_PARTS + i * 2 + 1].clamp(0.0, 65535.0) as u32;
+            *w = lo | (hi << 16);
+        }
+    }
     unsafe {
-        HULL_MOUNTS[side as usize].push((k, V3::new(x, y, z)));
+        HULL_MOUNTS[side as usize].push((k, V3::new(x, y, z), mask));
     }
     1
 }
@@ -763,6 +782,34 @@ pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
     1
 }
 
+/// Put a side's designed guns on its ships, without touching anything a turn
+/// can change. Split out of `apply_designs` because a restore needs exactly
+/// this and nothing else: the hull points and the subsystems it just read out
+/// of the snapshot must not be handed back their starting values.
+fn apply_mounts(sim: &mut Sim) {
+    for side in 0..2usize {
+        let mounts = unsafe { HULL_MOUNTS[side].clone() };
+        if mounts.is_empty() {
+            continue;
+        }
+        for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
+            // Cooldowns survive: a restored mount is the same mount, and
+            // forgetting when it last fired would hand a ship a free shot.
+            let fired: Vec<i32> = ship.weapons.iter().map(|w| w.last_fired_tick).collect();
+            ship.weapons = mounts
+                .iter()
+                .enumerate()
+                .map(|(i, (key, at, mask))| WeaponSlot {
+                    key: *key,
+                    mount: *at,
+                    arc_mask: *mask,
+                    last_fired_tick: fired.get(i).copied().unwrap_or(-99),
+                })
+                .collect();
+        }
+    }
+}
+
 /// Put a derived hull on every ship of a side.
 ///
 /// Hull, mass, radius, the boarding pair and the flight envelope, because
@@ -770,9 +817,9 @@ pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
 /// the class's: where a reactor sits inside a hull is geometry the rasteriser
 /// owns, and the rasteriser is still on the client.
 fn apply_designs(sim: &mut Sim) {
+    apply_mounts(sim);
     for side in 0..2usize {
         let Some(d) = (unsafe { HULL_DESIGN[side] }) else { continue };
-        let mounts = unsafe { HULL_MOUNTS[side].clone() };
         for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
             ship.hull = d.hull;
             ship.hull_max = d.hull;
@@ -789,12 +836,6 @@ fn apply_designs(sim: &mut Sim) {
                 accel_lat: d.accel_lat,
                 max_speed: d.max_speed,
             };
-            if !mounts.is_empty() {
-                ship.weapons = mounts
-                    .iter()
-                    .map(|(key, at)| WeaponSlot { key: *key, mount: *at, last_fired_tick: -99 })
-                    .collect();
-            }
         }
     }
 }
@@ -1674,6 +1715,72 @@ pub extern "C" fn ft_weapon_bay(ship: u32) -> u32 {
         .unwrap_or(0)
 }
 
+/// The direction at the centre of every arc mask cell, in the ship's frame.
+///
+/// `ARC_YAW * ARC_PITCH` triples at `OUT`, in bit order, so cell `n` starts at
+/// `OUT + n * 3`. Returns the number of cells written.
+///
+/// The client scans its own voxels to find where a hull blocks a turret, which
+/// is a measurement of a picture the core cannot see. WHICH directions it must
+/// measure is not a measurement: it is the mask's own geometry, and a client
+/// that derived those angles from its platform's `sin` would set a different
+/// bit on the boundary from the client next to it and desync over a shot one
+/// seat allowed and the other did not. So the angles come from here, off the
+/// same fixed polynomials the resolver reads the mask with.
+#[no_mangle]
+pub extern "C" fn ft_arc_dirs() -> u32 {
+    use crate::math::{ARC_PITCH, ARC_YAW, PI};
+    let s = scratch();
+    let mut n = 0usize;
+    for p in 0..ARC_PITCH {
+        // Cell centres, which is what `arc_bit` would map back to this cell.
+        let pitch = (p as f32 + 0.5) / ARC_PITCH as f32 * PI - PI / 2.0;
+        let (cp, sp) = (crate::math::dcos(pitch), crate::math::dsin(pitch));
+        for y in 0..ARC_YAW {
+            let yaw = (y as f32 + 0.5) / ARC_YAW as f32 * (2.0 * PI) - PI;
+            let b = OUT + n * 3;
+            s[b] = crate::math::dsin(yaw) * cp;
+            s[b + 1] = sp;
+            s[b + 2] = crate::math::dcos(yaw) * cp;
+            n += 1;
+        }
+    }
+    n as u32
+}
+
+/// Which arc mask cell a direction in the SHIP's frame falls in.
+///
+/// The other half of `ft_arc_dirs`. The shipyard has no match to ask
+/// `ft_can_bear`, but it still has to draw a turret refusing a bearing the
+/// resolver would refuse, and the binning is `atan2` on fixed polynomials.
+/// Asked rather than rebuilt, for the third time in this file and the same
+/// reason: two answers to one question is one answer too many.
+#[no_mangle]
+pub extern "C" fn ft_arc_bit(x: f32, y: f32, z: f32) -> u32 {
+    crate::math::arc_bit(V3::new(x, y, z)) as u32
+}
+
+/// Can this mount swing onto that target right now?
+///
+/// The arc question, asked of the core for the same reason `ft_can_fire` is:
+/// a turret buried behind its own hull has a smaller field of fire than the
+/// weapon's authored arc, and the client that offered the shot must be the
+/// client whose shot the resolver honours. Aims at the same point the resolver
+/// would: the named subsystem while it lives, the hull centre otherwise, so a
+/// mount that can see the engines but not the bridge says so.
+///
+/// `sub` is the subsystem index, or negative for the hull centre.
+#[no_mangle]
+pub extern "C" fn ft_can_bear(ship: u32, weapon: u32, target: u32, sub: i32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(t) = sim.ships.get(target as usize) else { return 0 };
+    let aim = match usize::try_from(sub).ok().and_then(|bi| t.subs.get(bi)) {
+        Some(b) if !b.dead => t.sub_world_pos(b),
+        _ => t.pos,
+    };
+    sim.bears(ship as usize, weapon as usize, aim) as u32
+}
+
 /// May this ship board that one right now? Same reason as above: the button
 /// and the resolver have to agree, and the way to guarantee that is for the
 /// button to ask.
@@ -1811,5 +1918,16 @@ pub extern "C" fn ft_restore(count: u32) -> u32 {
     }
     // The borrow has to end before restore_snapshot takes &mut Sim.
     let copy: Vec<f32> = scratch()[OUT..OUT + n].to_vec();
-    sim.restore_snapshot(&copy).is_ok() as u32
+    let ok = sim.restore_snapshot(&copy).is_ok();
+    // A restore rebuilds ships from their CLASS, so a designed hull would come
+    // back with the class's guns: the wrong mounts, in the wrong places, with
+    // no arc mask. The snapshot carries what changes during a match; which
+    // guns a design fitted never does, so it is re-applied from the record the
+    // match was started with rather than stored a second time in every turn.
+    if ok {
+        if let Some(sim) = sim_opt() {
+            apply_mounts(sim);
+        }
+    }
+    ok as u32
 }
