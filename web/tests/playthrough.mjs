@@ -77,6 +77,9 @@ let chunksSeen = 0;
 let worstBlast = null;
 /** Blasts sampled at all, so "none seen" cannot pass as "all landed". */
 let blastsSeen = 0;
+/** Blasts that fell back to the raw event because the hull could not be
+ *  consulted, which is the old behaviour surviving in a corner. */
+let unresolved = 0;
 /** The longest beam drawn, against the range of the weapon that fired it: a
  *  beam that hit used to be drawn out to full range and through the target. */
 let longestBeam = 0;
@@ -168,6 +171,11 @@ log(`turrets stay whole: ${mounts.length} mounts on damaged hulls, `
 // is resolved to a cell centre and a cell has a size.
 if (!blastsSeen) {
   console.log('\nFAIL: a whole match of hits and no blast was ever drawn');
+  process.exit(1);
+}
+if (unresolved) {
+  console.log(`\nFAIL: ${unresolved} blast sample(s) never resolved to the hull `
+    + 'and fell back to the collision sphere');
   process.exit(1);
 }
 if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
@@ -886,6 +894,7 @@ async function playMatch() {
     for (const b of snap.fx.onHull) {
       if (b.kill || !b.hullR) continue;
       blastsSeen++;
+      if (!b.resolved) unresolved++;
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
     for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);

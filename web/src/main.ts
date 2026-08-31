@@ -2990,11 +2990,24 @@ function carveHits(rec: { events: readonly SimEvent[] } | null | undefined): Hul
  * following the ship that took it. Memoised per event, because a blast is
  * rebuilt every frame it is on screen and the search walks a hull's cells.
  */
-const contactCache = new WeakMap<object, Vec3>();
-function contactWorld(e: SimEvent): Vec3 {
+interface Contact {
+  readonly pos: Vec3;
+  /** Where the ship's centre was at the tick of the hit.
+   *
+   *  A blast stays in the world where it happened while the ship flies on, so
+   *  "is this drawn on the hull" can only be asked against the pose the ship
+   *  held AT the hit. Measuring it against where the ship is now says a blast
+   *  drifted off the hull when all that happened is the ship left. */
+  readonly centre: Vec3;
+  /** False when the hull could not be consulted and this fell back to the raw
+   *  event, which is the point on the collision SPHERE. */
+  readonly resolved: boolean;
+}
+const contactCache = new WeakMap<object, Contact>();
+function contactWorld(e: SimEvent): Contact {
   const had = contactCache.get(e as unknown as object);
   if (had) return had;
-  let out = e.pos;
+  let out: Contact = { pos: e.pos, centre: e.pos, resolved: false };
   const pose = e.ship >= 0 ? match.poses(e.tick).find(p => p.id === e.ship) : undefined;
   if (pose) {
     const q = new THREE.Quaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w);
@@ -3002,10 +3015,13 @@ function contactWorld(e: SimEvent): Vec3 {
       e.pos.x - pose.pos.x, e.pos.y - pose.pos.y, e.pos.z - pose.pos.z)
       .applyQuaternion(q.clone().invert());
     const local = view.contactOf(e.ship, [v.x, v.y, v.z]);
+    const centre = { x: pose.pos.x, y: pose.pos.y, z: pose.pos.z };
     if (local) {
       const w = new THREE.Vector3(local[0], local[1], local[2])
         .applyQuaternion(q).add(new THREE.Vector3(pose.pos.x, pose.pos.y, pose.pos.z));
-      out = { x: w.x, y: w.y, z: w.z };
+      out = { pos: { x: w.x, y: w.y, z: w.z }, centre, resolved: true };
+    } else {
+      out = { pos: e.pos, centre, resolved: false };
     }
   }
   contactCache.set(e as unknown as object, out);
@@ -3038,11 +3054,14 @@ function beamEnd(fired: SimEvent, events: readonly SimEvent[]): Vec3 {
     if (ox * ox + oy * oy + oz * oz > 0.25) continue;
     if (t < bestT) { bestT = t; best = e; }
   }
-  return best ? contactWorld(best) : fired.to;
+  return best ? contactWorld(best).pos : fired.to;
 }
 
 function blastsAt(events: readonly SimEvent[], tick: number)
-  : Array<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }> {
+  : Array<{
+    pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
+    centre: Vec3; resolved: boolean;
+  }> {
   const out = [];
   for (const e of events) {
     const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision;
@@ -3053,8 +3072,16 @@ function blastsAt(events: readonly SimEvent[], tick: number)
     const hull = ships.find(x => x.id === e.ship)?.radius ?? 2;
     // A kill is the whole ship going up and belongs on its centre; a shot
     // belongs where it landed, which is not where the event says it did.
-    const pos = kill ? e.pos : contactWorld(e);
-    out.push({ pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill, ship: e.ship });
+    const c = kill ? null : contactWorld(e);
+    out.push({
+      pos: c ? c.pos : e.pos,
+      age,
+      radius: kill ? hull : Math.max(0.5, hull * 0.28),
+      kill,
+      ship: e.ship,
+      centre: c ? c.centre : e.pos,
+      resolved: c ? c.resolved : true,
+    });
   }
   return out;
 }
