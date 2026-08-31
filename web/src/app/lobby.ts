@@ -12,7 +12,7 @@
  * broken on a flaky connection.
  */
 
-import { Api, ApiError, type Room, type Ticket } from '../net/api.js';
+import { Api, ApiError, type Room, type SavedDesign, type Ticket } from '../net/api.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -35,12 +35,35 @@ export interface Launch {
 
 const POLL_MS = 2500;
 
+/**
+ * The practice levels, one button each.
+ *
+ * They were a dropdown beside a Play button, which put six of the seven behind
+ * a gesture nobody makes on a phone: a control that needs opening to reveal
+ * what is in it is a control most people never open.
+ */
+const PRACTICE: ReadonlyArray<{ key: string; name: string; blurb: string }> = [
+  { key: 'skirmish', name: 'Skirmish', blurb: 'Two on two, open space' },
+  { key: 'duel', name: 'Duel', blurb: 'One on one, nowhere to hide' },
+  { key: 'convoy', name: 'Convoy', blurb: 'A hull worth boarding' },
+  { key: 'low-orbit', name: 'Low orbit', blurb: 'A heavy body below you' },
+  { key: 'binary', name: 'Binary', blurb: 'A well either side of the line' },
+  { key: 'slingshot', name: 'Slingshot', blurb: 'A well off the line, to whip round' },
+  { key: 'sandbox', name: 'Sandbox', blurb: 'Ship stats unlocked, nothing at stake' },
+];
+
 export class Lobby {
   readonly #api: Api;
   readonly #onLaunch: (l: Launch) => void;
   #room: Room | null = null;
   #socket: WebSocket | null = null;
   #timer: number | null = null;
+  #library: SavedDesign[] = [];
+  #libMine = false;
+  /** Set by main.ts: opening a library design is the shipyard's job. */
+  #onOpenDesign: ((d: SavedDesign) => void) | null = null;
+
+  onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
   constructor(api: Api, onLaunch: (l: Launch) => void) {
     this.#api = api;
@@ -55,6 +78,7 @@ export class Lobby {
     this.#room = null;
     this.#showLobbyPanel();
     void this.refresh();
+    void this.refreshLibrary();
     this.#startPolling();
   }
 
@@ -253,19 +277,80 @@ export class Lobby {
     if (this.#timer !== null) { clearInterval(this.#timer); this.#timer = null; }
   }
 
+  /** A button a level. The first keeps the id the harness has always used. */
+  #renderPractice(): void {
+    const host = $('practiceList');
+    if (host.childElementCount) return;
+    PRACTICE.forEach((p, n) => {
+      const b = document.createElement('button');
+      if (n === 0) b.id = 'bPractice';
+      b.innerHTML = `<span class="n">${p.name}</span><span class="d">${p.blurb}</span>`;
+      b.onclick = () => { this.#practice(p.key); };
+      host.appendChild(b);
+    });
+  }
+
+  #practice(scenario: string): void {
+    this.#stopPolling();
+    this.hide();
+    this.#onLaunch({
+      kind: 'offline', seed: randomSeed(), scenario, humanSides: 0b01, side: 0,
+    });
+  }
+
+  // ------------------------------------------------------- the ship library --
+
+  /** Refresh the library. Public to read, so this works signed out too. */
+  async refreshLibrary(): Promise<void> {
+    try {
+      const { designs } = await this.#api.listDesigns({ mine: this.#libMine, limit: 60 });
+      this.#library = designs;
+    } catch {
+      // A library that cannot load must not take the lobby down with it: the
+      // rooms and the practice levels have nothing to do with it.
+      this.#library = [];
+    }
+    this.#renderLibrary();
+  }
+
+  #renderLibrary(): void {
+    const host = $('libList');
+    host.innerHTML = '';
+    $('libEmpty').style.display = this.#library.length ? 'none' : '';
+    $('bLibAll').className = this.#libMine ? '' : 'primary';
+    $('bLibMine').className = this.#libMine ? 'primary' : '';
+    for (const d of this.#library) {
+      const row = document.createElement('div');
+      row.className = 'libRow';
+      const cls = d.classKey.replace(/_/g, ' ');
+      row.innerHTML = `<div class="bd"><div class="n">${escape(d.name)}`
+        + (d.mine ? '<span class="me">yours</span>' : '') + '</div>'
+        + `<div class="s">${escape(cls)} &middot; by ${escape(d.owner.name)} &middot; `
+        + `saved mass ${d.reported.mass.toFixed(3)}, hull ${d.reported.hull.toFixed(0)}`
+        + (d.reported.legal ? '' : ' &middot; <span class="bad">illegal when saved</span>')
+        + '</div></div>';
+      const open = document.createElement('button');
+      open.textContent = 'Open';
+      open.onclick = () => { this.#onOpenDesign?.(d); };
+      row.appendChild(open);
+      if (d.mine) {
+        const del = document.createElement('button');
+        del.textContent = 'Delete';
+        del.onclick = () => {
+          void this.#api.deleteDesign(d.designId)
+            .then(() => this.refreshLibrary())
+            .catch(e => this.#err(e));
+        };
+        row.appendChild(del);
+      }
+      host.appendChild(row);
+    }
+  }
+
   #bind(): void {
-    $('bPractice').onclick = () => {
-      this.#stopPolling();
-      this.hide();
-      const pick = document.getElementById('selScenario') as HTMLSelectElement | null;
-      this.#onLaunch({
-        kind: 'offline',
-        seed: randomSeed(),
-        scenario: pick?.value || 'skirmish',
-        humanSides: 0b01,
-        side: 0,
-      });
-    };
+    this.#renderPractice();
+    $('bLibAll').onclick = () => { this.#libMine = false; void this.refreshLibrary(); };
+    $('bLibMine').onclick = () => { this.#libMine = true; void this.refreshLibrary(); };
     $('bNewPve').onclick = () => { void this.#create('pve'); };
     $('bNewPvp').onclick = () => { void this.#create('pvp'); };
 

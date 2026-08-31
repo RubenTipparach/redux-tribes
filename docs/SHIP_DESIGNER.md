@@ -339,6 +339,20 @@ Top speed, marines and boarding reach are exact on every class. **Two residuals 
 - **Benefactor.** Slowest-turning frigate, and its drive package is the interesting part: one DRV-H does most of the pushing but caps top speed at 7.0, so the small DRV-N beside it exists purely to raise the ceiling to 8.0. Exactly the thing a player should discover by swapping one part. Two cannon at `pen 2` make it the belt-breaker.
 - **Freighter.** The most constrained design and the one that proves the model: 608 hull on 1.68 mass is the same ~360-per-mass the Terran pays, and two holds cost 0.553: 33% of everything. It is a hold and a skin. It also surfaces a live defect: at `boarding_range: 10` against a Terran (r 3.5) plus its own 4.5, contact is at 8.0 u, so its legal boarding window is **2.0 u wide today**, before any larger hull exists.
 
+## The ship library
+
+**A design is storage plus provenance, and nothing else.** `designs` is a table of JSON records: id, owner, name, class, the client's own mass/hull/legal at save time, the body, and what it was cloned from. The server never interprets a body, and it cannot: what a design MEANS is the core's business and the core does not run on the server (ADR-6). So validation stops at "an object, with a `classKey`, under 64 KB", and the figures on a card are labelled as the client's own rather than presented as authority. `derive()` reading the body is the authority, on whichever client opens it.
+
+**Everything is public to read and anyone may clone anything.** `GET /v1/designs` needs no account; the account header only decides which rows come back marked `mine`. Saving needs one. `?mine=1` narrows the list to your own.
+
+**A clone is a copy, never a reference.** `POST /v1/designs` with a body somebody else wrote makes a NEW row owned by you, with `from` recording where it came from. So a hull you are working from cannot change under you, deleting yours never breaks anyone else's, and editing a clone provably leaves the original alone: the API suite asserts exactly that. Editing or deleting someone else's row is a 403, not a silent no-op.
+
+**In the editor it is one gesture.** `Save as` names the current hull and keeps it; the five class buttons are stock ships, so opening one and saving it IS cloning it, and opening someone's library entry and saving it is cloning theirs. When the open design is already yours the button becomes `Save` and updates in place. The name field is in the page rather than a browser `prompt`, because a modal the page does not own cannot be styled, checked, or reached the same way on every phone.
+
+**The round trip is what the harness checks**, not the status codes. Save a Karisen, walk out to the lobby, find the row, open it back, and assert the same class, the same part count and the same grid digest. A save that returns 201 and a list that renders a row prove nothing on their own.
+
+**Practice levels are one button each.** They were a dropdown beside a Play button, which put six of the seven behind a gesture nobody makes on a phone: a control you have to open to see what is in it is a control most people never open.
+
 ## The editing loop
 
 Nobody places a cell. Not a fine one: there is no fine occupancy grid any more: and not one of the 65,536 macro cells either.

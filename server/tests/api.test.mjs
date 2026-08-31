@@ -245,3 +245,90 @@ test('leaving frees the seat, and the last one out closes the room', async () =>
   assert.equal(empty.closed, true, 'an empty room is litter, so it goes');
   assert.equal((await fetch(`${base}/v1/rooms/${room.roomId}`)).status, 404);
 });
+
+// --------------------------------------------------------- the ship library --
+// The library is storage plus provenance. What matters is that it is public to
+// read, that anybody can clone anything, that a clone is a COPY rather than a
+// reference, and that nobody can edit somebody else's row.
+
+const acct = async (name) => {
+  const a = await (await post('/v1/accounts', { name })).json();
+  return { ...a, head: { 'content-type': 'application/json',
+    authorization: `Bearer ${a.token}`, 'x-account-id': a.accountId } };
+};
+const HULL = { classKey: 'terran_frigate', parts: [{ socket: 'g0', module: 'WPN-BB1' }],
+  sections: { beltMid: 4 }, armour: 'wrapped', faction: 'terran', paint: 0x0095E9 };
+
+test('the library is public to read and anyone can clone', async () => {
+  const ada = await acct('ada');
+  const bob = await acct('bob');
+
+  const saved = await (await post('/v1/designs',
+    { name: 'Ada Line', design: HULL, mass: 0.85, hull: 266, legal: true }, ada.head)).json();
+  assert.ok(saved.designId, 'saving returns an id');
+  assert.equal(saved.mine, true);
+  assert.equal(saved.owner.name, 'ada');
+  assert.deepEqual(saved.design, HULL, 'the body comes back verbatim');
+
+  // Public: no account header at all.
+  const open = await (await fetch(base + '/v1/designs')).json();
+  assert.ok(open.designs.some(d => d.designId === saved.designId), 'anyone can list it');
+
+  // Bob sees it as not his, and clones it into a row of his own.
+  const asBob = await (await fetch(base + '/v1/designs', { headers: bob.head })).json();
+  const seen = asBob.designs.find(d => d.designId === saved.designId);
+  assert.equal(seen.mine, false, "another player's design is not marked mine");
+
+  const clone = await (await post('/v1/designs',
+    { name: 'Bob Line', design: seen.design, from: seen.designId,
+      mass: 0.85, hull: 266, legal: true }, bob.head)).json();
+  assert.notEqual(clone.designId, saved.designId, 'a clone is a new row');
+  assert.equal(clone.owner.name, 'bob');
+  assert.equal(clone.clonedFrom, saved.designId, 'and it remembers where it came from');
+
+  // The clone is a COPY: editing it must not touch the original.
+  await post(`/v1/designs/${clone.designId}`,
+    { name: 'Bob Line II', design: { ...HULL, faction: 'rogue' } }, bob.head);
+  const original = await (await fetch(`${base}/v1/designs/${saved.designId}`)).json();
+  assert.equal(original.name, 'Ada Line');
+  assert.equal(original.design.faction, 'terran', "the original is untouched by a clone's edits");
+});
+
+test("nobody can edit or delete someone else's design", async () => {
+  const ada = await acct('ada2');
+  const bob = await acct('bob2');
+  const mine = await (await post('/v1/designs', { name: 'Mine', design: HULL }, ada.head)).json();
+
+  const edit = await post(`/v1/designs/${mine.designId}`, { name: 'Yours', design: HULL }, bob.head);
+  assert.equal(edit.status, 403);
+  const gone = await fetch(`${base}/v1/designs/${mine.designId}`, { method: 'DELETE', headers: bob.head });
+  assert.equal(gone.status, 403);
+
+  const still = await (await fetch(`${base}/v1/designs/${mine.designId}`)).json();
+  assert.equal(still.name, 'Mine');
+
+  // The owner can, and then it is gone.
+  const dropped = await fetch(`${base}/v1/designs/${mine.designId}`, { method: 'DELETE', headers: ada.head });
+  assert.equal(dropped.status, 200);
+  assert.equal((await fetch(`${base}/v1/designs/${mine.designId}`)).status, 404);
+});
+
+test('a design has to be an object with a class, and saving needs an account', async () => {
+  const ada = await acct('ada3');
+  assert.equal((await post('/v1/designs', { design: HULL })).status, 401);
+  assert.equal((await post('/v1/designs', { design: 'a hull' }, ada.head)).status, 400);
+  assert.equal((await post('/v1/designs', { design: { parts: [] } }, ada.head)).status, 400);
+  assert.equal((await post('/v1/designs',
+    { design: { classKey: 'terran_frigate', junk: 'x'.repeat(70000) } }, ada.head)).status, 413);
+});
+
+test('mine=1 lists only your own', async () => {
+  const ada = await acct('ada4');
+  const bob = await acct('bob4');
+  await post('/v1/designs', { name: 'A', design: HULL }, ada.head);
+  await post('/v1/designs', { name: 'B', design: HULL }, bob.head);
+  const mine = await (await fetch(base + '/v1/designs?mine=1', { headers: ada.head })).json();
+  assert.ok(mine.designs.length >= 1);
+  assert.ok(mine.designs.every(d => d.mine), 'every row from mine=1 is mine');
+  assert.ok(!mine.designs.some(d => d.name === 'B'), "and none of them is somebody else's");
+});

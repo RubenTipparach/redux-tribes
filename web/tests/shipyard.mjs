@@ -25,7 +25,7 @@ const ok = (msg) => console.log('  ok   ' + msg);
 
 /** Every control a player needs, and the tap has to ARRIVE at it. */
 const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTrack', 'dzTabParts',
-  'dzTabArmour', 'dzTabStats', 'dzReset', 'dzBare', 'dzStrip'];
+  'dzTabArmour', 'dzTabStats', 'dzSave', 'dzReset', 'dzBare', 'dzStrip'];
 /** Phone only: the desk layout has the panel beside the view and hides it. */
 const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
@@ -295,6 +295,69 @@ async function checkTurrets(page) {
   await page.waitForTimeout(400);
 }
 
+/**
+ * The ship library: save a hull, find it in the lobby, open it back.
+ *
+ * The point is that a design SURVIVES the round trip. A save that returns 201
+ * and a list that renders a row prove nothing on their own; loading it back
+ * and finding the same class and the same part count does.
+ */
+async function checkLibrary(page) {
+  await (await page.$$('#dzClasses button'))[1].click();   // Karisen, not the default
+  await page.waitForTimeout(500);
+  const before = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { classKey: d.classKey, parts: d.parts, hash: d.gridHash };
+  });
+
+  await page.click('#dzSave');
+  await page.waitForTimeout(250);
+  const suggested = await page.inputValue('#dzSaveName');
+  if (!suggested) fail('the save bar opened with no suggested name');
+  else ok(`the save bar suggests a name: "${suggested}"`);
+
+  const name = `Harness ${Date.now().toString(36)}`;
+  await page.fill('#dzSaveName', name);
+  await page.click('#dzSaveGo');
+  await page.waitForTimeout(1200);
+  const slot = await page.evaluate(() => window.ftDebug.designer().slot);
+  if (!slot.designId) {
+    fail(`saving did not take: ${(await page.textContent('#dzSaid')).trim()}`);
+    return;
+  }
+  ok(`saved to the library as "${slot.name}"`);
+  const label = await page.textContent('#dzSave');
+  if (label.trim() !== 'Save') fail(`after saving your own the button still reads "${label.trim()}"`);
+  else ok('and the button becomes Save, because it is yours to update');
+
+  // Out to the lobby: the row has to be there, and marked as mine.
+  await page.click('#dzClose');
+  await page.waitForTimeout(1200);
+  const rows = await page.$$eval('#libList .libRow', rs => rs.map(r => ({
+    name: r.querySelector('.n')?.textContent ?? '', sub: r.querySelector('.s')?.textContent ?? '',
+  })));
+  const row = rows.find(r => r.name.includes(name));
+  if (!row) { fail('the saved design is not in the library list'); return; }
+  if (!row.name.includes('yours')) fail('your own design is not marked as yours');
+  else ok(`the library lists it: ${row.sub.replace(/\s+/g, ' ').slice(0, 70)}`);
+
+  // And open it back. Same hull, or the round trip lost something.
+  const idx = rows.indexOf(row);
+  await (await page.$$('#libList .libRow button'))[idx * 2].click();
+  await page.waitForTimeout(1600);
+  const after = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { classKey: d.classKey, parts: d.parts, hash: d.gridHash, slot: d.slot };
+  });
+  if (after.classKey !== before.classKey || after.parts !== before.parts)
+    fail(`the round trip changed the hull: ${before.classKey}/${before.parts} became `
+      + `${after.classKey}/${after.parts}`);
+  else if (after.hash !== before.hash)
+    fail('the round trip changed the grid, so something in the record was lost');
+  else ok(`opening it back gives the same hull: ${after.classKey}, ${after.parts} parts, same grid`);
+  if (!after.slot.mine) fail('a design you saved does not come back marked as yours');
+}
+
 async function checkModesAndRotation(page) {
   await (await page.$$('#dzClasses button'))[0].click();
   await page.waitForTimeout(400);
@@ -361,6 +424,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     await checkGhostAndPicking(page);
     await checkTurrets(page);
     await checkModesAndRotation(page);
+    await checkLibrary(page);
   } else {
     await checkViewport(page, label, 38);
     // One tap gives the model the screen, and a tab tapped after it brings the

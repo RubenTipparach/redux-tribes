@@ -44,6 +44,26 @@ export interface Room {
 }
 
 /** What a seat needs to actually play the match its room started. */
+/**
+ * A design as the library stores it.
+ *
+ * `reported` is the CLIENT's own figures at save time, kept so a card can be
+ * drawn without loading the record. It is not authority: what a design derives
+ * is `derive()` reading `design`, and the server never worked any of it out.
+ */
+export interface SavedDesign {
+  designId: string;
+  name: string;
+  classKey: string;
+  owner: { accountId: string; name: string };
+  mine: boolean;
+  reported: { mass: number; hull: number; legal: boolean };
+  clonedFrom: string | null;
+  createdMs: number;
+  updatedMs: number;
+  design: unknown;
+}
+
 export interface Ticket {
   readonly matchId: string;
   readonly seed: string;
@@ -144,6 +164,43 @@ export class Api {
   startRoom(roomId: string): Promise<Room> {
     return this.#json(`/v1/rooms/${roomId}/start`, {
       method: 'POST', headers: this.#accountHeaders(), body: '{}',
+    });
+  }
+
+  // ------------------------------------------------------- the ship library --
+  // Public to read: no account header on the list, because anyone may look.
+
+  listDesigns(opts: { mine?: boolean; limit?: number } = {}): Promise<{ designs: SavedDesign[] }> {
+    const q = new URLSearchParams();
+    if (opts.mine) q.set('mine', '1');
+    if (opts.limit) q.set('limit', String(opts.limit));
+    const url = '/v1/designs' + (q.toString() ? `?${q}` : '');
+    // Signed in or not, the list works; the header is only what marks a row
+    // as yours.
+    return this.#json(url, this.#identity
+      ? { headers: this.#accountHeaders() } : {});
+  }
+
+  saveDesign(body: {
+    name: string; design: unknown; from?: string | null;
+    mass?: number; hull?: number; legal?: boolean;
+  }): Promise<SavedDesign> {
+    return this.#json('/v1/designs', {
+      method: 'POST', headers: this.#accountHeaders(), body: JSON.stringify(body),
+    });
+  }
+
+  updateDesign(designId: string, body: {
+    name?: string; design: unknown; mass?: number; hull?: number; legal?: boolean;
+  }): Promise<SavedDesign> {
+    return this.#json(`/v1/designs/${designId}`, {
+      method: 'POST', headers: this.#accountHeaders(), body: JSON.stringify(body),
+    });
+  }
+
+  deleteDesign(designId: string): Promise<{ ok: boolean }> {
+    return this.#json(`/v1/designs/${designId}`, {
+      method: 'DELETE', headers: this.#accountHeaders(),
     });
   }
 

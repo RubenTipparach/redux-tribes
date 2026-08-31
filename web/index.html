@@ -513,9 +513,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #dzTabs button.on { color:var(--cyan); background:#0d2231; box-shadow:inset 0 -2px 0 var(--cyan); }
 .dzpane { flex:1; min-height:0; overflow-y:auto; padding:12px; }
 .dzpane.hidden { display:none; }
-.dzfoot { flex:0 0 auto; display:flex; gap:6px; padding:9px 12px;
+.dzfoot { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:6px; padding:9px 12px;
   border-top:1px solid var(--line); }
-.dzfoot button { flex:1; font-size:11px; }
+.dzfoot button { flex:1 1 96px; font-size:11px; }
 
 .dzgrp { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:10px;
   letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:14px 0 6px; }
@@ -554,6 +554,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+.dzsave { display:flex; gap:6px; padding:9px 12px 0; }
+.dzsave.hidden { display:none; }
+.dzsave input { flex:1; min-width:0; padding:8px 10px; font-size:12px;
+  background:var(--panel); color:var(--ink); border:1px solid var(--line);
+  border-radius:5px; font-family:"Exo 2",system-ui,sans-serif; }
+.dzsave button { padding:8px 11px; font-size:11px; }
+.dzsaid { font-size:11px; color:var(--muted); padding:6px 12px 0; min-height:0; }
+.dzsaid:empty { display:none; }
+.dzsaid.bad { color:var(--red); }
 .dzturn { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
 .dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
 .dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
@@ -703,6 +712,27 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .seatRow .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); flex:0 0 auto; }
 .seatRow.rdy .dot { background:var(--green); }
 .seatRow .empty { color:var(--muted); font-style:italic; }
+/* One button a practice level, wrapping to whatever the width allows. */
+.picks { display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr));
+  gap:6px; margin-top:10px; }
+.picks button { text-align:left; padding:9px 11px; text-transform:none;
+  letter-spacing:0; font-family:"Exo 2",system-ui,sans-serif; }
+.picks button .n { display:block; font-family:Rajdhani,system-ui,sans-serif;
+  font-weight:700; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink); }
+.picks button .d { display:block; font-size:10px; color:var(--muted); margin-top:2px;
+  line-height:1.35; }
+
+.libRow { display:flex; align-items:center; gap:9px; padding:8px 10px; margin-top:6px;
+  border:1px solid var(--line); border-radius:5px; background:var(--panel); }
+.libRow .bd { flex:1; min-width:0; }
+.libRow .n { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.04em; color:var(--ink); }
+.libRow .n .me { color:var(--cyan); font-size:10px; letter-spacing:.1em; margin-left:6px; }
+.libRow .s { font-size:10px; color:var(--muted); line-height:1.4; }
+.libRow button { padding:6px 10px; font-size:10px; }
+.libRow .bad { color:var(--red); }
+
 #lobbyErr { color:var(--red); font-size:12px; min-height:16px; margin-top:8px; }
 #lobby input[type=text] { background:var(--panel); color:var(--ink);
   border:1px solid var(--line); border-radius:4px; padding:8px 10px; font-size:13px;
@@ -790,7 +820,17 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       <div id="dzStats"></div>
     </div>
 
+    <!-- Naming a design happens here rather than in a browser prompt: a
+         modal the page does not own cannot be checked, styled, or reached the
+         same way on every phone. -->
+    <div class="dzsave hidden" id="dzSaveBar">
+      <input id="dzSaveName" type="text" maxlength="48" placeholder="Name this hull">
+      <button id="dzSaveGo" class="primary">Save</button>
+      <button id="dzSaveNo">Cancel</button>
+    </div>
+    <div class="dzsaid" id="dzSaid"></div>
     <div class="dzfoot">
+      <button id="dzSave">Save as</button>
       <button id="dzReset">Reset to stock</button>
       <button id="dzBare">Strip armour</button>
       <button id="dzStrip">Strip bare</button>
@@ -812,29 +852,32 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
             <div class="t">Practice</div>
             <div class="s">Play the AI offline. Nothing is sent anywhere.</div>
           </div>
-          <button id="bPractice" class="primary">Play</button>
         </div>
-        <div class="row" style="margin-top:10px">
+        <!-- One button a level. A dropdown beside a Play button hid six of
+             the seven behind a gesture nobody makes on a phone. -->
+        <div id="practiceList" class="picks"></div>
+        <div class="row" style="margin-top:12px">
           <div class="grow">
             <div class="t">Shipyard</div>
             <div class="s">Design a hull: fit parts to a frame, plate it, paint it.</div>
           </div>
           <button id="bShipyard">Open</button>
         </div>
-        <div class="row" style="margin-top:10px">
-          <label class="grow" for="selScenario">
-            <div class="s">Scenario</div>
-            <select id="selScenario">
-              <option value="skirmish">Skirmish, two on two</option>
-              <option value="duel">Duel, one on one</option>
-              <option value="convoy">Convoy, a hull worth boarding</option>
-              <option value="low-orbit">Low orbit, a heavy body below</option>
-              <option value="binary">Binary, a well either side</option>
-              <option value="slingshot">Slingshot, a well off the line</option>
-              <option value="sandbox">Sandbox, ship stats unlocked</option>
-            </select>
-          </label>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div class="grow">
+            <div class="t">Ship library</div>
+            <div class="s" id="libNote">Everyone's designs. Open one to look at it,
+              then Save as to keep your own copy.</div>
+          </div>
+          <button id="bLibMine">Mine</button>
+          <button id="bLibAll" class="primary">All</button>
         </div>
+        <div id="libList"></div>
+        <div class="s" id="libEmpty">Nothing saved yet. Open the shipyard and
+          save a hull.</div>
       </div>
 
       <div class="card">

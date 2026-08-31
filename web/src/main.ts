@@ -13,6 +13,7 @@ import type { Match } from './sim/match.js';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
+import type { Design } from './app/design.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
@@ -2157,6 +2158,30 @@ const lobby = new Lobby(api, (l: Launch) => {
 // puts the player back where they opened it from.
 const designer = new Designer(() => { if (!lobby.visible) lobby.show(); });
 $('bShipyard').onclick = () => designer.show();
+
+// The seam between the shipyard and the library. The editor knows nothing
+// about the network and the lobby knows nothing about hulls; this is the one
+// place that knows both.
+designer.onSave(async req => {
+  const saved = req.designId
+    ? await api.updateDesign(req.designId, {
+      name: req.name, design: req.design,
+      mass: req.mass, hull: req.hull, legal: req.legal,
+    })
+    : await api.saveDesign({
+      name: req.name, design: req.design, from: req.from,
+      mass: req.mass, hull: req.hull, legal: req.legal,
+    });
+  void lobby.refreshLibrary();
+  return { designId: saved.designId, name: saved.name, mine: true, owner: saved.owner.name };
+});
+
+lobby.onOpenDesign(d => {
+  designer.show();
+  designer.loadDesign(d.design as Design, {
+    designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
+  });
+});
 
 renderHelp();
 frame();

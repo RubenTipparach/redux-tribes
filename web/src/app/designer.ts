@@ -18,7 +18,7 @@ import {
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
-  gunByKey, allRound,
+  gunByKey, allRound, zeroSections,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
@@ -56,8 +56,30 @@ const $ = <T extends HTMLElement>(id: string): T => {
   return el as T;
 };
 
+/** What the shipyard knows about where the open design came from. */
+export interface DesignSlot {
+  readonly designId: string | null;
+  readonly name: string;
+  /** Whether it is the signed in account's own, and so updatable in place. */
+  readonly mine: boolean;
+  readonly owner?: string;
+}
+
 export class Designer {
   readonly #onClose: () => void;
+  /**
+   * Saving is the host's job, not the shipyard's.
+   *
+   * The editor draws and collects input; talking to the library is a network
+   * concern and belongs where the other network concerns are. This is the one
+   * seam between them: hand over a name, a record and the client's own figures,
+   * get back where it ended up.
+   */
+  #onSave: ((req: {
+    name: string; design: Design; mass: number; hull: number; legal: boolean;
+    designId: string | null; from: string | null;
+  }) => Promise<DesignSlot>) | null = null;
+  #slot: DesignSlot = { designId: null, name: '', mine: false };
   #design: Design = stockFor('terran_frigate');
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
@@ -99,6 +121,34 @@ export class Designer {
   constructor(onClose: () => void) {
     this.#onClose = onClose;
     this.#bind();
+  }
+
+  onSave(fn: NonNullable<Designer['saveHandler']>): void { this.#onSave = fn; }
+  /** Only for the type above; never called. */
+  declare saveHandler: (req: {
+    name: string; design: Design; mass: number; hull: number; legal: boolean;
+    designId: string | null; from: string | null;
+  }) => Promise<DesignSlot>;
+
+  /**
+   * Open a record from the library. It arrives as a WORKING COPY: editing it
+   * changes nothing anywhere until it is saved, and saving somebody else's
+   * makes a new row rather than touching theirs.
+   */
+  loadDesign(d: Design, slot: DesignSlot): void {
+    this.#design = {
+      classKey: d.classKey,
+      parts: (d.parts ?? []).map(p => ({ ...p })),
+      sections: { ...zeroSections(), ...(d.sections ?? {}) },
+      armour: d.armour === 'skin' ? 'skin' : 'wrapped',
+      faction: typeof d.faction === 'string' ? d.faction : 'terran',
+      paint: typeof d.paint === 'number' ? d.paint : 0x0095E9,
+    };
+    this.#slot = slot;
+    this.#socket = null;
+    this.#note = null;
+    this.#said('');
+    if (this.#renderer) this.#refresh();
   }
 
   get visible(): boolean { return !$('designer').classList.contains('hidden'); }
@@ -1192,6 +1242,26 @@ export class Designer {
 
   #bind(): void {
     $('dzClose').onclick = () => { this.hide(); this.#onClose(); };
+
+    // Save. Someone else's design saves as a clone: their row is never
+    // touched, so a hull you are working from cannot change under you.
+    $('dzSave').onclick = () => {
+      const bar = $('dzSaveBar');
+      const field = $<HTMLInputElement>('dzSaveName');
+      bar.classList.remove('hidden');
+      field.value = this.#slot.mine && this.#slot.designId
+        ? this.#slot.name
+        : this.#slot.name ? `${this.#slot.name} copy` : this.#suggestName();
+      field.focus();
+      field.select();
+      this.#said('');
+    };
+    $('dzSaveNo').onclick = () => { $('dzSaveBar').classList.add('hidden'); };
+    $<HTMLInputElement>('dzSaveName').onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); void this.#doSave(); }
+      if (e.key === 'Escape') $('dzSaveBar').classList.add('hidden');
+    };
+    $('dzSaveGo').onclick = () => { void this.#doSave(); };
     $('dzReset').onclick = () => {
       this.#design = stockFor(this.#design.classKey);
       this.#socket = null;
@@ -1240,6 +1310,7 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
+    this.#syncSaveButton();
     // Collapse the sheet so the model has the screen. A phone control: at desk
     // widths the panel is beside the view and takes none of it.
     $('dzGrow').onclick = () => {
@@ -1258,11 +1329,57 @@ export class Designer {
     $('dzTrack').textContent = this.#showTarget ? 'Target on' : 'Target';
   }
 
+  /** The one line of feedback the save flow needs. */
+  #said(text: string, bad = false): void {
+    const el = $('dzSaid');
+    el.textContent = text;
+    el.className = bad ? 'dzsaid bad' : 'dzsaid';
+  }
+
+  /** What the Save button offers depends on whose design is open. */
+  #syncSaveButton(): void {
+    const b = $('dzSave');
+    b.textContent = this.#slot.mine && this.#slot.designId ? 'Save' : 'Save as';
+    b.title = this.#slot.designId && !this.#slot.mine
+      ? `Cloning ${this.#slot.name} into a design of your own`
+      : 'Keep this hull in the ship library';
+  }
+
   #syncPlateButton(): void {
     const b = $('dzPlate');
     b.className = this.#plate === 'off' ? '' : this.#plate === 'ghost' ? 'ghost' : 'on';
     b.textContent = this.#plate === 'on' ? 'Plate on'
       : this.#plate === 'ghost' ? 'Plate ghost' : 'Plate off';
+  }
+
+  /** A name a player will recognise, from the class and the faction. */
+  #suggestName(): string {
+    const f = frameFor(this.#design.classKey);
+    return `${paintFor(this.#design.faction).name} ${f.name.split(' ').pop()}`;
+  }
+
+  async #doSave(): Promise<void> {
+    if (!this.#onSave) { this.#said('the library is not reachable from here', true); return; }
+    const name = $<HTMLInputElement>('dzSaveName').value.trim();
+    if (!name) { this.#said('give it a name first', true); return; }
+    const d = this.#derived;
+    this.#said('saving...');
+    try {
+      const slot = await this.#onSave({
+        name,
+        design: this.#design,
+        mass: d.mass, hull: d.hull, legal: d.legal,
+        // Updating in place only ever happens on your own row.
+        designId: this.#slot.mine ? this.#slot.designId : null,
+        from: this.#slot.designId,
+      });
+      this.#slot = slot;
+      $('dzSaveBar').classList.add('hidden');
+      this.#said(`saved as "${slot.name}"`);
+      this.#syncSaveButton();
+    } catch (e) {
+      this.#said(e instanceof Error ? e.message : 'could not save', true);
+    }
   }
 
   #syncTabs(): void {
@@ -1296,6 +1413,7 @@ export class Designer {
       bearing: this.#rigs.filter(r => r.bears).length,
       showPlate: this.#plate === 'on',
       armour: this.#design.armour,
+      slot: this.#slot,
       livery: this.#liveryColours,
       enclosedOutside: rasterise(this.#design).enclosedOutside,
       flushProud: rasterise(this.#design).flushProud,

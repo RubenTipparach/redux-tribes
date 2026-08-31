@@ -24,6 +24,7 @@ import { createHash, randomUUID, randomBytes, timingSafeEqual } from 'node:crypt
 import { WebSocketServer, type WebSocket } from 'ws';
 import { db, nowMs } from './db.ts';
 import { mountLobby } from './lobby.ts';
+import { mountDesigns } from './designs.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8080);
 const app = express();
@@ -35,7 +36,7 @@ app.use(express.json({ limit: '256kb' }));
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   next();
 });
 app.options(/.*/, (_req, res) => { res.sendStatus(204); });
@@ -96,6 +97,11 @@ function publishTo(topic: string, event: unknown): void {
 // is a different job from brokering turns: this one is about who is playing,
 // the rest of this file is about what they did.
 mountLobby(app, publishTo);
+
+// The ship library. Storage and provenance only: the server never reads what
+// a design MEANS, because the core is what means it and the core is on the
+// clients.
+mountDesigns(app);
 
 // Fly sets these inside the machine. Reporting them makes "where is this
 // actually running" answerable from outside with a single request, rather

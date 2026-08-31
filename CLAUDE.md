@@ -119,6 +119,13 @@ npm --prefix server test                    # 9, the lobby and the lockstep API
 against `dist/`, so a change to the server could pass a suite that had never
 seen it.
 
+The server suite covers the lockstep gate and the ship library. The library is
+storage and provenance only: it never interprets a design, because what a
+design means is the core's business and the core does not run there. Everything
+in it is public to read, anyone may clone anything, and a clone is a COPY with
+a `from` stamp rather than a reference, so a hull you are working from cannot
+change under you.
+
 ### And one that plays the game
 
 The four above prove the model. None of them can tell you the GAME is playable,
