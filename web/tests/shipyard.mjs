@@ -89,7 +89,8 @@ async function checkLayout(page, label) {
   const pane = await page.evaluate(() => {
     const out = [];
     for (const sel of ['#dzMode button', '#dzFactions button', '#dzPaint button',
-      '#dzArmour input']) {
+      '#dzArmour input', '#dzSliceAt', '#dzBrushAdd', '#dzBrushCut',
+      '#dzSliceClear', '#dzDrawClear']) {
       const els = [...document.querySelectorAll(sel)];
       if (!els.length) { out.push(`${sel}: none rendered`); continue; }
       for (const el of els) {
@@ -302,6 +303,134 @@ async function checkTurrets(page) {
  * and a list that renders a row prove nothing on their own; loading it back
  * and finding the same class and the same part count does.
  */
+/**
+ * Drawing armour by hand.
+ *
+ * The property that matters is that the pencil COMPOSES with the generated
+ * exterior and is fully reversible: draw a run, the plate count and the mass
+ * go up and the grid changes; clear it, and every one of them comes back to
+ * exactly where it started. A tool that can add but not undo is a tool nobody
+ * dares use.
+ */
+async function checkDrawing(page) {
+  await (await page.$$('#dzClasses button'))[0].click();
+  await page.waitForTimeout(450);
+  await page.click('#dzTabArmour');
+  await page.waitForTimeout(300);
+  await page.evaluate(() =>
+    document.getElementById('dzSliceCanvas').scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(250);
+
+  const read = () => page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { plate: d.derived.plateCells, mass: +d.derived.mass.toFixed(5),
+      hash: d.gridHash, drawn: d.drawn, cut: d.cutCells, slice: d.slice };
+  });
+  const before = await read();
+
+  // Measure the canvas before every gesture: the pane reflows when the count
+  // line changes, which silently moved a whole run onto the wrong cells.
+  const box = async () => {
+    await page.evaluate(() =>
+      document.getElementById('dzSliceCanvas').scrollIntoView({ block: 'center' }));
+    await page.waitForTimeout(120);
+    const b = await (await page.$('#dzSliceCanvas')).boundingBox();
+    return { ...b, cell: b.width / 32 };
+  };
+  const tap = async (i, row) => {
+    const b = await box();
+    await page.mouse.click(b.x + b.cell * (i + 0.5), b.y + b.cell * (row + 0.5));
+    await page.waitForTimeout(420);
+  };
+  const run = async (row) => {
+    const b = await box();
+    await page.mouse.move(b.x + b.cell * 3.5, b.y + b.cell * (row + 0.5));
+    await page.mouse.down();
+    for (let n = 4; n < 13; n++)
+      await page.mouse.move(b.x + b.cell * (n + 0.5), b.y + b.cell * (row + 0.5));
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+  };
+  await run(16);
+  const drawn = await read();
+  if (!drawn.drawn) { fail('dragging across the slice drew nothing'); return; }
+  if (drawn.plate <= before.plate)
+    fail(`drawing ${drawn.drawn} cells did not raise the plate count (${before.plate})`);
+  else if (drawn.mass <= before.mass)
+    fail('drawn armour costs no mass, so the budget does not see it');
+  else if (drawn.hash === before.hash)
+    fail('drawing changed no cell in the grid');
+  else ok(`drawing ${drawn.drawn} cells adds ${drawn.plate - before.plate} plate `
+    + `and ${(drawn.mass - before.mass).toFixed(5)} mass`);
+
+  // Cut into the plate the sliders laid, which is the other half of the tool.
+  // Along the same row, which is known to cross the generated skin: the drawn
+  // cells come off first and the run carries on into the shell behind them.
+  await page.click('#dzBrushCut');
+  await page.waitForTimeout(150);
+  await run(16);
+  const carved = await read();
+  if (!carved.cut) fail('the cut brush removed nothing');
+  else ok(`the cut brush takes ${carved.cut} cells out of the generated skin`);
+
+  // And all the way back. This is the check the rest of it rests on.
+  await page.click('#dzDrawClear');
+  await page.waitForTimeout(700);
+  const home = await read();
+  if (home.drawn || home.cut) fail('Clear all left drawing behind');
+  else if (home.plate !== before.plate || home.hash !== before.hash)
+    fail(`clearing did not restore the hull: ${home.plate} plate against ${before.plate}`);
+  else ok('and Clear all puts every cell back exactly as it was');
+
+  await page.click('#dzBrushAdd');
+  await page.waitForTimeout(150);
+
+  // Armour has to reach the ship. A cell in the far corner of the lattice
+  // touches nothing, and plate hanging in space is the defect the pylons were
+  // written to end: a pencil that can make it is a pencil that will.
+  await tap(1, 1);
+  const orphan = await read();
+  const said = await page.evaluate(() => window.ftDebug.designer().drawSaid);
+  if (orphan.drawn) fail('a cell touching nothing was drawn anyway');
+  else if (!said) fail('a refused cell was refused silently');
+  else ok(`armour must reach the ship: "${said}"`);
+
+  // And one against the hull is taken. z 32 on the Terran puts the skin at
+  // column 6, so column 5 is the first empty cell that touches it.
+  await tap(5, 16);
+  const beside = await read();
+  if (!beside.drawn) fail('a cell against the hull was refused');
+  else ok('a cell against the hull is taken');
+
+  // Depth lays a column of slices in one stroke.
+  await page.evaluate(() => {
+    const e = document.getElementById('dzDepth');
+    e.value = '6'; e.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await tap(4, 16);
+  const deep = await read();
+  if (deep.drawn - beside.drawn < 5)
+    fail(`a depth 6 stroke drew ${deep.drawn - beside.drawn} cells, not a column`);
+  else ok(`a depth 6 stroke lays ${deep.drawn - beside.drawn} slices in one tap`);
+
+  // Onion skin: it has to take a value and not throw drawing it.
+  await page.evaluate(() => {
+    const e = document.getElementById('dzOnion');
+    e.value = '3'; e.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(350);
+  const onion = await page.evaluate(() => window.ftDebug.designer().onion);
+  if (onion !== 3) fail(`the onion slider reads ${onion}, not 3`);
+  else ok('onion skin shows three slices either side');
+
+  await page.evaluate(() => {
+    const d = document.getElementById('dzDepth');
+    d.value = '1'; d.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.click('#dzDrawClear');
+  await page.waitForTimeout(600);
+}
+
 async function checkLibrary(page) {
   await (await page.$$('#dzClasses button'))[1].click();   // Karisen, not the default
   await page.waitForTimeout(500);
@@ -424,6 +553,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     await checkGhostAndPicking(page);
     await checkTurrets(page);
     await checkModesAndRotation(page);
+    await checkDrawing(page);
     await checkLibrary(page);
   } else {
     await checkViewport(page, label, 38);

@@ -18,7 +18,7 @@ import {
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
-  gunByKey, allRound, zeroSections,
+  gunByKey, allRound, zeroSections, cellIndex, DRAWN_MAX,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
@@ -109,6 +109,18 @@ export class Designer {
   #showTarget = false;
   #target = new THREE.Vector3();
   #clock = 0;
+  /** Which z the slice editor is standing in, and what the brush does. */
+  #sliceAt = Math.floor(NZ / 2);
+  #brush: 'add' | 'cut' = 'add';
+  /** How many slices either side are ghosted, and how deep a stroke writes. */
+  #onion = 1;
+  #depth = 1;
+  #pending = 0;
+  /** The drawing, as sets as well as lists: connectivity is checked on every
+   *  painted cell and a linear scan per cell is a scan per pixel of a drag. */
+  #drawSet = new Set<number>();
+  #cutSet = new Set<number>();
+  #drawSaid = '';
   #last = performance.now();
   /** Where the hull actually is in the lattice, so the camera looks at it. */
   #centre = new THREE.Vector3();
@@ -143,8 +155,11 @@ export class Designer {
       armour: d.armour === 'skin' ? 'skin' : 'wrapped',
       faction: typeof d.faction === 'string' ? d.faction : 'terran',
       paint: typeof d.paint === 'number' ? d.paint : 0x0095E9,
+      plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
+      cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
     };
     this.#slot = slot;
+    this.#syncDrawSets();
     this.#socket = null;
     this.#note = null;
     this.#said('');
@@ -900,6 +915,7 @@ export class Designer {
     this.#renderSockets();
     this.#renderPalette();
     this.#renderArmour();
+    this.#renderSlice();
     this.#renderPick();
     this.#renderKey();
     this.#renderStats();
@@ -931,6 +947,7 @@ export class Designer {
         this.#design = stockFor(f.classKey);
         this.#socket = null;
         this.#note = null;
+        this.#syncDrawSets();
         this.#refresh();
       };
       host.appendChild(b);
@@ -1143,6 +1160,321 @@ export class Designer {
     }
   }
 
+  // ------------------------------------------------------- drawing armour --
+
+  /**
+   * The slice editor: one z plane of the lattice, flat, at tap size.
+   *
+   * Drawing composes with the generated exterior rather than replacing it,
+   * because the useful thing is rarely a hull drawn from nothing: it is the
+   * class hull with a sponson added here and a hangar mouth cut there. Two
+   * lists on the record, `plate` and `cut`, applied after everything else.
+   *
+   * A canvas rather than a grid of elements: 1,024 cells a slice, repainted on
+   * every pointer move, is a thousand nodes to lay out per frame against one
+   * fill loop.
+   */
+  /** Rebuild the fast sets from the record. Called whenever the record is
+   *  replaced wholesale: a class change, a reset, a design loaded. */
+  #syncDrawSets(): void {
+    this.#drawSet = new Set(this.#design.plate ?? []);
+    this.#cutSet = new Set(this.#design.cut ?? []);
+  }
+
+  /**
+   * Is this cell solid, as the ship stands right now?
+   *
+   * The cached raster plus the pencil on top. Re-rasterising to answer would
+   * be four milliseconds a cell and a drag asks per pixel.
+   */
+  #solidAt(n: number, grid: Uint8Array): boolean {
+    if (n < 0 || n >= NX * NY * NZ) return false;
+    if (this.#drawSet.has(n)) return true;
+    if (this.#cutSet.has(n)) return false;
+    return (grid[n] as number) !== Mat.Empty;
+  }
+
+  /** Face neighbours, staying inside the lattice and never wrapping a row. */
+  #neighbours(n: number): number[] {
+    const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+    const out: number[] = [];
+    if (i > 0) out.push(n - 1);
+    if (i < NX - 1) out.push(n + 1);
+    if (j > 0) out.push(n - NX);
+    if (j < NY - 1) out.push(n + NX);
+    if (k > 0) out.push(n - NX * NY);
+    if (k < NZ - 1) out.push(n + NX * NY);
+    return out;
+  }
+
+  #renderSlice(): void {
+    const cv = $<HTMLCanvasElement>('dzSliceCanvas');
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    const { grid, purp } = rasterise(this.#design);
+    const k = this.#sliceAt;
+    const px = cv.width / NX;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+
+    const sw = paintFor(this.#design.faction).swatches;
+    const prof = frameFor(this.#design.classKey).profile;
+    const z0 = Math.round((prof[0]![0] as number));
+    const z1 = Math.round((prof[prof.length - 1]![0] as number));
+    const st = hullAt(prof, k);
+
+    // The hull line for this station, so a player drawing knows where the
+    // class thinks its own skin is.
+    ctx.strokeStyle = '#2b3d5288';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(NX / 2 * px, NY / 2 * px, (st[0] as number) * px, (st[1] as number) * px,
+      0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Onion skin: the slices either side, dimmer the further out, so a run
+    // being drawn can be lined up with what is already there in front of and
+    // behind it. Drawn under the live slice, furthest first.
+    for (let d = this.#onion; d >= 1; d--) {
+      for (const side of [-1, 1]) {
+        const kk = k + side * d;
+        if (kk < 0 || kk >= NZ) continue;
+        ctx.globalAlpha = 0.34 / d;
+        for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+          const n = cellIndex(i, j, kk);
+          const mat = grid[n] as number;
+          if (!mat) continue;
+          ctx.fillStyle = side < 0 ? '#35C7FF' : '#FFD24B';
+          ctx.fillRect(i * px + px * 0.28, (NY - 1 - j) * px + px * 0.28, px * 0.44, px * 0.44);
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+
+    for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const n = cellIndex(i, j, k);
+      const mat = grid[n] as number;
+      if (!mat) continue;
+      const col = mat === Mat.Plate || mat === Mat.Skinned
+        ? armourColour(sw, this.#design.paint, i, j, k, z0, z1,
+          st[0] as number, st[1] as number)
+        : cellColour(mat, purp[n] as number, this.#design.paint);
+      ctx.fillStyle = `#${col.toString(16).padStart(6, '0')}`;
+      // y grows upward on the ship and downward on a canvas.
+      ctx.fillRect(i * px, (NY - 1 - j) * px, px - 0.6, px - 0.6);
+      // What a player may edit is only ever the plate. Everything else is
+      // drawn dimmer, so the difference is visible rather than remembered.
+      if (mat !== Mat.Plate && mat !== Mat.Skinned) {
+        ctx.fillStyle = '#0a0f17aa';
+        ctx.fillRect(i * px, (NY - 1 - j) * px, px - 0.6, px - 0.6);
+      }
+    }
+
+    // What this slice owes to the pencil rather than the sliders.
+    ctx.strokeStyle = '#FFD24B';
+    ctx.lineWidth = 1.2;
+    for (const n of this.#design.plate ?? []) {
+      if (((n / (NX * NY)) | 0) !== k) continue;
+      const i = n % NX, j = ((n / NX) | 0) % NY;
+      ctx.strokeRect(i * px + 0.6, (NY - 1 - j) * px + 0.6, px - 1.8, px - 1.8);
+    }
+    ctx.strokeStyle = '#F03B3B';
+    for (const n of this.#design.cut ?? []) {
+      if (((n / (NX * NY)) | 0) !== k) continue;
+      const i = n % NX, j = ((n / NX) | 0) % NY;
+      const x = i * px, y = (NY - 1 - j) * px;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + 2); ctx.lineTo(x + px - 2, y + px - 2);
+      ctx.moveTo(x + px - 2, y + 2); ctx.lineTo(x + 2, y + px - 2);
+      ctx.stroke();
+    }
+
+    $('dzSliceNum').textContent = String(k);
+    ($('dzSliceAt') as HTMLInputElement).value = String(k);
+    const added = (this.#design.plate ?? []).length, cut = (this.#design.cut ?? []).length;
+    $('dzDrawCount').textContent = this.#drawSaid
+      ? this.#drawSaid
+      : added || cut
+        ? `${added} cell${added === 1 ? '' : 's'} drawn, ${cut} cut, of ${DRAWN_MAX}`
+        : 'Nothing drawn by hand yet. The sliders above built what you see.';
+  }
+
+  /**
+   * Paint one column of cells, `depth` slices deep from the current one.
+   *
+   * Every added cell must touch something: armour, frame or a fitted part, on
+   * a face. Plate hanging in space beside a hull is the same defect the pylons
+   * were written to end, and a pencil that can make it is a pencil that will.
+   * A stroke still works outward from the hull because each cell it lays is
+   * itself something for the next one to touch.
+   */
+  #paintCell(i: number, j: number): boolean {
+    if (i < 0 || j < 0 || i >= NX || j >= NY) return false;
+    const { grid } = rasterise(this.#design);
+    const plate = (this.#design.plate ??= []);
+    const cut = (this.#design.cut ??= []);
+    const drop = (list: number[], set: Set<number>, v: number) => {
+      if (!set.has(v)) return false;
+      const at = list.indexOf(v);
+      if (at >= 0) list.splice(at, 1);
+      set.delete(v);
+      return true;
+    };
+    let changed = false;
+    let blocked = false;
+
+    for (let d = 0; d < this.#depth; d++) {
+      const k = this.#sliceAt + d;
+      if (k >= NZ) break;
+      const n = cellIndex(i, j, k);
+      const mat = grid[n] as number;
+
+      if (this.#brush === 'add') {
+        // Undoing a cut is the same gesture as adding, which is what anyone
+        // expects from a pencil that has just rubbed something out.
+        if (drop(cut, this.#cutSet, n)) { changed = true; continue; }
+        if (this.#solidAt(n, grid)) continue;        // something is already there
+        if (plate.length >= DRAWN_MAX) break;
+        if (!this.#neighbours(n).some(m => this.#solidAt(m, grid))) { blocked = true; continue; }
+        plate.push(n);
+        this.#drawSet.add(n);
+        changed = true;
+        continue;
+      }
+
+      if (drop(plate, this.#drawSet, n)) { changed = true; continue; }
+      // Only plate can be cut. The frame and the parts are not armour.
+      if (mat !== Mat.Plate && mat !== Mat.Skinned) continue;
+      if (this.#cutSet.has(n) || cut.length >= DRAWN_MAX) continue;
+      cut.push(n);
+      this.#cutSet.add(n);
+      changed = true;
+    }
+
+    if (changed && this.#brush === 'cut') this.#dropOrphans(grid);
+    this.#drawSaid = blocked && !changed
+      ? 'that cell touches nothing: armour has to reach the ship'
+      : '';
+    return changed;
+  }
+
+  /**
+   * A cut can strand what was drawn on top of it, so the invariant is kept
+   * rather than merely checked at the moment of drawing: anything the pencil
+   * added that no longer reaches the ship comes off with it.
+   */
+  #dropOrphans(grid: Uint8Array): void {
+    const drawn = this.#design.plate ?? [];
+    if (!drawn.length) return;
+    // Anchored: touching something that is NOT itself hand drawn.
+    const anchored = new Set<number>();
+    const queue: number[] = [];
+    for (const n of drawn) {
+      if (this.#neighbours(n).some(m => !this.#drawSet.has(m) && this.#solidAt(m, grid))) {
+        anchored.add(n);
+        queue.push(n);
+      }
+    }
+    for (let head = 0; head < queue.length; head++) {
+      for (const m of this.#neighbours(queue[head] as number)) {
+        if (this.#drawSet.has(m) && !anchored.has(m)) { anchored.add(m); queue.push(m); }
+      }
+    }
+    if (anchored.size === drawn.length) return;
+    this.#design.plate = drawn.filter(n => anchored.has(n));
+    this.#drawSet = new Set(this.#design.plate);
+  }
+
+  #bindSlice(): void {
+    const cv = $<HTMLCanvasElement>('dzSliceCanvas');
+    let painting = false, last = -1;
+    const cellFrom = (e: PointerEvent): readonly [number, number] => {
+      const r = cv.getBoundingClientRect();
+      const i = Math.floor(((e.clientX - r.left) / r.width) * NX);
+      const j = NY - 1 - Math.floor(((e.clientY - r.top) / r.height) * NY);
+      return [i, j];
+    };
+    const at = (e: PointerEvent) => {
+      const [i, j] = cellFrom(e);
+      const key = i * NY + j;
+      if (key === last) return;
+      last = key;
+      if (this.#paintCell(i, j)) this.#drawChanged();
+    };
+    cv.addEventListener('pointerdown', e => {
+      cv.setPointerCapture(e.pointerId);
+      painting = true; last = -1;
+      at(e);
+      e.preventDefault();
+    });
+    cv.addEventListener('pointermove', e => { if (painting) at(e); });
+    const stop = () => { painting = false; last = -1; };
+    cv.addEventListener('pointerup', stop);
+    cv.addEventListener('pointercancel', stop);
+
+    const go = (k: number) => {
+      this.#sliceAt = Math.max(0, Math.min(NZ - 1, k));
+      this.#renderSlice();
+    };
+    $('dzSliceDown').onclick = () => { go(this.#sliceAt - 1); };
+    $('dzSliceUp').onclick = () => { go(this.#sliceAt + 1); };
+    ($('dzSliceAt') as HTMLInputElement).oninput = e => {
+      go(Number((e.target as HTMLInputElement).value));
+    };
+    ($('dzOnion') as HTMLInputElement).oninput = e => {
+      this.#onion = Number((e.target as HTMLInputElement).value);
+      $('dzOnionN').textContent = String(this.#onion);
+      this.#renderSlice();
+    };
+    ($('dzDepth') as HTMLInputElement).oninput = e => {
+      this.#depth = Number((e.target as HTMLInputElement).value);
+      $('dzDepthN').textContent = String(this.#depth);
+    };
+    $('dzBrushAdd').onclick = () => { this.#brush = 'add'; this.#syncBrush(); };
+    $('dzBrushCut').onclick = () => { this.#brush = 'cut'; this.#syncBrush(); };
+    $('dzSliceClear').onclick = () => {
+      const k = this.#sliceAt;
+      const off = (n: number) => ((n / (NX * NY)) | 0) !== k;
+      this.#design.plate = (this.#design.plate ?? []).filter(off);
+      this.#design.cut = (this.#design.cut ?? []).filter(off);
+      this.#syncDrawSets();
+      this.#dropOrphans(rasterise(this.#design).grid);
+      this.#drawChanged();
+    };
+    $('dzDrawClear').onclick = () => {
+      this.#design.plate = [];
+      this.#design.cut = [];
+      this.#syncDrawSets();
+      this.#drawChanged();
+    };
+    this.#syncBrush();
+  }
+
+  #syncBrush(): void {
+    $('dzBrushAdd').className = this.#brush === 'add' ? 'on' : '';
+    $('dzBrushCut').className = this.#brush === 'cut' ? 'on' : '';
+  }
+
+  /**
+   * A change to the drawing repaints the slice at once and the hull on the
+   * next frame.
+   *
+   * Rasterising the whole lattice takes about four milliseconds, and a drag
+   * fires per pixel. Doing it inline made the pencil stutter under its own
+   * feedback, the same way the envelope slider did before it was deferred.
+   */
+  #drawChanged(): void {
+    this.#renderSlice();
+    if (this.#pending) return;
+    this.#pending = requestAnimationFrame(() => {
+      this.#pending = 0;
+      this.#derived = derive(this.#design);
+      this.#rebuild();
+      this.#renderHeader();
+      this.#renderStats();
+      this.#renderSlice();
+    });
+  }
+
   /** The colour key. Eight jobs, eight hues, the same on every faction. */
   #renderKey(): void {
     const host = $('dzKey');
@@ -1266,6 +1598,7 @@ export class Designer {
       this.#design = stockFor(this.#design.classKey);
       this.#socket = null;
       this.#note = null;
+      this.#syncDrawSets();
       this.#refresh();
     };
     // Three states, not two. Ghost is the one a player actually wants while
@@ -1291,6 +1624,9 @@ export class Designer {
     $('dzStrip').onclick = () => {
       this.#design.parts = [];
       for (const k of SECTIONS) this.#design.sections[k] = 0;
+      this.#design.plate = [];
+      this.#design.cut = [];
+      this.#syncDrawSets();
       this.#refresh();
     };
     // Take the plate off and leave the frame and its parts standing. The mode
@@ -1310,6 +1646,7 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
+    this.#bindSlice();
     this.#syncSaveButton();
     // Collapse the sheet so the model has the screen. A phone control: at desk
     // widths the panel is beside the view and takes none of it.
@@ -1414,6 +1751,13 @@ export class Designer {
       showPlate: this.#plate === 'on',
       armour: this.#design.armour,
       slot: this.#slot,
+      slice: this.#sliceAt,
+      brush: this.#brush,
+      drawn: (this.#design.plate ?? []).length,
+      cutCells: (this.#design.cut ?? []).length,
+      onion: this.#onion,
+      depth: this.#depth,
+      drawSaid: this.#drawSaid,
       livery: this.#liveryColours,
       enclosedOutside: rasterise(this.#design).enclosedOutside,
       flushProud: rasterise(this.#design).flushProud,

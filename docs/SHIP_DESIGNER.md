@@ -339,6 +339,22 @@ Top speed, marines and boarding reach are exact on every class. **Two residuals 
 - **Benefactor.** Slowest-turning frigate, and its drive package is the interesting part: one DRV-H does most of the pushing but caps top speed at 7.0, so the small DRV-N beside it exists purely to raise the ceiling to 8.0. Exactly the thing a player should discover by swapping one part. Two cannon at `pen 2` make it the belt-breaker.
 - **Freighter.** The most constrained design and the one that proves the model: 608 hull on 1.68 mass is the same ~360-per-mass the Terran pays, and two holds cost 0.553: 33% of everything. It is a hold and a skin. It also surfaces a live defect: at `boarding_range: 10` against a Terran (r 3.5) plus its own 4.5, contact is at 8.0 u, so its legal boarding window is **2.0 u wide today**, before any larger hull exists.
 
+## Drawing armour: the slice editor
+
+The slice drawer was one of three shipyard explorations (`mockups/ship-designer-slices/`) and it stayed a mockup while the built tool had nine section sliders and nothing else. There was no way to draw a hull by hand at all. There is now.
+
+**It composes rather than replaces.** Two lists on the record, `plate` and `cut`, as cell indices, applied after everything else the raster does. The useful thing is rarely a hull drawn from nothing: it is the class hull with a sponson added here and a hangar mouth cut there. Cut is applied before fill so a player who carves a mouth and lines it in one pass gets what they drew rather than what the order happened to be.
+
+**Only armour is drawable.** Neither list can touch the frame or a fitted part: those are the class and the fitting, both placed rather than drawn. They are shown on the slice, dimmed, so you can work around them.
+
+**Every drawn cell must reach the ship.** A cell is refused unless a face neighbour is already solid: armour, frame, part, or another drawn cell. A run still works outward from the hull, because each cell it lays is itself something for the next one to touch. And the invariant is kept rather than checked once: cutting can strand what was drawn on top of it, so after every cut a flood fill from the anchored cells drops whatever no longer reaches. Plate hanging in space beside a hull is the defect the pylons were written to end, and a pencil that can make it is a pencil that will.
+
+**Onion skin and brush depth.** The slices either side are ghosted, cyan aft and amber forward, dimmer the further out, up to four; a stroke writes up to eight slices deep from the one you are standing in, which is how a run becomes a rib rather than a line.
+
+**A canvas, not a grid of elements.** 1,024 cells a slice repainted on every pointer move is a thousand nodes to lay out per frame against one fill loop. The hull is rasterised on the next animation frame rather than inline, for the same reason the envelope probe was deferred: about four milliseconds a rasterisation against a drag that fires per pixel.
+
+**What the harness checks is that it is reversible.** Draw a run: the plate count and the mass go up and the grid digest changes. Cut: cells come out of the generated skin. Clear all: every one of those numbers returns to exactly where it started. A tool that can add but not undo is a tool nobody dares use. It also checks that a cell in the far corner is refused with a reason, that a cell against the hull is taken, and that a depth 6 stroke lays six slices in one tap.
+
 ## The ship library
 
 **A design is storage plus provenance, and nothing else.** `designs` is a table of JSON records: id, owner, name, class, the client's own mass/hull/legal at save time, the body, and what it was cloned from. The server never interprets a body, and it cannot: what a design MEANS is the core's business and the core does not run on the server (ADR-6). So validation stops at "an object, with a `classKey`, under 64 KB", and the figures on a card are labelled as the client's own rather than presented as authority. `derive()` reading the body is the authority, on whichever client opens it.

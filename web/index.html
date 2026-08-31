@@ -554,6 +554,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+.dzslice { margin-top:2px; }
+.dzslice .row { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+.dzslice .row .gap { flex:1; }
+.dzslice .row .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:600;
+  font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.dzslice input[type=range] { flex:1; min-width:0; accent-color:var(--cyan); }
+.dzslice button { padding:6px 10px; font-size:11px; }
+.dzslice button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+.dzslice b { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+  color:var(--cyan); min-width:22px; text-align:right; }
+#dzSliceCanvas { display:block; width:100%; height:auto; aspect-ratio:1;
+  border:1px solid var(--line); border-radius:5px; background:#070a0f;
+  touch-action:none; margin-bottom:8px; image-rendering:pixelated; }
+#dzDrawCount { font-size:10px; color:var(--muted); }
+
 .dzsave { display:flex; gap:6px; padding:9px 12px 0; }
 .dzsave.hidden { display:none; }
 .dzsave input { flex:1; min-width:0; padding:8px 10px; font-size:12px;
@@ -808,6 +823,37 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       <div id="dzPaint" class="dzpaint"></div>
       <div class="dzgrp">Colour key</div>
       <div id="dzKey" class="dzkeys"></div>
+
+      <div class="dzgrp">Draw armour</div>
+      <p class="dznote">One slice at a time, on top of whatever the sliders
+      built. Drag to paint a run. You are drawing plate and nothing else: the
+      frame and the fitted parts are shown so you can work around them, and
+      neither can be touched.</p>
+      <div class="dzslice">
+        <div class="row">
+          <button id="dzSliceDown">&lt;</button>
+          <input id="dzSliceAt" type="range" min="0" max="63" step="1" value="32">
+          <button id="dzSliceUp">&gt;</button>
+          <b id="dzSliceNum">32</b>
+        </div>
+        <canvas id="dzSliceCanvas" width="320" height="320"></canvas>
+        <div class="row">
+          <button id="dzBrushAdd" class="on">Add</button>
+          <button id="dzBrushCut">Cut</button>
+          <span class="gap"></span>
+          <button id="dzSliceClear">Clear slice</button>
+          <button id="dzDrawClear">Clear all</button>
+        </div>
+        <div class="row">
+          <span class="k">Onion</span>
+          <input id="dzOnion" type="range" min="0" max="4" step="1" value="1">
+          <b id="dzOnionN">1</b>
+          <span class="k">Depth</span>
+          <input id="dzDepth" type="range" min="1" max="8" step="1" value="1">
+          <b id="dzDepthN">1</b>
+        </div>
+        <div class="s" id="dzDrawCount"></div>
+      </div>
     </div>
 
     <div id="dzPaneStats" class="dzpane hidden">

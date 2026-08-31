@@ -838,6 +838,17 @@ export interface Design {
   sections: Sections;
   /** Which exterior the plate sliders are building. */
   armour: ArmourMode;
+  /**
+   * Hand drawn armour, as cell indices, ON TOP of whatever the mode built.
+   *
+   * Two lists rather than one replacing the shell, because the useful thing a
+   * player wants is rarely a hull drawn from nothing: it is the class hull
+   * with a sponson added here and a hangar mouth cut there. `plate` fills
+   * empty cells, `cut` removes plate the generator laid. Neither can touch the
+   * frame or a part: those are not armour and are not editable.
+   */
+  plate?: number[];
+  cut?: number[];
   /** Which faction's swatches the paint bucket offers. */
   faction: string;
   /** Armour tint. Cosmetic only: never hashed, never sent to the core. */
@@ -956,10 +967,30 @@ export interface Raster {
 
 const idx3 = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
+/** A cell's index, and back again. The wire format for hand drawn armour. */
+export const cellIndex = (i: number, j: number, k: number): number => idx3(i, j, k);
+export const cellAt = (n: number): readonly [number, number, number] =>
+  [n % NX, ((n / NX) | 0) % NY, (n / (NX * NY)) | 0];
+
+/** How many cells a player may draw. A frigate's whole skin is about 5,000,
+ *  so this is room to work in, not a target, and it is what keeps a design
+ *  record inside the library's 64 KB. */
+export const DRAWN_MAX = 20000;
+
 const rasterSig = (d: Design): string =>
   d.classKey + '|' + d.armour + '|'
   + d.parts.map(p => p.socket + ':' + p.module + ':' + (p.rot ?? 0)).sort().join(',') + '|'
-  + SECTIONS.map(k => d.sections[k]).join(',');
+  + SECTIONS.map(k => d.sections[k]).join(',') + '|'
+  // A length and a sum: cheap, and it changes whenever a cell does. The cache
+  // is a frame's worth of work, not a correctness boundary.
+  + drawSig(d.plate) + '/' + drawSig(d.cut);
+
+const drawSig = (list: readonly number[] | undefined): string => {
+  if (!list || !list.length) return '0';
+  let sum = 0;
+  for (const n of list) sum = (sum + n * 2654435761) >>> 0;
+  return `${list.length}.${sum}`;
+};
 
 /** A cache of one. `derive()` and the renderer ask for the same design back to
  *  back, and rasterising it twice per keystroke is the whole cost. */
@@ -1243,6 +1274,25 @@ export function rasterise(d: Design): Raster {
     }
   }
 
+  // --- hand drawn armour, last, over the top of everything ----------------
+  // Cut first, then fill, so a player who cuts a mouth and lines it in one
+  // pass gets what they drew rather than what the order happened to be.
+  //
+  // Neither list can touch the frame or a part. Armour is the only thing on
+  // the ship a player edits; the rest is the class and the fitting, and both
+  // of those are placed, not drawn.
+  for (const n of d.cut ?? []) {
+    if (n < 0 || n >= CELLS) continue;
+    const at = grid[n] as number;
+    if (at === Mat.Plate) { grid[n] = Mat.Empty; purp[n] = 0; }
+    else if (at === Mat.Skinned) grid[n] = Mat.Frame;
+  }
+  for (const n of d.plate ?? []) {
+    if (n < 0 || n >= CELLS || grid[n]) continue;
+    grid[n] = Mat.Plate;
+    purp[n] = STRUCT;
+  }
+
   // --- what came out ------------------------------------------------------
   let plateCells = 0;
   let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
@@ -1493,7 +1543,8 @@ export const STOCK: readonly Design[] = [
 export const stockFor = (classKey: string): Design => {
   const s = STOCK.find(d => d.classKey === classKey) ?? (STOCK[0] as Design);
   return { classKey: s.classKey, parts: s.parts.map(p => ({ ...p })),
-    sections: { ...s.sections }, armour: s.armour, faction: s.faction, paint: s.paint };
+    sections: { ...s.sections }, armour: s.armour, faction: s.faction, paint: s.paint,
+    plate: [], cut: [] };
 };
 
 // ============================================================== VOXELS ==
