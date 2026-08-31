@@ -14,13 +14,14 @@
 
 import * as THREE from 'three';
 import { bindOrbit, frameBox } from './orbitcam.js';
+import { AT_REST, blockedPct, blockedShell, easeAngle, turretGoal } from './turret.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
-  arcMasks, arcBlocked, rasterSig, ARC_YAW, ARC_PITCH,
+  arcMasks, rasterSig,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
@@ -169,6 +170,9 @@ export class Designer {
   #centre = new THREE.Vector3();
   /** Half extents of the drawn hull, for framing it rather than its sphere. */
   #half = new THREE.Vector3(1, 1, 1);
+  /** The HULL's own extents, without the arcs the frame may also have to
+   *  hold. It is what the camera is not allowed to zoom inside of. */
+  #solid = new THREE.Vector3(1, 1, 1);
   #hist: Record<string, number> = {};
   #geoms: THREE.BufferGeometry[] = [];
   #mats: THREE.Material[] = [];
@@ -268,7 +272,7 @@ export class Designer {
     // Framed on the hull's own extent, not on an empty berth, so a small ship
     // does not sit in the corner of a void. The fit is `orbitcam`'s, shared
     // with the schematic modal.
-    frameBox(this.#camera, this.#cam, this.#centre, this.#half);
+    frameBox(this.#camera, this.#cam, this.#centre, this.#half, this.#solid);
     this.#renderer.render(this.#scene, this.#camera);
   };
 
@@ -431,6 +435,7 @@ export class Designer {
         ((loZ + hiZ + 1) / 2 - NZ / 2) * cell);
       this.#half.set((hiX - loX + 1) * cell / 2, (hiY - loY + 1) * cell / 2,
         (hiZ - loZ + 1) * cell / 2);
+      this.#solid.copy(this.#half);
       // Arcs are part of the picture when they are on, so they are part of
       // what has to fit in the frame.
       if (this.#showArcs || this.#showTarget) {
@@ -693,43 +698,12 @@ export class Designer {
    * Attached to the hull rather than to the barrel, because that is where the
    * blockage is: the shadow does not swing when the turret does.
    */
-  /** How much of a mount's sphere its own hull takes, as a percentage. Every
-   *  cell counts once, which over-weights the poles as the mask itself does:
-   *  the number is here to compare turrets, not to integrate a solid angle. */
-  #blockedPct(mask: Uint32Array): number {
-    let n = 0;
-    for (const w of mask) {
-      let v = w >>> 0;
-      while (v) { n += v & 1; v >>>= 1; }
-    }
-    return (n / (ARC_YAW * ARC_PITCH)) * 100;
-  }
-
   #buildBlocked(n: number, full: number): void {
     const mask = this.#masks[n];
     const r = this.#rigs[n];
     if (!mask || !r) return;
-    const reach = full * 0.92;
-    const at = (yi: number, pi: number): readonly [number, number, number] => {
-      const yaw = (yi / ARC_YAW) * Math.PI * 2 - Math.PI;
-      const pitch = (pi / ARC_PITCH) * Math.PI - Math.PI / 2;
-      const cp = Math.cos(pitch);
-      return [Math.sin(yaw) * cp * reach, Math.sin(pitch) * reach,
-        Math.cos(yaw) * cp * reach];
-    };
-    const pts: number[] = [];
-    let blocked = 0;
-    for (let pi = 0; pi < ARC_PITCH; pi++) {
-      for (let yi = 0; yi < ARC_YAW; yi++) {
-        const bit = pi * ARC_YAW + yi;
-        if (!(((mask[bit >>> 5] ?? 0) >>> (bit & 31)) & 1)) continue;
-        blocked++;
-        const a = at(yi, pi), b = at(yi + 1, pi);
-        const c = at(yi + 1, pi + 1), d = at(yi, pi + 1);
-        pts.push(...a, ...b, ...c, ...a, ...c, ...d);
-      }
-    }
-    if (!blocked) return;
+    const pts = blockedShell(mask, full * 0.92);
+    if (!pts.length) return;
     const geo = this.#geo(new THREE.BufferGeometry());
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     const mesh = new THREE.Mesh(geo, this.#mat(new THREE.MeshBasicMaterial({
@@ -868,50 +842,23 @@ export class Designer {
       const mk = this.#arcs.getObjectByName('target');
       if (mk) mk.position.copy(this.#target);
     }
-    // Easing under a slew rate. The ease alone is smooth but its first step is
-    // proportional to the gap, so a turret picking up a target 105 degrees
-    // away still moved 54 of them in a tenth of a second, which reads as a
-    // snap however continuous the maths is. A mount has a top speed.
-    const SLEW = 110 * Math.PI / 180;              // radians a second
-    const k = 1 - Math.exp(-5.5 * dt);
-    const cap = SLEW * dt;
-    const step = (gap: number) => Math.max(-cap, Math.min(cap, gap * k));
-    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
-
     for (const r of this.#rigs) {
-      // The default position is straight ahead ON THE MOUNT: the rest facing
-      // the player set in 90 degree steps is already baked into the cells, so
-      // zero in the group's own frame IS that direction.
-      let goalYaw = 0, goalPitch = 0;
-      r.bears = false;
-
-      if (this.#showTarget) {
-        const d = this.#target.clone().sub(r.pivot);
-        // The core's own angles: yaw round from the nose, pitch as a true
-        // elevation off the horizontal plane (math.rs arc_test_3d). Roll does
-        // not enter it, because a mount has two axes.
-        const h = Math.atan2(d.x, d.z) * 180 / Math.PI;
-        const v = Math.atan2(d.y, Math.hypot(d.x, d.z)) * 180 / Math.PI;
-        const inside = (x: number, a: readonly [number, number]) => allRound(a)
-          || (x >= Math.min(a[0] as number, a[1] as number)
-            && x <= Math.max(a[0] as number, a[1] as number));
-        // The authored arc and the scanned one, the same pair the resolver
-        // reads. A turret that swung happily onto a target through its own
-        // engine block would be the designer promising a shot the match then
-        // refuses.
-        const m = this.#masks[this.#rigs.indexOf(r)];
-        r.bears = inside(h, r.gun.arcH) && inside(v, r.gun.arcV)
-          && !(m && arcBlocked(m, d.x, d.y, d.z));
-        // A mount that cannot bear returns to rest rather than straining at
-        // its stop, which is also what makes "bearing" readable at a glance.
-        if (r.bears) {
-          goalYaw = h * Math.PI / 180 - r.rest;
-          goalPitch = -v * Math.PI / 180;
-        }
-      }
-
-      r.yaw += step(wrap(goalYaw - r.yaw));
-      r.pitch += step(goalPitch - r.pitch);
+      // Where it wants to point, and how fast it may get there: both from
+      // `turret.ts`, which the map reads too. A second copy here would drift
+      // the first time either one's slew was tuned, and a player would watch a
+      // turret in the editor point somewhere the same turret on the map does
+      // not.
+      //
+      // At rest is straight ahead ON THE MOUNT: the facing set in 90 degree
+      // steps is already baked into the cells, so zero in the group's own
+      // frame IS that direction.
+      const n = this.#rigs.indexOf(r);
+      const goal = this.#showTarget
+        ? turretGoal(this.#target.clone().sub(r.pivot), r.rest, r.gun, this.#masks[n])
+        : AT_REST;
+      r.bears = goal.bears;
+      r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
+      r.pitch = easeAngle(r.pitch, goal.pitch, dt);
       r.group.rotation.y = r.yaw;
       r.group.rotation.x = r.pitch;
 
@@ -1767,7 +1714,7 @@ export class Designer {
       this.#rigs.forEach((r, n) => {
         const m = this.#masks[n];
         h += row(r.label, !m || stale ? 'scanning\u2026'
-          : `${(this.#blockedPct(m)).toFixed(0)}% of the sphere`);
+          : `${(blockedPct(m)).toFixed(0)}% of the sphere`);
       });
       h += '</div>';
       h += '<p class="dznote">Every weapon here traverses freely, so the only thing '
@@ -1979,7 +1926,7 @@ export class Designer {
         pending: this.#maskSig !== rasterSig(this.#design),
         drawing: this.#drawing,
         settle: ARC_SETTLE,
-        blocked: this.#masks.map(m => +this.#blockedPct(m).toFixed(2)),
+        blocked: this.#masks.map(m => +blockedPct(m).toFixed(2)),
         drawn: this.#arcs.children.filter(c => c.name.startsWith('blocked')).length,
         scans: this.#maskScans,
       },
@@ -1998,6 +1945,14 @@ export class Designer {
         })()
         : null,
       brush: this.#brush,
+      /** Where the camera is standing, so the harness can turn the model and
+       *  check that the distance does NOT move with it. */
+      cam: {
+        yaw: +this.#cam.yaw.toFixed(3),
+        pitch: +this.#cam.pitch.toFixed(3),
+        zoom: +this.#cam.zoom.toFixed(3),
+        dist: +this.#camera.position.distanceTo(this.#centre).toFixed(3),
+      },
       mirrorX: this.#mirrorX,
       mirrorY: this.#mirrorY,
       drawn: (this.#design.plate ?? []).length,

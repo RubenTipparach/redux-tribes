@@ -33,6 +33,17 @@ const body = (vel = { x: 0, y: 0, z: 0 }) => ({
   pos: { x: 0, y: 0, z: 0 }, vel, quat: { x: 0, y: 0, z: 0, w: 1 },
 });
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+/** A world offset in the ship's own frame: q^-1 * v * q, written out. */
+const local = (q, v) => {
+  const u = { x: -q.x, y: -q.y, z: -q.z };
+  const uv = { x: u.y * v.z - u.z * v.y, y: u.z * v.x - u.x * v.z, z: u.x * v.y - u.y * v.x };
+  const uuv = { x: u.y * uv.z - u.z * uv.y, y: u.z * uv.x - u.x * uv.z, z: u.x * uv.y - u.y * uv.x };
+  return {
+    x: v.x + 2 * (uv.x * q.w + uuv.x),
+    y: v.y + 2 * (uv.y * q.w + uuv.y),
+    z: v.z + 2 * (uv.z * q.w + uuv.z),
+  };
+};
 const reach = (dir, mode = Mode.MoveAndTurn, face) => {
   const l = Math.hypot(dir.x, dir.y, dir.z);
   const t = { x: dir.x / l * 400, y: dir.y / l * 400, z: dir.z / l * 400 };
@@ -157,10 +168,23 @@ test('a match starts with the scenario it was asked for', () => {
   for (const v of subs) {
     assert.ok(v.kind >= 0 && v.kind <= 4, `kind ${v.kind}`);
     assert.ok(v.hp > 0 && v.hp === v.hpMax && !v.dead);
-    assert.ok(v.radius > 0 && v.radius < 4, `radius ${v.radius}`);
+    // A BOX, and one that fits inside the hull it belongs to. Spheres stood
+    // proud of the plating on all six sides and overlapped into one lump.
+    //
+    // The furthest CORNER, in the ship's own frame, which is where the box
+    // actually reaches. Centre distance plus the box diagonal is a bound on
+    // that and a loose one: it fails a drive bay that is entirely inside the
+    // hull, because the diagonal points somewhere the corner does not.
+    const h = Math.hypot(v.half.x, v.half.y, v.half.z);
+    assert.ok(h > 0 && h < 3, `box diagonal ${h}`);
     const ship = ships.find(x => x.id === v.ship);
-    const d = Math.hypot(v.pos.x - ship.pos.x, v.pos.y - ship.pos.y, v.pos.z - ship.pos.z);
-    assert.ok(d < ship.radius + v.radius, `volume ${v.index} sits ${d} from its hull`);
+    const off = local(ship.quat, {
+      x: v.pos.x - ship.pos.x, y: v.pos.y - ship.pos.y, z: v.pos.z - ship.pos.z,
+    });
+    const corner = Math.hypot(
+      Math.abs(off.x) + v.half.x, Math.abs(off.y) + v.half.y, Math.abs(off.z) + v.half.z);
+    assert.ok(corner <= ship.radius,
+      `volume ${v.index} reaches ${corner} on a hull of ${ship.radius}`);
   }
   // Every frigate carries a bay, a set of jets and a pile, because losing one
   // has to be a thing that can happen to any of them.
@@ -292,6 +316,12 @@ test('a scanned firing arc crosses the boundary bit for bit', () => {
     'the half of the word the target sits in blocks the shot');
   assert.equal(bearings(half(word, !hi))[3], true,
     'and the other half of the same word does not');
+
+  // The hull registry is one static per side inside the module, so a design
+  // left standing here is a design the NEXT test fields. It cost an afternoon
+  // once: a test about where a shot lands was quietly firing a one gun Rogue
+  // that this test had fitted.
+  live.clearHulls();
 });
 
 test('a shot lands on the volume it was aimed at, not the hull in front of it', () => {

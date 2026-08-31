@@ -193,7 +193,14 @@ pub struct SubDef {
     /// Share the subsystem absorbs; the rest bleeds through to the hull.
     pub block_pct: f32,
     pub offset: V3,
-    pub radius: f32,
+    /// Half extents of the BOX this volume occupies, in the ship's own frame.
+    ///
+    /// A box rather than a sphere, because a hull is a box and its parts are
+    /// boxes: a sphere big enough to contain a drive bay sticks out through
+    /// the plating on all six sides, and six of them on a frigate overlapped
+    /// into one ball that swallowed the whole ship. What the player aims at
+    /// should be the shape of the thing they are aiming at.
+    pub half: V3,
 }
 
 pub struct MountDef {
@@ -246,48 +253,61 @@ pub struct ShipClass {
 /// worth doing.
 const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
     [
+        // The belts are SLABS around the WAIST, meeting over the keel line
+        // and reaching neither the bow nor the belly. What they cover is the
+        // reactor: a shot from ahead or abeam crosses one, and a shot from
+        // below passes under them, because their floor at y -0.30 sits above
+        // the reactor's ceiling at +0.40.
+        //
+        // They stop at z +0.90 on purpose, short of the bay and the jets. A
+        // belt that ran the length of the hull covered both, and engagements
+        // here are close to coplanar: shots arrive near horizontal, so a
+        // volume behind a full length belt is a volume nothing can ever reach
+        // and aiming at it is a button that does nothing.
         SubDef {
             id: "armor_l",
             kind: SubKind::Armor,
             hp: 100.0,
             block_pct: armor_block,
-            offset: V3::new(-1.6, 0.0, 0.5),
-            radius: 1.6,
+            offset: V3::new(-0.5, 0.15, -0.3),
+            half: V3::new(0.85, 0.45, 1.2),
         },
         SubDef {
             id: "armor_r",
             kind: SubKind::Armor,
             hp: 100.0,
             block_pct: armor_block,
-            offset: V3::new(1.6, 0.0, 0.5),
-            radius: 1.6,
+            offset: V3::new(0.5, 0.15, -0.3),
+            half: V3::new(0.85, 0.45, 1.2),
         },
+        // Right aft, and aft of the belts, so a stern chase meets the drives.
         SubDef {
             id: "engines",
             kind: SubKind::Thruster,
             hp: 100.0,
             block_pct: 60.0,
-            offset: V3::new(0.0, 0.0, -2.6),
-            radius: 1.4,
+            offset: V3::new(0.0, 0.0, -2.4),
+            half: V3::new(0.65, 0.45, 0.65),
         },
-        // Forward and ventral, where the attitude quads are drawn on the hull.
-        // Thin, because a jet is a nozzle and a tank rather than a citadel.
+        // Forward and ventral, where the attitude quads are drawn on the hull,
+        // and below the belts so a shot from underneath reaches them.
         SubDef {
             id: "rcs",
             kind: SubKind::Rcs,
             hp: 60.0,
             block_pct: 40.0,
-            offset: V3::new(0.0, -1.0, 1.5),
-            radius: 1.0,
+            offset: V3::new(0.0, -0.55, 1.5),
+            half: V3::new(0.6, 0.25, 0.7),
         },
-        // The battery, dorsal and forward, where the turrets are.
+        // The battery, dorsal and forward, where the turrets are, and above
+        // the belts for the same reason.
         SubDef {
             id: "weapons",
             kind: SubKind::Weapon,
             hp: 80.0,
             block_pct: 50.0,
-            offset: V3::new(0.0, 1.0, 1.2),
-            radius: 1.1,
+            offset: V3::new(0.0, 0.5, 1.1),
+            half: V3::new(0.55, 0.3, 0.8),
         },
         SubDef {
             id: "reactor",
@@ -295,7 +315,7 @@ const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
             hp: 90.0,
             block_pct: 45.0,
             offset: V3::new(0.0, 0.0, -0.6),
-            radius: 1.0,
+            half: V3::new(0.45, 0.4, 0.6),
         },
     ]
 }
@@ -312,8 +332,8 @@ static FREIGHTER_SUBS: [SubDef; 3] = [
         kind: SubKind::Thruster,
         hp: 100.0,
         block_pct: 60.0,
-        offset: V3::new(0.0, 0.0, -3.4),
-        radius: 1.6,
+        offset: V3::new(0.0, 0.0, -3.3),
+        half: V3::new(0.9, 0.7, 0.8),
     },
     SubDef {
         id: "rcs",
@@ -321,7 +341,7 @@ static FREIGHTER_SUBS: [SubDef; 3] = [
         hp: 60.0,
         block_pct: 40.0,
         offset: V3::new(0.0, -1.2, 2.0),
-        radius: 1.2,
+        half: V3::new(0.9, 0.4, 1.1),
     },
     SubDef {
         id: "reactor",
@@ -329,7 +349,7 @@ static FREIGHTER_SUBS: [SubDef; 3] = [
         hp: 120.0,
         block_pct: 45.0,
         offset: V3::new(0.0, 0.0, -1.0),
-        radius: 1.2,
+        half: V3::new(0.8, 0.7, 1.0),
     },
 ];
 

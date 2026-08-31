@@ -61,7 +61,7 @@ static mut SCRATCH: [f32; SCRATCH_LEN] = [0.0; SCRATCH_LEN];
 
 const OUT: usize = 64;
 pub const SHIP_STRIDE: usize = 34;
-pub const SUB_STRIDE: usize = 11;
+pub const SUB_STRIDE: usize = 13;
 pub const EVENT_STRIDE: usize = 14;
 pub const POSE_STRIDE: usize = 9;
 pub const PROJ_STRIDE: usize = 5;
@@ -1236,8 +1236,13 @@ pub extern "C" fn ft_read_subs() -> u32 {
             s[b + 6] = at.x;
             s[b + 7] = at.y;
             s[b + 8] = at.z;
-            s[b + 9] = def.radius;
-            s[b + 10] = def.block_pct;
+            // Half extents rather than a radius: the volume is a BOX in the
+            // ship's own frame, so the client orients it with the same
+            // quaternion it already draws the hull with.
+            s[b + 9] = def.half.x;
+            s[b + 10] = def.half.y;
+            s[b + 11] = def.half.z;
+            s[b + 12] = def.block_pct;
             n += 1;
         }
     }

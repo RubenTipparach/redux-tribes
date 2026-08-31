@@ -110,7 +110,7 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 76, the Rust core (tests/, not the lib target)
+cd engine/sim_core && cargo test            # 81, the Rust core (tests/, not the lib target)
 npm --prefix web test                       # 45, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
@@ -355,8 +355,8 @@ Rules that came out of actually measuring this repo:
 
 Current figures, worth not regressing: a turn resolved in 452 microseconds,
 envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 152822
-bytes locally (58265 gzipped) after the damage model, the design derivation and
-the turret arc scan;
+bytes locally after the damage model, the design derivation and the turret arc
+scan; 153261 once the hit volumes became boxes;
 quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
@@ -392,6 +392,33 @@ drift is hashed from the event rather than rolled. It is a pure function of
 (turn, tick): scrubbing back puts cells on and takes chunks out of the air, and
 a scar from turn three is still there in turn four.
 
+**The turrets turn, and one module says where.** A mount on the map swings onto
+whatever its ship is shooting at, eases under a slew cap and stands down to its
+rest facing when it cannot bear. That is the same behaviour the shipyard's
+preview had first, so it is the same code: `turret.ts` holds the goal, the two
+gates it passes (the weapon's authored arc and the mask scanned off the hull)
+and the ease, and the designer and the map both ask it. Two copies would have
+drifted the first time either one's slew was tuned, and a player would watch a
+turret in the editor point somewhere the same turret on the map does not.
+
+Posing a turret rewrites its quads in that ship's own copy of the geometry, and
+only while the barrel is actually moving: a settled mount costs nothing. Meshes
+of their own would cost nothing while moving either, and would mean the carve
+had to know which of four buffers a quad lives in, which is a hole in a hull
+waiting to land in the wrong one.
+
+**Hovering names what is under the pointer**, because the picture IS the grid: a
+raycast gives a triangle, two triangles are a quad, `cellOf` says which lattice
+cell that quad was a face of, and the raster says which placement is standing in
+it. A turret also draws the cone its own hull blocks while the pointer is on it,
+and the Ship data button draws all of them, because "what is this hull made of"
+and "where can its guns actually shoot" are the same question asked twice.
+
+**A press on a hull is about that hull.** It names it, and a second one goes and
+looks at it; it is never a move order, whatever the reachable area says. Your
+own frigate and the place you wanted to send it are a few pixels apart, and
+clicking the ship planted an order on top of it every time.
+
 **A hit event lands on the collision SPHERE, not on the hull.** The sphere
 circumscribes the long axis, so on a Terran it is 3.29 units against a hull 1.2
 by 0.76 by 3.2, and a carve measured from the event's own position took nothing
@@ -424,10 +451,31 @@ client because the client ASKED, not because someone wrote the rule twice.
 The blast damages hulls only, never volumes. A breach that could reach another
 reactor would chain, and a chain is a recursion with no bound written anywhere.
 
-**The reactor is protected by geometry, not by a rule.** The belts sit outboard
-at x +/- 1.6 and the bay sits forward and dorsal, so a shot from ahead or abeam
-meets one of them first and a shot from below does not. Attacking from a high or
-low aspect is therefore worth doing, and nothing in the code says so.
+**A volume is a BOX, in half extents about its offset.** Spheres came first and
+they made the model unreadable: a sphere big enough to hold a drive bay stands
+proud of the plating on all six sides, and six of them on a frigate overlapped
+into one lump with the ship inside it. The belts alone spanned the whole
+centreline, so every aspect met a belt and choosing one bought nothing. The
+schematic drew exactly that, which is how it was noticed.
+
+`Sim::seg_box` is the slab test, in the SHIP's frame: the segment goes into that
+frame once and the six tests are then axis aligned. A zero direction component
+is tested against its slab rather than divided by, because an infinity through
+the min/max chain is a NaN and every NaN comparison is false, so a hit reads as
+a miss.
+
+**The reactor is protected by geometry, not by a rule.** The belts are slabs
+around the WAIST that meet over the keel line and reach neither the bow nor the
+belly: their floor at y -0.30 sits above the reactor's ceiling at +0.40, and
+they stop at z +0.90. So a shot from ahead or abeam crosses a belt and one from
+below passes under them. Attacking from a low aspect is therefore worth doing,
+and nothing in the code says so.
+
+They stop short of the bay and the jets on purpose. Engagements here are close
+to COPLANAR: shots arrive near horizontal, so a volume behind a full length belt
+is a volume nothing can ever reach, and aiming at it is a button that does
+nothing. A belt that ran the length of the hull covered both, and `tests/
+volumes.rs` pins the aspect each volume is reachable from.
 
 ### The defect this exposed, worth not writing again
 

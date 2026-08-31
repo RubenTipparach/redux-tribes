@@ -14,9 +14,13 @@ import * as THREE from 'three';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
-import { arcMasks, mountsOf, partsOf, rasterise, stockFor, useArcDirs, useCore, type Design }
+import {
+  arcMasks, gunByKey, moduleById, mountsOf, partsOf, PURPOSE, rasterise, stockFor,
+  useArcDirs, useCore, type Design,
+}
   from './app/design.js';
 import { hullTone } from './app/hull.js';
+import { blockedPct } from './app/turret.js';
 import { shipThumb } from './app/thumb.js';
 import { Schematic, type SchematicSubject } from './app/schematic.js';
 import { Api } from './net/api.js';
@@ -603,7 +607,7 @@ function schematicOf(id: number): SchematicSubject | null {
         hpMax: v.hpMax,
         dead: v.dead,
         blockPct: v.blockPct,
-        radius: v.radius,
+        half: v.half,
         at: { x: at.x, y: at.y, z: at.z },
       };
     }),
@@ -674,6 +678,10 @@ function setInspect(on: boolean): void {
   const s = inspectSubject();
   inspect = on && s ? s.id : -1;
   inspectHot = -1;
+  // Ship data turns the ARCS on too. What a hull is made of and where its guns
+  // can actually shoot are the same question asked twice, and a player who has
+  // asked for one has asked for the other.
+  syncArcShell();
   renderInspect();
 }
 
@@ -698,6 +706,7 @@ function renderInspect(): void {
   if (inspect >= 0 && (!s || s.id !== inspect || !ready)) {
     inspect = -1;
     inspectHot = -1;
+    syncArcShell();
     btn.classList.remove('on');
     btn.textContent = 'Ship data';
   }
@@ -742,6 +751,88 @@ function renderInspect(): void {
   }
   host.classList.toggle('hidden', inspect < 0);
   placeInspect();
+}
+
+/**
+ * What the pointer is resting on, out on the map.
+ *
+ * The picture IS the grid: a raycast gives a quad, the quad names a lattice
+ * cell, and the raster says which placement is standing in that cell. So this
+ * is a lookup rather than a guess, and it is the same lookup the shipyard's
+ * own tap does over the same cells.
+ *
+ * A turret gets more: its weapon's numbers, how much of its sphere its own
+ * hull takes, and the blocked cone drawn on the ship while the pointer is on
+ * it. A player who cannot see why a mount will not shoot astern is a player
+ * who thinks the gun is broken.
+ */
+let tipShip = -1;
+let tipRig = -1;
+let tipCell = -1;
+
+function hideTip(): void {
+  if (tipShip < 0) return;
+  tipShip = -1; tipRig = -1; tipCell = -1;
+  $('partTip').classList.add('hidden');
+  syncArcShell();
+}
+
+/** The arcs on the map: the hovered turret's, or every one of them while the
+ *  ship data panel is up, because that panel is the "tell me about this hull"
+ *  request and an arc is part of the answer. */
+function syncArcShell(): void {
+  if (tipRig >= 0 && tipShip >= 0) view.showArcs(tipShip, tipRig);
+  else if (inspect >= 0) view.showArcs(inspect, -1);
+  else view.showArcs(-1, -1);
+}
+
+function showTip(clientX: number, clientY: number): void {
+  const at = view.pickHullCell(clientX, clientY);
+  if (!at) { hideTip(); return; }
+  const s = ships.find(x => x.id === at.ship);
+  if (!s) { hideTip(); return; }
+  const changed = at.ship !== tipShip || at.cell !== tipCell || at.rig !== tipRig;
+  tipShip = at.ship; tipCell = at.cell; tipRig = at.rig;
+
+  const tip = $('partTip');
+  if (changed) {
+    const design = hullOf(s);
+    const owner = rasterise(design).own[at.cell] ?? 0;
+    const part = owner > 0 ? design.parts[owner - 1] : undefined;
+    const mod = part ? moduleById(part.module) : undefined;
+    let body: string;
+    if (mod) {
+      const pu = PURPOSE[mod.purpose];
+      body = `<span class="nm">${mod.name}</span>`
+        + `<span class="sub">${mod.id} &middot; ${pu.label}</span>`;
+      if (at.rig >= 0) {
+        const gun = gunByKey(mod.weapon ?? '');
+        const masks = arcMasks(design);
+        const mask = masks[at.rig];
+        if (gun) {
+          body += `<span class="sub">${gun.dmg} dmg${gun.batch > 1 ? ` x${gun.batch}` : ''}`
+            + ` &middot; ${gun.range} u &middot; ${gun.cooldown}s</span>`;
+        }
+        if (mask) {
+          body += `<span class="sub">own hull blocks `
+            + `<b>${blockedPct(mask).toFixed(0)}%</b> of its sphere</span>`;
+        }
+      }
+    } else {
+      // Plate and frame belong to no placement: they are the hull itself.
+      body = `<span class="nm">${shipName(s)}</span>`
+        + `<span class="sub">hull plating</span>`;
+    }
+    tip.innerHTML = body;
+    tip.classList.remove('hidden');
+    syncArcShell();
+  }
+  // Offset off the cursor and flipped near the right edge, so the label never
+  // sits under the thing it is naming or off the screen.
+  const w = tip.offsetWidth || 180;
+  const left = clientX + 14 + w > window.innerWidth ? clientX - 14 - w : clientX + 14;
+  tip.style.left = `${Math.max(4, left)}px`;
+  tip.style.top = `${Math.max(4, clientY + 14)}px`;
 }
 
 function markInspect(): void {
@@ -1758,6 +1849,20 @@ function showPreview(): void {
     if (at) links.push({ from: e.pos, to: at, mine: false });
   }
   view.setAiming(links);
+
+  // And what every hull's TURRETS are following, which is a different list:
+  // the aim lines are drawn for the ship being flown and for the hostiles,
+  // but a barrel turns on every ship that has an order to shoot at something.
+  // Ours from the pick, theirs from what the core says they are retaliating
+  // against, so a turret tracks the ship the order set actually names.
+  const aims = new Map<number, Vec3>();
+  for (const e of live) {
+    const at = mine(e)
+      ? posOf(targetShip(e.id)?.id ?? -1)
+      : posOf(aiPlans.get(e.id)?.aiTarget ?? e.aiTarget);
+    if (at) aims.set(e.id, at);
+  }
+  view.setTurretAim(aims);
   // One readout for both states. It used to be two, and the planning one was
   // an element the footer no longer has, so every preview refresh threw and
   // took the click that asked for it with it.
@@ -1918,14 +2023,18 @@ canvas.addEventListener('pointerdown', ev => {
   // Routing, decided by where the drag STARTS so a gesture's meaning never
   // changes underneath the hand.
   //
-  // A move order needs a point the ship can actually finish its turn at, which
-  // is the core's question rather than a radius: the reachable set is a lobe
-  // along the nose, so a radius accepts clicks far outside it in one direction
-  // and rejects nothing at all behind a ship carrying velocity.
+  // A press that landed on a HULL is about that hull: it names it, and a
+  // second one focuses on it. It is never a move order, whatever the
+  // reachable area says. A destination under a ship is a destination the
+  // player did not mean, and the two are a few pixels apart exactly where
+  // their own hull is: clicking your own frigate to look at it planted a move
+  // order on top of it every time.
   const p = view.planePoint(ev.clientX, ev.clientY);
   const s = selectedShip();
   let kind: Drag['kind'] = 'pan';
-  if (canPlan() && p && s && view.sliceContains(p)) {
+  if (picked >= 0) {
+    kind = ev.pointerType !== 'mouse' && !view.panMode ? 'orbit' : 'pan';
+  } else if (canPlan() && p && s && view.sliceContains(p)) {
     kind = ev.shiftKey ? 'heading' : 'plan';
   } else if (ev.pointerType !== 'mouse' && !view.panMode) {
     // Touch has no second button, so the toolbar toggle still decides what one
@@ -1947,6 +2056,12 @@ canvas.addEventListener('pointermove', ev => {
     const at = view.pickSub(ev.clientX, ev.clientY, subsOf(inspect));
     if (at !== inspectHot) { inspectHot = at; markInspect(); }
   }
+
+  // And a mouse resting on a HULL names the part under it, whosever ship it
+  // is. Mouse only and never mid drag: a finger has no hover, and a label
+  // chasing a camera gesture is a label in the way of it.
+  if (ev.pointerType === 'mouse' && !prev && !drag) showTip(ev.clientX, ev.clientY);
+  else if (drag) hideTip();
 
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
@@ -2062,6 +2177,31 @@ function logPlacement(): void {
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
+canvas.addEventListener('pointerleave', hideTip);
+
+/**
+ * Double click a hull to go and look at it.
+ *
+ * Centres AND closes, which is what `focusOn` does in one move, and then turns
+ * the part labels on, because "look at that ship" and "tell me what is on it"
+ * are the same request. Works on a hostile as readily as on your own: reading
+ * what an enemy is built out of is how a player decides where to aim, and the
+ * inspector already draws whatever hull is selected.
+ *
+ * A phone has no double click, so the same thing is reachable there through
+ * the fleet rail's own button; this is the desk's shortcut for it.
+ */
+canvas.addEventListener('dblclick', ev => {
+  const id = view.pickShip(ev.clientX, ev.clientY);
+  if (id < 0) return;
+  ev.preventDefault();
+  if (id !== selected) select(id);
+  const s = ships.find(x => x.id === id);
+  if (!s) return;
+  view.focusOn(s);
+  setInspect(true);
+  draw();
+});
 
 /**
  * The wheel zooms, over the map AND over anything drawn on top of it.
@@ -2863,6 +3003,18 @@ Object.defineProperty(window, 'ftDebug', {
     /** Where the next shot is pointed on the CURRENT target, or -1 for hull. */
     aimSub: () => { const t = targetShip(); return t ? aimSubFor(t.id) : -1; },
     aimKind: () => (aim ? aim.kind : -1),
+    /** Every turret's bearing on the map, so the harness can watch one swing
+     *  onto a target rather than reading the code that swings it. */
+    turrets: () => view.turretState(),
+    /** What is under a screen point, and what the label on it says. Reading
+     *  only: the harness never writes through this. */
+    partAt: (x: number, y: number) => view.pickHullCell(x, y),
+    tip: () => ({
+      ship: tipShip, rig: tipRig, cell: tipCell,
+      shown: !$('partTip').classList.contains('hidden'),
+      text: $('partTip').textContent ?? '',
+    }),
+    arcs: () => view.arcShellCount(),
     subs: () => subs.map(v => ({ ...v })),
     /** Where the selected hull's nose actually points, for checking that a
      * commanded heading is being turned INTO over several turns. */
