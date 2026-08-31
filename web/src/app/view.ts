@@ -1646,13 +1646,19 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
-  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit?: boolean }> = [];
+  #lastBeams: ReadonlyArray<{
+    from: Vec3; to: Vec3; age: number;
+    hit?: boolean | undefined; centre?: Vec3 | undefined; ship?: number | undefined;
+  }> = [];
   #lastBlasts: ReadonlyArray<{
     pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
     centre: Vec3; resolved: boolean;
   }> = [];
 
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit?: boolean }>): void {
+  setBeams(list: ReadonlyArray<{
+    from: Vec3; to: Vec3; age: number;
+    hit?: boolean | undefined; centre?: Vec3 | undefined; ship?: number | undefined;
+  }>): void {
     this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
@@ -2189,7 +2195,7 @@ export class View {
     onHull: Array<{
       ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
     }>;
-    beamLen: Array<{ len: number; hit: boolean }>;
+    beamLen: Array<{ len: number; hit: boolean; off: number; hullR: number }>;
   } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
@@ -2215,15 +2221,33 @@ export class View {
         off: +off.toFixed(3), hullR: +hullR.toFixed(3),
       };
     });
-    // With whether it hit anything, because a beam that MISSED is drawn to
-    // full range and is right to be: judging a beam by its length alone would
-    // fail a clean miss.
-    const beamLen = this.#lastBeams.map(b => ({
-      len: +Math.sqrt(
-        (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
-      ).toFixed(2),
-      hit: b.hit === true,
-    }));
+    // Judged the same way a blast is: how far the END of the beam sits from
+    // the ship it hit. Length is not the question and never was. A beam that
+    // MISSED is drawn to full range and is right to be, and a beam that hit a
+    // ship 260 units away is 260 units long and also right; what would be
+    // wrong is a beam that carried on THROUGH what it hit, and that shows as
+    // an end nowhere near the hull.
+    const beamLen = this.#lastBeams.map(b => {
+      const c = b.ship === undefined ? undefined : this.#carved.get(b.ship);
+      const half = c ? c.hull.half : null;
+      const hullR = half
+        ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+        : 0;
+      const off = b.centre
+        ? Math.sqrt(
+          (b.to.x - b.centre.x) ** 2
+          + (b.to.y - b.centre.y) ** 2
+          + (b.to.z - b.centre.z) ** 2)
+        : 0;
+      return {
+        len: +Math.sqrt(
+          (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
+        ).toFixed(2),
+        hit: b.hit === true,
+        off: +off.toFixed(3),
+        hullR: +hullR.toFixed(3),
+      };
+    });
     return {
       onHull,
       beamLen,

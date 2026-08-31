@@ -2712,7 +2712,11 @@ function showTick(tick: number): void {
                  && tick >= e.tick && tick < e.tick + BEAM_TICKS)
     .map(e => {
       const end = beamEnd(e, events);
-      return { from: e.pos, to: end.to, hit: end.hit, age: (tick - e.tick) / BEAM_TICKS };
+      return {
+        from: e.pos, to: end.to, hit: end.hit,
+        centre: end.centre, ship: end.ship,
+        age: (tick - e.tick) / BEAM_TICKS,
+      };
     }));
   view.setBlasts(blastsAt(events, tick));
   // What the turn has taken off each hull, and the chunks still in the air.
@@ -3041,7 +3045,8 @@ function contactWorld(e: SimEvent): Contact {
  * ship as the shooter, and the point sits on this shot's line rather than on
  * another mount's, which is what tells two shots in one tick apart.
  */
-function beamEnd(fired: SimEvent, events: readonly SimEvent[]): { to: Vec3; hit: boolean } {
+function beamEnd(fired: SimEvent, events: readonly SimEvent[])
+  : { to: Vec3; hit: boolean; centre?: Vec3; ship?: number } {
   const ax = fired.pos.x, ay = fired.pos.y, az = fired.pos.z;
   const dx = fired.to.x - ax, dy = fired.to.y - ay, dz = fired.to.z - az;
   const len2 = dx * dx + dy * dy + dz * dz;
@@ -3060,7 +3065,9 @@ function beamEnd(fired: SimEvent, events: readonly SimEvent[]): { to: Vec3; hit:
   // A MISS is drawn to full range, and correctly so: nothing stopped it. Only
   // a beam that hit something has anywhere shorter to stop, which is why the
   // two are told apart rather than judged by length.
-  return best ? { to: contactWorld(best).pos, hit: true } : { to: fired.to, hit: false };
+  if (!best) return { to: fired.to, hit: false };
+  const c = contactWorld(best);
+  return { to: c.pos, hit: true, centre: c.centre, ship: best.ship };
 }
 
 function blastsAt(events: readonly SimEvent[], tick: number)
