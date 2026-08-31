@@ -399,6 +399,69 @@ export class View {
    * write to a buffer that is already on the card. Rebuilding the index for
    * every hit would cost the whole hull.
    */
+  /**
+   * The cell of a hull nearest a point in that hull's own space, or -1.
+   *
+   * Two questions ask this and they differ in one thing, so it takes that one
+   * thing as an argument rather than existing twice (GUIDELINES 5.1).
+   *
+   * The CARVE wants the nearest cell still standing, because that is where it
+   * starts eating and a hole is not a place to start from. The PICTURE wants
+   * the nearest cell of the hull as built, because a blast is drawn where the
+   * shot met the ship and that answer must not drift as the ship comes apart,
+   * and because it is cached per turn and a carve dependent answer cached once
+   * would be frozen at whatever the hull looked like the first time it was
+   * asked.
+   */
+  static #nearestCell(
+    c: Carved, local: readonly [number, number, number], liveOnly: boolean,
+  ): number {
+    const cell = c.hull.cell;
+    let near = -1, best = Infinity;
+    for (let q = 0; q < c.hull.quads; q++) {
+      const from = c.hull.quadAt[q] as number, to = c.hull.quadAt[q + 1] as number;
+      for (let n = from; n < to; n++) {
+        const id = c.hull.quadCells[n] as number;
+        if (liveOnly && c.cells.has(id)) continue;
+        const i = id % NX, j = ((id / NX) | 0) % NY, k = (id / (NX * NY)) | 0;
+        const dx = (i - NX / 2 + 0.5) * cell - local[0];
+        const dy = (j - NY / 2 + 0.5) * cell - local[1];
+        const dz = (k - NZ / 2 + 0.5) * cell - local[2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best) { best = d2; near = id; }
+      }
+    }
+    return near;
+  }
+
+  /**
+   * Where a shot MET a hull, in that hull's own space.
+   *
+   * A hit event carries the point on the ship's collision SPHERE, and that
+   * sphere circumscribes the long axis: on a Terran it is 3.29 units against a
+   * hull 1.2 by 0.76 by 3.2, so a hit abeam lands about two units off the
+   * flank, in open space. The carve has always had to solve this to take any
+   * cells at all. The blast and the end of a beam were still being drawn at
+   * the raw event, which is why an explosion hung beside the ship and a beam
+   * carried on through it: the core cannot answer this, because the core has a
+   * sphere and boxes and only the client has the hull.
+   */
+  contactOf(
+    ship: number, local: readonly [number, number, number],
+  ): [number, number, number] | null {
+    const c = this.#carveOf(ship);
+    if (!c) return null;
+    const near = View.#nearestCell(c, local, false);
+    if (near < 0) return null;
+    const cell = c.hull.cell;
+    const i = near % NX, j = ((near / NX) | 0) % NY, k = (near / (NX * NY)) | 0;
+    return [
+      (i - NX / 2 + 0.5) * cell,
+      (j - NY / 2 + 0.5) * cell,
+      (k - NZ / 2 + 0.5) * cell,
+    ];
+  }
+
   #applyHit(c: Carved, h: HullHit): void {
     const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
     const born: Debris[] = [];
@@ -412,20 +475,7 @@ export class View {
     // standing is the cell the shot came in at, because the sphere point is in
     // the direction the shot arrived from.
     const cell = c.hull.cell;
-    let near = -1, best = Infinity;
-    for (let q = 0; q < c.hull.quads; q++) {
-      const from = c.hull.quadAt[q] as number, to = c.hull.quadAt[q + 1] as number;
-      for (let n = from; n < to; n++) {
-        const id = c.hull.quadCells[n] as number;
-        if (c.cells.has(id)) continue;
-        const i = id % NX, j = ((id / NX) | 0) % NY, k = (id / (NX * NY)) | 0;
-        const dx = (i - NX / 2 + 0.5) * cell - h.local[0];
-        const dy = (j - NY / 2 + 0.5) * cell - h.local[1];
-        const dz = (k - NZ / 2 + 0.5) * cell - h.local[2];
-        const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < best) { best = d2; near = id; }
-      }
-    }
+    const near = View.#nearestCell(c, h.local, true);
     if (near < 0) return;
     const ai = near % NX, aj = ((near / NX) | 0) % NY, ak = (near / (NX * NY)) | 0;
 

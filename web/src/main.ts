@@ -2635,7 +2635,7 @@ function showTick(tick: number): void {
   view.setBeams(events
     .filter(e => e.kind === EventKind.ShotFired
                  && tick >= e.tick && tick < e.tick + BEAM_TICKS)
-    .map(e => ({ from: e.pos, to: e.to, age: (tick - e.tick) / BEAM_TICKS })));
+    .map(e => ({ from: e.pos, to: beamEnd(e, events), age: (tick - e.tick) / BEAM_TICKS })));
   view.setBlasts(blastsAt(events, tick));
   // What the turn has taken off each hull, and the chunks still in the air.
   // Both are drawn from the same event stream, so scrubbing back puts the
@@ -2900,6 +2900,72 @@ function carveHits(rec: { events: readonly SimEvent[] } | null | undefined): Hul
   return out;
 }
 
+/**
+ * Where a hit event actually MET the hull, in world space.
+ *
+ * The event carries a point on the ship's collision SPHERE, which circumscribes
+ * the long axis: on a Terran it is 3.29 units against a hull 1.2 by 0.76 by
+ * 3.2, so a hit abeam lands about two units off the flank in open space. That
+ * is why an explosion hung beside the ship instead of on it. The core cannot
+ * answer this, because the core has a sphere and boxes; only the client has the
+ * hull, and it already had to solve it for the carve.
+ *
+ * Resolved in the hull's OWN space and put back through the pose the ship held
+ * at the tick of the hit, so a blast stays where it happened rather than
+ * following the ship that took it. Memoised per event, because a blast is
+ * rebuilt every frame it is on screen and the search walks a hull's cells.
+ */
+const contactCache = new WeakMap<object, Vec3>();
+function contactWorld(e: SimEvent): Vec3 {
+  const had = contactCache.get(e as unknown as object);
+  if (had) return had;
+  let out = e.pos;
+  const pose = e.ship >= 0 ? match.poses(e.tick).find(p => p.id === e.ship) : undefined;
+  if (pose) {
+    const q = new THREE.Quaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w);
+    const v = new THREE.Vector3(
+      e.pos.x - pose.pos.x, e.pos.y - pose.pos.y, e.pos.z - pose.pos.z)
+      .applyQuaternion(q.clone().invert());
+    const local = view.contactOf(e.ship, [v.x, v.y, v.z]);
+    if (local) {
+      const w = new THREE.Vector3(local[0], local[1], local[2])
+        .applyQuaternion(q).add(new THREE.Vector3(pose.pos.x, pose.pos.y, pose.pos.z));
+      out = { x: w.x, y: w.y, z: w.z };
+    }
+  }
+  contactCache.set(e as unknown as object, out);
+  return out;
+}
+
+/**
+ * Where a beam stops.
+ *
+ * The core fires from the mount to the weapon's full RANGE and reports the hit
+ * as a separate event, so a beam that struck at eight units was still drawn out
+ * to three hundred, straight through the target and away. A hit is exactly on
+ * the fired segment, which is what makes the pairing sound: same tick, this
+ * ship as the shooter, and the point sits on this shot's line rather than on
+ * another mount's, which is what tells two shots in one tick apart.
+ */
+function beamEnd(fired: SimEvent, events: readonly SimEvent[]): Vec3 {
+  const ax = fired.pos.x, ay = fired.pos.y, az = fired.pos.z;
+  const dx = fired.to.x - ax, dy = fired.to.y - ay, dz = fired.to.z - az;
+  const len2 = dx * dx + dy * dy + dz * dz;
+  if (len2 <= 0) return fired.to;
+  let best: SimEvent | null = null, bestT = Infinity;
+  for (const e of events) {
+    if (e.kind !== EventKind.ShotHit || e.tick !== fired.tick) continue;
+    if (e.other !== fired.ship) continue;
+    const px = e.pos.x - ax, py = e.pos.y - ay, pz = e.pos.z - az;
+    const t = (px * dx + py * dy + pz * dz) / len2;
+    if (t < 0 || t > 1.001) continue;
+    const ox = px - dx * t, oy = py - dy * t, oz = pz - dz * t;
+    if (ox * ox + oy * oy + oz * oz > 0.25) continue;
+    if (t < bestT) { bestT = t; best = e; }
+  }
+  return best ? contactWorld(best) : fired.to;
+}
+
 function blastsAt(events: readonly SimEvent[], tick: number)
   : Array<{ pos: Vec3; age: number; radius: number; kill: boolean }> {
   const out = [];
@@ -2910,7 +2976,10 @@ function blastsAt(events: readonly SimEvent[], tick: number)
     const age = (tick - e.tick) / life;
     if (age < 0 || age > 1) continue;
     const hull = ships.find(x => x.id === e.ship)?.radius ?? 2;
-    out.push({ pos: e.pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill });
+    // A kill is the whole ship going up and belongs on its centre; a shot
+    // belongs where it landed, which is not where the event says it did.
+    const pos = kill ? e.pos : contactWorld(e);
+    out.push({ pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill });
   }
   return out;
 }
