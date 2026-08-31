@@ -430,7 +430,8 @@ envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 152822
 bytes locally after the damage model, the design derivation and the turret arc
 scan; 153261 once the hit volumes became boxes; 156798 once a hull pick became
 per ship rather than per side, which is 3537 bytes on the same compiler either
-side of the commit, four slots of registry and the roster query;
+side of the commit, four slots of registry and the roster query. CI shipped
+that same source at 154674;
 quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
@@ -676,10 +677,12 @@ Determinism is checked, not assumed:
 
 Two DIFFERENT builds of the core agree too, which is the stronger claim and the
 one lockstep actually rests on. The module CI ships and a local build of the
-same source differ by 1582 bytes, having been compiled by different rustc
-versions, and they produce identical hashes over six turns. Worth re-running
-after any change to the maths: fetch `/sim_core.wasm` from the live site and
-hash the same match against the local build.
+same source differ by 2124 bytes, having been compiled by different rustc
+versions, and they produce identical hashes over six turns, with a per SHIP
+pick set on both slots so the hull registry is exercised rather than left
+empty. Worth re-running after any change to the maths, and after anything that
+feeds the hash: fetch `/sim_core.wasm` from the live site and hash the same
+match against the local build.
 
 `.github/workflows/deploy.yml` is one file with five jobs (`sim`, `prototype`, `api`,
 `web`, `deploy`). Parse it with a YAML parser before pushing a change to it: an unquoted
