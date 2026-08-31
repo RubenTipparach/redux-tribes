@@ -230,6 +230,29 @@ export const SUB_LABEL: Record<number, string> = {
   0: 'armour', 1: 'engines', 2: 'jets', 3: 'weapons', 4: 'reactor',
 };
 
+/**
+ * What losing one costs, in a sentence.
+ *
+ * Words about a rule, not the rule: `turn.rs` decides what a dead volume stops,
+ * and this says so where a player is looking at the volume. If the resolver's
+ * answer changes, this line is stale copy and has to be rewritten with it.
+ */
+export const SUB_BLURB: Record<number, string> = {
+  0: 'Belt armour. Nothing runs through it, so losing one costs no system: it is '
+    + 'there to be shot instead of the hull, and once the belt is gone the hits '
+    + 'land whole.',
+  1: 'Main drive. When the LAST one goes the ship is adrift from that instant: it '
+    + 'coasts out the rest of the turn on the velocity it was carrying and cannot '
+    + 'add to it.',
+  2: 'Attitude jets. When the last one goes the drive still pushes and the hull '
+    + 'stops swinging, so it re-flies the rest of the turn on an envelope with no '
+    + 'turn left in it.',
+  3: 'Weapon bay. With it out every mount on the ship is silent, whatever cooldown '
+    + 'they have left.',
+  4: 'Reactor. Not damage that happens to be lethal: the hull is gone the moment '
+    + 'the pile is, whatever was left of it.',
+};
+
 export interface PartyState {
   readonly faction: number;
   readonly count: number;

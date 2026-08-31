@@ -197,27 +197,94 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 #log .hit { color:var(--ink); } #log .bad { color:var(--red); }
 #log .good { color:var(--green); } #log .warn { color:var(--orange); }
 
-.shipRow { padding:5px 6px; border:1px solid var(--line); border-radius:4px;
-  margin-bottom:5px; cursor:pointer; }
-.shipRow:hover { border-color:var(--cyan); }
-.shipRow.sel { border-color:var(--cyan); background:#0d2231; }
-.shipRow.gone { opacity:.4; }
+/* --------------------------------------------------------- fleet chips --
+   A chip is a button with a picture of the ship on it, because a player who
+   spent an hour in the shipyard should be able to find their hull in the rail
+   without reading. What is BROKEN sits beside it rather than inside it: a
+   chip listing all five volumes every turn is a chip nobody reads, and the
+   ones that matter are the ones that are out. */
+.chip { display:grid; grid-template-columns:minmax(0,1fr) auto;
+  border:1px solid var(--line); border-radius:5px; margin-bottom:6px;
+  background:var(--panel2); }
+.chip:hover { border-color:#2b455c; }
+.chip.sel { border-color:var(--cyan); background:#0d2231; }
 /* The hostile under the guns. Distinct from .sel on purpose: one marks the
    hull you are flying, the other the hull you are shooting at, and a phone
    shows both lists at once. */
-.shipRow.tg { border-color:var(--orange); background:#2a1607; }
-.shipRow.tg .nm { color:var(--orange); }
-.shipRow .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
-  letter-spacing:.06em; }
+.chip.tg { border-color:var(--orange); background:#2a1607; }
+.chip.gone { opacity:.42; }
+.chipPick { display:flex; align-items:center; gap:8px; min-width:0; padding:6px;
+  border:0; border-radius:4px 0 0 4px; background:transparent; text-align:left;
+  font-family:inherit; font-size:12px; font-weight:400; letter-spacing:0;
+  text-transform:none; color:var(--ink); }
+.chipPick:hover { color:var(--ink); background:#16202d; }
+.chip.sel .chipPick:hover, .chip.tg .chipPick:hover { background:#ffffff0d; }
+.chipPick .th { flex:0 0 44px; width:44px; height:44px; border-radius:4px;
+  background:#0a1017; border:1px solid var(--line); object-fit:contain; }
+.chipPick .th.nogl { display:flex; align-items:center; justify-content:center;
+  font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:18px;
+  color:var(--muted); }
+.chipPick .body { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:1px; }
+.chipPick .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.06em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chipPick .nm i { font-style:normal; color:var(--red); font-size:11px; }
+.chip.tg .chipPick .nm { color:var(--orange); }
+.chipPick .ln { display:flex; justify-content:space-between; gap:8px; font-size:11px;
+  color:var(--muted); min-width:0; }
+/* The label is a fixed word and the value is what may be long, so only the
+   value gives ground. Both shrinking turned "target" into "tar...". */
+.chipPick .ln span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chipPick .ln span:first-child { flex:0 0 auto; }
 /* Who this hull is aiming at. Red for ours, matching the line drawn from it;
    orange for a hostile, matching theirs. */
-.sub.aim span:last-child { color:var(--red); }
-.enemy .sub.aim span:last-child { color:var(--orange); }
+.chipPick .ln.aim span:last-child { color:var(--red); }
+.enemy .chipPick .ln.aim span:last-child { color:var(--orange); }
+
+.chipSide { display:flex; flex-direction:column; align-items:flex-end; gap:3px;
+  padding:6px 6px 6px 0; max-width:92px; }
+.chipInfo { flex:0 0 auto; width:24px; height:24px; padding:0; border-radius:50%;
+  font-family:Rajdhani,system-ui,sans-serif; font-size:12px; line-height:1; }
+/* One offline system, said in the one place a glance lands. A hull at 80 hull
+   points with its jets out is in far more trouble than one at 50 with
+   everything working, and the bar alone cannot tell those apart. */
+.off { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:9px;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--red);
+  border:1px solid #6b2020; background:#1d0f0f; border-radius:3px; padding:2px 5px;
+  white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.aimedBy { grid-column:1/3; display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+  padding:0 6px 6px; }
+.aimedBy .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:9px;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.aimedBy .who { padding:2px 6px; font-size:10px; border-radius:3px; }
+.aimedBy .who.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+
 .bar { height:4px; background:#1a2634; border-radius:2px; margin-top:3px; overflow:hidden; }
 .bar i { display:block; height:100%; background:var(--cyan); }
 .enemy .bar i { background:var(--orange); }
 .sub { display:flex; justify-content:space-between; font-size:11px; color:var(--muted); }
 .sub.dead { color:var(--red); text-decoration:line-through; }
+
+/* ---------------------------------------------------------- ship card --
+   The rest of a hull's state, while a pointer rests on its chip. An addition
+   and never the only route: the same detail is one tap away on the chip's
+   info button, because a phone has no hover to depend on. */
+#shipCard { position:fixed; z-index:14; width:250px; max-width:calc(100vw - 16px);
+  padding:9px 11px; border-radius:7px; background:#0d141dfa;
+  border:1px solid var(--line); box-shadow:0 10px 28px #000a; pointer-events:none;
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+#shipCard.hidden { display:none; }
+#shipCard .hd { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; color:var(--cyan); }
+#shipCard .s { font-size:11px; color:var(--muted); margin-bottom:6px; }
+#shipCard .sect { margin:9px 0 3px; }
+#shipCard .hint { margin-top:8px; }
+#shipCard .hint b { color:var(--ink); }
+.vrow { display:grid; grid-template-columns:62px minmax(0,1fr) auto; gap:7px;
+  align-items:center; font-size:11px; color:var(--muted); padding:1px 0; }
+.vrow .bar { margin:0; }
+.vrow span:last-child { font-variant-numeric:tabular-nums; }
+.vrow.dead { color:var(--red); }
+.vrow.dead .bar i { background:var(--red); }
 .wrow { display:flex; align-items:center; justify-content:space-between; font-size:12px;
   padding:3px 4px; border:1px solid var(--line); border-radius:4px; margin-bottom:4px;
   cursor:pointer; }
@@ -287,6 +354,53 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   letter-spacing:.1em; color:var(--green); background:#111823cc; border-radius:9px;
   padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
 #pAlt.zero { display:none; }
+
+/* ----------------------------------------------------- the inspector --
+   Labels on the parts of one hull, out on the map. The layer shares the
+   canvas grid cell so it lines up with it by construction rather than by
+   arithmetic; each box is placed per frame from the projection of its volume,
+   which is why it can follow a ship through a playback. */
+#inspect { grid-column:2; grid-row:2; position:relative; z-index:5;
+  pointer-events:none; overflow:hidden; }
+#inspect.hidden { display:none; }
+.ibox { position:absolute; pointer-events:auto;
+  width:max-content; max-width:200px; padding:4px 7px; border-radius:5px;
+  font-size:10px; line-height:1.35; color:var(--ink);
+  background:#0d141de8; border:1px solid var(--line);
+  display:grid; grid-template-columns:auto minmax(26px,1fr) auto; gap:3px 6px;
+  align-items:center; -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+  --dx:-16px; --dy:50%; --len:16px; --ang:0rad; }
+/* The marker on the volume, and the leader back to it. Both are placed from
+   the label's own frame by `placeInspect`, so a label nudged clear of its
+   neighbours stays visibly attached to the thing it is naming: a box that has
+   drifted off with no line to follow is a caption for the whole ship. */
+.ibox::before { content:""; position:absolute; left:var(--dx); top:var(--dy);
+  width:7px; height:7px; margin:-4px 0 0 -4px; border-radius:50%; background:var(--cyan);
+  box-shadow:0 0 0 2px #0d141dcc; }
+.ibox::after { content:""; position:absolute; left:var(--dx); top:var(--dy);
+  width:var(--len); height:1px; background:var(--cyan); opacity:.5;
+  transform-origin:0 50%; transform:rotate(var(--ang)); }
+.ibox .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; letter-spacing:.08em;
+  text-transform:uppercase; white-space:nowrap; }
+.ibox .bar { margin:0; }
+.ibox .v { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+/* The sentence about what losing it costs, only for the one being looked at.
+   Every box carrying it at once is the fog of text this mode exists to avoid. */
+.ibox .why { display:none; grid-column:1/4; color:var(--muted); }
+.ibox.hot { border-color:var(--cyan); z-index:2; }
+.ibox.hot .why { display:block; }
+.ibox.dead { border-color:#6b2020; background:#1d0f0fe8; }
+.ibox.dead::before, .ibox.dead::after { background:var(--red); }
+.ibox.dead .k, .ibox.dead .v { color:var(--red); }
+.ibox.dead .bar i { background:var(--red); }
+
+/* Offered rather than always on: it belongs to where the camera is standing,
+   which the rail cannot say, so it lives in the corner of the map. */
+#bInspect { grid-column:2; grid-row:2; align-self:start; justify-self:end;
+  z-index:6; margin:9px; padding:8px 12px; border-radius:7px; background:#111823ee;
+  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+#bInspect.hidden { display:none; }
+#bInspect.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
 
 /* The heading dials, over the canvas. Bottom left, which is the one corner no
    rail, sheet, toolbar or readout uses at any size. */
@@ -377,7 +491,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   /* One column here, so the readout follows the toolbar out of column 2.
      Left behind, it opens an implicit second column and shoves the row. */
-  #toolbar, #pAlt, #attitude, #modes { grid-column:1; }
+  #toolbar, #pAlt, #attitude, #modes, #inspect, #bInspect { grid-column:1; }
+  /* Under the mode row rather than beside it. At 390px the modes fill the width
+     they are centred in, so a button in the same line buries the last two of
+     them, which is the exact defect the buried control check exists for. */
+  #bInspect { margin-top:56px; }
   /* The toolbar owns the bottom of the canvas on a phone and is centred, so
      the dials cannot share that line at any width: they sit above it. 44px of
      button plus its 12px margin plus a gap. */
@@ -390,7 +508,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   button { padding:10px 13px; }
   #timeline { --slotw:22px; }
   #slots, .slot { height:26px; }
-  .shipRow { padding:9px 8px; margin-bottom:7px; }
+  .chipPick { padding:9px 8px; }
+  .chipSide { padding:9px 8px 9px 0; }
   .wrow { padding:8px 6px; }
   .modes { gap:6px; }
   input[type=range] { height:36px; }
@@ -457,11 +576,108 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   /* Wraps into the strip the sheet leaves rather than running under it. */
   #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
     max-width:calc(100% - min(330px, 54vw) - 20px); justify-content:flex-end; }
+  /* Into column 2 with everything else on the canvas. Left in column 1 it sat
+     inside the 54px tab rail, where the tab bar swallowed every tap on it. */
+  #inspect { grid-column:2; grid-row:2; }
+  #bInspect { grid-column:2; grid-row:2; justify-self:end; align-self:start;
+    margin:50px 10px 0 0; padding:6px 10px; }
   .dial { width:64px; height:64px; }
   #toolbar button { width:38px; height:38px; font-size:13px; }
 }
 
 @media (prefers-reduced-motion: reduce) { #left, #right { transition:none; } }
+
+/* ------------------------------------------------------------ schematic --
+   The shipyard's own view of a hull with the live damage model over it. Same
+   full screen mechanism and the same three panes, deliberately: a player who
+   has designed a ship already knows how to turn one, and a second set of
+   conventions for looking at the same hull would be one to learn for nothing. */
+#schema { position:fixed; inset:0; z-index:22; background:var(--ground);
+  display:grid; grid-template-columns:minmax(0,1fr) 320px;
+  grid-template-rows:48px minmax(0,1fr); grid-template-areas:"h h" "view side"; }
+#schema.hidden { display:none; }
+#scHead { grid-area:h; display:flex; align-items:center; gap:11px; padding:0 14px;
+  background:var(--panel2); border-bottom:1px solid var(--line); min-width:0;
+  overflow:hidden; -webkit-user-select:none; user-select:none; }
+#scHead h2 { font-family:Michroma,"Rajdhani",sans-serif; font-size:12px; font-weight:400;
+  letter-spacing:.12em; color:var(--cyan); margin:0; white-space:nowrap; flex:0 0 auto; }
+/* What gives ground when the header runs out of room, in order: the class line
+   first, then the figures. Close never does, because a modal you cannot shut
+   is the worst thing on this page. */
+#scWhat { min-width:0; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; }
+/* Scrolls rather than clips. On a phone there is not room for four figures
+   beside a name, and a stat cut off mid word reads as broken where one that
+   slides under the finger reads as more of them. */
+#scStats { display:flex; gap:11px; min-width:0; flex:0 1 auto;
+  overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+#scStats::-webkit-scrollbar { display:none; }
+#scClose { flex:0 0 auto; }
+#scView { grid-area:view; position:relative; min-width:0; min-height:0; background:#070a0f; }
+#scCanvas { display:block; width:100%; height:100%; touch-action:none;
+  -webkit-user-select:none; user-select:none; }
+#scHint { position:absolute; left:10px; bottom:9px; z-index:3; font-size:10px;
+  color:var(--muted); pointer-events:none; }
+#scCard { grid-area:view; align-self:end; justify-self:start; z-index:4;
+  margin:0 0 26px 9px; max-width:min(400px, calc(100% - 20px)); padding:8px 10px;
+  border-radius:7px; background:#0d141dee; border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); }
+#scCard.hidden { display:none; }
+#scCard .hd { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+#scCard .dot { width:11px; height:11px; border-radius:3px; flex:0 0 auto; }
+#scCard .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:13px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--ink); }
+#scCard .id { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); }
+#scCard .sub { display:block; margin:5px 0 0; font-size:11px; line-height:1.45;
+  color:var(--muted); }
+#scCard .sub b { color:var(--cyan); font-weight:700; }
+#scSide { grid-area:side; background:var(--panel2); border-left:1px solid var(--line);
+  padding:12px; overflow-y:auto; min-width:0; }
+/* The half of this that works with no pointer at all: hover a row and the
+   sphere lights out on the model, tap it and the card names it. */
+.scrow { display:grid; grid-template-columns:12px minmax(0,1fr) auto; gap:4px 8px;
+  align-items:center; width:100%; margin-bottom:5px; padding:7px 9px;
+  border:1px solid var(--line); border-radius:5px; background:var(--panel);
+  text-align:left; font-family:inherit; font-size:12px; font-weight:400;
+  letter-spacing:0; text-transform:none; color:var(--ink); }
+.scrow:hover { color:var(--ink); }
+.scrow .sw { width:11px; height:11px; border-radius:3px; }
+.scrow .nm { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
+  letter-spacing:.06em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.scrow .st { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.scrow .bar { grid-column:1/4; margin:1px 0 0; }
+.scrow.hot { border-color:var(--cyan); background:#0d2231; }
+.scrow.dead .nm { color:var(--red); text-decoration:line-through; }
+#scSide .hint { margin-top:10px; }
+
+/* A phone gets the model over the list, same as the shipyard: 320px of rail
+   beside a 390px screen leaves no screen. */
+@media (max-width: 900px) {
+  #schema { grid-template-columns:minmax(0,1fr);
+    grid-template-rows:46px minmax(0,42dvh) auto minmax(0,1fr);
+    grid-template-areas:"h" "view" "card" "side"; }
+  #scHead { height:46px; gap:8px; padding:0 10px; }
+  #scHead h2 { font-size:11px; }
+  /* The class line is the first thing to go: the figures beside it are the
+     ones a player is reading a schematic for. */
+  #scWhat { display:none; }
+  #scStats { gap:8px; }
+  /* Under the model rather than over it. A 42dvh viewport is not big enough to
+     spend half of on a card that describes what the other half is showing. */
+  #scCard { grid-area:card; align-self:stretch; justify-self:stretch; max-width:none;
+    margin:0; border-radius:0; border-width:1px 0; }
+  #scCard.hidden { display:none; }
+}
+/* Sideways, where only about 390px of height exists: back to side by side,
+   and the card returns to the corner of the model. */
+@media (max-width: 900px) and (max-height: 560px) {
+  #schema { grid-template-columns:minmax(0,1fr) min(280px, 44vw);
+    grid-template-rows:40px minmax(0,1fr); grid-template-areas:"h h" "view side"; }
+  #scHead { height:40px; }
+  #scCard { grid-area:view; align-self:end; justify-self:start;
+    margin:0 0 22px 9px; max-width:calc(100% - 20px); border-radius:7px; border-width:1px; }
+}
 
 /* ---------------------------------------------------------------- lobby --
    A full screen layer over the console rather than a separate page: the game
@@ -920,6 +1136,34 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   </aside>
 </div>
 
+<!-- The schematic. Same full screen mechanism as the shipyard, one z above the
+     console: a hull taken apart and labelled, over whatever was on screen. -->
+<div id="schema" class="hidden">
+  <header id="scHead">
+    <h2 id="scName">ship</h2>
+    <span class="dzstat" id="scWhat"></span>
+    <span class="dzgap"></span>
+    <span id="scStats"></span>
+    <button id="scClose">Close</button>
+  </header>
+  <section id="scView">
+    <canvas id="scCanvas"></canvas>
+    <div id="scHint">tap a volume to name it &middot; drag to orbit &middot; pinch or wheel to zoom</div>
+  </section>
+  <!-- A sibling of the view rather than a child of it, so a phone can give the
+       card a row of its own instead of laying it over the model it describes.
+       On a desk it goes back over the view's bottom left corner, which is the
+       one part of a framed hull nothing needs. -->
+  <div id="scCard" class="hidden"></div>
+  <aside id="scSide">
+    <div class="sect">Hit volumes</div>
+    <div id="scList"></div>
+    <p class="hint">Every shot goes into one of these. A volume soaks its own
+      share of the damage and passes the rest through to the hull, so what is
+      left of each one is what decides where the next hit lands.</p>
+  </aside>
+</div>
+
 <div id="lobby">
   <div class="wrap">
     <h2>FALLEN TRIBES</h2>
@@ -1144,6 +1388,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 
   <div id="pAlt" class="zero" aria-live="polite">ALT 0</div>
 
+  <!-- Labels on the parts of one hull, out on the map. Positioned per frame
+       from the projection of each volume, so they follow the ship rather than
+       the ship having to hold still for them. -->
+  <div id="inspect" class="hidden" aria-hidden="true"></div>
+  <!-- Offered only once the camera is actually looking at a ship, which is why
+       it lives on the canvas and not in the rail: it is about where the camera
+       is standing, and the rail cannot say. -->
+  <button id="bInspect" class="hidden" title="Label this hull's systems">Ship data</button>
+
   <div id="toolbar" aria-label="Camera and ship controls">
     <button id="cMode" title="One finger on empty space orbits. Tap to pan instead. Mouse: left pans, right orbits.">&#10227;</button>
     <button id="cCentre" title="Centre the camera on the selected ship">&#8853;</button>
@@ -1154,6 +1407,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <button id="pCW" class="shipctl" title="Swing heading 15 degrees right (D)">&#8635;</button>
     <button id="pFace" class="shipctl" title="Face the target (F)">&#9678;</button>
   </div>
+
+  <!-- What a chip cannot fit, while a pointer rests on one. An addition and
+       never the only route: the same detail is a tap away on the info button,
+       because a phone has no hover. -->
+  <div id="shipCard" class="hidden" role="tooltip"></div>
 
   <footer>
     <!-- Anchored to the footer so it sits over the canvas and never under a

@@ -44,6 +44,54 @@ export interface HullMesh {
   readonly quads: number;
   /** Half extents in ship units, about the hull's own centre. */
   readonly half: readonly [number, number, number];
+  /**
+   * Where that centre is, in ship units.
+   *
+   * Not the origin. A hull is not symmetric about the point it turns around:
+   * a Terran runs from its drive bells behind the origin to a nose well in
+   * front of it, and anything framing this mesh on (0,0,0) with `half` puts
+   * the difference off the edge of the picture.
+   */
+  readonly mid: readonly [number, number, number];
+}
+
+/**
+ * The side colours a hull is washed with, and the wash itself.
+ *
+ * Here rather than in `view.ts` because three pictures now draw the same
+ * hulls: the map, the fleet chip thumbnails and the schematic modal. Whose
+ * ship a hull is has to read identically in all three, and a second copy of
+ * the tint is a copy that goes its own way the first time one of them is
+ * tuned (GUIDELINES 5.1).
+ */
+export const SIDE_TONE = {
+  mine: 0x35c7ff,
+  theirs: 0xfa6a0a,
+  adrift: 0xff4b4b,
+  lost: 0x33404f,
+} as const;
+
+/** Which of those a hull wears, given the seat looking at it. */
+export function hullTone(
+  s: { destroyed: boolean; drifting: boolean; side: number }, mySide: number,
+): number {
+  return s.destroyed ? SIDE_TONE.lost
+    : s.drifting ? SIDE_TONE.adrift
+    : s.side === mySide ? SIDE_TONE.mine : SIDE_TONE.theirs;
+}
+
+/**
+ * Wash a hull material toward its side, keeping the design's own paint.
+ *
+ * Lambert MULTIPLIES this by the vertex colour, so the full side colour would
+ * wash a red gun to near black. Halfway from white keeps the hue and still
+ * says whose it is, with a little emissive so a hull reads against the field
+ * rather than sinking into it.
+ */
+export function tintHull(mat: THREE.MeshLambertMaterial, tone: number, destroyed: boolean): void {
+  mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), destroyed ? 0.8 : 0.5);
+  mat.emissive.setHex(destroyed ? 0x000000 : tone).multiplyScalar(0.12);
+  mat.needsUpdate = true;
 }
 
 const cache = new Map<string, HullMesh>();
@@ -227,6 +275,11 @@ export function hullMesh(d: Design): HullMesh {
       Math.max(1, hiX - loX + 1) * cell / 2,
       Math.max(1, hiY - loY + 1) * cell / 2,
       Math.max(1, hiZ - loZ + 1) * cell / 2,
+    ],
+    mid: [
+      ((loX + hiX + 1) / 2 - NX / 2) * cell,
+      ((loY + hiY + 1) / 2 - NY / 2) * cell,
+      ((loZ + hiZ + 1) / 2 - NZ / 2) * cell,
     ],
   };
   if (cache.size >= CACHE_MAX) {
