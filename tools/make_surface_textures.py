@@ -13,8 +13,9 @@ zooms in on one hull. Two things fix that without touching a single rule:
   that colour is lit as though it had that surface, and
 
   a WINDOW DECAL per cell, painted on in the shipyard, which adds a recess to
-  the normals and a glow to the emission while the cell keeps the paint colour
-  it already had.
+  the normals, takes the hull's paint off the glass, and puts a glow behind it.
+  Three maps, and the middle one is the one that makes an unlit window read as
+  a window rather than as a rectangle of hull.
 
 Neither changes an outcome, so neither crosses the boundary: meshes and
 materials are the client's business (CLAUDE.md, the boundary). What a player
@@ -308,6 +309,34 @@ DEEP = (1.00, 0.62, 0.26)     # the falloff at the edge of a warm pane
 COOL = (0.80, 0.92, 1.00)     # instrument light, which is what a bridge is
 AMBER = (1.00, 0.72, 0.20)    # running lights and bay markers
 
+# How dark the GLASS is, as a multiplier on whatever the hull is painted.
+#
+# This is the map the first two cuts did not have, and not having it is why a
+# window with its light off looked like no window at all. Emission only ADDS:
+# it can put a glow on a pane and it cannot take the hull's paint off one, so
+# an unlit pane rendered as plain armour in the armour's own colour, which on a
+# blue hull is a blue rectangle indistinguishable from the plating around it.
+# A window is dark glass. It multiplies the paint down to nearly nothing and
+# THEN the emission adds whatever is on inside, which is also why a lit pane
+# now reads in its own colour instead of the hull's colour plus a wash.
+GLASS = 0.06
+
+
+def pane_lights(n: int, seed: int):
+    """How many of `n` panes are on, dim or off, for one variant.
+
+    Three states rather than a continuum, because at the size a cell is drawn
+    the eye reads on, half and off and nothing between them. Deterministic from
+    the seed, so a regeneration is bit identical and the same hull looks the
+    same on both screens.
+    """
+    r = rng(seed)
+    out = []
+    for _ in range(n):
+        x = r()
+        out.append(1.0 if x > 0.58 else (0.55 if x > 0.34 else 0.0))
+    return tuple(out)
+
 
 def lerp3(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
@@ -319,6 +348,14 @@ def _panes(spec):
     `lit` is 0 to 1, and it is deliberately not 1 everywhere. A row of identical
     panes reads as a texture; one dark pane and one dim one reads as a ship with
     somebody aboard, and it costs nothing.
+
+    But a dark pane is not an ABSENT one. The first cut set the fourth cabin to
+    exactly zero, meaning nobody home, and at the size a cell is drawn that is
+    a hole rather than a window: the frame is in the normal map but the eye is
+    reading the emission, and black emission next to three lit panes looks like
+    a window somebody forgot to draw. An unlit pane is still glass, and glass
+    with no light behind it reflects the sky, so it keeps a little cool
+    emission instead of none.
     """
     def height(x, y):
         v = 0.0
@@ -336,14 +373,24 @@ def _panes(spec):
             if x0 < x < x1 and y0 < y < y1:
                 inset = min(x - x0, x1 - x, y - y0, y1 - y)
                 k = smoothstep(0.0, 0.026, inset)
+                # A pane with nothing on behind it emits nothing. It is still
+                # obviously a window, because the glass map has taken the
+                # hull's paint off it and left it black.
                 return tuple(v * lit * (0.35 + 0.65 * k)
                              for v in lerp3(cold, hot, k))
         return (0.0, 0.0, 0.0)
 
-    return height, emission
+    def glass(x, y):
+        for (x0, y0, x1, y1, _lit) in spec:
+            if x0 < x < x1 and y0 < y < y1:
+                inset = min(x - x0, x1 - x, y - y0, y1 - y)
+                return smoothstep(0.0, 0.012, inset)
+        return 0.0
+
+    return height, emission, glass
 
 
-def w_porthole():
+def w_porthole(v=0):
     """One round window. The unit a habitation deck is made of."""
     def height(x, y):
         dx, dy = x - 0.5, y - 0.5
@@ -361,33 +408,38 @@ def w_porthole():
         # from the centre reads as a lit BALL rather than as a lit room.
         k = smoothstep(0.252, 0.205, r)
         return tuple(v * (0.30 + 0.70 * k) for v in lerp3(DEEP, WARM, k))
-    return height, emission
+
+    def glass(x, y):
+        dx, dy = x - 0.5, y - 0.5
+        r = (dx * dx + dy * dy) ** 0.5
+        return smoothstep(0.262, 0.248, r)
+    return height, emission, glass
 
 
-def w_panes():
+def w_panes(v=0):
     """Four square windows. A cabin block."""
-    g, lit = 0.055, (1.0, 0.55, 0.9, 0.0)
+    g, lit = 0.055, pane_lights(4, 0xCAB19 + v * 7919)
     spec, i = [], 0
     for by in (0.5 + g, 0.5 - g - 0.30):
         for bx in (0.5 + g, 0.5 - g - 0.30):
             spec.append((bx, by, bx + 0.30, by + 0.30, lit[i]))
             i += 1
-    height, emission = _panes(spec)
-    return height, lambda x, y: emission(x, y, WARM, DEEP)
+    height, emission, glass = _panes(spec)
+    return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
-def w_strip():
+def w_strip(v=0):
     """A viewport band with mullions. A promenade, or a long corridor."""
     spec, n = [], 4
-    lit = (1.0, 0.72, 1.0, 0.45)
+    lit = pane_lights(n, 0x57317 + v * 7919)
     for i in range(n):
         x0 = 0.10 + i * (0.80 / n)
         spec.append((x0 + 0.014, 0.40, x0 + 0.80 / n - 0.014, 0.60, lit[i]))
-    height, emission = _panes(spec)
-    return height, lambda x, y: emission(x, y, WARM, DEEP)
+    height, emission, glass = _panes(spec)
+    return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
-def w_bridge():
+def w_bridge(v=0):
     """One wide canted viewport. Where somebody is flying this thing."""
     def shape(x, y):
         # Canted: the top edge runs wider than the bottom one.
@@ -408,10 +460,13 @@ def w_bridge():
         d = min(0.68 - y, y - 0.32)
         k = smoothstep(0.0, 0.05, d)
         return tuple(v * (0.45 + 0.55 * k) for v in lerp3(WARM, COOL, k))
-    return height, emission
+
+    def glass(x, y):
+        return 1.0 if shape(x, y) else 0.0
+    return height, emission, glass
 
 
-def w_beacons():
+def w_beacons(v=0):
     """Three running lights. Not a window: the thing that makes a hull read as
     crewed at a range where a window is one pixel."""
     pts = [(0.5, 0.22), (0.5, 0.50), (0.5, 0.78)]
@@ -433,10 +488,18 @@ def w_beacons():
                 k = smoothstep(0.062, 0.0, r)
                 return tuple(v * (0.25 + 0.75 * k) for v in lerp3(AMBER, (1, 1, 0.92), k))
         return (0.0, 0.0, 0.0)
-    return height, emission
+
+    def glass(x, y):
+        out = 0.0
+        for (cx, cy) in pts:
+            dx, dy = x - cx, y - cy
+            r = (dx * dx + dy * dy) ** 0.5
+            out = max(out, smoothstep(0.068, 0.056, r))
+        return out
+    return height, emission, glass
 
 
-def w_hangar():
+def w_hangar(v=0):
     """A bay mouth: deeply recessed, lit from inside, with a lip round it."""
     x0, x1, y0, y1 = 0.14, 0.86, 0.22, 0.78
 
@@ -458,19 +521,88 @@ def w_hangar():
         floor = smoothstep(0.70, 0.24, y)
         c = lerp3(DEEP, (1.0, 0.93, 0.80), k)
         return tuple(v * (0.20 + 0.80 * k) * (0.55 + 0.45 * floor) for v in c)
-    return height, emission
+
+    def glass(x, y):
+        if not (x0 < x < x1 and y0 < y < y1):
+            return 0.0
+        inset = min(x - x0, x1 - x, y - y0, y1 - y)
+        return smoothstep(0.0, 0.012, inset)
+    return height, emission, glass
 
 
+# The last number is how many VARIANTS the decal carries, side by side in one
+# texture.
+#
+# A run of cabins with the same panes lit in every one of them reads as a
+# repeating texture rather than as a ship with people in it, which is the same
+# thing sixteen ember tiles exist to avoid. There is no per cell attribute to
+# hang a choice on here, and there does not need to be: neighbouring window
+# cells merge into ONE quad whose UV runs 0 to N in cells, so a texture holding
+# V patterns side by side and sampled at 1/V cycles through them, one per cell,
+# for nothing but the width. Seven and five rather than four and six, because a
+# period sharing a factor with a run lines the same pattern up under the same
+# part of the ship every time round.
 WINDOWS = [
-    ("porthole", "Porthole",  "One round window. The unit a habitation deck is made of.", w_porthole),
-    ("panes",    "Cabins",    "Four panes, and one of them dark.",                        w_panes),
-    ("strip",    "Promenade", "A viewport band with mullions.",                           w_strip),
-    ("bridge",   "Bridge",    "A canted viewport, lit by instruments.",                   w_bridge),
-    ("beacons",  "Beacons",   "Running lights. Reads as crewed at map range.",            w_beacons),
-    ("hangar",   "Bay mouth", "A recessed opening, lit from the deck inside.",            w_hangar),
+    ("porthole", "Porthole",  "One round window. The unit a habitation deck is made of.", w_porthole, 1),
+    ("panes",    "Cabins",    "Four panes, lit differently down the run.",                w_panes,    7),
+    ("strip",    "Promenade", "A viewport band with mullions.",                           w_strip,    5),
+    ("bridge",   "Bridge",    "A canted viewport, lit by instruments.",                   w_bridge,   1),
+    ("beacons",  "Beacons",   "Running lights. Reads as crewed at map range.",            w_beacons,  1),
+    ("hangar",   "Bay mouth", "A recessed opening, lit from the deck inside.",            w_hangar,   1),
 ]
 
 WINDOW_STRENGTH = 26.0
+
+
+# ----------------------------------------------------------- environment --
+#
+# What a metal has to reflect.
+#
+# A metal with no environment is BLACK: metalness says "this surface shows you
+# what is around it", and around it is nothing until something is there. So the
+# moment a palette colour carries metalness, the scene needs one of these, and
+# it may as well be a file with a generator like every other texture here
+# rather than a gradient built at load time (GUIDELINES 3).
+#
+# Equirectangular, and authored directly in that space: u is the way round, v
+# is up. That means no trigonometry, which is what keeps `--check` honest on a
+# machine that is not this one.
+#
+# Low frequency on purpose. PMREM blurs this into roughness levels before
+# anything reflects it, so fine detail is detail that gets averaged away; what
+# survives and what actually matters is the big split between a lit sky above
+# and a dark ground below. The two ends are the same colours the battlefield's
+# hemisphere light already uses, so a reflection agrees with the lighting
+# rather than arguing with it.
+ENV_W, ENV_H = 512, 256
+ENV_SKY = (0.373, 0.498, 0.627)     # 0x5f7fa0, the hemisphere light's sky
+ENV_MID = (0.098, 0.129, 0.180)
+ENV_GROUND = (0.039, 0.055, 0.078)  # 0x0a0e14, its ground and the background
+# A cool wash across the sky, so a curved hull does not reflect one flat tone.
+ENV_WASH = (0.16, 0.30, 0.42)
+
+
+def env_png() -> bytes:
+    """The battlefield's surroundings, as one equirectangular strip."""
+    cloud = [value_noise(p, 0xE0A5 + i) for i, p in enumerate((3, 6))]
+    grain = value_noise(12, 0xE0A7)
+    out = []
+    for y in range(ENV_H):
+        # 0 at the top of the sphere, 1 at the bottom.
+        t = (y + 0.5) / ENV_H
+        for x in range(ENV_W):
+            u = (x + 0.5) / ENV_W
+            base = (lerp3(ENV_SKY, ENV_MID, smoothstep(0.0, 0.55, t))
+                    if t < 0.55
+                    else lerp3(ENV_MID, ENV_GROUND, smoothstep(0.55, 1.0, t)))
+            # A slow drift round the sphere, strongest up top where a hull's
+            # shoulders catch it.
+            k = fbm(u, t, cloud) * (1.0 - smoothstep(0.25, 0.85, t))
+            c = lerp3(base, ENV_WASH, 0.35 * k)
+            # A little tooth, so a mirror surface is not a flat field.
+            g = (grain(u, t) - 0.5) * 0.03
+            out.append((c[0] + g, c[1] + g, c[2] + g))
+    return rgb_png(out, ENV_W, ENV_H)
 
 
 # ------------------------------------------------------------------ main --
@@ -485,16 +617,32 @@ def main() -> int:
 
     for key, _label, _blurb, build, strength in ARMOUR:
         h = build()
-        files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, strength, True)))
+        files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, SIZE, strength, True)))
 
-    for key, _label, _blurb, build in WINDOWS:
-        height, emission = build()
-        h = [height((x + 0.5) / SIZE, (y + 0.5) / SIZE)
-             for y in range(SIZE) for x in range(SIZE)]
-        e = [emission((x + 0.5) / SIZE, (y + 0.5) / SIZE)
-             for y in range(SIZE) for x in range(SIZE)]
-        files.append((f"tex/window_{key}_n.png", normal_png(h, SIZE, WINDOW_STRENGTH, True)))
-        files.append((f"tex/window_{key}_e.png", rgb_png(e, SIZE)))
+    for key, _label, _blurb, build, variants in WINDOWS:
+        made = [build(v) for v in range(variants)]
+        wide = SIZE * variants
+        h, e, c = [], [], []
+        for y in range(SIZE):
+            for x in range(wide):
+                # Which variant this column is in, and where inside it.
+                height, emission, glass = made[x // SIZE]
+                u = ((x % SIZE) + 0.5) / SIZE
+                w = (y + 0.5) / SIZE
+                h.append(height(u, w))
+                e.append(emission(u, w))
+                # The glass map, as a MULTIPLIER on whatever the hull is
+                # painted: white where the hull shows through and near black
+                # on the glass.
+                g = glass(u, w)
+                t = 1.0 + (GLASS - 1.0) * g
+                c.append((t, t, t))
+        files.append((f"tex/window_{key}_n.png",
+                      normal_png(h, wide, SIZE, WINDOW_STRENGTH, True)))
+        files.append((f"tex/window_{key}_e.png", rgb_png(e, wide, SIZE)))
+        files.append((f"tex/window_{key}_c.png", rgb_png(c, wide, SIZE)))
+
+    files.append(("tex/env.png", env_png()))
 
     # The same bytes again as data URIs, because GUIDELINES 2.1 gives a mockup
     # no network at all and that includes a file sitting next to it.

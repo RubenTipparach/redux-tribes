@@ -823,7 +823,11 @@ fn apply_mounts(sim: &mut Sim) {
             let ship = &mut sim.ships[si];
             // Cooldowns survive: a restored mount is the same mount, and
             // forgetting when it last fired would hand a ship a free shot.
+            // Cooldowns and damage both survive: a restored mount is the same
+            // mount, and a gun that has been knocked off the hull does not come
+            // back because the design was re-read.
             let fired: Vec<i32> = ship.weapons.iter().map(|w| w.last_fired_tick).collect();
+            let hp: Vec<f32> = ship.weapons.iter().map(|w| w.hp).collect();
             ship.weapons = mounts
                 .iter()
                 .enumerate()
@@ -832,6 +836,7 @@ fn apply_mounts(sim: &mut Sim) {
                     mount: *at,
                     arc_mask: *mask,
                     last_fired_tick: fired.get(i).copied().unwrap_or(-99),
+                    hp: hp.get(i).copied().unwrap_or(crate::data::MOUNT_HP),
                 })
                 .collect();
         }
@@ -1787,6 +1792,23 @@ pub extern "C" fn ft_nominal_reach(ship: u32) -> f32 {
 #[no_mangle]
 pub extern "C" fn ft_can_fire(ship: u32, weapon: u32) -> u32 {
     sim_opt().map(|s| s.can_fire(ship as usize, weapon as usize) as u32).unwrap_or(0)
+}
+
+/// Has this mount been knocked off the hull?
+///
+/// `ft_can_fire` already returns false for a mount that has gone, which greys
+/// it out. This is asked separately because the client has a second thing to
+/// do about it: stop DRAWING the turret. A gun knocked off a hull is not
+/// cooling down and is not waiting for the bay, it is not there, and it is
+/// never coming back, so the renderer takes it off rather than leaving a
+/// barrel bolted to a hole.
+#[no_mangle]
+pub extern "C" fn ft_mount_gone(ship: u32, weapon: u32) -> u32 {
+    sim_opt()
+        .and_then(|s| s.ships.get(ship as usize))
+        .and_then(|sh| sh.weapons.get(weapon as usize))
+        .map(|w| w.destroyed() as u32)
+        .unwrap_or(0)
 }
 
 /// Has this hull a weapon bay left to fire from?

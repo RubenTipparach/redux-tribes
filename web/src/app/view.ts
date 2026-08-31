@@ -170,6 +170,16 @@ export const FX_TICKS = Math.max(KILL_TICKS, HIT_TICKS, BEAM_TICKS);
 /** A kill's fireball, as a multiple of the hull radius it consumed. */
 const KILL_REACH = 7.5;
 
+/**
+ * How many point lights the explosions share.
+ *
+ * Fixed, and made once: three.js compiles the light count into every material,
+ * so a light appearing when a shell lands and going when the fire dies
+ * recompiles the whole scene twice a second. Four covers a salvo, because the
+ * brightest few are the ones anybody sees.
+ */
+const BLAST_LIGHTS = 4;
+
 const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
@@ -312,6 +322,21 @@ export class View {
   #carved = new Map<number, Carved>();
   /** Each ship's turrets, built with its hull and posed every frame. */
   #rigs = new Map<number, Rig[]>();
+  /**
+   * Whether the CORE says a mount has been knocked off, ship and mount index.
+   *
+   * Handed in rather than reached for, because the view draws and does not own
+   * a match. Absent until the console sets it, and a view with no answer keeps
+   * every turret, which is the safe way round: drawing a gun that is gone is a
+   * wrong picture, and taking one off that is still there is a wrong picture
+   * AND a player wondering where their weapon went.
+   */
+  #mountGone: ((ship: number, mount: number) => boolean) | null = null;
+
+  /** Tell the view how to ask whether a mount is still on its hull. */
+  setMountGone(fn: (ship: number, mount: number) => boolean): void {
+    this.#mountGone = fn;
+  }
   /** What each hull's guns are tracking, in world space. Set by the console,
    *  because WHO a ship is shooting at is a match fact and this only draws
    *  where the barrels ended up. */
@@ -462,7 +487,7 @@ export class View {
     ];
   }
 
-  #applyHit(c: Carved, h: HullHit): void {
+  #applyHit(id: number, c: Carved, h: HullHit): void {
     const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
     const born: Debris[] = [];
 
@@ -511,22 +536,14 @@ export class View {
       }
     }
 
-    // Knocked loose. A mount is bolted to the frame and plating around it, and
-    // when every one of those cells is gone there is nothing holding it on, so
-    // it goes too, in one piece and at the same tick. This is the only way a
-    // turret leaves a hull, which is what makes the rule above hold: it is
-    // whole, or it is not there.
+    // A mount that has been knocked off is taken off, and the CORE says which:
+    // `mountGone` is the resolver's own answer, permanent, and the same one
+    // that stops the gun firing. This used to be decided here, from whether
+    // every cell bolting a turret on had gone, which made the renderer the
+    // author of a rule the simulation did not know about: the turret vanished
+    // and the gun kept shooting out of the empty socket. One rule, asked.
     for (let r = 0; r < c.hull.rigs.length; r++) {
-      const holds = c.hull.rigSupport[r];
-      // A mount with nothing recorded as holding it can never come off. That
-      // is deliberate: it means the design put it somewhere this cannot reason
-      // about, and dropping it on a guess is worse than leaving it standing.
-      if (!holds || !holds.length) continue;
-      let attached = false;
-      for (const n of holds) {
-        if (!c.cells.has(n)) { attached = true; break; }
-      }
-      if (attached) continue;
+      if (!this.#mountGone || !this.#mountGone(id, r)) continue;
       const own = c.hull.rigCells[r];
       if (!own) continue;
       for (const n of own) {
@@ -1526,7 +1543,7 @@ export class View {
       if (h.tick > tick) continue;
       const c = this.#carveOf(h.ship);
       if (!c) continue;
-      if (h.tick > c.upTo) this.#applyHit(c, h);
+      if (h.tick > c.upTo) this.#applyHit(h.ship, c, h);
       const age = (tick - h.tick) / DEBRIS_TICKS;
       if (age >= 0 && age < 1) {
         for (const d of c.born.get(h.tick) ?? []) {
@@ -1646,13 +1663,19 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
-  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit: boolean }> = [];
+  #lastBeams: ReadonlyArray<{
+    from: Vec3; to: Vec3; age: number;
+    hit?: boolean | undefined; centre?: Vec3 | undefined; ship?: number | undefined;
+  }> = [];
   #lastBlasts: ReadonlyArray<{
     pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
     centre: Vec3; resolved: boolean;
   }> = [];
 
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit: boolean }>): void {
+  setBeams(list: ReadonlyArray<{
+    from: Vec3; to: Vec3; age: number;
+    hit?: boolean | undefined; centre?: Vec3 | undefined; ship?: number | undefined;
+  }>): void {
     this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
@@ -1686,6 +1709,58 @@ export class View {
    * it. Additive and depth-write off, so they light each other instead of
    * cutting holes.
    */
+  /**
+   * The lights an explosion casts, made ONCE and reused.
+   *
+   * three.js bakes the light count into every material it compiles, so adding
+   * a light when a shell lands and removing it when the fire dies recompiles
+   * the whole scene twice a second. A fixed pool costs the same every frame:
+   * an unused one sits at zero intensity, which the shader still evaluates and
+   * which is a multiply by nothing rather than a recompile.
+   *
+   * Four, because a salvo is a handful of blasts and the brightest few are the
+   * ones anybody sees. `distance` is set per blast so a hit lights the hull it
+   * landed on rather than the whole field.
+   */
+  #blastLights: THREE.PointLight[] = [];
+
+  #lightBlasts(
+    list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>,
+  ): void {
+    if (!this.#blastLights.length) {
+      for (let i = 0; i < BLAST_LIGHTS; i++) {
+        const l = new THREE.PointLight(FLAME, 0, 1, 2);
+        l.visible = true;
+        this.#blastLights.push(l);
+        this.#scene.add(l);
+      }
+    }
+    // Brightest first, so four lights go to the four blasts worth lighting.
+    const lit = list
+      .map(b => {
+        const a = Math.max(0, Math.min(1, b.age));
+        // The flash is the first moment and then it falls away fast: an
+        // explosion that fades its light linearly reads as a lamp being turned
+        // down rather than as something going off.
+        const fall = (1 - a) * (1 - a);
+        return { b, a, power: b.radius * (b.kill ? 5.2 : 2.4) * fall };
+      })
+      .filter(x => x.power > 0.01)
+      .sort((p, q) => q.power - p.power);
+
+    for (let i = 0; i < this.#blastLights.length; i++) {
+      const l = this.#blastLights[i] as THREE.PointLight;
+      const x = lit[i];
+      if (!x) { l.intensity = 0; continue; }
+      l.position.set(x.b.pos.x, x.b.pos.y, x.b.pos.z);
+      // White at the flash, through flame, to red as it dies, which is the
+      // same journey the fireball itself makes.
+      l.color.setHex(x.a < 0.18 ? WHITE : (x.a < 0.55 ? FLAME : RED));
+      l.intensity = x.power;
+      l.distance = x.b.radius * (x.b.kill ? 26 : 12);
+    }
+  }
+
   setBlasts(
     list: ReadonlyArray<{
       pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
@@ -1693,6 +1768,7 @@ export class View {
     }>,
   ): void {
     this.#lastBlasts = list;
+    this.#lightBlasts(list);
     for (const c of this.#fxGroup.children) {
       const m = c as THREE.Mesh;
       m.geometry.dispose();
@@ -2183,18 +2259,13 @@ export class View {
    * explosion hangs in space beside the ship. `beamLen` is the same question
    * for a beam, which used to be drawn to the weapon's full range whether or
    * not it hit anything.
-   *
-   * Beams that HIT, only. A beam that missed is SUPPOSED to run out to the
-   * weapon's range and into space, so measuring every beam would call a clean
-   * miss the very defect this reports, and did.
    */
   fxStats(): {
     blasts: number; beams: number; trails: number; widest: number;
     onHull: Array<{
       ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
     }>;
-    beamLen: number[];
-    beamsHit: number;
+    beamLen: Array<{ len: number; hit: boolean; off: number; hullR: number }>;
   } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
@@ -2220,13 +2291,36 @@ export class View {
         off: +off.toFixed(3), hullR: +hullR.toFixed(3),
       };
     });
-    const beamLen = this.#lastBeams.filter(b => b.hit).map(b => +Math.sqrt(
-      (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
-    ).toFixed(2));
+    // Judged the same way a blast is: how far the END of the beam sits from
+    // the ship it hit. Length is not the question and never was. A beam that
+    // MISSED is drawn to full range and is right to be, and a beam that hit a
+    // ship 260 units away is 260 units long and also right; what would be
+    // wrong is a beam that carried on THROUGH what it hit, and that shows as
+    // an end nowhere near the hull.
+    const beamLen = this.#lastBeams.map(b => {
+      const c = b.ship === undefined ? undefined : this.#carved.get(b.ship);
+      const half = c ? c.hull.half : null;
+      const hullR = half
+        ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+        : 0;
+      const off = b.centre
+        ? Math.sqrt(
+          (b.to.x - b.centre.x) ** 2
+          + (b.to.y - b.centre.y) ** 2
+          + (b.to.z - b.centre.z) ** 2)
+        : 0;
+      return {
+        len: +Math.sqrt(
+          (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
+        ).toFixed(2),
+        hit: b.hit === true,
+        off: +off.toFixed(3),
+        hullR: +hullR.toFixed(3),
+      };
+    });
     return {
       onHull,
       beamLen,
-      beamsHit: beamLen.length,
       blasts: this.#fxGroup.children.length,
       beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,

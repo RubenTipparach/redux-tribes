@@ -75,6 +75,9 @@ useCore((cls, geo, parts) => sim.derive(cls, geo, parts));
 // core's definition of its own mask, not something to rebuild out of Math.sin.
 useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 const view = new View(canvas, match, sim);
+// The map takes a turret off when the CORE says the mount has gone, rather
+// than working it out from the hull it drew.
+view.setMountGone((ship, mount) => match.mountGone(ship, mount));
 
 let seed = randomSeed();
 let ships: ShipState[] = [];
@@ -2724,7 +2727,11 @@ function showTick(tick: number): void {
                  && tick >= e.tick && tick < e.tick + BEAM_TICKS)
     .map(e => {
       const end = beamEnd(e, events);
-      return { from: e.pos, to: end.pos, hit: end.hit, age: (tick - e.tick) / BEAM_TICKS };
+      return {
+        from: e.pos, to: end.to, hit: end.hit,
+        centre: end.centre, ship: end.ship,
+        age: (tick - e.tick) / BEAM_TICKS,
+      };
     }));
   view.setBlasts(blastsAt(events, tick));
   // What the turn has taken off each hull, and the chunks still in the air.
@@ -3053,11 +3060,12 @@ function contactWorld(e: SimEvent): Contact {
  * ship as the shooter, and the point sits on this shot's line rather than on
  * another mount's, which is what tells two shots in one tick apart.
  */
-function beamEnd(fired: SimEvent, events: readonly SimEvent[]): { pos: Vec3; hit: boolean } {
+function beamEnd(fired: SimEvent, events: readonly SimEvent[])
+  : { to: Vec3; hit: boolean; centre?: Vec3; ship?: number } {
   const ax = fired.pos.x, ay = fired.pos.y, az = fired.pos.z;
   const dx = fired.to.x - ax, dy = fired.to.y - ay, dz = fired.to.z - az;
   const len2 = dx * dx + dy * dy + dz * dz;
-  if (len2 <= 0) return { pos: fired.to, hit: false };
+  if (len2 <= 0) return { to: fired.to, hit: false };
   let best: SimEvent | null = null, bestT = Infinity;
   for (const e of events) {
     if (e.kind !== EventKind.ShotHit || e.tick !== fired.tick) continue;
@@ -3069,10 +3077,12 @@ function beamEnd(fired: SimEvent, events: readonly SimEvent[]): { pos: Vec3; hit
     if (ox * ox + oy * oy + oz * oz > 0.25) continue;
     if (t < bestT) { bestT = t; best = e; }
   }
-  // A beam that hit stops at the hull. A beam that MISSED goes on to the
-  // weapon's range and into space, which is what a miss looks like, so the
-  // two are told apart here rather than by how long the line came out.
-  return best ? { pos: contactWorld(best).pos, hit: true } : { pos: fired.to, hit: false };
+  // A MISS is drawn to full range, and correctly so: nothing stopped it. Only
+  // a beam that hit something has anywhere shorter to stop, which is why the
+  // two are told apart rather than judged by length.
+  if (!best) return { to: fired.to, hit: false };
+  const c = contactWorld(best);
+  return { to: c.pos, hit: true, centre: c.centre, ship: best.ship };
 }
 
 function blastsAt(events: readonly SimEvent[], tick: number)

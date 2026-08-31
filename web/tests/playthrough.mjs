@@ -80,17 +80,13 @@ let blastsSeen = 0;
 /** Blasts that fell back to the raw event because the hull could not be
  *  consulted, which is the old behaviour surviving in a corner. */
 let unresolved = 0;
-/** The longest beam drawn that HIT something, against the range of the weapon
- *  that fired it: a beam that hit used to be drawn out to full range and
- *  through the target.
- *
- *  Hits only, because a beam that MISSED is supposed to run out to the
- *  weapon's range and off into space. Measuring every beam made a clean miss
- *  read as the overshoot defect, and did: a run failed at 297.8 u on a shot
- *  that never connected with anything. `beamsHit` is counted so that a match
- *  where no beam landed cannot pass this by having nothing to measure. */
-let longestBeam = 0;
-let beamsHit = 0;
+/** The worst end of a beam that HIT, as how far it stopped from the hull it
+ *  hit. Length is not the question: a beam that missed runs to full range and
+ *  is right to, and a beam that hit a ship 260 units off is 260 units long and
+ *  also right. What would be wrong is one that carried on THROUGH what it hit,
+ *  which shows as an end nowhere near the hull. */
+let worstBeam = null;
+let hittingBeams = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -197,24 +193,28 @@ if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
     + `hull radius ${worstBlast.hullR} u`);
   process.exit(1);
 }
-// And a beam stops at what it hit. The beam weapon's range is 300 units, so a
-// beam that CONNECTED and is anywhere near that length is one drawn straight
-// through its target. A missed beam is not asked about: running out to the
-// weapon's range is what a miss looks like.
-if (!beamsHit) {
-  console.log('\nFAIL: a whole match and no beam was ever seen connecting, '
-    + 'so nothing was measured');
+// And a beam STOPS at what it hit, judged where the blast is judged: at the
+// hull, not by length. Two earlier cuts of this used length and both were
+// wrong about a different thing. A beam that missed runs to full range and is
+// right to; a beam that hit a ship 260 units away is 260 units long and also
+// right. The only wrong beam is one that carried on through what it hit, and
+// that is an END nowhere near the hull.
+if (!hittingBeams) {
+  console.log('\nFAIL: no beam that hit anything was ever sampled, so nothing '
+    + 'was checked about where a beam stops');
   process.exit(1);
 }
-if (longestBeam > 200) {
-  console.log(`\nFAIL: a beam was drawn ${longestBeam} u, which is its full `
-    + 'range: it did not stop at the ship it hit');
+if (worstBeam && worstBeam.off > worstBeam.hullR + 0.15) {
+  console.log(`\nFAIL: a beam did not stop at the ship it hit: it ends `
+    + `${worstBeam.off} u from that hull's centre, and the hull's radius is `
+    + `${worstBeam.hullR} u`);
   process.exit(1);
 }
 log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
   + `${worstBlast ? worstBlast.off : 0} u out against a hull radius of `
-  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam that connected `
-  + `${longestBeam} u over ${beamsHit} sample(s)`);
+  + `${worstBlast ? worstBlast.hullR : 0} u; ${hittingBeams} beams that hit, `
+  + `worst stopping ${worstBeam ? worstBeam.off : 0} u out against `
+  + `${worstBeam ? worstBeam.hullR : 0} u`);
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -918,8 +918,11 @@ async function playMatch() {
       if (!b.resolved) unresolved++;
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
-    for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);
-    beamsHit += snap.fx.beamsHit;
+    for (const b of snap.fx.beamLen) {
+      if (!b.hit || !b.hullR) continue;
+      hittingBeams++;
+      if (!worstBeam || b.off - b.hullR > worstBeam.off - worstBeam.hullR) worstBeam = b;
+    }
     if (snap.done) break;
     await page.waitForTimeout(200);
   }

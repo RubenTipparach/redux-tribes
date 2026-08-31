@@ -88,6 +88,7 @@ export interface MatchExports {
   ft_can_fire(ship: number, weapon: number): number;
   ft_can_bear(ship: number, weapon: number, target: number, sub: number): number;
   ft_weapon_bay(ship: number): number;
+  ft_mount_gone(ship: number, weapon: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
   ft_ship_roll(ship: number): number;
@@ -291,6 +292,13 @@ export class Match {
   /** Whether this hull has a weapon bay left at all, as against a mount that
    * is merely cooling. The core's answer, so the reason shown and the reason
    * the resolver acts on are one reason. */
+  /** Has this mount been knocked off the hull? Permanent, and the reason the
+   *  map stops drawing a turret: the core decides a gun has gone, the renderer
+   *  does not work it out for itself. */
+  mountGone(ship: number, weapon: number): boolean {
+    return this.#ex.ft_mount_gone(ship, weapon) !== 0;
+  }
+
   weaponBay(ship: number): boolean {
     return this.#ex.ft_weapon_bay(ship) !== 0;
   }

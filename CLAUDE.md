@@ -154,12 +154,18 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
-A check has to ask about the thing it names. The beam check measured EVERY beam
-against the weapon's range, on the reasoning that a long beam is one drawn
-through its target, and a run went red at 297.8 units on a beam that had simply
-missed: the core emits the full range endpoint on every shot and the client
-shortens the ones that hit, so running out into space is what a miss is
-supposed to look like. It reads the beams that CONNECTED now, and counts them,
+A check has to ask about the thing it names, and LENGTH was never the question
+about a beam. Two cuts of that check measured one, and each was wrong about
+something different. Measuring every beam against the weapon's range went red
+at 297.8 units on a beam that had simply MISSED: the core emits the full range
+endpoint on every shot and the client shortens only the ones that hit, so
+running out into space is exactly what a miss looks like. Measuring only the
+beams that connected still calls a legitimate hit on a ship 260 units away too
+long, and still misses the real defect, which is a beam that carried on THROUGH
+what it hit.
+
+So it is judged where a blast is judged: how far the END of the beam sits from
+the hull it hit, against that hull's own radius. Beams that hit are counted too,
 so a match where none landed cannot pass by having nothing to measure.
 
 ### And one for the addresses
