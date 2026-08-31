@@ -1,0 +1,830 @@
+<title>Hull Finishes and Windows</title>
+<meta name="description" content="Nine armour finishes as tiling normal maps and six window decals as emission, shown on a voxel hull under the battlefield's own lighting. What a player would pick per palette colour, what each one costs, and why none of it crosses the boundary.">
+<script src="../vendor/three.global.js"></script>
+<script src="textures.js"></script>
+<style>
+/* Self contained: no network, no remote fonts, no CDN (mockup rule 2.1). */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --amber:#FFC24B;
+  --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 16px 96px;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.6;-webkit-text-size-adjust:100%}
+.wrap{max-width:1040px;margin:0 auto}
+header{padding:40px 0 20px;border-bottom:1px solid var(--line);margin-bottom:26px}
+h1{margin:0 0 6px;font-size:clamp(24px,5vw,38px);line-height:1.15;letter-spacing:-.02em}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:#1B6C8C;margin:0 0 12px}
+.lede{margin:0;color:var(--muted);font-size:17px;max-width:70ch}
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--cyan);margin:38px 0 6px}
+h2 .num{color:#1B6C8C;margin-right:8px}
+p.say{margin:0 0 14px;color:var(--muted);max-width:70ch}
+.note{border-left:2px solid var(--cyan);background:#0E1622;padding:10px 14px;margin:14px 0;
+  font-size:14px;color:var(--muted)}
+.note b{color:var(--ink)}
+.note.warn{border-left-color:var(--amber)}
+code{font-family:var(--mono);font-size:.9em;color:var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);font-weight:400}
+td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+.scroll-x{overflow-x:auto}
+
+/* ---- stages ---- */
+.stage{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;
+  margin:14px 0}
+.stage canvas{display:block;width:100%;border-radius:5px;background:#0A0E14}
+.cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 9px}
+
+/* the nine finishes, labelled over the render */
+.sheet{position:relative;max-width:600px;margin:0 auto}
+.sheet .marks{position:absolute;inset:0;pointer-events:none}
+.sheet .marks span{position:absolute;transform:translate(-50%,0);white-space:nowrap;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:#CFE0F0;text-shadow:0 1px 3px #000,0 0 8px #000}
+
+/* controls */
+.rows{display:grid;gap:8px;margin-top:12px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row > .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted);min-width:74px}
+button{font-family:var(--ui);font-size:13px;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:5px;padding:5px 10px;cursor:pointer;
+  min-height:34px}
+button:hover{border-color:#2F4A63}
+button[aria-pressed="true"]{border-color:var(--cyan);color:#061019;background:var(--cyan)}
+button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.sw{width:34px;height:34px;padding:0;border-radius:5px}
+.sw[aria-pressed="true"]{outline:2px solid var(--cyan);outline-offset:2px;border-color:#0A0E14}
+select{font-family:var(--ui);font-size:13px;color:var(--ink);background:var(--panel);
+  border:1px solid var(--line);border-radius:5px;padding:6px 8px;min-height:34px}
+.chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
+  border-radius:6px;padding:6px 8px}
+.chip .dot{width:18px;height:18px;border-radius:4px;flex:none;border:1px solid #0006}
+.chip .nm{font-size:12px;color:var(--muted);min-width:64px}
+.roleGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(214px,1fr));gap:8px}
+.hint{font-size:12px;color:var(--muted);margin:8px 0 0}
+.bad{color:var(--amber)}
+footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);
+  font-size:12px;color:var(--muted)}
+@media (max-width:560px){
+  .row > .lbl{min-width:100%}
+}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kicker">fallen tribes / mockup</p>
+  <h1>Hull Finishes and Windows</h1>
+  <p class="lede">A hull is a lattice of cells and every face is a flat rectangle of one
+  colour. That reads at map range and it is bare up close, which is exactly where the
+  console now takes a player. Two additions fix it without touching a single rule: a
+  normal map chosen per palette colour, and a window decal painted per cell.</p>
+</header>
+
+<div class="note"><b>What is being decided here.</b> Which of these nine finishes and six
+windows are worth having, and whether the map's own lighting shows them off well enough
+to be worth the bytes. Nothing below is wired into the game and nothing is in
+<code>web/public/</code>. Say which ones survive and they get built.</div>
+
+<h2><span class="num">1</span> The nine finishes</h2>
+<p class="say">Each plate is three cells by three cells, so the tiling is visible: one
+repeat of the texture per hull cell, whatever size the merged quad turns out to be. The
+light sweeps, because a normal map that is never raked is a picture of a pattern rather
+than a surface.</p>
+
+<div class="stage">
+  <p class="cap">nine finishes, one light, swept</p>
+  <div class="sheet">
+    <canvas id="cSheet"></canvas>
+    <div class="marks" id="sheetLabels"></div>
+  </div>
+  <div class="rows">
+    <div class="row">
+      <span class="lbl">light</span>
+      <button id="bSweep" aria-pressed="true">Sweeping</button>
+      <button id="bSweepMap" aria-pressed="false">Hold at map angle</button>
+    </div>
+  </div>
+</div>
+
+<h2><span class="num">2</span> On a hull, under the battlefield's own lights</h2>
+<p class="say">The same hemisphere and key light <code>view.ts</code> puts on the map,
+at the same colours and intensities. Drag to orbit, wheel or pinch to zoom. Pick a
+faction and a swatch from the real eight, then give each colour on the ship its own
+finish: that is the control the shipyard would grow, and it is per COLOUR rather than
+per part, so painting a hull green and choosing ablative makes every green cell ablative.</p>
+
+<div class="stage">
+  <p class="cap">a hull wearing what you picked</p>
+  <canvas id="cShip"></canvas>
+  <div class="rows">
+    <div class="row"><span class="lbl">faction</span><span id="uFaction"></span></div>
+    <div class="row"><span class="lbl">armour</span><span id="uSwatch"></span></div>
+    <div class="row"><span class="lbl">finish</span></div>
+    <div class="roleGrid" id="uRoles"></div>
+    <div class="row"><span class="lbl">windows</span><span id="uWindow"></span></div>
+    <div class="row">
+      <span class="lbl">view</span>
+      <button id="bDark" aria-pressed="false">Lights out</button>
+      <button id="bSpec" aria-pressed="false">Specular shading</button>
+      <button id="bFlat" aria-pressed="false">Finishes off</button>
+    </div>
+  </div>
+  <p class="hint" id="shipStat"></p>
+</div>
+
+<div class="note"><b>The thing I expected to go wrong, and did not.</b> The map is lit by
+a hemisphere light at 1.6 and one key at 1.1, and a hemisphere light is close to ambient,
+which is exactly what a normal map cannot show: with no direction to the light there is no
+shading to perturb. It turns out the key alone carries them. Press <b>Finishes off</b> to
+take every normal map away and put it back: the seams, rivets and ribs are plainly the
+difference, under the shading model that ships today and with no new light and no material
+change. <b>Specular shading</b> swaps Lambert for Phong to show what a highlight would add
+on top, which is more, and is a separate decision with its own cost.</div>
+
+<h2><span class="num">3</span> Windows are a decal, and the paint stays underneath</h2>
+<p class="say">A window is not a colour. It is a recess in the normals and a glow in the
+emission, laid over a cell that keeps whatever the player painted it: paint the hull
+Karisen rust and the porthole is a lit window in a rust coloured hull, not a sticker.
+Two window cells side by side merge into one quad carrying two windows, because the
+decal tiles like every other texture here.</p>
+<p class="say">Press <b>Lights out</b> above to kill the key light and see what the
+emission alone is doing. Not every pane is lit: one dark pane in four is what makes a
+row of windows read as a ship with somebody aboard rather than as a texture.</p>
+
+<h2><span class="num">4</span> What it costs</h2>
+<div class="scroll-x"><table id="tCost">
+  <thead><tr><th>texture</th><th>what it is</th><th class="n">bytes</th></tr></thead>
+  <tbody></tbody>
+</table></div>
+<p class="say">All 128 x 128, every dimension a power of two (GUIDELINES 4). A design
+wears one finish per colour and realistically one or two colours, so a hull costs one or
+two of these plus one window pair, not the whole set. They are separate files rather than
+an atlas on purpose: a finish has to TILE once per cell across a greedy quad that may be
+twenty cells wide, and repeat wrapping repeats a whole image rather than one tile of it.</p>
+
+<h2><span class="num">5</span> What this does not touch</h2>
+<p class="say">Nothing here changes an outcome, so nothing here crosses the boundary.
+Meshes, materials and lighting are the client's business; the core decides what happens.
+A finish is stored with the design beside <code>paint</code>, and like <code>paint</code>
+it is not passed to <code>ft_match_new</code> and not in the state hash. Two seats that
+disagreed about whether a hull is riveted or ablative would still resolve the same turn to
+the same hash.</p>
+<p class="say">One integration cost is real and worth stating up front: a window cell
+cannot merge with a neighbour that is not also a window, so painting them adds quads. How
+many depends entirely on whether they are CONTIGUOUS. A run of window cells side by side
+merges into one quad that carries one window per cell, which is nearly free; nine windows
+scattered a few cells apart shatter the long armour rectangles they sit in and cost about
+seven quads each. The hull above uses a contiguous strip and reports the figure under the
+controls as you change it.</p>
+
+<footer>
+Textures generated by <code>tools/make_surface_textures.py</code>, which is a stopgap:
+GUIDELINES 4 wants a texture out of Material Maker, and it answers 403 on every download
+path from the sandbox this was made in. Whichever of these survives review should be
+re-authored as a <code>.ptex</code> graph before it ships. Rendered with three.js r169,
+vendored.
+</footer>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+// ---------------------------------------------------------------- data --
+//
+// The palette is copied from web/src/app/design.ts (FACTION_PAINT and PURPOSE)
+// rather than invented, so a colour picked here is a colour the game has.
+var FACTION = [
+  { key:'terran', name:'Terran', sw:[0x0095E9,0x0B7FC4,0x124E89,0x0B2E52,0x6FB6E8,0xD8E2EC,0x37475A,0xF2A93B] },
+  { key:'karisen', name:'Karisen', sw:[0xFA6A0A,0xD2560A,0x73172D,0x3E0F18,0xFFA35C,0xE8D6C0,0x4A2A1A,0xFFD24B] },
+  { key:'rogue', name:'Rogue', sw:[0x494182,0x3A3466,0x6B5FA8,0x181425,0x9A8FD1,0xC9C4E0,0x2A2440,0xE0483C] },
+  { key:'benefactor', name:'Benefactor', sw:[0x1A7A3E,0x146032,0x2FA85B,0x0E4423,0x7FD9A0,0xEDE7C8,0x2F4A38,0xF9A31B] },
+  { key:'civil', name:'Civilian', sw:[0xD8E2EC,0xB9C6D4,0x8C949E,0x4F4F4F,0xF2F5F8,0x2A2E33,0x6E7680,0xC0A24A] }
+];
+// PURPOSE base hues, for everything that is not armour.
+var HUE = { structure:0x8494A8, engine:0xFF7A18, gun:0xF03B3B, command:0x3FD97C };
+
+var FINISH = [
+  ['smooth','Smooth'], ['plate','Riveted'], ['ribbed','Corrugated'],
+  ['hex','Ablative'], ['cracked','Patched'], ['tread','Grip deck'],
+  ['greeble','Greebled'], ['weave','Composite'], ['battered','Battered']
+];
+var WINDOW = [
+  ['porthole','Porthole'], ['panes','Cabins'], ['strip','Promenade'],
+  ['bridge','Bridge'], ['beacons','Beacons'], ['hangar','Bay mouth']
+];
+
+var stat = document.getElementById('shipStat');
+function fail(why) {
+  stat.innerHTML = '<span class="bad">' + why + '</span>';
+}
+
+// ------------------------------------------------------------ textures --
+var TEX = {};
+function makeTex(name, srgb, done) {
+  var uri = window.FT_TEX[name];
+  if (!uri) { done(); return; }
+  new THREE.TextureLoader().load(uri, function (t) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    t.anisotropy = 8;
+    TEX[name] = t;
+    done();
+  }, undefined, done);
+}
+
+var want = [];
+FINISH.forEach(function (f) { if (f[0] !== 'smooth') want.push(['armour_' + f[0] + '_n', false]); });
+WINDOW.forEach(function (w) {
+  want.push(['window_' + w[0] + '_n', false]);
+  want.push(['window_' + w[0] + '_e', true]);
+});
+
+var left = want.length;
+if (!window.THREE) { fail('three.js did not load.'); return; }
+if (!window.FT_TEX) { fail('textures.js did not load.'); return; }
+want.forEach(function (w) {
+  makeTex(w[0], w[1], function () { if (--left === 0) start(); });
+});
+
+// -------------------------------------------------------------- the ship --
+//
+// A voxel hull, meshed the way hull.ts meshes one: greedy rectangles of like
+// cells, with the winding rule copied from it, including the inversion on the
+// y axis that once drew every hull's top and bottom backwards.
+var NX = 24, NY = 16, NZ = 46;
+var R = { none:0, armour:1, structure:2, engine:3, gun:4, command:5 };
+var ROLE_ORDER = ['armour', 'structure', 'engine', 'gun', 'command'];
+var ROLE_LABEL = { armour:'Armour', structure:'Frame', engine:'Drive', gun:'Guns', command:'Bridge' };
+
+function buildGrid() {
+  var g = new Uint8Array(NX * NY * NZ);
+  var win = new Uint8Array(NX * NY * NZ);
+  function ix(i, j, k) { return i + j * NX + k * NX * NY; }
+  function box(x0, x1, y0, y1, z0, z1, role) {
+    for (var k = z0; k <= z1; k++)
+      for (var j = y0; j <= y1; j++)
+        for (var i = x0; i <= x1; i++)
+          if (i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ) g[ix(i, j, k)] = role;
+  }
+  box(9, 14, 6, 10, 5, 34, R.armour);      // main body
+  box(7, 16, 7, 9, 11, 26, R.armour);      // waist, wider
+  box(11, 12, 11, 12, 9, 30, R.structure); // dorsal spine
+  box(10, 13, 5, 5, 10, 28, R.structure);  // ventral keel
+  box(4, 6, 7, 9, 15, 27, R.armour);       // port pod
+  box(17, 19, 7, 9, 15, 27, R.armour);     // starboard pod
+  box(4, 6, 10, 10, 19, 23, R.gun);        // pod turrets
+  box(17, 19, 10, 10, 19, 23, R.gun);
+  box(10, 13, 11, 12, 31, 35, R.command);  // bridge block
+  box(9, 14, 6, 10, 2, 5, R.engine);       // drive section
+  box(10, 13, 7, 9, 0, 2, R.engine);       // bells
+  // A tapered nose, so the ship has a front rather than a wall.
+  for (var k = 35; k <= 41; k++) {
+    var t = (k - 35) / 6;
+    var hw = Math.max(0, Math.round(2.5 * (1 - t)));
+    var hh = Math.max(0, Math.round(2.0 * (1 - t)));
+    box(11 - hw, 12 + hw, 8 - hh, 8 + hh, k, k, R.armour);
+  }
+  // Where windows go. Found rather than guessed: the first cut named cells by
+  // hand and most of them turned out to be buried behind the pods, so the run
+  // of portholes was two windows long. A cell qualifies if it is solid, if it
+  // is armour, and if one of its side faces actually meets open space.
+  function open(i, j, k) {
+    return i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ || !g[ix(i, j, k)];
+  }
+  function flank(i, j, k) {
+    return g[ix(i, j, k)] === R.armour && (open(i - 1, j, k) || open(i + 1, j, k));
+  }
+  // A CONTIGUOUS run, which is the case worth showing: neighbouring window
+  // cells merge into one quad carrying one window per cell, so a habitation
+  // strip costs about what the plate it replaced cost. Scattered single cells
+  // are the expensive way round and the page says so.
+  for (var kk = 11; kk <= 30; kk++) {
+    for (var ii = 0; ii < NX; ii++) if (flank(ii, 8, kk)) win[ix(ii, 8, kk)] = 1;
+  }
+  // And the bridge looks forward.
+  for (var i2 = 10; i2 <= 13; i2++) {
+    for (var j2 = 11; j2 <= 12; j2++) {
+      if (g[ix(i2, j2, 35)] === R.command && open(i2, j2, 36)) win[ix(i2, j2, 35)] = 1;
+    }
+  }
+  return { g: g, win: win };
+}
+
+var DIRS = [
+  { axis:0, step: 1, n:[ 1, 0, 0] }, { axis:0, step:-1, n:[-1, 0, 0] },
+  { axis:1, step: 1, n:[ 0, 1, 0] }, { axis:1, step:-1, n:[ 0,-1, 0] },
+  { axis:2, step: 1, n:[ 0, 0, 1] }, { axis:2, step:-1, n:[ 0, 0,-1] }
+];
+
+function mesh(grid, win) {
+  var g = grid.g, w = grid.win;
+  function ix(i, j, k) { return i + j * NX + k * NX * NY; }
+  var SIZE = [NX, NY, NZ];
+  // Buckets, one per role plus one for window quads, so each becomes a group
+  // with a material of its own and a finish can be changed without a rebuild.
+  var buckets = {};
+  ROLE_ORDER.forEach(function (r) { buckets[r] = { pos:[], nrm:[], uv:[], q:0 }; });
+  buckets.window = { pos:[], nrm:[], uv:[], q:0 };
+
+  var at = [0, 0, 0];
+  function put(a, axis, u, v, ww) {
+    if (axis === 0) { a[0] = ww; a[1] = u; a[2] = v; }
+    else if (axis === 1) { a[0] = u; a[1] = ww; a[2] = v; }
+    else { a[0] = u; a[1] = v; a[2] = ww; }
+  }
+  for (var d = 0; d < DIRS.length; d++) {
+    var dir = DIRS[d], axis = dir.axis;
+    var uAxis = axis === 0 ? 1 : 0, vAxis = axis === 2 ? 1 : 2;
+    var wN = SIZE[axis], uN = SIZE[uAxis], vN = SIZE[vAxis];
+    var mask = new Int32Array(uN * vN);
+    for (var ww = 0; ww < wN; ww++) {
+      mask.fill(-1);
+      for (var v = 0; v < vN; v++) for (var u = 0; u < uN; u++) {
+        put(at, axis, u, v, ww);
+        var i = at[0], j = at[1], k = at[2];
+        if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) continue;
+        var role = g[ix(i, j, k)];
+        if (!role) continue;
+        put(at, axis, u, v, ww + dir.step);
+        var ni = at[0], nj = at[1], nk = at[2];
+        var solid = (ni >= 0 && nj >= 0 && nk >= 0 && ni < NX && nj < NY && nk < NZ)
+          && g[ix(ni, nj, nk)];
+        if (solid) continue;
+        // A window only lands on a face that faces out to the side or forward,
+        // which is the per FACE decision the shipyard would make. Painting a
+        // whole cell would put a porthole on its roof.
+        var isWin = win && w[ix(i, j, k)] && (axis === 0 || (axis === 2 && dir.step > 0));
+        mask[u + v * uN] = isWin ? 100 : role;
+      }
+      for (var vv = 0; vv < vN; vv++) {
+        for (var uu = 0; uu < uN;) {
+          var key = mask[uu + vv * uN];
+          if (key < 0) { uu++; continue; }
+          var wide = 1;
+          while (uu + wide < uN && mask[uu + wide + vv * uN] === key) wide++;
+          var tall = 1;
+          grow: while (vv + tall < vN) {
+            for (var q = 0; q < wide; q++) {
+              if (mask[uu + q + (vv + tall) * uN] !== key) break grow;
+            }
+            tall++;
+          }
+          for (var b = 0; b < tall; b++) for (var a = 0; a < wide; a++) mask[uu + a + (vv + b) * uN] = -1;
+
+          // The winding rule, straight out of hull.ts: u cross v points along
+          // the normal for x and z, and against it for y.
+          var face = dir.step > 0 ? 1 : 0;
+          var ccw = (dir.step > 0) !== (axis === 1);
+          var corners = ccw
+            ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
+            : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
+          var bkt = key === 100 ? buckets.window : buckets[ROLE_ORDER[key - 1]];
+          for (var c = 0; c < 4; c++) {
+            var du = corners[c][0], dv = corners[c][1];
+            put(at, axis, uu + du, vv + dv, ww + face);
+            bkt.pos.push(at[0] - NX / 2, at[1] - NY / 2, at[2] - NZ / 2);
+            bkt.nrm.push(dir.n[0], dir.n[1], dir.n[2]);
+            // One repeat of the texture per CELL, however many cells the
+            // greedy rectangle turned out to cover.
+            bkt.uv.push(du, dv);
+          }
+          bkt.q++;
+          uu += wide;
+        }
+      }
+    }
+  }
+  return buckets;
+}
+
+// ------------------------------------------------------------- renderers --
+function orbit(canvas, cam, target, onChange) {
+  var drag = null, dist = { v: 0 }, yaw = { v: 0 }, pitch = { v: 0 };
+  var pts = new Map();
+  var pinch = 0;
+  function apply() {
+    var cp = Math.cos(pitch.v);
+    cam.position.set(
+      target.x + dist.v * cp * Math.sin(yaw.v),
+      target.y + dist.v * Math.sin(pitch.v),
+      target.z + dist.v * cp * Math.cos(yaw.v));
+    cam.lookAt(target);
+    onChange();
+  }
+  canvas.style.touchAction = 'none';
+  canvas.addEventListener('pointerdown', function (e) {
+    canvas.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1) drag = { x: e.clientX, y: e.clientY };
+    if (pts.size === 2) {
+      var a = Array.from(pts.values());
+      pinch = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      drag = null;
+    }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 2) {
+      var a = Array.from(pts.values());
+      var d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+      if (pinch > 0) { dist.v *= pinch / Math.max(1, d); clampD(); apply(); }
+      pinch = d;
+      return;
+    }
+    if (!drag) return;
+    yaw.v -= (e.clientX - drag.x) * 0.008;
+    pitch.v = Math.max(-1.35, Math.min(1.35, pitch.v + (e.clientY - drag.y) * 0.008));
+    drag = { x: e.clientX, y: e.clientY };
+    apply();
+  });
+  function up(e) { pts.delete(e.pointerId); if (pts.size < 2) pinch = 0; if (!pts.size) drag = null; }
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    dist.v *= Math.exp(e.deltaY * 0.0011);
+    clampD(); apply();
+  }, { passive: false });
+  function clampD() { dist.v = Math.max(12, Math.min(180, dist.v)); }
+  return {
+    set: function (y, p, dd) { yaw.v = y; pitch.v = p; dist.v = dd; apply(); },
+    dist: function () { return dist.v; }
+  };
+}
+
+function fit(canvas, renderer, cam, h) {
+  var w = canvas.clientWidth || 640;
+  canvas.height = Math.round(h);
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(w, h, false);
+  cam.aspect = w / h;
+  cam.updateProjectionMatrix();
+}
+
+// ---------------------------------------------------------------- start --
+function start() {
+  try { sheet(); } catch (e) { console.error(e); }
+  try { ship(); } catch (e) { console.error(e); fail('The hull stage failed: ' + e.message); }
+  costTable();
+}
+
+function normalMapFor(key) {
+  return key === 'smooth' ? null : (TEX['armour_' + key + '_n'] || null);
+}
+
+// ---- stage 1: the nine finishes on plates ----
+function sheet() {
+  var canvas = document.getElementById('cSheet');
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0A0E14);
+  var cam = new THREE.PerspectiveCamera(30, 1, 1, 200);
+  cam.position.set(0, 0, 34);
+  cam.lookAt(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0x6a7f96, 0.45));
+  var key = new THREE.DirectionalLight(0xffffff, 1.5);
+  scene.add(key);
+
+  var labels = document.getElementById('sheetLabels');
+  var marks = [];
+  var plate = new THREE.PlaneGeometry(6.4, 6.4);
+  var uv = plate.attributes.uv;
+  for (var i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 3, uv.getY(i) * 3);
+
+  FINISH.forEach(function (f, n) {
+    var mat = new THREE.MeshPhongMaterial({
+      color: 0x7d8fa4, shininess: 34, specular: 0x40536a,
+      normalMap: normalMapFor(f[0])
+    });
+    if (mat.normalMap) mat.normalScale.set(1, 1);
+    var m = new THREE.Mesh(plate, mat);
+    m.position.set((n % 3 - 1) * 7.2, (1 - Math.floor(n / 3)) * 7.2, 0);
+    scene.add(m);
+    var s = document.createElement('span');
+    s.textContent = f[1];
+    labels.appendChild(s);
+    // Where the label goes is where the RENDERER put the plate, projected. A
+    // CSS grid over the canvas only agrees with the plates when the canvas
+    // happens to be square, and it is not.
+    marks.push({ el: s, at: new THREE.Vector3(m.position.x, m.position.y - 3.55, 0) });
+  });
+
+  function placeLabels() {
+    var w = canvas.clientWidth, h = canvas.clientHeight;
+    for (var n = 0; n < marks.length; n++) {
+      var v = marks[n].at.clone().project(cam);
+      marks[n].el.style.left = ((v.x * 0.5 + 0.5) * w) + 'px';
+      marks[n].el.style.top = ((-v.y * 0.5 + 0.5) * h + 4) + 'px';
+    }
+  }
+
+  var sweeping = true;
+  var bS = document.getElementById('bSweep'), bH = document.getElementById('bSweepMap');
+  bS.onclick = function () { sweeping = true; bS.setAttribute('aria-pressed', 'true'); bH.setAttribute('aria-pressed', 'false'); };
+  bH.onclick = function () {
+    sweeping = false; bS.setAttribute('aria-pressed', 'false'); bH.setAttribute('aria-pressed', 'true');
+    key.position.set(0.4, 1, 0.25).normalize(); renderer.render(scene, cam);
+  };
+
+  function size() {
+    fit(canvas, renderer, cam, Math.round(canvas.clientWidth));
+    // Pull the camera back far enough that all nine plates fit whatever the
+    // aspect turned out to be, then put the labels where they landed.
+    var vFit = 11.6 / Math.tan(cam.fov * Math.PI / 360);
+    var hFit = 11.6 / (Math.tan(cam.fov * Math.PI / 360) * cam.aspect);
+    cam.position.z = Math.max(vFit, hFit);
+    cam.updateProjectionMatrix();
+    placeLabels();
+  }
+  window.addEventListener('resize', size); size();
+
+  var t0 = performance.now();
+  (function loop() {
+    requestAnimationFrame(loop);
+    if (sweeping) {
+      var a = (performance.now() - t0) * 0.00042;
+      key.position.set(Math.cos(a) * 0.9, Math.sin(a) * 0.9, 0.75);
+    }
+    placeLabels();
+    renderer.render(scene, cam);
+  })();
+}
+
+// ---- stage 2: the hull ----
+function ship() {
+  var canvas = document.getElementById('cShip');
+  var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0A0E14);
+  var cam = new THREE.PerspectiveCamera(42, 1, 0.5, 800);
+
+  // The battlefield's own lighting, from view.ts, at its own numbers.
+  var hemi = new THREE.HemisphereLight(0x5f7fa0, 0x0a0e14, 1.6);
+  var key = new THREE.DirectionalLight(0xdfefff, 1.1);
+  key.position.set(0.4, 1, 0.25);
+  scene.add(hemi); scene.add(key);
+
+  var state = {
+    faction: 0, swatch: 0, windows: 'porthole',
+    finish: { armour:'plate', structure:'ribbed', engine:'greeble', gun:'tread', command:'plate' },
+    dark: false, spec: false, flat: false
+  };
+
+  var grid = buildGrid();
+  var group = new THREE.Group();
+  scene.add(group);
+  var mats = {}, meshes = {}, counts = {};
+
+  function colourOf(role) {
+    if (role === 'armour') return FACTION[state.faction].sw[state.swatch];
+    if (role === 'window') return FACTION[state.faction].sw[state.swatch];
+    return HUE[role];
+  }
+
+  function makeMaterial(role) {
+    var Ctor = state.spec ? THREE.MeshPhongMaterial : THREE.MeshLambertMaterial;
+    var opts = { color: colourOf(role) };
+    if (state.spec) { opts.shininess = 60; opts.specular = 0x6c8194; }
+    var m = new Ctor(opts);
+    if (role === 'window') {
+      if (!state.flat) m.normalMap = TEX['window_' + state.windows + '_n'] || null;
+      m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
+      m.emissive = new THREE.Color(0xffffff);
+      m.emissiveIntensity = 1.0;
+    } else if (!state.flat) {
+      m.normalMap = normalMapFor(state.finish[role]);
+    }
+    if (m.normalMap) m.normalScale.set(1, 1);
+    return m;
+  }
+
+  function rebuild() {
+    while (group.children.length) {
+      var c = group.children.pop();
+      c.geometry.dispose();
+      c.material.dispose();
+    }
+    var b = mesh(grid, state.windows !== 'none');
+    counts = {};
+    Object.keys(b).forEach(function (role) {
+      var d = b[role];
+      counts[role] = d.q;
+      if (!d.q) return;
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(d.pos), 3));
+      geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(d.nrm), 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(d.uv), 2));
+      var idx = new Uint32Array(d.q * 6);
+      for (var q = 0; q < d.q; q++) {
+        var v = q * 4;
+        idx[q * 6] = v; idx[q * 6 + 1] = v + 1; idx[q * 6 + 2] = v + 2;
+        idx[q * 6 + 3] = v; idx[q * 6 + 4] = v + 2; idx[q * 6 + 5] = v + 3;
+      }
+      geo.setIndex(new THREE.BufferAttribute(idx, 1));
+      geo.computeBoundingSphere();
+      mats[role] = makeMaterial(role);
+      meshes[role] = new THREE.Mesh(geo, mats[role]);
+      group.add(meshes[role]);
+    });
+    report();
+  }
+
+  function repaint() {
+    Object.keys(mats).forEach(function (role) {
+      if (!meshes[role] || !meshes[role].parent) return;
+      var m = mats[role];
+      m.color.setHex(colourOf(role));
+      if (role === 'window') {
+        m.normalMap = state.flat ? null : (TEX['window_' + state.windows + '_n'] || null);
+        m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
+      } else {
+        m.normalMap = state.flat ? null : normalMapFor(state.finish[role]);
+      }
+      if (m.normalMap) m.normalScale.set(1, 1);
+      m.needsUpdate = true;
+    });
+    report();
+  }
+
+  function relight() {
+    hemi.intensity = state.dark ? 0.16 : 1.6;
+    key.intensity = state.dark ? 0.05 : 1.1;
+  }
+
+  function report() {
+    var total = 0, winq = counts.window || 0;
+    Object.keys(counts).forEach(function (k) { total += counts[k]; });
+    var base = countWithout();
+    stat.textContent = total + ' quads, of which ' + winq + ' carry a window. '
+      + 'Without windows the same hull is ' + base + ', so the decals cost '
+      + (total - base) + ' quads (' + Math.round((total - base) / base * 1000) / 10 + '%).';
+  }
+  var _baseCache = null;
+  function countWithout() {
+    if (_baseCache !== null) return _baseCache;
+    var b = mesh(grid, false), n = 0;
+    Object.keys(b).forEach(function (k) { n += b[k].q; });
+    _baseCache = n;
+    return n;
+  }
+
+  // ---- controls ----
+  function chipBtn(parent, label, pressed, on) {
+    var b = document.createElement('button');
+    b.textContent = label;
+    b.setAttribute('aria-pressed', pressed ? 'true' : 'false');
+    b.onclick = function () {
+      Array.prototype.forEach.call(parent.children, function (c) { c.setAttribute('aria-pressed', 'false'); });
+      b.setAttribute('aria-pressed', 'true');
+      on();
+    };
+    parent.appendChild(b);
+    return b;
+  }
+
+  var uF = document.getElementById('uFaction');
+  FACTION.forEach(function (f, i) {
+    chipBtn(uF, f.name, i === state.faction, function () { state.faction = i; swatches(); repaint(); });
+  });
+
+  var uS = document.getElementById('uSwatch');
+  function swatches() {
+    uS.innerHTML = '';
+    FACTION[state.faction].sw.forEach(function (hex, i) {
+      var b = document.createElement('button');
+      b.className = 'sw';
+      b.style.background = '#' + hex.toString(16).padStart(6, '0');
+      b.title = '#' + hex.toString(16).padStart(6, '0');
+      b.setAttribute('aria-label', 'swatch ' + (i + 1));
+      b.setAttribute('aria-pressed', i === state.swatch ? 'true' : 'false');
+      b.onclick = function () {
+        state.swatch = i;
+        Array.prototype.forEach.call(uS.children, function (c) { c.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true');
+        repaint();
+      };
+      uS.appendChild(b);
+    });
+  }
+  swatches();
+
+  var uR = document.getElementById('uRoles');
+  ROLE_ORDER.forEach(function (role) {
+    var chip = document.createElement('div');
+    chip.className = 'chip';
+    var dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.id = 'dot_' + role;
+    chip.appendChild(dot);
+    var nm = document.createElement('span');
+    nm.className = 'nm';
+    nm.textContent = ROLE_LABEL[role];
+    chip.appendChild(nm);
+    var sel = document.createElement('select');
+    sel.setAttribute('aria-label', ROLE_LABEL[role] + ' finish');
+    FINISH.forEach(function (f) {
+      var o = document.createElement('option');
+      o.value = f[0]; o.textContent = f[1];
+      if (f[0] === state.finish[role]) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = function () { state.finish[role] = sel.value; repaint(); };
+    chip.appendChild(sel);
+    uR.appendChild(chip);
+  });
+  function dots() {
+    ROLE_ORDER.forEach(function (role) {
+      var d = document.getElementById('dot_' + role);
+      if (d) d.style.background = '#' + colourOf(role).toString(16).padStart(6, '0');
+    });
+  }
+
+  var uW = document.getElementById('uWindow');
+  chipBtn(uW, 'None', false, function () { state.windows = 'none'; rebuild(); });
+  WINDOW.forEach(function (w) {
+    chipBtn(uW, w[1], w[0] === state.windows, function () { state.windows = w[0]; rebuild(); });
+  });
+
+  var bD = document.getElementById('bDark');
+  bD.onclick = function () {
+    state.dark = !state.dark;
+    bD.setAttribute('aria-pressed', state.dark ? 'true' : 'false');
+    relight();
+  };
+  var bP = document.getElementById('bSpec');
+  bP.onclick = function () {
+    state.spec = !state.spec;
+    bP.setAttribute('aria-pressed', state.spec ? 'true' : 'false');
+    rebuild();
+  };
+  var bF = document.getElementById('bFlat');
+  bF.onclick = function () {
+    state.flat = !state.flat;
+    bF.setAttribute('aria-pressed', state.flat ? 'true' : 'false');
+    repaint();
+  };
+
+  var _repaint = repaint;
+  repaint = function () { _repaint(); dots(); };
+  var _rebuild = rebuild;
+  rebuild = function () { _rebuild(); dots(); };
+
+  var target = new THREE.Vector3(0, 0, 0);
+  var ctl = orbit(canvas, cam, target, function () { });
+  ctl.set(0.9, 0.36, 42);
+
+  function size() {
+    // A phone is 358 CSS pixels wide here, and 0.62 of that is a letterbox
+    // nothing can be judged in, so the hull gets a floor.
+    var w = canvas.clientWidth || 640;
+    fit(canvas, renderer, cam, Math.min(560, Math.max(300, Math.round(w * 0.62))));
+  }
+  window.addEventListener('resize', size);
+  size();
+  rebuild();
+  relight();
+
+  (function loop() { requestAnimationFrame(loop); renderer.render(scene, cam); })();
+
+  // Enough for a headless check to read without touching anything.
+  window.ftMockup = {
+    quads: function () { return counts; },
+    state: function () { return JSON.parse(JSON.stringify(state)); },
+    roles: function () { return Object.keys(mats).filter(function (r) { return meshes[r] && meshes[r].parent; }); },
+    normalOf: function (role) { return mats[role] && mats[role].normalMap ? mats[role].normalMap.name || 'set' : null; }
+  };
+}
+
+// ---- the cost table ----
+function costTable() {
+  var tb = document.querySelector('#tCost tbody');
+  function row(name, what, uri) {
+    var bytes = uri ? Math.round((uri.length - uri.indexOf(',') - 1) * 3 / 4) : 0;
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td><code>' + name + '</code></td><td>' + what
+      + '</td><td class="n">' + bytes.toLocaleString() + '</td>';
+    tb.appendChild(tr);
+  }
+  FINISH.forEach(function (f) {
+    if (f[0] === 'smooth') { row('(none)', 'Smooth is no texture at all', null); return; }
+    row('armour_' + f[0] + '_n.png', f[1] + ', tiling normal', window.FT_TEX['armour_' + f[0] + '_n']);
+  });
+  WINDOW.forEach(function (w) {
+    row('window_' + w[0] + '_n.png', w[1] + ', normal', window.FT_TEX['window_' + w[0] + '_n']);
+    row('window_' + w[0] + '_e.png', w[1] + ', emission', window.FT_TEX['window_' + w[0] + '_e']);
+  });
+}
+})();
+</script>
