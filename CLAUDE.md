@@ -109,10 +109,10 @@ $ curl -sS https://redux-tribes.fly.dev/healthz
 All four must pass before a push:
 
 ```sh
-node prototype/cli.js test                  # 21, the JS design reference
-cd engine/sim_core && cargo test            # 31, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 21, the wasm boundary
-npm --prefix server test                    # 9, the lobby and the lockstep API
+node prototype/cli.js test                  # 25, the JS design reference
+cd engine/sim_core && cargo test            # 61, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 41, the wasm boundary
+npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
 `npm --prefix server test` builds first on purpose. It used to run straight
@@ -160,9 +160,12 @@ every control hits THAT control and not something drawn over it, all five
 classes legal out of the box, all eight of a faction's swatches actually on
 the hull, every enclosed mount inside the hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
-selection that outlines it, and a turret that turns 90 degrees and takes its
-cells with it. Run it after touching `design.ts`, `designer.ts` or the
-designer's markup.
+selection that outlines it, a turret that turns 90 degrees and takes its
+cells with it, and the armour pencil: a run that is fully reversible, a cell
+that reaches nothing refused with a reason, slabs that TILE the lattice rather
+than overlapping, the slab drawn on the model at the thickness the slider says,
+and the optional x and y mirrors turning one tap into two and then four. Run it
+after touching `design.ts`, `designer.ts` or the designer's markup.
 
 ## The boundary: the core simulates, the client draws
 

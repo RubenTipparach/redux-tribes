@@ -104,17 +104,29 @@ export class Designer {
   #note: string | null = null;
   #marks = new THREE.Group();
   #arcs = new THREE.Group();
+  #slabBox = new THREE.Group();
   #rigs: Rig[] = [];
   #showArcs = false;
   #showTarget = false;
   #target = new THREE.Vector3();
   #clock = 0;
-  /** Which z the slice editor is standing in, and what the brush does. */
-  #sliceAt = Math.floor(NZ / 2);
+  /**
+   * The slice editor's cursor, as a SLAB index rather than a z.
+   *
+   * Thickness makes a slice deeper, not overlapping: the lattice is cut into
+   * slabs of `#depth` cells and the slider walks the slabs, so at thickness 4
+   * there are 16 of them rather than 64 positions that each smear four cells
+   * into their neighbours. A run paints the whole slab.
+   */
+  #slab = Math.floor(NZ / 2);
   #brush: 'add' | 'cut' = 'add';
-  /** How many slices either side are ghosted, and how deep a stroke writes. */
+  /** How many SLABS either side are ghosted, and how thick a slab is. */
   #onion = 1;
   #depth = 1;
+  /** Optional mirroring, about the ship's own centre planes. Z is not offered:
+   *  a hull is not symmetric front to back and nobody wants it to be. */
+  #mirrorX = false;
+  #mirrorY = false;
   #pending = 0;
   /** The drawing, as sets as well as lists: connectivity is checked on every
    *  painted cell and a linear scan per cell is a scan per pixel of a drag. */
@@ -193,7 +205,8 @@ export class Designer {
     key.position.set(5, 8, 6); this.#scene.add(key);
     const fill = new THREE.DirectionalLight(0x35C7FF, 0.32);
     fill.position.set(-6, -3, -5); this.#scene.add(fill);
-    this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks, this.#arcs);
+    this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks, this.#arcs,
+      this.#slabBox);
 
     // Orbit. One finger drags, two pinch, and the buttons do the same job for
     // anyone who would rather tap. There is no second mouse button on a phone.
@@ -916,6 +929,7 @@ export class Designer {
     this.#renderPalette();
     this.#renderArmour();
     this.#renderSlice();
+    this.#renderSlabBox();
     this.#renderPick();
     this.#renderKey();
     this.#renderStats();
@@ -1174,6 +1188,15 @@ export class Designer {
    * every pointer move, is a thousand nodes to lay out per frame against one
    * fill loop.
    */
+  /** The z range this slab covers, inclusive. */
+  #slabZ(): readonly [number, number] {
+    const z0 = this.#slab * this.#depth;
+    return [z0, Math.min(NZ - 1, z0 + this.#depth - 1)];
+  }
+
+  /** How many slabs the lattice divides into at the current thickness. */
+  #slabCount(): number { return Math.ceil(NZ / this.#depth); }
+
   /** Rebuild the fast sets from the record. Called whenever the record is
    *  replaced wholesale: a class change, a reset, a design loaded. */
   #syncDrawSets(): void {
@@ -1212,9 +1235,28 @@ export class Designer {
     const ctx = cv.getContext('2d');
     if (!ctx) return;
     const { grid, purp } = rasterise(this.#design);
-    const k = this.#sliceAt;
+    const [za, zb] = this.#slabZ();
+    // The slab is drawn as one picture: a cell shows if ANY z in the slab has
+    // it, taking the material of the first that does. Drawing on it writes the
+    // whole slab, so showing only its front plane would be a lie about what a
+    // stroke does.
+    const k = za;
     const px = cv.width / NX;
     ctx.clearRect(0, 0, cv.width, cv.height);
+    const inSlab = (i: number, j: number): number => {
+      for (let z = za; z <= zb; z++) {
+        const m = grid[cellIndex(i, j, z)] as number;
+        if (m) return m;
+      }
+      return 0;
+    };
+    const purpIn = (i: number, j: number): number => {
+      for (let z = za; z <= zb; z++) {
+        const n = cellIndex(i, j, z);
+        if (grid[n]) return purp[n] as number;
+      }
+      return 0;
+    };
 
     const sw = paintFor(this.#design.faction).swatches;
     const prof = frameFor(this.#design.classKey).profile;
@@ -1231,19 +1273,20 @@ export class Designer {
       0, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Onion skin: the slices either side, dimmer the further out, so a run
+    // Onion skin: the SLABS either side, dimmer the further out, so a run
     // being drawn can be lined up with what is already there in front of and
-    // behind it. Drawn under the live slice, furthest first.
+    // behind it. Drawn under the live slab, furthest first.
     for (let d = this.#onion; d >= 1; d--) {
       for (const side of [-1, 1]) {
-        const kk = k + side * d;
-        if (kk < 0 || kk >= NZ) continue;
+        const oa = (this.#slab + side * d) * this.#depth;
+        if (oa < 0 || oa >= NZ) continue;
+        const ob = Math.min(NZ - 1, oa + this.#depth - 1);
         ctx.globalAlpha = 0.34 / d;
+        ctx.fillStyle = side < 0 ? '#35C7FF' : '#FFD24B';
         for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
-          const n = cellIndex(i, j, kk);
-          const mat = grid[n] as number;
-          if (!mat) continue;
-          ctx.fillStyle = side < 0 ? '#35C7FF' : '#FFD24B';
+          let any = false;
+          for (let z = oa; z <= ob && !any; z++) if (grid[cellIndex(i, j, z)]) any = true;
+          if (!any) continue;
           ctx.fillRect(i * px + px * 0.28, (NY - 1 - j) * px + px * 0.28, px * 0.44, px * 0.44);
         }
       }
@@ -1251,13 +1294,12 @@ export class Designer {
     ctx.globalAlpha = 1;
 
     for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
-      const n = cellIndex(i, j, k);
-      const mat = grid[n] as number;
+      const mat = inSlab(i, j);
       if (!mat) continue;
       const col = mat === Mat.Plate || mat === Mat.Skinned
         ? armourColour(sw, this.#design.paint, i, j, k, z0, z1,
           st[0] as number, st[1] as number)
-        : cellColour(mat, purp[n] as number, this.#design.paint);
+        : cellColour(mat, purpIn(i, j), this.#design.paint);
       ctx.fillStyle = `#${col.toString(16).padStart(6, '0')}`;
       // y grows upward on the ship and downward on a canvas.
       ctx.fillRect(i * px, (NY - 1 - j) * px, px - 0.6, px - 0.6);
@@ -1270,16 +1312,20 @@ export class Designer {
     }
 
     // What this slice owes to the pencil rather than the sliders.
+    const inZ = (n: number) => {
+      const z = (n / (NX * NY)) | 0;
+      return z >= za && z <= zb;
+    };
     ctx.strokeStyle = '#FFD24B';
     ctx.lineWidth = 1.2;
     for (const n of this.#design.plate ?? []) {
-      if (((n / (NX * NY)) | 0) !== k) continue;
+      if (!inZ(n)) continue;
       const i = n % NX, j = ((n / NX) | 0) % NY;
       ctx.strokeRect(i * px + 0.6, (NY - 1 - j) * px + 0.6, px - 1.8, px - 1.8);
     }
     ctx.strokeStyle = '#F03B3B';
     for (const n of this.#design.cut ?? []) {
-      if (((n / (NX * NY)) | 0) !== k) continue;
+      if (!inZ(n)) continue;
       const i = n % NX, j = ((n / NX) | 0) % NY;
       const x = i * px, y = (NY - 1 - j) * px;
       ctx.beginPath();
@@ -1288,8 +1334,26 @@ export class Designer {
       ctx.stroke();
     }
 
-    $('dzSliceNum').textContent = String(k);
-    ($('dzSliceAt') as HTMLInputElement).value = String(k);
+    // The mirror planes, so a symmetric stroke has something to aim at.
+    ctx.strokeStyle = '#35C7FF66';
+    ctx.lineWidth = 1;
+    if (this.#mirrorX) {
+      ctx.beginPath();
+      ctx.moveTo(cv.width / 2, 0); ctx.lineTo(cv.width / 2, cv.height);
+      ctx.stroke();
+    }
+    if (this.#mirrorY) {
+      ctx.beginPath();
+      ctx.moveTo(0, cv.height / 2); ctx.lineTo(cv.width, cv.height / 2);
+      ctx.stroke();
+    }
+
+    $('dzSliceNum').textContent = String(this.#slab);
+    const range = $('dzSliceAt') as HTMLInputElement;
+    range.max = String(Math.max(0, this.#slabCount() - 1));
+    range.value = String(this.#slab);
+    $('dzSliceSpan').textContent = za === zb
+      ? `z ${za} of ${NZ}` : `z ${za} to ${zb} of ${NZ}`;
     const added = (this.#design.plate ?? []).length, cut = (this.#design.cut ?? []).length;
     $('dzDrawCount').textContent = this.#drawSaid
       ? this.#drawSaid
@@ -1322,32 +1386,42 @@ export class Designer {
     let changed = false;
     let blocked = false;
 
-    for (let d = 0; d < this.#depth; d++) {
-      const k = this.#sliceAt + d;
-      if (k >= NZ) break;
-      const n = cellIndex(i, j, k);
-      const mat = grid[n] as number;
+    // Where the stroke lands: this column, plus its mirror images if either
+    // axis is on. Deduped, because a cell on a mirror plane is its own mirror
+    // and painting it twice would undo it.
+    const columns = new Set<number>([i * NY + j]);
+    if (this.#mirrorX) columns.add((NX - 1 - i) * NY + j);
+    if (this.#mirrorY) columns.add(i * NY + (NY - 1 - j));
+    if (this.#mirrorX && this.#mirrorY) columns.add((NX - 1 - i) * NY + (NY - 1 - j));
 
-      if (this.#brush === 'add') {
-        // Undoing a cut is the same gesture as adding, which is what anyone
-        // expects from a pencil that has just rubbed something out.
-        if (drop(cut, this.#cutSet, n)) { changed = true; continue; }
-        if (this.#solidAt(n, grid)) continue;        // something is already there
-        if (plate.length >= DRAWN_MAX) break;
-        if (!this.#neighbours(n).some(m => this.#solidAt(m, grid))) { blocked = true; continue; }
-        plate.push(n);
-        this.#drawSet.add(n);
+    const [za, zb] = this.#slabZ();
+    for (const col of columns) {
+      const ci = (col / NY) | 0, cj = col % NY;
+      for (let k = za; k <= zb; k++) {
+        const n = cellIndex(ci, cj, k);
+        const mat = grid[n] as number;
+
+        if (this.#brush === 'add') {
+          // Undoing a cut is the same gesture as adding, which is what anyone
+          // expects from a pencil that has just rubbed something out.
+          if (drop(cut, this.#cutSet, n)) { changed = true; continue; }
+          if (this.#solidAt(n, grid)) continue;      // something is already there
+          if (plate.length >= DRAWN_MAX) break;
+          if (!this.#neighbours(n).some(m => this.#solidAt(m, grid))) { blocked = true; continue; }
+          plate.push(n);
+          this.#drawSet.add(n);
+          changed = true;
+          continue;
+        }
+
+        if (drop(plate, this.#drawSet, n)) { changed = true; continue; }
+        // Only plate can be cut. The frame and the parts are not armour.
+        if (mat !== Mat.Plate && mat !== Mat.Skinned) continue;
+        if (this.#cutSet.has(n) || cut.length >= DRAWN_MAX) continue;
+        cut.push(n);
+        this.#cutSet.add(n);
         changed = true;
-        continue;
       }
-
-      if (drop(plate, this.#drawSet, n)) { changed = true; continue; }
-      // Only plate can be cut. The frame and the parts are not armour.
-      if (mat !== Mat.Plate && mat !== Mat.Skinned) continue;
-      if (this.#cutSet.has(n) || cut.length >= DRAWN_MAX) continue;
-      cut.push(n);
-      this.#cutSet.add(n);
-      changed = true;
     }
 
     if (changed && this.#brush === 'cut') this.#dropOrphans(grid);
@@ -1412,11 +1486,12 @@ export class Designer {
     cv.addEventListener('pointercancel', stop);
 
     const go = (k: number) => {
-      this.#sliceAt = Math.max(0, Math.min(NZ - 1, k));
+      this.#slab = Math.max(0, Math.min(this.#slabCount() - 1, k));
       this.#renderSlice();
+      this.#renderSlabBox();
     };
-    $('dzSliceDown').onclick = () => { go(this.#sliceAt - 1); };
-    $('dzSliceUp').onclick = () => { go(this.#sliceAt + 1); };
+    $('dzSliceDown').onclick = () => { go(this.#slab - 1); };
+    $('dzSliceUp').onclick = () => { go(this.#slab + 1); };
     ($('dzSliceAt') as HTMLInputElement).oninput = e => {
       go(Number((e.target as HTMLInputElement).value));
     };
@@ -1426,14 +1501,34 @@ export class Designer {
       this.#renderSlice();
     };
     ($('dzDepth') as HTMLInputElement).oninput = e => {
-      this.#depth = Number((e.target as HTMLInputElement).value);
+      // Thicker slices means FEWER of them, so the cursor is remapped by the
+      // z it was standing on rather than kept as an index into a scale that
+      // just changed under it.
+      const wasZ = this.#slab * this.#depth;
+      this.#depth = Math.max(1, Number((e.target as HTMLInputElement).value));
       $('dzDepthN').textContent = String(this.#depth);
+      this.#slab = Math.max(0, Math.min(this.#slabCount() - 1,
+        Math.floor(wasZ / this.#depth)));
+      this.#renderSlice();
+      this.#renderSlabBox();
     };
+    const mirror = (id: string, set: (on: boolean) => void, get: () => boolean) => {
+      $(id).onclick = () => {
+        set(!get());
+        this.#syncBrush();
+        this.#renderSlice();
+      };
+    };
+    mirror('dzMirrorX', v => { this.#mirrorX = v; }, () => this.#mirrorX);
+    mirror('dzMirrorY', v => { this.#mirrorY = v; }, () => this.#mirrorY);
     $('dzBrushAdd').onclick = () => { this.#brush = 'add'; this.#syncBrush(); };
     $('dzBrushCut').onclick = () => { this.#brush = 'cut'; this.#syncBrush(); };
     $('dzSliceClear').onclick = () => {
-      const k = this.#sliceAt;
-      const off = (n: number) => ((n / (NX * NY)) | 0) !== k;
+      const [za, zb] = this.#slabZ();
+      const off = (n: number) => {
+        const z = (n / (NX * NY)) | 0;
+        return z < za || z > zb;
+      };
       this.#design.plate = (this.#design.plate ?? []).filter(off);
       this.#design.cut = (this.#design.cut ?? []).filter(off);
       this.#syncDrawSets();
@@ -1449,9 +1544,52 @@ export class Designer {
     this.#syncBrush();
   }
 
+  /**
+   * The slab, boxed on the model.
+   *
+   * A flat grid on the right says WHAT you are drawing and nothing at all
+   * about WHERE: on a 64 cell hull, "slice 32" is a number, and a box round
+   * the part of the ship it cuts is a place. It grows and shrinks with the
+   * thickness, which is the other half of what the control does.
+   *
+   * Only while the Armour tab is open. A box round a slab you cannot draw on
+   * is decoration over the thing you are trying to look at.
+   */
+  #renderSlabBox(): void {
+    this.#clear(this.#slabBox);
+    if (this.#tab !== 'armour') return;
+    const cell = RUNG[frameFor(this.#design.classKey).rung];
+    const [za, zb] = this.#slabZ();
+    const depth = (zb - za + 1) * cell;
+    const mid = ((za + zb + 1) / 2 - NZ / 2) * cell;
+    const w = NX * cell, h = NY * cell;
+
+    const box = new THREE.LineSegments(
+      this.#geo(new THREE.EdgesGeometry(new THREE.BoxGeometry(w, h, depth))),
+      this.#mat(new THREE.LineBasicMaterial({
+        color: 0xFFD24B, transparent: true, opacity: 0.5, depthTest: false })));
+    box.position.z = mid;
+    box.renderOrder = 9;
+    this.#slabBox.add(box);
+
+    // The two cut planes, filled faintly, so the slab reads as a slab rather
+    // than as a wireframe crate floating round the hull.
+    for (const z of [za, zb + 1]) {
+      const plane = new THREE.Mesh(
+        this.#geo(new THREE.PlaneGeometry(w, h)),
+        this.#mat(new THREE.MeshBasicMaterial({
+          color: 0xFFD24B, transparent: true, opacity: 0.06,
+          side: THREE.DoubleSide, depthWrite: false })));
+      plane.position.z = (z - NZ / 2) * cell;
+      this.#slabBox.add(plane);
+    }
+  }
+
   #syncBrush(): void {
     $('dzBrushAdd').className = this.#brush === 'add' ? 'on' : '';
     $('dzBrushCut').className = this.#brush === 'cut' ? 'on' : '';
+    $('dzMirrorX').className = this.#mirrorX ? 'on' : '';
+    $('dzMirrorY').className = this.#mirrorY ? 'on' : '';
   }
 
   /**
@@ -1728,6 +1866,7 @@ export class Designer {
       $(id).className = this.#tab === which ? 'on' : '';
       $(pane).classList.toggle('hidden', this.#tab !== which);
     }
+    this.#renderSlabBox();
     this.#resize();
   }
 
@@ -1751,8 +1890,20 @@ export class Designer {
       showPlate: this.#plate === 'on',
       armour: this.#design.armour,
       slot: this.#slot,
-      slice: this.#sliceAt,
+      slab: this.#slab,
+      slabZ: this.#slabZ(),
+      slabs: this.#slabCount(),
+      slabBox: this.#slabBox.children.length
+        ? (() => {
+          const b = new THREE.Box3().setFromObject(this.#slabBox);
+          return { parts: this.#slabBox.children.length,
+            depth: +(b.max.z - b.min.z).toFixed(3),
+            mid: +((b.max.z + b.min.z) / 2).toFixed(3) };
+        })()
+        : null,
       brush: this.#brush,
+      mirrorX: this.#mirrorX,
+      mirrorY: this.#mirrorY,
       drawn: (this.#design.plate ?? []).length,
       cutCells: (this.#design.cut ?? []).length,
       onion: this.#onion,

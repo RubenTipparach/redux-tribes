@@ -559,6 +559,8 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzslice .row .gap { flex:1; }
 .dzslice .row .k { font-family:Rajdhani,system-ui,sans-serif; font-weight:600;
   font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.dzslice .row .s { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
+  color:var(--muted); }
 .dzslice input[type=range] { flex:1; min-width:0; accent-color:var(--cyan); }
 .dzslice button { padding:6px 10px; font-size:11px; }
 .dzslice button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
@@ -668,7 +670,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   .dzclasses button { padding:5px 8px; font-size:10px; }
   /* Three tool buttons share this line on a phone, so the hint gives way
      rather than running underneath them. */
-  #dzHint { font-size:9px; max-width:52%; }
+  #dzHint { font-size:9px; max-width:35%; }
   #dzGrow { display:block; flex:0 0 44px; font-size:10px; color:var(--muted); }
   #designer.wide #dzGrow { color:var(--cyan); }
 }
@@ -825,10 +827,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       <div id="dzKey" class="dzkeys"></div>
 
       <div class="dzgrp">Draw armour</div>
-      <p class="dznote">One slice at a time, on top of whatever the sliders
+      <p class="dznote">One slab at a time, on top of whatever the sliders
       built. Drag to paint a run. You are drawing plate and nothing else: the
       frame and the fitted parts are shown so you can work around them, and
-      neither can be touched.</p>
+      neither can be touched. Thick cuts the hull into deeper slabs rather than
+      overlapping slices, so there are fewer of them to walk through and a run
+      paints the whole depth. The slab you are standing in is boxed on the
+      model. Mirror is off until you ask for it, and only x and y.</p>
       <div class="dzslice">
         <div class="row">
           <button id="dzSliceDown">&lt;</button>
@@ -841,16 +846,23 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
           <button id="dzBrushAdd" class="on">Add</button>
           <button id="dzBrushCut">Cut</button>
           <span class="gap"></span>
-          <button id="dzSliceClear">Clear slice</button>
+          <button id="dzSliceClear">Clear slab</button>
           <button id="dzDrawClear">Clear all</button>
         </div>
         <div class="row">
           <span class="k">Onion</span>
           <input id="dzOnion" type="range" min="0" max="4" step="1" value="1">
           <b id="dzOnionN">1</b>
-          <span class="k">Depth</span>
+          <span class="k">Thick</span>
           <input id="dzDepth" type="range" min="1" max="8" step="1" value="1">
           <b id="dzDepthN">1</b>
+        </div>
+        <div class="row">
+          <span class="k">Mirror</span>
+          <button id="dzMirrorX">X</button>
+          <button id="dzMirrorY">Y</button>
+          <span class="gap"></span>
+          <span class="s" id="dzSliceSpan"></span>
         </div>
         <div class="s" id="dzDrawCount"></div>
       </div>

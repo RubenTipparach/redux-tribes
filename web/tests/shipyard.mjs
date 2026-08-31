@@ -90,6 +90,7 @@ async function checkLayout(page, label) {
     const out = [];
     for (const sel of ['#dzMode button', '#dzFactions button', '#dzPaint button',
       '#dzArmour input', '#dzSliceAt', '#dzBrushAdd', '#dzBrushCut',
+      '#dzMirrorX', '#dzMirrorY', '#dzOnion', '#dzDepth',
       '#dzSliceClear', '#dzDrawClear']) {
       const els = [...document.querySelectorAll(sel)];
       if (!els.length) { out.push(`${sel}: none rendered`); continue; }
@@ -324,7 +325,8 @@ async function checkDrawing(page) {
   const read = () => page.evaluate(() => {
     const d = window.ftDebug.designer();
     return { plate: d.derived.plateCells, mass: +d.derived.mass.toFixed(5),
-      hash: d.gridHash, drawn: d.drawn, cut: d.cutCells, slice: d.slice };
+      hash: d.gridHash, drawn: d.drawn, cut: d.cutCells,
+      slab: d.slab, z: d.slabZ, slabs: d.slabs, box: d.slabBox };
   });
   const before = await read();
 
@@ -402,31 +404,101 @@ async function checkDrawing(page) {
   if (!beside.drawn) fail('a cell against the hull was refused');
   else ok('a cell against the hull is taken');
 
-  // Depth lays a column of slices in one stroke.
-  await page.evaluate(() => {
-    const e = document.getElementById('dzDepth');
-    e.value = '6'; e.dispatchEvent(new Event('input', { bubbles: true }));
-  });
+  // Thickness makes a slice DEEPER rather than overlapping the next one, so
+  // the slabs tile the 64 cells of the lattice and there are fewer of them.
+  // The cursor has to follow the z it was standing on, or the number under
+  // the slider means something different before and after the drag.
+  const slider = async (id, v) => {
+    await page.evaluate(([i, n]) => {
+      const e = document.getElementById(i);
+      e.value = String(n); e.dispatchEvent(new Event('input', { bubbles: true }));
+    }, [id, v]);
+    await page.waitForTimeout(350);
+  };
+  const thin = await read();
+  await slider('dzDepth', 6);
+  const thick = await read();
+  if (thick.slabs !== 11)
+    fail(`thickness 6 gives ${thick.slabs} slabs, not the 11 that tile 64 cells`);
+  else if (thick.z[1] - thick.z[0] !== 5)
+    fail(`a thickness 6 slab spans z ${thick.z[0]} to ${thick.z[1]}`);
+  else if (thin.z[0] < thick.z[0] || thin.z[0] > thick.z[1])
+    fail(`the cursor left z ${thin.z[0]} for the slab z ${thick.z[0]} to ${thick.z[1]}`);
+  else ok(`thickness 6 tiles 64 cells into ${thick.slabs} slabs of z `
+    + `${thick.z[0]} to ${thick.z[1]}, still holding z ${thin.z[0]}`);
+
+  // Tiling means the next slab starts where this one stopped. Overlapping
+  // slices were the defect: the same cell drawn from two places.
+  await page.click('#dzSliceUp');
+  await page.waitForTimeout(300);
+  const next = await read();
+  if (next.z[0] !== thick.z[1] + 1)
+    fail(`the next slab starts at z ${next.z[0]}, overlapping a slab ending at ${thick.z[1]}`);
+  else ok(`slabs tile: z ${thick.z[0]} to ${thick.z[1]}, then ${next.z[0]} to ${next.z[1]}`);
+  await page.click('#dzSliceDown');
+  await page.waitForTimeout(300);
+
+  // And the slab is drawn on the model, at the thickness the slider says, so
+  // a number on the right has a place on the left.
+  if (!thick.box) fail('no slab box on the model while the Armour tab is open');
+  else if (!(thick.box.depth > thin.box.depth * 5.5))
+    fail(`the slab box is ${thick.box.depth} deep at thickness 6 `
+      + `against ${thin.box.depth} at 1, so it does not follow the slider`);
+  else ok(`the slab box on the model grows ${thin.box.depth} to ${thick.box.depth} `
+    + `units with the thickness`);
+
+  // A stroke paints every z of the slab, not just the face of it.
   await tap(4, 16);
   const deep = await read();
-  if (deep.drawn - beside.drawn < 5)
-    fail(`a depth 6 stroke drew ${deep.drawn - beside.drawn} cells, not a column`);
-  else ok(`a depth 6 stroke lays ${deep.drawn - beside.drawn} slices in one tap`);
+  if (deep.drawn - beside.drawn < 4)
+    fail(`a thickness 6 stroke drew ${deep.drawn - beside.drawn} cells, not a column`);
+  else ok(`one tap at thickness 6 lays ${deep.drawn - beside.drawn} cells down the slab`);
+
+  await slider('dzDepth', 1);
+  await page.click('#dzDrawClear');
+  await page.waitForTimeout(600);
 
   // Onion skin: it has to take a value and not throw drawing it.
-  await page.evaluate(() => {
-    const e = document.getElementById('dzOnion');
-    e.value = '3'; e.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await page.waitForTimeout(350);
+  await slider('dzOnion', 3);
   const onion = await page.evaluate(() => window.ftDebug.designer().onion);
   if (onion !== 3) fail(`the onion slider reads ${onion}, not 3`);
-  else ok('onion skin shows three slices either side');
+  else ok('onion skin shows three slabs either side');
 
-  await page.evaluate(() => {
-    const d = document.getElementById('dzDepth');
-    d.value = '1'; d.dispatchEvent(new Event('input', { bubbles: true }));
+  // Symmetry is a toggle, off by default, and only mirrors x and y. With it
+  // on, one tap is two cells; with both on, four. Back to z 32 first: the
+  // thickness walk left the cursor on z 30, where a mount fills the mirror of
+  // the cell being tapped, so a fair test of the mirror needs a symmetric cut.
+  await slider('dzSliceAt', 32);
+  const off = await read();
+  if (off.z[0] !== 32) { fail(`the slice slider went to z ${off.z[0]}, not 32`); return; }
+  if (off.drawn) { fail('Clear all left drawing behind before the mirror check'); return; }
+  await page.click('#dzMirrorX');
+  await page.waitForTimeout(200);
+  await tap(5, 16);
+  const mx = await read();
+  if (mx.drawn !== 2)
+    fail(`mirror x drew ${mx.drawn} cells from one tap, not 2`);
+  else ok('mirror x paints the cell and its opposite number across the keel');
+
+  await page.click('#dzDrawClear');
+  await page.waitForTimeout(500);
+  await page.click('#dzMirrorY');
+  await page.waitForTimeout(200);
+  await tap(5, 16);
+  const mxy = await read();
+  if (mxy.drawn !== 4)
+    fail(`mirror x and y drew ${mxy.drawn} cells from one tap, not 4`);
+  else ok('mirror x and y together paint all four quarters');
+
+  await page.click('#dzMirrorX');
+  await page.click('#dzMirrorY');
+  await page.waitForTimeout(200);
+  const backOff = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return d.mirrorX || d.mirrorY;
   });
+  if (backOff) fail('the mirror toggles do not turn off');
+  await slider('dzOnion', 1);
   await page.click('#dzDrawClear');
   await page.waitForTimeout(600);
 }
@@ -583,6 +655,16 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
       !document.getElementById('dzPick').classList.contains('hidden'));
     if (!open) fail(`${label}: a tap on the model said nothing`);
     else ok(`${label}: a tap on the model opens the card`);
+
+    // The hint and the tool row share the bottom of the canvas, and at 390 the
+    // hint wrapped to a second line that ran under the buttons.
+    const overlap = await page.evaluate(() => {
+      const a = document.getElementById('dzHint').getBoundingClientRect();
+      const b = document.getElementById('dzTools').getBoundingClientRect();
+      return Math.round(Math.min(a.right, b.right) - Math.max(a.left, b.left));
+    });
+    if (overlap > 0) fail(`${label}: the hint runs ${overlap}px under the tool row`);
+    else ok(`${label}: the hint clears the tool row`);
     await checkLayout(page, label + ' with the card open');
   }
   if (errs.length) { for (const e of errs.slice(0, 4)) fail(`page error: ${e}`); }
