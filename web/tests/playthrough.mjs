@@ -299,8 +299,40 @@ async function checkReview() {
   if (!watching.review?.watching) fail('Watch did not load the turn it was aimed at');
   if (!/WATCHING/.test(watching.phase)) fail(`header says ${watching.phase} while watching`);
 
+  // Back to aimed-only, then SCRUB into the turn without pressing Watch.
+  // Watch was the only way in: the scrubber sat there enabled and inert over a
+  // turn the panel was already pointing at, so the only way to look at one
+  // moment was to play the whole thing and try to catch it.
   await tap('#rpLive');
   await page.waitForTimeout(200);
+  if (!MOBILE) {
+    const box = await (await page.$('#scrub')).boundingBox();
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.25, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.55, y, { steps: 6 });
+    const during = await page.evaluate(() => ({
+      tick: window.ftDebug.playing(),
+      watching: window.ftDebug.review()?.watching ?? false,
+      phase: document.getElementById('hPhase').textContent,
+    }));
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    const held = await page.evaluate(() => window.ftDebug.playing());
+    if (!during.watching) fail('scrubbing an aimed turn did not enter it');
+    if (during.tick === null || during.tick <= 0) {
+      fail(`scrubbing an aimed turn left the tick at ${during.tick}`);
+    }
+    if (!/WATCHING/.test(during.phase)) fail(`scrubbed into a turn and the header says ${during.phase}`);
+    // And it HOLDS. A scrubber that ran the rest of the turn at you on release
+    // is a play button with extra steps.
+    if (held !== during.tick) {
+      fail(`released the scrubber at ${during.tick} and it ran on to ${held}`);
+    }
+    log(`the scrubber walks an aimed turn without pressing Watch, and holds at t=${held}`);
+    await tap('#rpLive');
+    await page.waitForTimeout(200);
+  }
   const back = await read();
   if (back.hash !== live.hash || back.turn !== live.turn) {
     fail(`the review did not put the match back: ${live.turn}/${live.hash} became ${back.turn}/${back.hash}`);

@@ -111,7 +111,7 @@ All four must pass before a push:
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
 cd engine/sim_core && cargo test            # 81, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 45, the wasm boundary
+npm --prefix web test                       # 54, the wasm boundary and the addresses
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -154,6 +154,27 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
+### And one for the addresses
+
+```sh
+node web/tests/routes.mjs   # against a server on 8123
+```
+
+Every screen has a path, and the whole point of that is a RELOAD. It starts a
+game and checks the address became `/play/<id>`, plays two turns, loads that
+address fresh, and compares the match to itself: same turn, and every hull's
+own numbers identical, because "same turn" alone would pass on a match that
+restarted. Then the lobby offering it back, a design that reloads into the
+editor, a room that reloads into the room, an address naming a game that is
+gone falling back to the lobby AND rewriting itself, and Back walking the
+screens.
+
+It caught the defect that makes the whole feature fail: on a deep path a
+relative `src="./main.js"` asks for `/play/main.js`, and the server answers
+anything that is not an API route with the app shell, so the module arrived as
+HTML and the page booted no further than its own markup. Asset URLs are
+absolute for that reason.
+
 ### And one for the shipyard
 
 ```sh
@@ -175,6 +196,36 @@ that reaches nothing refused with a reason, slabs that TILE the lattice rather
 than overlapping, the slab drawn on the model at the thickness the slider says,
 and the optional x and y mirrors turning one tap into two and then four. Run it
 after touching `design.ts`, `designer.ts` or the designer's markup.
+
+## A game that started is a game you can come back to
+
+A practice match had no id and no record: it lived in the wasm module and died
+with the tab. Two things fix that, and they are the same idea twice.
+
+**Every screen has an address.** `/`, `/play/<gameId>`, `/room/<roomId>`,
+`/ship` and `/ship/<designId>`. `route.ts` parses and formats, and knows
+nothing about screens: what a route MEANS is the app's business, and a router
+that showed panels would be a second place that knows the screen list. Real
+paths rather than a hash, because the server already answers anything that is
+not an API route with the app shell.
+
+Which means **asset URLs must be absolute**. A relative `./main.js` on
+`/play/abc` asks for `/play/main.js`, which the shell route answers with HTML,
+and the page boots no further than its own markup.
+
+**A local game persists as its orders, not as its state.** A match is already a
+pure function of what it started from and the orders since (ADR-6), so a save
+is the launch record plus one entry per resolved turn, and resuming replays
+them. Small, survives a rebuild, and keeps the history the review panel scrubs
+through; a snapshot would be bigger, would be invalidated by every format
+change, and would throw that history away. `localStorage`, because practice has
+to work with no server at all and always has. A served match already persists:
+it has a room id and its orders are on the server.
+
+The shelf orders by a `seq` stamp rather than by `updatedMs`. Two games started
+in the same millisecond tie, and a tie makes the sort fall back to enumeration
+order, which is insertion order and therefore OLDEST first: the shelf then kept
+the twelve oldest games and dropped the one just started.
 
 ## The boundary: the core simulates, the client draws
 

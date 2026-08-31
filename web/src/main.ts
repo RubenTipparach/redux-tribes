@@ -23,6 +23,8 @@ import { hullTone } from './app/hull.js';
 import { blockedPct } from './app/turret.js';
 import { shipThumb } from './app/thumb.js';
 import { Schematic, type SchematicSubject } from './app/schematic.js';
+import * as route from './app/route.js';
+import * as saves from './app/saves.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
@@ -58,7 +60,10 @@ const STAT_ROWS: Array<[keyof Flight, string, number, number, number]> = [
 // --------------------------------------------------------------- boot --
 
 const canvas = $<HTMLCanvasElement>('cv');
-const sim = await Sim.load('./sim_core.wasm');
+// Absolute for the same reason the script tag is: this page is served from
+// `/play/<id>` too, and `./sim_core.wasm` there is `/play/sim_core.wasm`,
+// which the shell route answers with HTML.
+const sim = await Sim.load('/sim_core.wasm');
 const match: Match = sim.match();
 // The editor asks the core what a design is, rather than working it out. Wired
 // once, here, because `design.ts` should not know the wasm module exists: it
@@ -305,6 +310,8 @@ let flightOverride = new Map<number, Flight>();
 let launch: Launch = { kind: 'offline', seed: '', scenario: 'skirmish', humanSides: 0b01, side: 0 };
 /** True while a committed turn is waiting on the other seat. */
 let waiting = false;
+/** Whether this game's ending has been written to its save yet. */
+let endedSaved = false;
 
 /**
  * Is this hull mine? The simulation only knows sides, deliberately, so this
@@ -356,6 +363,7 @@ function start(): void {
   view.setWells(match.wells(), drive);
   view.mySide = launch.side;
   waiting = false;
+  endedSaved = false;
   banner(false);
   flightOverride = new Map();
   readShips();
@@ -378,6 +386,28 @@ function start(): void {
   restoreFacing();
   refreshAiPlans();
   view.invalidateEnvelope();
+  // A resumed game is the same match run forward again. The core is a pure
+  // function of what it started from and the orders since (ADR-6), so
+  // replaying them lands on the state it left off in, bit for bit, and the
+  // history the review panel scrubs comes back with it.
+  //
+  // Before the envelopes and the first refresh, so the console draws the turn
+  // the player is actually on rather than turn zero and then jumping.
+  for (const [n, body] of (launch.resume ?? []).entries()) {
+    const orders = new Map<number, PlannedOrder>();
+    for (const [ship, o] of Object.entries(body)) orders.set(Number(ship), o as PlannedOrder);
+    match.resolveWith(orders);
+    void n;
+  }
+  if (launch.resume?.length) {
+    readShips();
+    view.setShips(ships);
+    selected = ships.find(mine)?.id ?? -1;
+    view.setSelection(selected);
+    view.fit();
+    restoreFacing();
+    refreshAiPlans();
+  }
   planTurnEnvelopes();
   previewTick = TICKS_PER_TURN;
   view.setGhosts([]);
@@ -1610,6 +1640,13 @@ function renderHeader(): void {
   // gameOver reports the winning SIDE, not a verdict: which of those is a
   // victory depends on the seat, and only the client knows the seat.
   const over = match.gameOver;
+  // How it ended goes on the shelf, once. The list offers a finished game to
+  // look at rather than to come back to, and a game that never said how it
+  // went would sit there looking like it was still waiting for a turn.
+  if (over >= 0 && launch.gameId && !endedSaved) {
+    endedSaved = true;
+    saves.finish(launch.gameId, over === launch.side ? 'won' : 'lost');
+  }
   // Watching a past turn is the phase that outranks the rest, because the turn
   // number in the header would otherwise name a turn nobody is looking at.
   const watched = watching() && review ? match.history[review.at] : undefined;
@@ -1626,7 +1663,11 @@ function renderHeader(): void {
   // preview of the plan. Only the playback one touches playTick, which is the
   // state that used to trap the console.
   const sc = $<HTMLInputElement>('scrub');
-  sc.disabled = playTick === null && !canPlan();
+  // Three things it can be scrubbing: a turn playing back, a turn the review
+  // panel is aimed at, or the plan being written. Only the last one needs the
+  // planning gate; a review panel that is open is a turn to move through
+  // whether or not it has been played yet.
+  sc.disabled = playTick === null && review === null && !canPlan();
   if (playTick === null && canPlan()) sc.value = String(previewTick);
 }
 
@@ -2300,6 +2341,14 @@ async function endTurn(): Promise<void> {
     }
   } else {
     match.resolveWith(own);
+    // A local game persists here, at the one moment its state changed and is
+    // known to be worth keeping. Orders only: the match replays from them, so
+    // what goes to disk is a few hundred bytes a turn rather than a snapshot.
+    if (launch.gameId) {
+      const body: Record<string, PlannedOrder> = {};
+      for (const [ship, o] of own) body[String(ship)] = o;
+      saves.recordTurn(launch.gameId, turn, body);
+    }
   }
 
   waiting = false;
@@ -2346,7 +2395,7 @@ function banner(on: boolean, waitingOn = 0): void {
 $('bRestart').onclick = () => {
   // Back to the lobby rather than straight into another match: the room you
   // were in is finished, and picking the next one is a decision.
-  lobby.show();
+  route.go(route.LOBBY);
 };
 
 // Touch only, now that a mouse has two buttons to do this with. A phone has
@@ -2558,6 +2607,18 @@ $('bSpeed').onclick = () => {
 };
 
 const scrub = $<HTMLInputElement>('scrub');
+/**
+ * Was the turn actually running when this drag started?
+ *
+ * Releasing has to resume a playback the player paused by grabbing it, and
+ * hold one they scrubbed into from a standstill. Read at the START of the
+ * gesture, because the input handler has already set `playing` to false by
+ * the time the release is heard.
+ */
+let scrubResumes = false;
+const armScrub = () => { scrubResumes = playing && playTick !== null; };
+scrub.addEventListener('pointerdown', armScrub);
+scrub.addEventListener('keydown', armScrub);
 // Scrubbing pauses so the preview holds still under the finger, and RELEASING
 // resumes. Without that release, `playing = false` with a tick set was a state
 // nothing could leave: the frame loop only advances while playing, so playback
@@ -2570,6 +2631,16 @@ const scrub = $<HTMLInputElement>('scrub');
 // a state nothing could leave, since the frame loop only advances while
 // playing, and that is exactly the freeze that took End Turn with it.
 scrub.oninput = () => {
+  // A turn the review panel is AIMED at is a turn the scrubber can move
+  // through, without pressing Watch first. Watch was the only way in, so the
+  // scrubber sat there enabled and inert over a turn the panel was already
+  // pointing at, and the only way to look at a moment was to play the whole
+  // thing and catch it. Scrubbing into it enters it PAUSED, which is what a
+  // scrubber means: this frame, held, not this frame and then off again.
+  if (playTick === null && review) {
+    watchTurn(review.at, review.auto);
+    playing = false;
+  }
   if (playTick !== null) {
     playing = false;
     playTick = Number(scrub.value);
@@ -2582,6 +2653,10 @@ scrub.oninput = () => {
 };
 scrub.onchange = () => {
   if (playTick === null) return;
+  // Releasing resumes the turn that was already RUNNING, and holds one the
+  // scrubber walked into. Resuming either would mean a player who dragged to
+  // second four to look at it got the rest of the turn played at them.
+  if (watching() && !scrubResumes) return;
   playing = true;
 };
 
@@ -3167,12 +3242,23 @@ const lobby = new Lobby(api, (l: Launch) => {
   launch = l;
   seed = l.seed;
   start();
+  // The game is up, so the address says so. `shownRoute` is set FIRST: this
+  // navigation is the consequence of a screen change rather than the cause of
+  // one, and letting the router act on it would start the same game again.
+  if (l.gameId) {
+    const r: route.Route = { kind: 'play', gameId: l.gameId };
+    shownRoute = route.href(r);
+    route.go(r);
+  }
 });
 
 // The shipyard sits over the lobby rather than replacing it, so closing it
 // puts the player back where they opened it from.
-const designer = new Designer(() => { if (!lobby.visible) lobby.show(); });
-$('bShipyard').onclick = () => designer.show();
+const designer = new Designer(() => {
+  if (route.current().kind === 'ship') route.go(route.LOBBY);
+  else if (!lobby.visible) lobby.show();
+});
+$('bShipyard').onclick = () => { route.go({ kind: 'ship' }); };
 
 // The seam between the shipyard and the library. The editor knows nothing
 // about the network and the lobby knows nothing about hulls; this is the one
@@ -3192,12 +3278,91 @@ designer.onSave(async req => {
 });
 
 lobby.onOpenDesign(d => {
+  // Push the design's own address, so the editor a player is in is a place
+  // they can reload into and a link they can send.
+  route.go({ kind: 'ship', designId: d.designId });
   designer.show();
   designer.loadDesign(d.design as Design, {
     designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
   });
 });
 
+// The lobby says where it went; this puts it in the address bar. One decision
+// about which screen has which path, in one place.
+lobby.onWhere(where => {
+  const want: route.Route = where.room ? { kind: 'room', roomId: where.room } : route.LOBBY;
+  if (route.same(route.current(), want)) return;
+  // Same reason as above: the lobby has already moved, and this is only the
+  // address catching up. Acting on it would join the room a second time.
+  shownRoute = route.href(want);
+  route.go(want, { replace: true });
+});
+
+/**
+ * Put the screen where the URL says.
+ *
+ * Every entry point goes through here: the first load, a Back press, and every
+ * in app navigation, because `go` calls this too. That is what keeps the
+ * address and the screen from ever being two different opinions.
+ *
+ * A route that names something gone (a save that was forgotten, a room that
+ * closed) falls back to the lobby and REWRITES the address, rather than
+ * leaving a player looking at a list with an address that promises a game.
+ */
+let shownRoute = '';
+async function showRoute(r: route.Route): Promise<void> {
+  const key = route.href(r);
+  if (key === shownRoute) return;
+  shownRoute = key;
+
+  if (r.kind !== 'ship') designer.hide();
+  if (r.kind !== 'play' && r.kind !== 'room') {
+    // Leaving a game: the match stays in the module, but the screen over it
+    // goes, and the lobby is the thing behind it.
+    closeSchematic();
+  }
+
+  switch (r.kind) {
+    case 'play': {
+      if (lobby.resume(r.gameId)) return;
+      route.go(route.LOBBY, { replace: true });
+      return;
+    }
+    case 'room': {
+      if (await lobby.openRoom(r.roomId)) return;
+      route.go(route.LOBBY, { replace: true });
+      return;
+    }
+    case 'ship': {
+      if (!r.designId) { designer.show(); lobby.show(); return; }
+      // Straight to a design by id, which is what a reload on `/ship/<id>`
+      // has to do: the library row it came from may not even be loaded yet.
+      try {
+        const d = await api.getDesign(r.designId);
+        designer.show();
+        designer.loadDesign(d.design as Design, {
+          designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
+        });
+      } catch {
+        designer.show();
+      }
+      lobby.show();
+      return;
+    }
+    default:
+      lobby.show();
+  }
+}
+
+// Back, Forward, and every `go` above. `showRoute` is idempotent on the route
+// it is already showing, which is what makes it safe to call from both.
+route.onRoute(r => { void showRoute(r); });
+
 renderHelp();
 frame();
-void lobby.signIn().then(() => lobby.show());
+// Sign in first so the lobby knows who it is, then go wherever the address
+// says. A reload on a game lands back in the game.
+void lobby.signIn().then(() => {
+  lobby.show();
+  void showRoute(route.current());
+});

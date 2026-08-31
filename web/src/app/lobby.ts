@@ -14,6 +14,8 @@
 
 import { Api, ApiError, type Room, type SavedDesign, type Ticket } from '../net/api.js';
 import { CLASS_NAMES, classIndexOf } from '../sim/types.js';
+import { newId } from './route.js';
+import * as saves from './saves.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -24,6 +26,17 @@ const $ = <T extends HTMLElement>(id: string): T => {
 /** How a match was entered, which decides how its turns are resolved. */
 export interface Launch {
   readonly kind: 'offline' | 'served';
+  /**
+   * The save this game is filed under, for an offline one.
+   *
+   * Present from the moment it starts rather than minted on the first turn: a
+   * game refreshed before its first turn resolves is still a game somebody
+   * started, and it should be there when they come back.
+   */
+  readonly gameId?: string;
+  /** Turns already played, replayed on top of the fresh match to get back to
+   *  where the save left off. */
+  readonly resume?: ReadonlyArray<Record<string, unknown>>;
   readonly seed: string;
   readonly scenario: string;
   /** Bit per side: set means a person plays it. */
@@ -71,6 +84,17 @@ export class Lobby {
   #libMine = false;
   /** Set by main.ts: opening a library design is the shipyard's job. */
   #onOpenDesign: ((d: SavedDesign) => void) | null = null;
+  /**
+   * Set by main.ts: where the lobby has just moved to.
+   *
+   * The lobby says where it went and the app puts that in the address bar,
+   * rather than the lobby writing URLs itself. Which screen has which path is
+   * one decision and it lives in one place; a panel that pushed its own would
+   * be a second router.
+   */
+  #onWhere: ((where: { room?: string }) => void) | null = null;
+
+  onWhere(fn: (where: { room?: string }) => void): void { this.#onWhere = fn; }
   /** The design whose hull the next practice level is flown in, if any. */
   #hull: SavedDesign | null = null;
 
@@ -88,6 +112,7 @@ export class Lobby {
     $('lobby').classList.remove('hidden');
     this.#room = null;
     this.#showLobbyPanel();
+    this.renderSaves();
     void this.refresh();
     void this.refreshLibrary();
     this.#startPolling();
@@ -237,11 +262,30 @@ export class Lobby {
     try {
       const room = await this.#api.joinRoom(roomId);
       this.#watch(room);
+      this.#onWhere?.({ room: room.roomId });
       if (room.status !== 'open' && room.matchId) { await this.#enter(room); return; }
       this.#renderRoom(room);
     } catch (e) {
       this.#err(e);
+      this.#onWhere?.({});
       void this.refresh();
+    }
+  }
+
+  /**
+   * Open a room by id, because the URL named it.
+   *
+   * The same path a click takes, so a link to a room and a click on one land
+   * in exactly the same place. A room that is gone falls back to the list
+   * rather than to an empty panel.
+   */
+  async openRoom(roomId: string): Promise<boolean> {
+    if (!this.visible) this.show();
+    try {
+      await this.#join(roomId);
+      return this.#room !== null;
+    } catch {
+      return false;
     }
   }
 
@@ -249,6 +293,7 @@ export class Lobby {
     try {
       const room = await this.#api.createRoom({ mode });
       this.#watch(room);
+      this.#onWhere?.({ room: room.roomId });
       this.#renderRoom(room);
     } catch (e) {
       this.#err(e);
@@ -343,13 +388,89 @@ export class Lobby {
       : 'Or take a hull out of the library. Anyone&rsquo;s will do.';
   }
 
+  /**
+   * Start a practice level, and file it under an id straight away.
+   *
+   * The save exists before the first turn does. A game refreshed on turn zero
+   * is still a game somebody started, and coming back to an empty lobby is
+   * exactly the thing this is here to stop.
+   */
   #practice(scenario: string): void {
     this.#stopPolling();
     this.hide();
-    this.#onLaunch({
-      kind: 'offline', seed: randomSeed(), scenario, humanSides: 0b01, side: 0,
+    const name = PRACTICE.find(p => p.key === scenario)?.name ?? scenario;
+    const game = saves.create({
+      id: newId(),
+      name: this.#hull ? `${name}, in ${this.#hull.name}` : name,
+      seed: randomSeed(),
+      scenario,
+      humanSides: 0b01,
+      side: 0,
       ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
     });
+    this.#onLaunch({
+      kind: 'offline', gameId: game.id, seed: game.seed, scenario, humanSides: 0b01, side: 0,
+      ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
+    });
+  }
+
+  /**
+   * The games this browser has in progress.
+   *
+   * Above the levels, because "carry on with the one I was playing" is the
+   * commoner intent than "start another", and a player who lost the tab has no
+   * other way back in: the address they were on is the only other handle on it
+   * and they have just lost that too.
+   */
+  renderSaves(): void {
+    const host = $('savedList');
+    const rows = saves.list();
+    host.innerHTML = '';
+    $('savedWrap').style.display = rows.length ? '' : 'none';
+    for (const g of rows) {
+      const div = document.createElement('div');
+      div.className = 'card roomRow';
+      const state = g.outcome === 'won' ? 'won'
+        : g.outcome === 'lost' ? 'lost'
+        : `turn ${g.turns.length}`;
+      div.innerHTML =
+        `<div class="row">`
+        + `<div class="grow"><div class="t">${escape(g.name)}</div>`
+        + `<div class="s">${escape(state)} &middot; ${when(g.updatedMs)}</div></div>`
+        + `<button class="drop" title="Forget this game">&times;</button>`
+        + `</div>`;
+      div.onclick = () => { this.#resume(g.id); };
+      const drop = div.querySelector('button');
+      if (drop) {
+        drop.onclick = ev => {
+          ev.stopPropagation();
+          saves.remove(g.id);
+          this.renderSaves();
+        };
+      }
+      host.appendChild(div);
+    }
+  }
+
+  /** Pick a saved game up where it was left. */
+  #resume(id: string): void {
+    const g = saves.load(id);
+    if (!g) { this.renderSaves(); return; }
+    this.#stopPolling();
+    this.hide();
+    this.#onLaunch({
+      kind: 'offline', gameId: g.id, seed: g.seed, scenario: g.scenario,
+      humanSides: g.humanSides, side: g.side, resume: g.turns,
+      ...(g.hull ? { hull: g.hull, hullName: g.hullName ?? 'your design' } : {}),
+    });
+  }
+
+  /** Open a saved game by id, because the URL named it. Returns false when
+   *  there is no such save, so the caller can put the player somewhere real. */
+  resume(id: string): boolean {
+    if (!saves.load(id)) return false;
+    this.#resume(id);
+    return true;
   }
 
   // ------------------------------------------------------- the ship library --
@@ -433,6 +554,7 @@ export class Lobby {
       this.#socket?.close();
       this.#socket = null;
       this.#showLobbyPanel();
+      this.#onWhere?.({});
       void this.#api.leaveRoom(id).catch(() => { /* leaving is best effort */ });
       void this.refresh();
     };
@@ -455,4 +577,15 @@ export function randomSeed(): string {
   const b = new Uint8Array(8);
   crypto.getRandomValues(b);
   return Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** How long ago, in the shortest form that still says it. */
+function when(ms: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (secs < 90) return 'just now';
+  const mins = Math.round(secs / 60);
+  if (mins < 90) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
 }
