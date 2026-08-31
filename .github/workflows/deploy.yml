@@ -92,9 +92,19 @@ jobs:
     # Only on the canonical repo, so forks without Fly access fall through
     # cleanly. Case insensitive so a clone under either casing works.
     if: ${{ contains(fromJSON('["rubentipparach/redux-tribes", "RubenTipparach/redux-tribes"]'), github.repository) }}
+    # One deploy at a time, and a NEWER one supersedes an older one that has
+    # not finished. With cancel-in-progress false these queued strictly, so a
+    # run of pushes stacked three full deploys back to back, each one waiting
+    # up to twenty minutes on Fly's builder, and the first two were shipping
+    # code the third already replaced. An older image is worth nothing once a
+    # newer one is waiting behind it.
+    #
+    # This is a PER JOB group, which is the distinction the note at the top of
+    # this file is about: cancelling at workflow level would kill the tests
+    # too, and a run whose tests were cancelled cannot say the build is good.
     concurrency:
       group: fly-deploy
-      cancel-in-progress: false
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
