@@ -1646,7 +1646,11 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
+  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }> = [];
+  #lastBlasts: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }> = [];
+
   setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+    this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
       ((c as THREE.Line).material as THREE.Material).dispose();
@@ -1679,7 +1683,10 @@ export class View {
    * it. Additive and depth-write off, so they light each other instead of
    * cutting holes.
    */
-  setBlasts(list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>): void {
+  setBlasts(
+    list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }>,
+  ): void {
+    this.#lastBlasts = list;
     for (const c of this.#fxGroup.children) {
       const m = c as THREE.Mesh;
       m.geometry.dispose();
@@ -2159,14 +2166,50 @@ export class View {
 
   /** How much blast and how much history is on screen, and how big the biggest
    * blast has grown. Observation only, for the harness and the console. */
-  fxStats(): { blasts: number; beams: number; trails: number; widest: number } {
+  /**
+   * What the effects layer is drawing, and whether it is drawing it ON the
+   * ship.
+   *
+   * `off` is how far a blast sits from its ship's centre and `hullR` is that
+   * hull's own bounding radius. A blast drawn at the raw event sits on the
+   * COLLISION sphere, which circumscribes the long axis and is about twice the
+   * hull radius on a frigate, so `off > hullR` is exactly the defect where an
+   * explosion hangs in space beside the ship. `beamLen` is the same question
+   * for a beam, which used to be drawn to the weapon's full range whether or
+   * not it hit anything.
+   */
+  fxStats(): {
+    blasts: number; beams: number; trails: number; widest: number;
+    onHull: Array<{ ship: number; kill: boolean; off: number; hullR: number }>;
+    beamLen: number[];
+  } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
       const g = (c as THREE.Mesh).geometry;
       g.computeBoundingSphere();
       widest = Math.max(widest, g.boundingSphere?.radius ?? 0);
     }
+    const onHull = this.#lastBlasts.map(b => {
+      const mesh = this.#hulls.get(b.ship);
+      const c = this.#carved.get(b.ship);
+      const half = c ? c.hull.half : null;
+      const hullR = half
+        ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+        : 0;
+      const off = mesh
+        ? Math.sqrt(
+          (b.pos.x - mesh.position.x) ** 2
+          + (b.pos.y - mesh.position.y) ** 2
+          + (b.pos.z - mesh.position.z) ** 2)
+        : 0;
+      return { ship: b.ship, kill: b.kill, off: +off.toFixed(3), hullR: +hullR.toFixed(3) };
+    });
+    const beamLen = this.#lastBeams.map(b => +Math.sqrt(
+      (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
+    ).toFixed(2));
     return {
+      onHull,
+      beamLen,
       blasts: this.#fxGroup.children.length,
       beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,

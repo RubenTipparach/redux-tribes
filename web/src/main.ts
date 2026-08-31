@@ -2967,7 +2967,7 @@ function beamEnd(fired: SimEvent, events: readonly SimEvent[]): Vec3 {
 }
 
 function blastsAt(events: readonly SimEvent[], tick: number)
-  : Array<{ pos: Vec3; age: number; radius: number; kill: boolean }> {
+  : Array<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }> {
   const out = [];
   for (const e of events) {
     const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.Collision;
@@ -2979,7 +2979,7 @@ function blastsAt(events: readonly SimEvent[], tick: number)
     // A kill is the whole ship going up and belongs on its centre; a shot
     // belongs where it landed, which is not where the event says it did.
     const pos = kill ? e.pos : contactWorld(e);
-    out.push({ pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill });
+    out.push({ pos, age, radius: kill ? hull : Math.max(0.5, hull * 0.28), kill, ship: e.ship });
   }
   return out;
 }

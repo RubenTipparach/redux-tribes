@@ -71,6 +71,15 @@ let aimedAtAVolume = false;
 let aimedShotQueued = false;
 /** The most chunks of hull seen in the air at once. */
 let chunksSeen = 0;
+/** The worst blast seen, as how far it sat from the hull it was drawn on.
+ *  A shot's explosion belongs ON the ship, and the event it comes from carries
+ *  a point on the COLLISION sphere, which stands well proud of a hull. */
+let worstBlast = null;
+/** Blasts sampled at all, so "none seen" cannot pass as "all landed". */
+let blastsSeen = 0;
+/** The longest beam drawn, against the range of the weapon that fired it: a
+ *  beam that hit used to be drawn out to full range and through the target. */
+let longestBeam = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -149,6 +158,34 @@ if (chewed.length) {
 const lost = mounts.filter(m => m.cells > 0 && m.gone === m.cells).length;
 log(`turrets stay whole: ${mounts.length} mounts on damaged hulls, `
   + `none part eaten, ${lost} knocked clean off`);
+
+// A SHOT LANDS ON THE SHIP.
+//
+// The hit event carries the point where the segment entered the ship's
+// collision sphere, and that sphere circumscribes the long axis: on a frigate
+// it is about twice the hull's own radius, so a blast drawn at the raw event
+// hangs in open space beside the hull. One cell of slack, because the contact
+// is resolved to a cell centre and a cell has a size.
+if (!blastsSeen) {
+  console.log('\nFAIL: a whole match of hits and no blast was ever drawn');
+  process.exit(1);
+}
+if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
+  console.log('\nFAIL: a blast was drawn off the hull it belongs to:');
+  console.log(`  ship ${worstBlast.ship}: ${worstBlast.off} u from centre, `
+    + `hull radius ${worstBlast.hullR} u`);
+  process.exit(1);
+}
+// And a beam stops at what it hit. The beam weapon's range is 300 units, so a
+// beam anywhere near that length is one drawn straight through its target.
+if (longestBeam > 200) {
+  console.log(`\nFAIL: a beam was drawn ${longestBeam} u, which is its full `
+    + 'range: it did not stop at the ship it hit');
+  process.exit(1);
+}
+log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
+  + `${worstBlast ? worstBlast.off : 0} u out against a hull radius of `
+  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam ${longestBeam} u`);
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -801,6 +838,21 @@ async function playMatch() {
     await page.waitForTimeout(1500);
     const d = await page.evaluate(() => window.ftDebug.damage());
     chunksSeen = Math.max(chunksSeen, d.chunks);
+  }
+
+  // Where the shot effects are actually drawn. Sampled through the playback
+  // rather than once, because a beam lasts a few ticks and a blast a few more,
+  // so a single look almost always finds an empty screen.
+  for (let s = 0; s < 12; s++) {
+    await page.waitForTimeout(220);
+    const fx = await page.evaluate(() => window.ftDebug.fx());
+    for (const b of fx.onHull) {
+      if (b.kill || !b.hullR) continue;
+      blastsSeen++;
+      if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
+    }
+    for (const len of fx.beamLen) longestBeam = Math.max(longestBeam, len);
+    if (await page.evaluate(() => window.ftDebug.playing() === null)) break;
   }
 
   // Playback must run out and hand control back. A turn that never returns to
