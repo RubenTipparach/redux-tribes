@@ -80,9 +80,12 @@ let blastsSeen = 0;
 /** Blasts that fell back to the raw event because the hull could not be
  *  consulted, which is the old behaviour surviving in a corner. */
 let unresolved = 0;
-/** The longest beam drawn, against the range of the weapon that fired it: a
- *  beam that hit used to be drawn out to full range and through the target. */
+/** The longest beam that HIT something, against the range of the weapon that
+ *  fired it: a beam that hit used to be drawn out to full range and straight
+ *  through the target. A beam that missed is drawn to full range and is right
+ *  to be, so the two are counted apart. */
 let longestBeam = 0;
+let hittingBeams = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -185,7 +188,15 @@ if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
   process.exit(1);
 }
 // And a beam stops at what it hit. The beam weapon's range is 300 units, so a
-// beam anywhere near that length is one drawn straight through its target.
+// beam that hit and is anywhere near that length is one drawn straight through
+// its target. Only beams that HIT are judged: a miss goes the full distance
+// because nothing stopped it, and failing that would be failing correct
+// behaviour.
+if (!hittingBeams) {
+  console.log('\nFAIL: no beam that hit anything was ever sampled, so nothing '
+    + 'was checked about where a beam stops');
+  process.exit(1);
+}
 if (longestBeam > 200) {
   console.log(`\nFAIL: a beam was drawn ${longestBeam} u, which is its full `
     + 'range: it did not stop at the ship it hit');
@@ -193,7 +204,8 @@ if (longestBeam > 200) {
 }
 log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
   + `${worstBlast ? worstBlast.off : 0} u out against a hull radius of `
-  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam ${longestBeam} u`);
+  + `${worstBlast ? worstBlast.hullR : 0} u; ${hittingBeams} beams that hit, `
+  + `longest ${longestBeam} u of a 300 u range`);
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -897,7 +909,11 @@ async function playMatch() {
       if (!b.resolved) unresolved++;
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
-    for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);
+    for (const b of snap.fx.beamLen) {
+      if (!b.hit) continue;
+      hittingBeams++;
+      longestBeam = Math.max(longestBeam, b.len);
+    }
     if (snap.done) break;
     await page.waitForTimeout(200);
   }

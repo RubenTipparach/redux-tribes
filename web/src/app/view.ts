@@ -1646,13 +1646,13 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
-  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }> = [];
+  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit?: boolean }> = [];
   #lastBlasts: ReadonlyArray<{
     pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
     centre: Vec3; resolved: boolean;
   }> = [];
 
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit?: boolean }>): void {
     this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
@@ -2189,7 +2189,7 @@ export class View {
     onHull: Array<{
       ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
     }>;
-    beamLen: number[];
+    beamLen: Array<{ len: number; hit: boolean }>;
   } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
@@ -2215,9 +2215,15 @@ export class View {
         off: +off.toFixed(3), hullR: +hullR.toFixed(3),
       };
     });
-    const beamLen = this.#lastBeams.map(b => +Math.sqrt(
-      (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
-    ).toFixed(2));
+    // With whether it hit anything, because a beam that MISSED is drawn to
+    // full range and is right to be: judging a beam by its length alone would
+    // fail a clean miss.
+    const beamLen = this.#lastBeams.map(b => ({
+      len: +Math.sqrt(
+        (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
+      ).toFixed(2),
+      hit: b.hit === true,
+    }));
     return {
       onHull,
       beamLen,

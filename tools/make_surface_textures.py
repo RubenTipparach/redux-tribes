@@ -307,6 +307,8 @@ WARM = (1.00, 0.86, 0.62)     # lived in: galley light, crew spaces
 DEEP = (1.00, 0.62, 0.26)     # the falloff at the edge of a warm pane
 COOL = (0.80, 0.92, 1.00)     # instrument light, which is what a bridge is
 AMBER = (1.00, 0.72, 0.20)    # running lights and bay markers
+# How much an UNLIT pane still gives back. Not zero: see `_panes`.
+DARK_PANE = 0.16
 
 
 def lerp3(a, b, t):
@@ -319,6 +321,14 @@ def _panes(spec):
     `lit` is 0 to 1, and it is deliberately not 1 everywhere. A row of identical
     panes reads as a texture; one dark pane and one dim one reads as a ship with
     somebody aboard, and it costs nothing.
+
+    But a dark pane is not an ABSENT one. The first cut set the fourth cabin to
+    exactly zero, meaning nobody home, and at the size a cell is drawn that is
+    a hole rather than a window: the frame is in the normal map but the eye is
+    reading the emission, and black emission next to three lit panes looks like
+    a window somebody forgot to draw. An unlit pane is still glass, and glass
+    with no light behind it reflects the sky, so it keeps a little cool
+    emission instead of none.
     """
     def height(x, y):
         v = 0.0
@@ -336,6 +346,11 @@ def _panes(spec):
             if x0 < x < x1 and y0 < y < y1:
                 inset = min(x - x0, x1 - x, y - y0, y1 - y)
                 k = smoothstep(0.0, 0.026, inset)
+                # A pane with nothing on behind it is cold glass catching the
+                # sky, not an absence. Below a quarter lit it takes the cool
+                # tint and a floor, so it still reads as a window.
+                if lit < 0.25:
+                    return tuple(v * DARK_PANE * (0.45 + 0.55 * k) for v in COOL)
                 return tuple(v * lit * (0.35 + 0.65 * k)
                              for v in lerp3(cold, hot, k))
         return (0.0, 0.0, 0.0)
@@ -366,7 +381,7 @@ def w_porthole():
 
 def w_panes():
     """Four square windows. A cabin block."""
-    g, lit = 0.055, (1.0, 0.55, 0.9, 0.0)
+    g, lit = 0.055, (1.0, 0.55, 0.9, 0.0)   # the last one is dark, not absent
     spec, i = [], 0
     for by in (0.5 + g, 0.5 - g - 0.30):
         for bx in (0.5 + g, 0.5 - g - 0.30):
