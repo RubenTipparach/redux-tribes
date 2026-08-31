@@ -167,10 +167,12 @@ def emit(out: Path, png: bytes, check: bool) -> bool:
 
 # --------------------------------------------------------------- normals ---
 
-def normal_png(height_field, size: int, strength: float, tiling: bool = True) -> bytes:
+def normal_png(height_field, w: int, h: int, strength: float, tiling: bool = True) -> bytes:
     """A height field as a tangent space normal map.
 
-    `height_field` is a flat list of size * size heights in roughly 0..1.
+    `height_field` is a flat list of w * h heights in roughly 0..1. Not square,
+    because a decal that wants several variants holds them side by side and
+    lets repeat wrapping cycle through them.
 
     Green is +Y up, which is the OpenGL convention and the one three.js reads,
     so a ridge lit from above looks lit from above rather than inside out.
@@ -181,14 +183,14 @@ def normal_png(height_field, size: int, strength: float, tiling: bool = True) ->
     """
     def at(ix: int, iy: int) -> float:
         if tiling:
-            return height_field[(iy % size) * size + (ix % size)]
-        ix = 0 if ix < 0 else (size - 1 if ix >= size else ix)
-        iy = 0 if iy < 0 else (size - 1 if iy >= size else iy)
-        return height_field[iy * size + ix]
+            return height_field[(iy % h) * w + (ix % w)]
+        ix = 0 if ix < 0 else (w - 1 if ix >= w else ix)
+        iy = 0 if iy < 0 else (h - 1 if iy >= h else iy)
+        return height_field[iy * w + ix]
 
     out = bytearray()
-    for y in range(size):
-        for x in range(size):
+    for y in range(h):
+        for x in range(w):
             # Central differences. The step is one texel, so `strength` is in
             # height units per texel and a bigger texture is not automatically
             # a bumpier one.
@@ -203,15 +205,15 @@ def normal_png(height_field, size: int, strength: float, tiling: bool = True) ->
                 int(255.0 * (nx * 0.5 + 0.5) + 0.5),
                 int(255.0 * (ny * 0.5 + 0.5) + 0.5),
                 int(255.0 * (nz * 0.5 + 0.5) + 0.5)))
-    return encode_png(size, size, bytes(out))
+    return encode_png(w, h, bytes(out))
 
 
-def rgb_png(colour_field, size: int) -> bytes:
-    """A flat list of size * size (r, g, b) triples in 0..1 as a PNG."""
+def rgb_png(colour_field, w: int, h: int) -> bytes:
+    """A flat list of w * h (r, g, b) triples in 0..1 as a PNG."""
     out = bytearray()
     for r, g, b in colour_field:
         out += bytes((
             int(255.0 * (0.0 if r < 0 else (1.0 if r > 1 else r)) + 0.5),
             int(255.0 * (0.0 if g < 0 else (1.0 if g > 1 else g)) + 0.5),
             int(255.0 * (0.0 if b < 0 else (1.0 if b > 1 else b)) + 0.5)))
-    return encode_png(size, size, bytes(out))
+    return encode_png(w, h, bytes(out))

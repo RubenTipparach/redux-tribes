@@ -231,10 +231,17 @@ var FINISH = [
   ['hex','Ablative'], ['cracked','Patched'], ['tread','Grip deck'],
   ['greeble','Greebled'], ['weave','Composite'], ['battered','Battered']
 ];
+// Key, label, and how many lit patterns the texture holds side by side. A run
+// of cabins with the same panes lit in every one of them reads as a repeating
+// texture rather than as a ship with people in it, and window cells merge into
+// one quad whose UV runs 0 to N in cells, so sampling at 1/V cycles through the
+// V patterns, one per cell, with no per cell attribute anywhere.
 var WINDOW = [
-  ['porthole','Porthole'], ['panes','Cabins'], ['strip','Promenade'],
-  ['bridge','Bridge'], ['beacons','Beacons'], ['hangar','Bay mouth']
+  ['porthole','Porthole',1], ['panes','Cabins',7], ['strip','Promenade',5],
+  ['bridge','Bridge',1], ['beacons','Beacons',1], ['hangar','Bay mouth',1]
 ];
+var VARIANTS = {};
+WINDOW.forEach(function (w) { VARIANTS[w[0]] = w[2]; });
 
 var stat = document.getElementById('shipStat');
 function fail(why) {
@@ -250,6 +257,10 @@ function makeTex(name, srgb, done) {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     t.anisotropy = 8;
+    // A decal holding V patterns side by side is sampled at 1/V across, so one
+    // cell shows one pattern and the next cell shows the next.
+    var m = /^window_([a-z]+)_/.exec(name);
+    if (m && VARIANTS[m[1]] > 1) t.repeat.set(1 / VARIANTS[m[1]], 1);
     TEX[name] = t;
     done();
   }, undefined, done);
@@ -543,28 +554,32 @@ function stampNormal(finishKey, winKey) {
   if (!base) { STAMP[key] = detail; return detail; }
 
   var A = readTexels(base), B = readTexels(detail);
-  var n = Math.min(A.width, B.width), m = Math.min(A.height, B.height);
+  // The window is as wide as its variant count; the finish is one cell. Bake at
+  // the window's width and let the finish tile across it, so the stamp keeps
+  // both the variants and the finish underneath them.
+  var n = B.width, m = B.height;
   var cv = document.createElement('canvas');
   cv.width = n; cv.height = m;
   var cx = cv.getContext('2d');
   var out = cx.createImageData(n, m);
   for (var y = 0; y < m; y++) {
     for (var x = 0; x < n; x++) {
-      var i = (y * n + x) * 4;
+      var j = (y * n + x) * 4;
+      var i = ((y % A.height) * A.width + (x % A.width)) * 4;
       var tx = A.data[i] / 255 * 2 - 1;
       var ty = A.data[i + 1] / 255 * 2 - 1;
       var tz = A.data[i + 2] / 255 * 2;
-      var ux = B.data[i] / 255 * -2 + 1;
-      var uy = B.data[i + 1] / 255 * -2 + 1;
-      var uz = B.data[i + 2] / 255 * 2 - 1;
+      var ux = B.data[j] / 255 * -2 + 1;
+      var uy = B.data[j + 1] / 255 * -2 + 1;
+      var uz = B.data[j + 2] / 255 * 2 - 1;
       var d = tx * ux + ty * uy + tz * uz;
       var k = tz === 0 ? 0 : d / tz;
       var rx = tx * k - ux, ry = ty * k - uy, rz = tz * k - uz;
       var len = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1;
-      out.data[i] = Math.round((rx / len * 0.5 + 0.5) * 255);
-      out.data[i + 1] = Math.round((ry / len * 0.5 + 0.5) * 255);
-      out.data[i + 2] = Math.round((rz / len * 0.5 + 0.5) * 255);
-      out.data[i + 3] = 255;
+      out.data[j] = Math.round((rx / len * 0.5 + 0.5) * 255);
+      out.data[j + 1] = Math.round((ry / len * 0.5 + 0.5) * 255);
+      out.data[j + 2] = Math.round((rz / len * 0.5 + 0.5) * 255);
+      out.data[j + 3] = 255;
     }
   }
   cx.putImageData(out, 0, 0);
@@ -572,6 +587,7 @@ function stampNormal(finishKey, winKey) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.NoColorSpace;
   t.anisotropy = 8;
+  if (VARIANTS[winKey] > 1) t.repeat.set(1 / VARIANTS[winKey], 1);
   t.needsUpdate = true;
   STAMP[key] = t;
   return t;

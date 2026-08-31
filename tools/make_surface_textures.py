@@ -322,6 +322,22 @@ AMBER = (1.00, 0.72, 0.20)    # running lights and bay markers
 GLASS = 0.06
 
 
+def pane_lights(n: int, seed: int):
+    """How many of `n` panes are on, dim or off, for one variant.
+
+    Three states rather than a continuum, because at the size a cell is drawn
+    the eye reads on, half and off and nothing between them. Deterministic from
+    the seed, so a regeneration is bit identical and the same hull looks the
+    same on both screens.
+    """
+    r = rng(seed)
+    out = []
+    for _ in range(n):
+        x = r()
+        out.append(1.0 if x > 0.58 else (0.55 if x > 0.34 else 0.0))
+    return tuple(out)
+
+
 def lerp3(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
 
@@ -374,7 +390,7 @@ def _panes(spec):
     return height, emission, glass
 
 
-def w_porthole():
+def w_porthole(v=0):
     """One round window. The unit a habitation deck is made of."""
     def height(x, y):
         dx, dy = x - 0.5, y - 0.5
@@ -400,9 +416,9 @@ def w_porthole():
     return height, emission, glass
 
 
-def w_panes():
+def w_panes(v=0):
     """Four square windows. A cabin block."""
-    g, lit = 0.055, (1.0, 0.55, 0.9, 0.0)   # the last one is dark, not absent
+    g, lit = 0.055, pane_lights(4, 0xCAB19 + v * 7919)
     spec, i = [], 0
     for by in (0.5 + g, 0.5 - g - 0.30):
         for bx in (0.5 + g, 0.5 - g - 0.30):
@@ -412,10 +428,10 @@ def w_panes():
     return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
-def w_strip():
+def w_strip(v=0):
     """A viewport band with mullions. A promenade, or a long corridor."""
     spec, n = [], 4
-    lit = (1.0, 0.72, 1.0, 0.45)
+    lit = pane_lights(n, 0x57317 + v * 7919)
     for i in range(n):
         x0 = 0.10 + i * (0.80 / n)
         spec.append((x0 + 0.014, 0.40, x0 + 0.80 / n - 0.014, 0.60, lit[i]))
@@ -423,7 +439,7 @@ def w_strip():
     return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
-def w_bridge():
+def w_bridge(v=0):
     """One wide canted viewport. Where somebody is flying this thing."""
     def shape(x, y):
         # Canted: the top edge runs wider than the bottom one.
@@ -450,7 +466,7 @@ def w_bridge():
     return height, emission, glass
 
 
-def w_beacons():
+def w_beacons(v=0):
     """Three running lights. Not a window: the thing that makes a hull read as
     crewed at a range where a window is one pixel."""
     pts = [(0.5, 0.22), (0.5, 0.50), (0.5, 0.78)]
@@ -483,7 +499,7 @@ def w_beacons():
     return height, emission, glass
 
 
-def w_hangar():
+def w_hangar(v=0):
     """A bay mouth: deeply recessed, lit from inside, with a lip round it."""
     x0, x1, y0, y1 = 0.14, 0.86, 0.22, 0.78
 
@@ -514,13 +530,25 @@ def w_hangar():
     return height, emission, glass
 
 
+# The last number is how many VARIANTS the decal carries, side by side in one
+# texture.
+#
+# A run of cabins with the same panes lit in every one of them reads as a
+# repeating texture rather than as a ship with people in it, which is the same
+# thing sixteen ember tiles exist to avoid. There is no per cell attribute to
+# hang a choice on here, and there does not need to be: neighbouring window
+# cells merge into ONE quad whose UV runs 0 to N in cells, so a texture holding
+# V patterns side by side and sampled at 1/V cycles through them, one per cell,
+# for nothing but the width. Seven and five rather than four and six, because a
+# period sharing a factor with a run lines the same pattern up under the same
+# part of the ship every time round.
 WINDOWS = [
-    ("porthole", "Porthole",  "One round window. The unit a habitation deck is made of.", w_porthole),
-    ("panes",    "Cabins",    "Four panes, and one of them dark.",                        w_panes),
-    ("strip",    "Promenade", "A viewport band with mullions.",                           w_strip),
-    ("bridge",   "Bridge",    "A canted viewport, lit by instruments.",                   w_bridge),
-    ("beacons",  "Beacons",   "Running lights. Reads as crewed at map range.",            w_beacons),
-    ("hangar",   "Bay mouth", "A recessed opening, lit from the deck inside.",            w_hangar),
+    ("porthole", "Porthole",  "One round window. The unit a habitation deck is made of.", w_porthole, 1),
+    ("panes",    "Cabins",    "Four panes, lit differently down the run.",                w_panes,    7),
+    ("strip",    "Promenade", "A viewport band with mullions.",                           w_strip,    5),
+    ("bridge",   "Bridge",    "A canted viewport, lit by instruments.",                   w_bridge,   1),
+    ("beacons",  "Beacons",   "Running lights. Reads as crewed at map range.",            w_beacons,  1),
+    ("hangar",   "Bay mouth", "A recessed opening, lit from the deck inside.",            w_hangar,   1),
 ]
 
 WINDOW_STRENGTH = 26.0
@@ -538,25 +566,30 @@ def main() -> int:
 
     for key, _label, _blurb, build, strength in ARMOUR:
         h = build()
-        files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, strength, True)))
+        files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, SIZE, strength, True)))
 
-    for key, _label, _blurb, build in WINDOWS:
-        height, emission, glass = build()
-        h = [height((x + 0.5) / SIZE, (y + 0.5) / SIZE)
-             for y in range(SIZE) for x in range(SIZE)]
-        e = [emission((x + 0.5) / SIZE, (y + 0.5) / SIZE)
-             for y in range(SIZE) for x in range(SIZE)]
-        # The glass map, as a MULTIPLIER on whatever the hull is painted:
-        # white where the hull shows through and near black on the glass.
-        c = []
+    for key, _label, _blurb, build, variants in WINDOWS:
+        made = [build(v) for v in range(variants)]
+        wide = SIZE * variants
+        h, e, c = [], [], []
         for y in range(SIZE):
-            for x in range(SIZE):
-                g = glass((x + 0.5) / SIZE, (y + 0.5) / SIZE)
-                v = 1.0 + (GLASS - 1.0) * g
-                c.append((v, v, v))
-        files.append((f"tex/window_{key}_n.png", normal_png(h, SIZE, WINDOW_STRENGTH, True)))
-        files.append((f"tex/window_{key}_e.png", rgb_png(e, SIZE)))
-        files.append((f"tex/window_{key}_c.png", rgb_png(c, SIZE)))
+            for x in range(wide):
+                # Which variant this column is in, and where inside it.
+                height, emission, glass = made[x // SIZE]
+                u = ((x % SIZE) + 0.5) / SIZE
+                w = (y + 0.5) / SIZE
+                h.append(height(u, w))
+                e.append(emission(u, w))
+                # The glass map, as a MULTIPLIER on whatever the hull is
+                # painted: white where the hull shows through and near black
+                # on the glass.
+                g = glass(u, w)
+                t = 1.0 + (GLASS - 1.0) * g
+                c.append((t, t, t))
+        files.append((f"tex/window_{key}_n.png",
+                      normal_png(h, wide, SIZE, WINDOW_STRENGTH, True)))
+        files.append((f"tex/window_{key}_e.png", rgb_png(e, wide, SIZE)))
+        files.append((f"tex/window_{key}_c.png", rgb_png(c, wide, SIZE)))
 
     # The same bytes again as data URIs, because GUIDELINES 2.1 gives a mockup
     # no network at all and that includes a file sitting next to it.
