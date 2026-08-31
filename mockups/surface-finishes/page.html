@@ -266,7 +266,7 @@ function makeTex(name, srgb, done) {
   }, undefined, done);
 }
 
-var want = [];
+var want = [['env', true]];
 FINISH.forEach(function (f) { if (f[0] !== 'smooth') want.push(['armour_' + f[0] + '_n', false]); });
 WINDOW.forEach(function (w) {
   want.push(['window_' + w[0] + '_n', false]);
@@ -688,26 +688,20 @@ function ship() {
 
   // Metalness needs something to REFLECT. A metal with no environment is
   // black, so showing metalness under the map's two lights alone would be
-  // showing it at its worst and calling that the answer. This is the same
-  // sky and ground the hemisphere light already uses, as an equirectangular
-  // strip run through PMREM, which is a 64 by 32 canvas and a one off cost.
-  // Worth stating plainly: the battlefield has no environment map today, so
-  // adopting metalness means adding one there too.
-  var envCv = document.createElement('canvas');
-  envCv.width = 64; envCv.height = 32;
-  var envCx = envCv.getContext('2d');
-  var grad = envCx.createLinearGradient(0, 0, 0, 32);
-  grad.addColorStop(0, '#5f7fa0');
-  grad.addColorStop(0.55, '#26313f');
-  grad.addColorStop(1, '#0a0e14');
-  envCx.fillStyle = grad; envCx.fillRect(0, 0, 64, 32);
-  var envSrc = new THREE.CanvasTexture(envCv);
-  envSrc.mapping = THREE.EquirectangularReflectionMapping;
-  envSrc.colorSpace = THREE.SRGBColorSpace;
-  var pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromEquirectangular(envSrc).texture;
-  scene.environmentIntensity = 0.55;
-  pmrem.dispose(); envSrc.dispose();
+  // showing it at its worst and calling that the answer.
+  //
+  // A committed file with a generator, like every other texture here, rather
+  // than a gradient drawn at load time: GUIDELINES 3 wants an asset to be a
+  // file, and this is the one the battlefield would ship the day a palette
+  // colour carries metalness. Its two ends are the colours the hemisphere
+  // light already uses, so a reflection agrees with the lighting.
+  if (TEX.env) {
+    TEX.env.mapping = THREE.EquirectangularReflectionMapping;
+    var pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromEquirectangular(TEX.env).texture;
+    scene.environmentIntensity = 0.55;
+    pmrem.dispose();
+  }
 
   var state = {
     faction: 0, swatch: 0, windows: 'porthole',

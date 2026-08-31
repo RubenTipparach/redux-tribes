@@ -554,6 +554,57 @@ WINDOWS = [
 WINDOW_STRENGTH = 26.0
 
 
+# ----------------------------------------------------------- environment --
+#
+# What a metal has to reflect.
+#
+# A metal with no environment is BLACK: metalness says "this surface shows you
+# what is around it", and around it is nothing until something is there. So the
+# moment a palette colour carries metalness, the scene needs one of these, and
+# it may as well be a file with a generator like every other texture here
+# rather than a gradient built at load time (GUIDELINES 3).
+#
+# Equirectangular, and authored directly in that space: u is the way round, v
+# is up. That means no trigonometry, which is what keeps `--check` honest on a
+# machine that is not this one.
+#
+# Low frequency on purpose. PMREM blurs this into roughness levels before
+# anything reflects it, so fine detail is detail that gets averaged away; what
+# survives and what actually matters is the big split between a lit sky above
+# and a dark ground below. The two ends are the same colours the battlefield's
+# hemisphere light already uses, so a reflection agrees with the lighting
+# rather than arguing with it.
+ENV_W, ENV_H = 512, 256
+ENV_SKY = (0.373, 0.498, 0.627)     # 0x5f7fa0, the hemisphere light's sky
+ENV_MID = (0.098, 0.129, 0.180)
+ENV_GROUND = (0.039, 0.055, 0.078)  # 0x0a0e14, its ground and the background
+# A cool wash across the sky, so a curved hull does not reflect one flat tone.
+ENV_WASH = (0.16, 0.30, 0.42)
+
+
+def env_png() -> bytes:
+    """The battlefield's surroundings, as one equirectangular strip."""
+    cloud = [value_noise(p, 0xE0A5 + i) for i, p in enumerate((3, 6))]
+    grain = value_noise(12, 0xE0A7)
+    out = []
+    for y in range(ENV_H):
+        # 0 at the top of the sphere, 1 at the bottom.
+        t = (y + 0.5) / ENV_H
+        for x in range(ENV_W):
+            u = (x + 0.5) / ENV_W
+            base = (lerp3(ENV_SKY, ENV_MID, smoothstep(0.0, 0.55, t))
+                    if t < 0.55
+                    else lerp3(ENV_MID, ENV_GROUND, smoothstep(0.55, 1.0, t)))
+            # A slow drift round the sphere, strongest up top where a hull's
+            # shoulders catch it.
+            k = fbm(u, t, cloud) * (1.0 - smoothstep(0.25, 0.85, t))
+            c = lerp3(base, ENV_WASH, 0.35 * k)
+            # A little tooth, so a mirror surface is not a flat field.
+            g = (grain(u, t) - 0.5) * 0.03
+            out.append((c[0] + g, c[1] + g, c[2] + g))
+    return rgb_png(out, ENV_W, ENV_H)
+
+
 # ------------------------------------------------------------------ main --
 
 def main() -> int:
@@ -590,6 +641,8 @@ def main() -> int:
                       normal_png(h, wide, SIZE, WINDOW_STRENGTH, True)))
         files.append((f"tex/window_{key}_e.png", rgb_png(e, wide, SIZE)))
         files.append((f"tex/window_{key}_c.png", rgb_png(c, wide, SIZE)))
+
+    files.append(("tex/env.png", env_png()))
 
     # The same bytes again as data URIs, because GUIDELINES 2.1 gives a mockup
     # no network at all and that includes a file sitting next to it.

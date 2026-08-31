@@ -170,6 +170,16 @@ export const FX_TICKS = Math.max(KILL_TICKS, HIT_TICKS, BEAM_TICKS);
 /** A kill's fireball, as a multiple of the hull radius it consumed. */
 const KILL_REACH = 7.5;
 
+/**
+ * How many point lights the explosions share.
+ *
+ * Fixed, and made once: three.js compiles the light count into every material,
+ * so a light appearing when a shell lands and going when the fire dies
+ * recompiles the whole scene twice a second. Four covers a salvo, because the
+ * brightest few are the ones anybody sees.
+ */
+const BLAST_LIGHTS = 4;
+
 const v = (a: Vec3) => new THREE.Vector3(a.x, a.y, a.z);
 
 /** How finely the reachable set is probed. 14 cells a side is 2744 flights. */
@@ -1699,6 +1709,58 @@ export class View {
    * it. Additive and depth-write off, so they light each other instead of
    * cutting holes.
    */
+  /**
+   * The lights an explosion casts, made ONCE and reused.
+   *
+   * three.js bakes the light count into every material it compiles, so adding
+   * a light when a shell lands and removing it when the fire dies recompiles
+   * the whole scene twice a second. A fixed pool costs the same every frame:
+   * an unused one sits at zero intensity, which the shader still evaluates and
+   * which is a multiply by nothing rather than a recompile.
+   *
+   * Four, because a salvo is a handful of blasts and the brightest few are the
+   * ones anybody sees. `distance` is set per blast so a hit lights the hull it
+   * landed on rather than the whole field.
+   */
+  #blastLights: THREE.PointLight[] = [];
+
+  #lightBlasts(
+    list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>,
+  ): void {
+    if (!this.#blastLights.length) {
+      for (let i = 0; i < BLAST_LIGHTS; i++) {
+        const l = new THREE.PointLight(FLAME, 0, 1, 2);
+        l.visible = true;
+        this.#blastLights.push(l);
+        this.#scene.add(l);
+      }
+    }
+    // Brightest first, so four lights go to the four blasts worth lighting.
+    const lit = list
+      .map(b => {
+        const a = Math.max(0, Math.min(1, b.age));
+        // The flash is the first moment and then it falls away fast: an
+        // explosion that fades its light linearly reads as a lamp being turned
+        // down rather than as something going off.
+        const fall = (1 - a) * (1 - a);
+        return { b, a, power: b.radius * (b.kill ? 5.2 : 2.4) * fall };
+      })
+      .filter(x => x.power > 0.01)
+      .sort((p, q) => q.power - p.power);
+
+    for (let i = 0; i < this.#blastLights.length; i++) {
+      const l = this.#blastLights[i] as THREE.PointLight;
+      const x = lit[i];
+      if (!x) { l.intensity = 0; continue; }
+      l.position.set(x.b.pos.x, x.b.pos.y, x.b.pos.z);
+      // White at the flash, through flame, to red as it dies, which is the
+      // same journey the fireball itself makes.
+      l.color.setHex(x.a < 0.18 ? WHITE : (x.a < 0.55 ? FLAME : RED));
+      l.intensity = x.power;
+      l.distance = x.b.radius * (x.b.kill ? 26 : 12);
+    }
+  }
+
   setBlasts(
     list: ReadonlyArray<{
       pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
@@ -1706,6 +1768,7 @@ export class View {
     }>,
   ): void {
     this.#lastBlasts = list;
+    this.#lightBlasts(list);
     for (const c of this.#fxGroup.children) {
       const m = c as THREE.Mesh;
       m.geometry.dispose();
