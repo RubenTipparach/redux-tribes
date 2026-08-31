@@ -13,13 +13,13 @@ import type { Match } from './sim/match.js';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
-import type { Design } from './app/design.js';
+import { mountsOf, partsOf, rasterise, useCore, type Design } from './app/design.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
   type SubState, type Vec3,
-  CLASS_NAMES, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario, SCENARIO_BY_NAME,
-  SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
+  CLASS_NAMES, classIndexOf, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
+  SCENARIO_BY_NAME, SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -50,6 +50,12 @@ const STAT_ROWS: Array<[keyof Flight, string, number, number, number]> = [
 const canvas = $<HTMLCanvasElement>('cv');
 const sim = await Sim.load('./sim_core.wasm');
 const match: Match = sim.match();
+// The editor asks the core what a design is, rather than working it out. Wired
+// once, here, because `design.ts` should not know the wasm module exists: it
+// measures a picture and hands the counts over. There is deliberately no
+// fallback, so a boot that failed to wire this fails loudly at the first
+// derivation instead of quietly showing numbers nobody computed.
+useCore((cls, geo, parts) => sim.derive(cls, geo, parts));
 const view = new View(canvas, match, sim);
 
 let seed = randomSeed();
@@ -286,15 +292,27 @@ function start(): void {
   // The lobby has always carried a scenario name and this always ignored it,
   // so every match was a skirmish however it was entered.
   const scenario = SCENARIO_BY_NAME[launch.scenario] ?? Scenario.Skirmish;
-  // A hull picked in the lobby applies to the side that picked it. Passed to
-  // the core rather than applied here, because which hull a side fields is a
-  // match fact both seats have to agree on and the core is what hashes it.
-  const hulls: [number, number] = [-1, -1];
-  if (launch.hull !== undefined) hulls[launch.side] = launch.hull;
-  match.start(seed, scenario, launch.humanSides, hulls);
+  // A hull picked in the lobby applies to the side that picked it, and it is
+  // the DESIGN that crosses, not its class: the core derives what it weighs,
+  // what it can take and how it flies, and hashes the result. The client's
+  // only contribution is measuring its own picture.
+  match.clearHulls();
+  const picked = launch.hull as Design | undefined;
+  let flying = '';
+  if (picked) {
+    const r = rasterise(picked);
+    const took = match.setHull(launch.side, classIndexOf(picked.classKey), {
+      plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
+    }, partsOf(picked), mountsOf(picked));
+    // The core refuses an illegal hull, and saying so beats spawning the class
+    // hull and letting a player wonder why their ship is somebody else's.
+    flying = took ? `in ${launch.hullName ?? 'your design'}`
+      : `${launch.hullName ?? 'that design'} is not legal, flying the class hull`;
+  }
+  match.start(seed, scenario, launch.humanSides);
   // Say what was taken out, on the panel that lists it. A design picked in the
   // lobby and never mentioned again is a pick a player cannot check.
-  $('hullNote').textContent = launch.hullName ? `in ${launch.hullName}` : '';
+  $('hullNote').textContent = flying;
   // The rings compare the field against the drive of a hull actually in the
   // match, so they mean something for the ships being flown.
   const own = match.ships().find(mine);

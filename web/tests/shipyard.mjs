@@ -675,7 +675,8 @@ async function checkLibrary(page) {
   else ok(`opening it back gives the same hull: ${after.classKey}, ${after.parts} parts, same grid`);
   if (!after.slot.mine) fail('a design you saved does not come back marked as yours');
 
-  await checkHullPick(page, name, before.classKey);
+  await checkHullPick(page, name, before.classKey, await page.evaluate(() =>
+    window.ftDebug.designer().derived.hull));
 }
 
 /**
@@ -685,7 +686,7 @@ async function checkLibrary(page) {
  * that matters: the ships the match spawns. A Karisen design picked and a
  * Terran fielded is a chooser that lights up and does nothing.
  */
-async function checkHullPick(page, name, classKey) {
+async function checkHullPick(page, name, classKey, hull) {
   await page.click('#dzClose');
   await page.waitForTimeout(1200);
   const chips = await page.$$eval('#practiceHull button', bs =>
@@ -704,6 +705,7 @@ async function checkHullPick(page, name, classKey) {
     const d = window.ftDebug;
     const side = d.side();
     return { side, mine: d.ships().filter(s => s.side === side).map(s => s.cls),
+      hulls: d.ships().filter(s => s.side === side).map(s => s.hull),
       foes: d.ships().filter(s => s.side !== side).map(s => s.cls),
       note: document.getElementById('hullNote').textContent };
   });
@@ -716,6 +718,16 @@ async function checkHullPick(page, name, classKey) {
     fail(`the console does not say which design was taken out: "${flown.note}"`);
   else ok(`every hull the player fields is the picked ${classKey}, `
     + `and the panel says "${flown.note}"`);
+
+  // And it is the DESIGN, not just its class: the hull points the editor
+  // showed are the hull points the ship spawned with, because the core derived
+  // them once and both asked it.
+  const off = flown.hulls.map(h => Math.abs(h - hull));
+  if (!flown.hulls.length) fail('no hull points to compare');
+  else if (Math.max(...off) > 0.5)
+    fail(`the editor said hull ${hull.toFixed(1)} and the ships spawned with `
+      + `${flown.hulls.map(h => h.toFixed(1)).join(', ')}`);
+  else ok(`and it spawns with the hull the editor derived: ${hull.toFixed(1)}`);
   if (flown.foes.every(c => c === want) && want >= 0 && flown.foes.length)
     fail('the pick reached the other side as well, which is not a pick, it is a mod');
 }

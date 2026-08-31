@@ -170,26 +170,55 @@ test('a match starts with the scenario it was asked for', () => {
   }
 });
 
-test('a side can field a hull the scenario did not author', () => {
-  // Picked in the lobby, applied at spawn, hashed: which hull a side fields
-  // decides radius, boarding range, mounts and volumes, so two seats that
-  // disagreed about it would be playing different matches.
+test('a side fields the design it picked, derived by the core', () => {
+  // Picked in the lobby, derived here, applied at spawn and hashed. The parts
+  // and the counts below are the stock Rogue's, so a hull built out of them
+  // has to come out as one.
+  const parts = [3, 3, 3, 12, 12, 14, 14, 7, 7, 6, 10, 10, 8, 8, 11, 11, 16,
+    17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19];
+  const geo = { plateCells: 1632, ext: [24, 14, 45], radiusCells: 24.315633, fouled: 0 };
+
   const m = sim.match();
+  m.clearHulls();
   m.start('deadbeefcafe0003', 0);
-  const authored = m.ships().map(s => [s.side, s.cls]);
+  const authored = m.ships().map(s => [s.side, s.cls, +s.hullMax.toFixed(2)]);
   const hashA = m.hash;
 
-  m.start('deadbeefcafe0003', 0, 0b01, [2, -1]);   // 2 is the Rogue
-  const picked = m.ships().map(s => [s.side, s.cls]);
-  assert.equal(picked.length, authored.length);
-  for (let i = 0; i < picked.length; i++) {
-    if (picked[i][0] === 0) assert.equal(picked[i][1], 2, 'side 0 flies what it picked');
-    else assert.equal(picked[i][1], authored[i][1], 'side 1 keeps what was authored');
-  }
-  assert.notEqual(m.hash, hashA, 'the hull a side fields is in the hash');
+  // What the core says the design is, asked directly.
+  const stats = sim.derive(2, geo, parts);
+  assert.ok(stats, 'the core derives the record');
+  assert.ok(Math.abs(stats.hull - 194.848) < 0.1, `hull ${stats.hull}`);
+  assert.ok(Math.abs(stats.mass - 0.789256) < 1e-4, `mass ${stats.mass}`);
+  assert.equal(stats.marines, 40);
+  assert.equal(stats.gates, 0b1111111, 'the stock Rogue passes every gate');
 
-  m.start('deadbeefcafe0003', 0, 0b01, [-1, -1]);
-  assert.deepEqual(m.ships().map(s => [s.side, s.cls]), authored, 'and clearing it restores them');
+  m.clearHulls();
+  m.setHull(0, 2, geo, parts, [
+    { key: 'projectile', at: [-0.8, 0.2, 1.5] },
+    { key: 'projectile', at: [0.8, 0.2, 1.5] },
+  ]);
+  m.start('deadbeefcafe0003', 0);
+  const flown = m.ships();
+  for (const s of flown) {
+    if (s.side !== 0) continue;
+    assert.ok(Math.abs(s.hullMax - stats.hull) < 0.1,
+      `a designed hull carries its own hull points: ${s.hullMax} against ${stats.hull}`);
+    assert.ok(Math.abs(s.radius - stats.radius) < 0.01, `radius ${s.radius}`);
+    assert.equal(s.marines, stats.marines);
+  }
+  assert.notEqual(m.hash, hashA, 'the design a side fields is in the hash');
+
+  // The other side keeps what the scenario authored, and clearing restores it.
+  const mineNow = flown.filter(s => s.side === 0).map(s => +s.hullMax.toFixed(2));
+  const foeNow = flown.filter(s => s.side === 1).map(s => +s.hullMax.toFixed(2));
+  const foeWas = authored.filter(a => a[0] === 1).map(a => a[2]);
+  assert.deepEqual(foeNow, foeWas, 'a design is one side\'s, not the match\'s');
+  assert.ok(mineNow.every(h => Math.abs(h - 194.85) < 0.1), 'and mine are the design');
+
+  m.clearHulls();
+  m.start('deadbeefcafe0003', 0);
+  assert.deepEqual(m.ships().map(s => [s.side, s.cls, +s.hullMax.toFixed(2)]), authored,
+    'clearing the design restores the authored ships');
   assert.equal(m.hash, hashA, 'exactly, hash and all');
 });
 

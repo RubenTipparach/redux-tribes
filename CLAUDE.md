@@ -110,7 +110,7 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 65, the Rust core (tests/, not the lib target)
+cd engine/sim_core && cargo test            # 69, the Rust core (tests/, not the lib target)
 npm --prefix web test                       # 43, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
@@ -180,7 +180,10 @@ a hard line, not a preference, and it is what lets a native Rust client replace
 
 **In the core.** Every rule and every number that decides an outcome: movement,
 weapons, arcs, damage, subsystems, boarding, contact, AI, turn order, the RNG,
-the state hash, and the authored data all of it reads.
+the state hash, the authored data all of it reads, and what a DESIGN comes out
+as: the parts table and the arithmetic that turns parts and plate into a ship
+live in `design.rs`, and the editor asks for its own readout rather than
+working it out beside the thing that will have to agree with it.
 
 **In the client.** Meshes, cameras, panels, input routing, playback, formatting.
 Nothing that changes what happens.
@@ -346,9 +349,11 @@ Rules that came out of actually measuring this repo:
 - **Numbers in the commit message.** "Faster" is not a result; 16 ms to 0.4 ms
   is. If it was not measured, do not claim it.
 
-Current figures, worth not regressing: wasm 132669 bytes as CI builds and ships
-it (50116 gzipped), a turn resolved in 452 microseconds, envelope 96 shell cells
-at 7.9 units, 61 fps while planning. Quote the shipped size rather than a local
+Current figures, worth not regressing: a turn resolved in 452 microseconds,
+envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 149537
+bytes locally (57325 gzipped) after the damage model and the design derivation;
+quote what CI ships rather than a local build when it matters, since the same
+source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
 
@@ -410,13 +415,18 @@ index is hashed, for the same reason sides are: a seat that fielded a Rogue
 against one that spawned a Terran would agree for as long as the two happened
 to fly alike, and part several turns later.
 
-The design's own numbers do NOT cross yet, and the chooser says so on screen.
-`derive()` runs in the client over a raster the client computed, and what a
-design MEANS is a rule (ADR-2), so shipping its mass and hull across as a
-config would be the shortcut this repo keeps refusing. The port is the planned
-work: the module table and the derivation arithmetic into `sim_core`, the
-editor asking the core for its own readout, and the match applying what the
-core derived.
+The design's own numbers cross too, and the core is what turns them into a
+ship. `design.rs` holds the parts table and the arithmetic; `ft_derive` answers
+with mass, hull, the envelope, marines, boarding and seven gate bits; the
+editor's `derive()` no longer computes anything, it rasterises and asks. What
+the client still contributes is what it MEASURED off its own voxel grid: plate
+cells, extent, bounding radius, where each gun sits. Counts, not rules, and
+they stop being an input the day the rasteriser moves too.
+
+Mass, radius, boarding range and boarding capacity are per SHIP now, not per
+class, joining hull and the flight envelope, and all four are hashed. A design
+that set them on one seat and not the other would ram differently and shoot
+past.
 
 ## Sides are a match fact, not a point of view
 

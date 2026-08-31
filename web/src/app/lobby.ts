@@ -31,10 +31,11 @@ export interface Launch {
   /** Which side this client sits in. */
   readonly side: number;
   /**
-   * The class index this side fields, or undefined for the one the scenario
-   * authored. Set when a saved design is picked in the lobby.
+   * The design this side fields, or undefined for the hull the scenario
+   * authored. The whole record, not its class: the core derives what it
+   * weighs, what it can take and how it flies from the parts and the plate.
    */
-  readonly hull?: number;
+  readonly hull?: unknown;
   /** What that design is called, for the console to say so. */
   readonly hullName?: string;
   readonly ticket?: Ticket;
@@ -336,20 +337,18 @@ export class Lobby {
     // Say exactly how far the pick goes. A design that quietly flew as a stock
     // hull would read as the editor not working.
     $('practiceHullNote').innerHTML = this.#hull
-      ? `Every ship you field is a `
-        + `${escape(CLASS_NAMES[classIndexOf(this.#hull.classKey)] ?? '?')}. `
-        + 'Its own plate, mass and mounts arrive when the core derives a design '
-        + 'rather than the editor, which is the next piece of work.'
+      ? `Every ship you field is this hull: its own mass, hull points, flight `
+        + 'envelope and guns, derived by the core from the parts and the plate '
+        + 'you fitted. The level still decides where they stand and how many.'
       : 'Or take a hull out of the library. Anyone&rsquo;s will do.';
   }
 
   #practice(scenario: string): void {
     this.#stopPolling();
     this.hide();
-    const hull = this.#hull ? classIndexOf(this.#hull.classKey) : -1;
     this.#onLaunch({
       kind: 'offline', seed: randomSeed(), scenario, humanSides: 0b01, side: 0,
-      ...(hull >= 0 ? { hull, hullName: this.#hull!.name } : {}),
+      ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
     });
   }
 

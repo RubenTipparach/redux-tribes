@@ -100,6 +100,17 @@ pub struct Ship {
 
     pub hull: f32,
     pub hull_max: f32,
+    /// Mass, radius and the boarding numbers, per SHIP rather than per class.
+    ///
+    /// They seed from the class and a designed hull replaces them, which is
+    /// what makes a design a ship rather than a skin: mass decides what a ram
+    /// costs, radius decides what a shot can reach and what collides, and the
+    /// boarding pair decides who can be taken. All four are in the state hash
+    /// for the same reason the flight stats are.
+    pub mass: f32,
+    pub radius: f32,
+    pub boarding_range: f32,
+    pub boarding_capacity: i32,
     pub subs: Vec<Sub>,
     pub weapons: Vec<WeaponSlot>,
 
@@ -165,6 +176,10 @@ impl Ship {
             flight: cls.flight,
             hull: cls.hull,
             hull_max: cls.hull,
+            mass: cls.mass,
+            radius: cls.radius,
+            boarding_range: cls.boarding_range,
+            boarding_capacity: cls.boarding_capacity,
             subs: cls
                 .subsystems
                 .iter()
@@ -475,7 +490,7 @@ impl Sim {
             if ship.destroyed || Some(ship.id) == ignore {
                 continue;
             }
-            let hull_t = Self::seg_sphere(a, b, ship.pos, ship.class_def().radius);
+            let hull_t = Self::seg_sphere(a, b, ship.pos, ship.radius);
             let mut sub_hit: Option<(usize, f32)> = None;
             for (bi, sub) in ship.subs.iter().enumerate() {
                 if sub.dead {

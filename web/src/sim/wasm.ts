@@ -45,7 +45,15 @@ interface SimExports {
   ft_octree_ptr(): number;
   ft_octree_len(): number;
   ft_look_basis(fx: number, fy: number, fz: number): number;
+  ft_derive(
+    classIdx: number, plateCells: number, extX: number, extY: number, extZ: number,
+    radiusCells: number, fouled: number, parts: number,
+  ): number;
 }
+
+/** Where a design's part list goes before `derive` reads it. Mirrors
+ *  `ffi::DERIVE_PARTS`: past the block the answer comes back in. */
+const DERIVE_PARTS = 64 + 32;
 
 // input slots
 const IN_POS = 0, IN_VEL = 3, IN_QUAT = 6, IN_TARGET = 10, IN_FACE = 13;
@@ -53,6 +61,23 @@ const IN_HAS_TARGET = 16, IN_HAS_FACE = 17, IN_FLIGHT = 18;
 const IN_ROLL = 24, IN_HAS_ROLL = 25;
 // output slots
 const OUT_POS = 32, OUT_VEL = 35, OUT_QUAT = 38, OUT_COMMITTED = 42, OUT_PATH = 64;
+
+/**
+ * What the core says a design is.
+ *
+ * `gates` is one bit per legality check, set when it PASSES, in the order the
+ * core declares: parts, thrust, bridge, arms, mass, sphere, turrets. The words
+ * beside each bit are the client's, because how a refusal is phrased is
+ * presentation; WHETHER it is refused is not.
+ */
+export interface DerivedStats {
+  readonly mass: number; readonly hull: number; readonly radius: number;
+  readonly accelFwd: number; readonly accelRetro: number; readonly accelLat: number;
+  readonly maxSpeed: number; readonly yaw: number; readonly pitch: number;
+  readonly reachU: number; readonly marines: number; readonly capacity: number;
+  readonly boardingRange: number; readonly massMax: number; readonly parts: number;
+  readonly guns: number; readonly trunnions: number; readonly gates: number;
+}
 
 export class Sim {
   readonly #ex: SimExports;
@@ -88,6 +113,37 @@ export class Sim {
    */
   match(): Match {
     return new Match(this.#ex as unknown as MatchExports);
+  }
+
+  /**
+   * What a design comes out as, asked of the core.
+   *
+   * The client measures its own voxel grid and passes the counts; every rule
+   * that turns those counts into a ship is the core's. The editor used to do
+   * this arithmetic itself, which is exactly the shortcut ADR-2 refuses: two
+   * clients that derived a design differently would field two different ships
+   * from one record and part on the first turn.
+   */
+  derive(classIdx: number, geo: {
+    plateCells: number; ext: readonly [number, number, number];
+    radiusCells: number; fouled: number;
+  }, parts: readonly number[]): DerivedStats | null {
+    const s = this.#s;
+    if (DERIVE_PARTS + parts.length > s.length) return null;
+    for (let i = 0; i < parts.length; i++) s[DERIVE_PARTS + i] = parts[i] as number;
+    const ok = this.#ex.ft_derive(classIdx, geo.plateCells,
+      geo.ext[0], geo.ext[1], geo.ext[2], geo.radiusCells, geo.fouled, parts.length);
+    if (!ok) return null;
+    const o = this.#s;
+    const b = 64;
+    return {
+      mass: o[b] ?? 0, hull: o[b + 1] ?? 0, radius: o[b + 2] ?? 0,
+      accelFwd: o[b + 3] ?? 0, accelRetro: o[b + 4] ?? 0, accelLat: o[b + 5] ?? 0,
+      maxSpeed: o[b + 6] ?? 0, yaw: o[b + 7] ?? 0, pitch: o[b + 8] ?? 0,
+      reachU: o[b + 9] ?? 0, marines: o[b + 10] ?? 0, capacity: o[b + 11] ?? 0,
+      boardingRange: o[b + 12] ?? 0, massMax: o[b + 13] ?? 1, parts: o[b + 14] ?? 0,
+      guns: o[b + 15] ?? 0, trunnions: o[b + 16] ?? 0, gates: o[b + 17] ?? 0,
+    };
   }
 
   #writeInputs(body: Body, flight: Flight, order: FlyOrder): void {

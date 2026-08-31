@@ -45,12 +45,12 @@
 //!   pose    9 slots: id, destroyed, pos(3), quat(4)
 //!   proj    5 slots: id, kind, pos(3)
 
-use crate::data::{class_index, class_from_index, ship_class, ALL_CLASSES};
+use crate::data::{class_index, class_from_index, ship_class, WeaponKey, ALL_CLASSES};
 use crate::flight::{
     can_reach, fly_span, fly_turn, Body, Flight, Mode, Well, TICKS_PER_SECOND, TICKS_PER_TURN,
 };
 use crate::math::{Quat, V3};
-use crate::state::{Faction, ProjKind, Sim, SpawnSpec, Winner};
+use crate::state::{Faction, ProjKind, Sim, SpawnSpec, WeaponSlot, Winner};
 use crate::turn::{Event, FireOrder, Order};
 
 /// Sized for the largest single payload the boundary carries, which is the
@@ -667,6 +667,138 @@ pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
 /// player picking a hull is not a player redrawing the engagement.
 static mut HULL_CHOICE: [i32; 2] = [-1, -1];
 
+/// A designed hull per side: what the core derived from it, and the mounts the
+/// client measured off it.
+///
+/// Stored derived rather than raw, so a match applies numbers that were worked
+/// out once, here, by the thing that owns the rules. Cleared by setting a
+/// design with no parts, and consumed by `ft_match_new` like the hull choice.
+static mut HULL_DESIGN: [Option<crate::design::Derived>; 2] = [None, None];
+static mut HULL_MOUNTS: [Vec<(WeaponKey, V3)>; 2] = [Vec::new(), Vec::new()];
+
+/// Derive a design and hold it for one side.
+///
+/// Inputs are `ft_derive`'s, plus the side. The results are written back the
+/// same way too, so a caller can read what its own hull came out as without a
+/// second call.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_hull_design(
+    side: u32,
+    class_idx: u32,
+    plate_cells: i32,
+    ext_x: i32,
+    ext_y: i32,
+    ext_z: i32,
+    radius_cells: f32,
+    fouled: i32,
+    parts: u32,
+) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    if ft_derive(class_idx, plate_cells, ext_x, ext_y, ext_z, radius_cells, fouled, parts) == 0 {
+        return 0;
+    }
+    let s = scratch();
+    let d = crate::design::Derived {
+        mass: s[OUT], hull: s[OUT + 1], radius: s[OUT + 2],
+        accel_fwd: s[OUT + 3], accel_retro: s[OUT + 4], accel_lat: s[OUT + 5],
+        max_speed: s[OUT + 6], yaw_rate: s[OUT + 7], pitch_rate: s[OUT + 8],
+        reach_u: s[OUT + 9], marines: s[OUT + 10] as i32, capacity: s[OUT + 11] as i32,
+        boarding_range: s[OUT + 12], mass_max: s[OUT + 13], parts: s[OUT + 14] as i32,
+        guns: s[OUT + 15] as i32, trunnions: s[OUT + 16] as i32, gates: s[OUT + 17] as u32,
+    };
+    // An illegal hull is not fielded. The gates are the core's, so the refusal
+    // is too: a client that decided for itself which of its own designs were
+    // allowed into a match would be the client that let one through. The stats
+    // are left in the scratch either way, so a caller can read the gate bits
+    // and say WHICH rule refused it.
+    if !d.legal() {
+        return 0;
+    }
+    unsafe {
+        HULL_DESIGN[side as usize] = Some(d);
+        HULL_MOUNTS[side as usize].clear();
+    }
+    // The class comes with it: a design is a hull of its own class, and the
+    // spawn still needs to know which one.
+    ft_hull_choice(side, class_idx as i32);
+    1
+}
+
+/// One gun on a designed hull: what it is and where it sits, in ship units.
+///
+/// Position is measured by the client off the socket the gun was fitted to,
+/// the same way plate cells are counted: a number, not a rule. It decides arcs
+/// and range, so it is hashed with everything else once the ship carries it.
+#[no_mangle]
+pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    let k = match key {
+        1 => WeaponKey::Cannon,
+        2 => WeaponKey::Plasma,
+        3 => WeaponKey::Missile,
+        _ => WeaponKey::Beam,
+    };
+    unsafe {
+        HULL_MOUNTS[side as usize].push((k, V3::new(x, y, z)));
+    }
+    1
+}
+
+/// Forget a side's design, so the next match is flown in the authored hull.
+#[no_mangle]
+pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    unsafe {
+        HULL_DESIGN[side as usize] = None;
+        HULL_MOUNTS[side as usize].clear();
+    }
+    ft_hull_choice(side, -1);
+    1
+}
+
+/// Put a derived hull on every ship of a side.
+///
+/// Hull, mass, radius, the boarding pair and the flight envelope, because
+/// those are what a design changes about a ship. The subsystem LAYOUT stays
+/// the class's: where a reactor sits inside a hull is geometry the rasteriser
+/// owns, and the rasteriser is still on the client.
+fn apply_designs(sim: &mut Sim) {
+    for side in 0..2usize {
+        let Some(d) = (unsafe { HULL_DESIGN[side] }) else { continue };
+        let mounts = unsafe { HULL_MOUNTS[side].clone() };
+        for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
+            ship.hull = d.hull;
+            ship.hull_max = d.hull;
+            ship.mass = d.mass;
+            ship.radius = d.radius;
+            ship.marines = d.marines;
+            ship.boarding_capacity = d.capacity;
+            ship.boarding_range = d.boarding_range;
+            ship.flight = Flight {
+                yaw_rate: d.yaw_rate,
+                pitch_rate: d.pitch_rate,
+                accel_fwd: d.accel_fwd,
+                accel_retro: d.accel_retro,
+                accel_lat: d.accel_lat,
+                max_speed: d.max_speed,
+            };
+            if !mounts.is_empty() {
+                ship.weapons = mounts
+                    .iter()
+                    .map(|(key, at)| WeaponSlot { key: *key, mount: *at, last_fired_tick: -99 })
+                    .collect();
+            }
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn ft_hull_choice(side: u32, class_idx: i32) -> u32 {
     if side > 1 {
@@ -717,6 +849,8 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_
         6 => scenario_sandbox(seed, mask),
         _ => scenario_skirmish(seed, mask),
     };
+    let mut sim = sim;
+    apply_designs(&mut sim);
     let n = sim.ships.len();
     unsafe {
         MATCH = Some(sim);
@@ -980,7 +1114,6 @@ pub extern "C" fn ft_read_ships() -> u32 {
         if b + SHIP_STRIDE > SCRATCH_LEN {
             return i as u32;
         }
-        let cls = ship.class_def();
         s[b] = ship.id as f32;
         s[b + 1] = class_index(ship.class) as f32;
         s[b + 2] = ship.faction.index() as f32;
@@ -1020,10 +1153,13 @@ pub extern "C" fn ft_read_ships() -> u32 {
             s[b + 26 + k * 2] = f;
             s[b + 27 + k * 2] = c;
         }
-        s[b + 30] = cls.radius;
+        // The SHIP's, not the class's: a designed hull carries its own radius
+        // and its own reach, and reporting the class here would draw a ring
+        // round a ship that is not the ring the resolver uses.
+        s[b + 30] = ship.radius;
         s[b + 31] = ship.flight.max_speed;
         s[b + 32] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
-        s[b + 33] = cls.boarding_range;
+        s[b + 33] = ship.boarding_range;
     }
     n as u32
 }
@@ -1381,6 +1517,78 @@ pub extern "C" fn ft_ship_fly_from(ship: u32, mode: u32, from_tick: u32) -> u32 
     s[35] = flown.end_vel.x;
     s[36] = flown.end_vel.y;
     s[37] = flown.end_vel.z;
+    1
+}
+
+/// Where a design's part list is written before `ft_derive` reads it.
+///
+/// Past the block the results come back in, so a caller can lay the parts down
+/// once and read the answer without the two treading on each other.
+pub const DERIVE_PARTS: usize = OUT + 32;
+
+/// What a design comes out as: what it weighs, what it can take, how it flies.
+///
+/// The client measures its own voxel grid and passes the counts; every RULE
+/// that turns those counts into a ship is here. It used to be the other way
+/// round, with the editor doing the arithmetic, which is exactly the shortcut
+/// ADR-2 exists to refuse: two clients that derived a design differently would
+/// field two different ships from one record.
+///
+/// Parts are module INDICES into `design::MODULES`, written at `DERIVE_PARTS`
+/// before the call. Results land at `OUT`:
+///
+/// ```text
+///   0 mass          6 max speed    12 boarding range
+///   1 hull          7 yaw rate     13 mass budget
+///   2 radius        8 pitch rate   14 parts
+///   3 accel fwd     9 nominal reach 15 guns
+///   4 accel retro  10 marines      16 trunnions
+///   5 accel lat    11 capacity     17 gate bits, one per check, set when it passes
+/// ```
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn ft_derive(
+    class_idx: u32,
+    plate_cells: i32,
+    ext_x: i32,
+    ext_y: i32,
+    ext_z: i32,
+    radius_cells: f32,
+    fouled: i32,
+    parts: u32,
+) -> u32 {
+    let n = parts as usize;
+    if DERIVE_PARTS + n > SCRATCH_LEN {
+        return 0;
+    }
+    let s = scratch();
+    let list: Vec<usize> = (0..n).map(|i| s[DERIVE_PARTS + i].max(0.0) as usize).collect();
+    let geo = crate::design::Geometry {
+        plate_cells,
+        ext: [ext_x, ext_y, ext_z],
+        radius_cells,
+        fouled,
+    };
+    let d = crate::design::derive(class_from_index(class_idx), &list, geo);
+    let s = scratch();
+    s[OUT] = d.mass;
+    s[OUT + 1] = d.hull;
+    s[OUT + 2] = d.radius;
+    s[OUT + 3] = d.accel_fwd;
+    s[OUT + 4] = d.accel_retro;
+    s[OUT + 5] = d.accel_lat;
+    s[OUT + 6] = d.max_speed;
+    s[OUT + 7] = d.yaw_rate;
+    s[OUT + 8] = d.pitch_rate;
+    s[OUT + 9] = d.reach_u;
+    s[OUT + 10] = d.marines as f32;
+    s[OUT + 11] = d.capacity as f32;
+    s[OUT + 12] = d.boarding_range;
+    s[OUT + 13] = d.mass_max;
+    s[OUT + 14] = d.parts as f32;
+    s[OUT + 15] = d.guns as f32;
+    s[OUT + 16] = d.trunnions as f32;
+    s[OUT + 17] = d.gates as f32;
     1
 }
 

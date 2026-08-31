@@ -20,6 +20,13 @@ import {
 } from './types.js';
 
 const OUT = 64;
+/** Where a design's part list goes before the core reads it. Mirrors
+ *  `ffi::DERIVE_PARTS`. */
+const DERIVE_PARTS = OUT + 32;
+/** The designer's gun keys to `sim_core::data::WeaponKey` discriminants. The
+ *  editor has three guns; the core also knows plasma, which is a cannon with
+ *  different effects and nothing fits. */
+const WEAPON_KEY: Record<string, number> = { beam: 0, projectile: 1, missile: 3 };
 const SHIP_STRIDE = 34;
 const SUB_STRIDE = 11;
 const EVENT_STRIDE = 14;
@@ -34,6 +41,13 @@ export interface MatchExports {
   ft_scratch_len(): number;
   ft_match_new(seedHi: number, seedLo: number, scenario: number, humanSides: number): number;
   ft_hull_choice(side: number, classIdx: number): number;
+  ft_hull_design(
+    side: number, classIdx: number, plateCells: number,
+    extX: number, extY: number, extZ: number,
+    radiusCells: number, fouled: number, parts: number,
+  ): number;
+  ft_hull_mount(side: number, key: number, x: number, y: number, z: number): number;
+  ft_hull_clear(side: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
   ft_game_over(): number;
@@ -135,20 +149,41 @@ export class Match {
    * it. It goes to the core rather than staying here because it changes the
    * simulation, and two clients that disagreed about it would part on turn one.
    */
+  /** Both sides back to the hulls their scenario authored. */
+  clearHulls(): void {
+    this.#ex.ft_hull_clear(0);
+    this.#ex.ft_hull_clear(1);
+  }
+
   /**
-   * Which hull each side fields, or -1 for the one the scenario authored.
+   * The hull one side fields, as a design rather than a class.
    *
-   * A match fact, not a preference: both seats must pass the same pair or they
-   * are playing different matches, which is why the core hashes it. Set before
-   * `start`, which is what consumes it.
+   * The core derives it: mass, hull points, envelope, marines, boarding and
+   * the guns, from the parts and the plate. What crosses from here is what the
+   * client MEASURED off its own voxel grid, which is a count and not a rule.
+   * A match fact like the seed, and hashed for the same reason: two seats that
+   * fielded different ships would part on the first turn.
    */
-  start(seed: string, scenario: Scenario, humanSides = 0b01,
-        hulls: readonly [number, number] = [-1, -1]): void {
+  setHull(side: number, classIdx: number, geo: {
+    plateCells: number; ext: readonly [number, number, number];
+    radiusCells: number; fouled: number;
+  }, parts: readonly number[], mounts: ReadonlyArray<{ key: string; at: readonly [number, number, number] }>): boolean {
+    const s = this.#s;
+    if (DERIVE_PARTS + parts.length > s.length) return false;
+    for (let i = 0; i < parts.length; i++) s[DERIVE_PARTS + i] = parts[i] as number;
+    const ok = this.#ex.ft_hull_design(side, classIdx, geo.plateCells,
+      geo.ext[0], geo.ext[1], geo.ext[2], geo.radiusCells, geo.fouled, parts.length);
+    if (!ok) return false;
+    for (const m of mounts) {
+      this.#ex.ft_hull_mount(side, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2]);
+    }
+    return true;
+  }
+
+  start(seed: string, scenario: Scenario, humanSides = 0b01): void {
     const clean = seed.replace(/[^0-9a-f]/gi, '').padStart(16, '0').slice(-16);
     const hi = parseInt(clean.slice(0, 8), 16) >>> 0;
     const lo = parseInt(clean.slice(8), 16) >>> 0;
-    this.#ex.ft_hull_choice(0, hulls[0]);
-    this.#ex.ft_hull_choice(1, hulls[1]);
     this.#ex.ft_match_new(hi, lo, scenario, humanSides);
     this.orders.clear();
     this.history.length = 0;

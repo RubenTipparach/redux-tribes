@@ -390,23 +390,40 @@ it is a single choice that applies to whichever level is tapped, and seven
 copies of it would be seven controls saying one thing. Anyone's design may be
 picked, the same rule the library itself follows.
 
-**What it changes today is the CLASS.** Every ship the player fields spawns as
-the picked design's hull class, the level still decides where they stand and
-how many there are, and the console names the design on the panel that lists
-the fleet. The choice reaches the core as `ft_hull_choice(side, class)` before
-`ft_match_new`, and the class index is in the state hash, because a seat that
-fielded a Rogue against one that spawned a Terran would otherwise agree for as
-long as the two happened to fly alike.
+**It fields the design, not its class.** Every ship the player fields spawns
+with that hull's mass, hull points, flight envelope, marines, boarding gear and
+guns; the level still decides where they stand and how many there are, and the
+console names the design on the panel that lists the fleet.
 
-**What it does not change yet is the design's own numbers**, and the chooser
-says so rather than letting a plated hull quietly fly as a stock one. Mass,
-hull points, the flight envelope and the mounts come out of `derive()`, which
-runs on the client over a raster the client computed, and a rule that decides
-outcomes cannot live there (ADR-2). The next piece of work is the one
-SHIP_DESIGNER has planned since slice 1: the module table and the derivation
-arithmetic into `sim_core`, the editor asking the core for its readout instead
-of computing it, and the match applying what the core derived. Then a design
-flies as itself, on both seats, with nothing to disagree about.
+**The core derives it.** The design crosses as `ft_hull_design(side, class,
+plate cells, extent, radius cells, fouled, parts)` with the gun positions
+following as `ft_hull_mount`, and `ft_match_new` applies what came back to that
+side's ships. Every number in the answer is the core's arithmetic over the
+core's own parts table. What the client contributes is what it MEASURED off the
+voxel grid it drew: how many cells of plate, how big the box is, how far the
+furthest corner sits, where each gun was fitted. Counts, not rules.
+
+**And the editor asks the same question.** `derive()` in `design.ts` no longer
+computes anything: it rasterises, hands the counts over and puts labels on the
+answer. That is the whole point of moving it. The seven gates come back as a
+bitmask and the words beside each bit stay on the client, because how a refusal
+is phrased is presentation and whether it is refused is not.
+
+The five authored classes are the calibration and `tests/design.rs` pins them:
+the core's numbers match the editor's old ones to within 2e-5 relative on mass,
+hull, all four accelerations, both turn rates, reach, marines, capacity and
+boarding range. A change that moves any of them has moved the game and has to
+say so out loud.
+
+Per ship rather than per class now, because a design sets them: mass, radius,
+boarding range and boarding capacity moved onto `Ship`, joining hull and the
+flight envelope. All four are in the state hash, so two seats that disagreed
+about what a hull weighs would ram differently and part rather than drift.
+
+It costs 7433 bytes of wasm, 142104 to 149537 on the same compiler either side
+of the change. A derivation with the raster cached costs 0.055 ms, so the
+crossing is not what a slider drag pays for: the rasterisation, at about four
+milliseconds, still is.
 
 ## The ship library
 

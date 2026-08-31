@@ -7,6 +7,7 @@
 
 pub mod ai;
 pub mod data;
+pub mod design;
 pub mod ffi;
 pub mod flight;
 pub mod math;

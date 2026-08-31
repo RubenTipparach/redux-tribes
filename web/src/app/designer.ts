@@ -1943,6 +1943,8 @@ export class Designer {
       /** One cell's material. Observation only: the harness uses it to aim a
        *  gesture at a cell it can describe, rather than at a pixel it hopes
        *  about. Nothing in the editor reads it back. */
+      /** One derivation, for measuring what the crossing costs. */
+      timeDerive: () => derive(this.#design).hull,
       cellAt: (i: number, j: number, k: number) =>
         rasterise(this.#design).grid[cellIndex(i, j, k)] ?? 0,
       marks: this.#marks.children.length,

@@ -366,7 +366,7 @@ impl Sim {
             if ship.destroyed {
                 continue;
             }
-            let r = ship.class_def().radius;
+            let r = ship.radius;
             for w in &self.wells {
                 let reach = w.soft + r;
                 if ship.pos.sub(w.pos).len2() <= reach * reach {
@@ -493,7 +493,7 @@ impl Sim {
             && !to.destroyed
             && to.faction != from.faction
             && from.marines > 0
-            && from.pos.dist(to.pos) <= from.class_def().boarding_range
+            && from.pos.dist(to.pos) <= from.boarding_range
     }
 
     // --------------------------------------------------------------- weapons --
@@ -775,7 +775,7 @@ impl Sim {
                 if self.ships[i].destroyed || self.ships[j].destroyed {
                     continue;
                 }
-                let (ra, rb) = (self.ships[i].class_def().radius, self.ships[j].class_def().radius);
+                let (ra, rb) = (self.ships[i].radius, self.ships[j].radius);
                 let delta = self.ships[j].pos.sub(self.ships[i].pos);
                 let dist = delta.len();
                 let min_dist = ra + rb;
@@ -785,7 +785,7 @@ impl Sim {
 
                 let nrm = delta.scale(1.0 / dist);
                 let overlap = min_dist - dist;
-                let (ma, mb) = (self.ships[i].class_def().mass, self.ships[j].class_def().mass);
+                let (ma, mb) = (self.ships[i].mass, self.ships[j].mass);
                 // The heavier hull moves less, which is the only place mass
                 // shows up in this game and the only place it needs to.
                 let wa = mb / (ma + mb);
@@ -1083,7 +1083,7 @@ impl Sim {
             if !self.can_board(si, ti) {
                 continue;
             }
-            let capacity = self.ships[si].class_def().boarding_capacity;
+            let capacity = self.ships[si].boarding_capacity;
             let send = self.ships[si].marines.min(capacity);
             self.ships[si].marines -= send;
             let faction = self.ships[si].faction;
@@ -1190,6 +1190,13 @@ impl Sim {
                 num(v, &mut byte);
             }
             num(s.hull, &mut byte);
+            // Per ship since a design may set them, so two clients that
+            // disagreed about a hull's mass or radius would ram differently
+            // and shoot past each other.
+            for v in [s.mass, s.radius, s.boarding_range] {
+                num(v, &mut byte);
+            }
+            int(s.boarding_capacity, &mut byte);
             int(s.marines, &mut byte);
             for x in &s.subs {
                 num(x.hp, &mut byte);

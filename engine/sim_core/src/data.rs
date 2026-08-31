@@ -206,7 +206,17 @@ pub struct ShipClass {
     pub name: &'static str,
     pub hull: f32,
     pub radius: f32,
+    /// The class's mass, which is ALSO the berth a design of this class is
+    /// built inside: the authored ships come out at 75 to 90 percent of it.
     pub mass: f32,
+    /// The world size of one lattice cell for this class, which is what makes
+    /// a freighter's plate cost more than a frigate's for the same cell count.
+    pub rung_cell: f32,
+    /// What the bare frame carries before a single part is fitted. Everything
+    /// above these comes from barracks, airlocks and clamps.
+    pub base_reach: f32,
+    pub base_marines: i32,
+    pub base_capacity: i32,
     pub flight: Flight,
     pub boarding_range: f32,
     pub marines: i32,
@@ -340,6 +350,10 @@ static C_TERRAN_FRIGATE: ShipClass = ShipClass {
     hull: 300.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 6.0,
         pitch_rate: 4.0,
@@ -362,6 +376,10 @@ static C_KARISEN_FRIGATE: ShipClass = ShipClass {
     hull: 250.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 6.5,
         pitch_rate: 4.0,
@@ -386,6 +404,10 @@ static C_ROGUE_FRIGATE: ShipClass = ShipClass {
     hull: 180.0,
     radius: 3.2,
     mass: 0.9,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 9.0,
         pitch_rate: 6.0,
@@ -408,6 +430,10 @@ static C_BENEFACTOR_FRIGATE: ShipClass = ShipClass {
     hull: 250.0,
     radius: 3.5,
     mass: 1.0,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 5.0,
         pitch_rate: 3.5,
@@ -430,6 +456,10 @@ static C_FREIGHTER: ShipClass = ShipClass {
     hull: 600.0,
     radius: 4.5,
     mass: 2.0,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
     flight: Flight {
         yaw_rate: 2.5,
         pitch_rate: 1.5,

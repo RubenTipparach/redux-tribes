@@ -924,13 +924,10 @@ export interface Derived {
  * hulls over the allowed layer configurations: 5.7 percent rms, worst case
  * the Rogue at 8.8 percent on mass, and every class still legal.
  */
-const PLATE_UM = 78, HULL_MILLI = 34;
-/** How much bigger this rung's cell is than a frigate's, cubed. Plate is a
- *  volume of material, so it scales; a part is a machine, so it does not. */
-const rungVol = (rung: RungKey): number => (RUNG[rung] / RUNG.frigate) ** 3;
-
-/** Turn length, from prototype/sim/data.js CONST. */
-const TURN_SECONDS = 10;
+/* What a cell of plate costs and gives, how a bigger rung scales it, and how
+ * long a turn is, all used to live here. They are the core's now
+ * (`design.rs`), along with the arithmetic that read them: this file measures
+ * the picture and the core says what the picture weighs. */
 
 /**
  * The whole ship as one occupancy grid: frame, parts and plate.
@@ -1433,128 +1430,160 @@ export function rasterise(d: Design): Raster {
   return raster;
 }
 
-export function derive(d: Design): Derived {
+/**
+ * Every gun a design carries, and where it sits in SHIP units.
+ *
+ * A measurement of the picture, like the plate count: which socket a gun was
+ * fitted to is the design, and turning a cell into a position is the same
+ * arithmetic the renderer uses to draw the turret there. What the position
+ * MEANS, which is the arc it fires through and the range it reaches, is the
+ * core's and stays there.
+ */
+export function mountsOf(d: Design): Array<{ key: string; at: [number, number, number] }> {
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
-
-  // --- what is bolted on ------------------------------------------------
-  let massUM = 0, hullMilli = 0;
-  let thrust = 0, retro = 0, latX = 0, latY = 0, exhaust = 0;
-  let marines = 0, capacity = 0, reach = 0, parts = 0;
-  const gunCount = new Map<string, number>();
-  let trunnions = 0, guns = 0;
-
+  const socks = socketsOf(frame, d.parts);
+  const out: Array<{ key: string; at: [number, number, number] }> = [];
   for (const p of d.parts) {
     const m = moduleById(p.module);
-    if (!m) continue;
-    parts++;
-    massUM += m.mass;
-    hullMilli += m.hull;
-    thrust += m.thrust ?? 0;
-    retro += m.retro ?? 0;
-    latX += m.latX ?? 0;
-    latY += m.latY ?? 0;
-    if (m.exhaust && m.exhaust > exhaust) exhaust = m.exhaust;
-    marines += m.marines ?? 0;
-    capacity += m.capacity ?? 0;
-    reach += m.reach ?? 0;
-    if (m.fits === 'gun' && m.id === 'WPN-BB1') trunnions++;
-    if (m.weapon) {
-      guns++;
-      gunCount.set(m.weapon, (gunCount.get(m.weapon) ?? 0) + 1);
-    }
+    if (!m?.weapon) continue;
+    const sock = socks.find(k => k.id === p.socket);
+    if (!sock) continue;
+    out.push({
+      key: m.weapon,
+      at: [
+        ((sock.at[0] as number) - NX / 2) * cell,
+        ((sock.at[1] as number) - NY / 2) * cell,
+        ((sock.at[2] as number) - NZ / 2) * cell,
+      ],
+    });
   }
+  return out;
+}
 
-  // --- the hull as built, counted rather than estimated -------------------
+/** The module indices a design is built from, in the core's own order. */
+export function partsOf(d: Design): number[] {
+  const out: number[] = [];
+  for (const p of d.parts) {
+    const at = MODULES.findIndex(m => m.id === p.module);
+    if (at >= 0) out.push(at);
+  }
+  return out;
+}
+
+/**
+ * Ask the core what a design IS.
+ *
+ * The rules moved. Mass, hull, the flight envelope and the seven gates are the
+ * core's arithmetic now, because they decide outcomes and a rule that decides
+ * outcomes cannot live in one of two clients (ADR-2). This function is what is
+ * left: rasterise, which is the client MEASURING its own picture, then hand the
+ * counts across and hand the answer back with labels on it.
+ *
+ * The wiring is explicit rather than imported so `design.ts` stays free of the
+ * wasm module: the app hands it a derivation once, at boot, and there is no
+ * second path to fall back to. A fallback would be the copy this deleted.
+ */
+export type CoreDerive = (
+  classIdx: number,
+  geo: { plateCells: number; ext: readonly [number, number, number];
+    radiusCells: number; fouled: number },
+  parts: readonly number[],
+) => CoreStats | null;
+
+/** The block the core writes back. Mirrors `DerivedStats` in `sim/wasm.ts`. */
+export interface CoreStats {
+  readonly mass: number; readonly hull: number; readonly radius: number;
+  readonly accelFwd: number; readonly accelRetro: number; readonly accelLat: number;
+  readonly maxSpeed: number; readonly yaw: number; readonly pitch: number;
+  readonly reachU: number; readonly marines: number; readonly capacity: number;
+  readonly boardingRange: number; readonly massMax: number; readonly parts: number;
+  readonly guns: number; readonly trunnions: number; readonly gates: number;
+}
+
+let coreDerive: CoreDerive | null = null;
+export function useCore(fn: CoreDerive): void { coreDerive = fn; }
+
+/** Class keys in `sim_core::data::ALL_CLASSES` order, which is the index the
+ *  core answers to. The same order `FRAMES` is authored in. */
+const CLASS_ORDER: readonly string[] = [
+  'terran_frigate', 'karisen_frigate', 'rogue_frigate', 'benefactor_frigate', 'freighter',
+];
+
+/** One bit per gate, in the core's own order, with the words to say about it. */
+const GATES: ReadonlyArray<readonly [string, string, string]> = [
+  ['parts', 'something is fitted', 'nothing is fitted at all'],
+  ['thrust', 'at least one drive', 'no drive fitted, so no thrust at all'],
+  ['bridge', 'a bridge', 'every frame has a bay for exactly one'],
+  ['arms', 'at least one gun', 'a frigate with no gun is not a warship'],
+  ['mass', 'inside the berth', 'over the berth this frame allows'],
+  ['sphere', 'inside the collision sphere', 'wider than the class collides at'],
+  ['turrets', 'turrets swing clear', 'armour or another part is inside a turret'],
+];
+
+export function derive(d: Design): Derived {
+  const frame = frameFor(d.classKey);
   const raster = rasterise(d);
   const ext = raster.extent as [number, number, number];
-  const plateCells = raster.plateCells;
   const enclosed = ext[0] * ext[1] * ext[2];
 
-  const vol = rungVol(frame.rung);
-  massUM += Math.round(plateCells * PLATE_UM * vol);
-  hullMilli += Math.round(plateCells * HULL_MILLI * vol);
+  if (!coreDerive) {
+    throw new Error('design.derive: the core has not been wired in, so nothing may be derived');
+  }
+  const parts = partsOf(d);
+  const stats = coreDerive(Math.max(0, CLASS_ORDER.indexOf(d.classKey)), {
+    plateCells: raster.plateCells, ext, radiusCells: raster.radiusCells, fouled: raster.fouled,
+  }, parts);
+  if (!stats) throw new Error('design.derive: the core refused the record');
 
-  const mass = massUM / 1e6;
-  const hull = hullMilli / 1000;
-
-  // --- flight ------------------------------------------------------------
-  // No thruster means no thrust at all, which is the core's own rule: losing
-  // the last live Thruster costs 100 percent of thrust.
-  const mDen = massUM > 0 ? massUM : 1;
-  const accelFwd = (thrust * 10_000) / mDen;
-  const accelRetro = (retro * 10_000) / mDen;
-  const accelLat = (Math.min(latX, latY) * 10_000) / mDen;
-  const maxSpeed = thrust > 0 ? exhaust : 0;
-  // A first moment curve, not rigid body dynamics, chosen because ADR-14 says
-  // the flight model is hand authored and the physical form misses the
-  // authored numbers badly.
-  // Rotation comes from what actually turns the ship: the lateral blocks,
-  // against its mass and its length. Normalising against the CLASS budget
-  // instead rewarded being under budget twice over, and gave the Freighter a
-  // better turn rate than the Terran.
-  const lenZ = Math.max(1, ext[2]);
-  const K = 16.6;
-  const yaw = thrust > 0 ? Math.min(24, (K * latX) / (Math.max(mass, 1e-6) * lenZ)) : 0;
-  const pitch = thrust > 0 ? Math.min(16, (K * 0.67 * latY) / (Math.max(mass, 1e-6) * lenZ)) : 0;
-
-  // prototype/sim/data.js nominalReach(), verbatim.
-  const tAccel = accelFwd > 0 ? Math.min(TURN_SECONDS, maxSpeed / accelFwd) : 0;
-  const reachU = 0.5 * accelFwd * tAccel * tAccel + maxSpeed * (TURN_SECONDS - tAccel);
-
-  // --- the true bounding sphere, which is the gate the wireframe used to be
-  const radius = raster.radiusCells * cell;
-
-  // --- the belt a shot actually meets ------------------------------------
-  const belt = Math.max(d.sections.beltFwd, d.sections.beltMid, d.sections.beltAft);
-
+  // What each gun kind is fitted, which is a count over the same list and not
+  // a rule: the client draws a mounts table with it and nothing else reads it.
+  const gunCount = new Map<string, number>();
+  for (const p of d.parts) {
+    const m = moduleById(p.module);
+    if (m?.weapon) gunCount.set(m.weapon, (gunCount.get(m.weapon) ?? 0) + 1);
+  }
   const mounts: Mount[] = [];
   for (const g of GUNS) {
     const n = gunCount.get(g.key) ?? 0;
     if (n > 0) mounts.push({ key: g.key, n });
   }
 
-  // --- gates. Six hard checks and no soft ones: a design cannot be refused
-  // by a system sim_core does not have, which is why power and heat are not
-  // here at all.
-  const checks: Check[] = [
-    { id: 'parts', label: 'something is fitted', ok: parts > 0,
-      detail: `${parts} part${parts === 1 ? '' : 's'} placed` },
-    { id: 'thrust', label: 'at least one drive', ok: thrust > 0,
-      detail: thrust > 0 ? `${thrust} thrust across the drive plate`
-        : 'no drive fitted, so no thrust at all' },
-    { id: 'bridge', label: 'a bridge', ok: d.parts.some(p => p.module === 'UTL-BRG'),
-      detail: 'exactly one, and every frame has a bay for it' },
-    { id: 'arms', label: 'at least one gun', ok: guns > 0 || frame.classKey === 'freighter',
-      detail: frame.classKey === 'freighter'
-        ? 'the Freighter frame has no gun ring, on purpose'
-        : `${guns} gun${guns === 1 ? '' : 's'} on ${trunnions} barbette${trunnions === 1 ? '' : 's'}` },
-    { id: 'mass', label: 'inside the berth', ok: mass <= frame.massMax + 1e-9,
-      detail: `${mass.toFixed(3)} of ${frame.massMax.toFixed(2)} mass units` },
-    { id: 'sphere', label: 'inside the collision sphere', ok: radius <= frame.radius + 1e-9,
-      detail: `${radius.toFixed(3)} u against the class radius ${frame.radius.toFixed(1)}` },
-    // A turret swivels through its own box, so the box is its own and nothing
-    // else may stand in it. The generated exterior carves round them, so this
-    // fails on a design that arrived with something in one rather than on one
-    // the editor built: an older save, or a part nudged into a turret.
-    { id: 'turrets', label: 'turrets swing clear', ok: raster.fouled === 0,
-      detail: raster.fouled === 0
-        ? `${raster.turrets.length} turret${raster.turrets.length === 1 ? '' : 's'}, `
-          + 'each with its box to itself'
-        : `${raster.fouled} cell${raster.fouled === 1 ? '' : 's'} of armour or another `
-          + 'part inside a turret' },
-  ];
+  const checks: Check[] = GATES.map(([id, label, why], i) => ({
+    id,
+    label,
+    ok: (stats.gates & (1 << i)) !== 0,
+    detail: (stats.gates & (1 << i)) !== 0 ? detailFor(id, stats, raster, frame) : why,
+  }));
+
+  const belt = Math.max(d.sections.beltFwd, d.sections.beltMid, d.sections.beltAft);
 
   return {
-    cells: CELLS, plateCells, enclosed, massUM, mass, massMax: frame.massMax,
-    hull, radius, extent: ext,
-    accelFwd, accelRetro, accelLat, maxSpeed, yaw, pitch, reachU,
-    marines: frame.baseMarines + marines,
-    capacity: frame.baseCapacity + capacity,
-    boardingRange: frame.baseReach + reach,
+    cells: CELLS, plateCells: raster.plateCells, enclosed,
+    massUM: Math.round(stats.mass * 1e6), mass: stats.mass, massMax: stats.massMax,
+    hull: stats.hull, radius: stats.radius, extent: ext,
+    accelFwd: stats.accelFwd, accelRetro: stats.accelRetro, accelLat: stats.accelLat,
+    maxSpeed: stats.maxSpeed, yaw: stats.yaw, pitch: stats.pitch, reachU: stats.reachU,
+    marines: stats.marines, capacity: stats.capacity, boardingRange: stats.boardingRange,
     turrets: raster.turrets, fouled: raster.fouled,
-    mounts, belt, checks, legal: checks.every(c => c.ok), parts,
+    mounts, belt, checks, legal: checks.every(c => c.ok), parts: stats.parts,
   };
+}
+
+/** The number that makes a passing gate worth reading. Words only. */
+function detailFor(id: string, s: CoreStats, r: Raster, frame: FrameDef): string {
+  switch (id) {
+    case 'parts': return `${s.parts} part${s.parts === 1 ? '' : 's'} placed`;
+    case 'thrust': return `drive fitted across ${s.parts} parts`;
+    case 'bridge': return 'exactly one, and every frame has a bay for it';
+    case 'arms': return frame.classKey === 'freighter'
+      ? 'the Freighter frame has no gun ring, on purpose'
+      : `${s.guns} gun${s.guns === 1 ? '' : 's'} on ${s.trunnions} barbette${s.trunnions === 1 ? '' : 's'}`;
+    case 'mass': return `${s.mass.toFixed(3)} of ${s.massMax.toFixed(2)} mass units`;
+    case 'sphere': return `${s.radius.toFixed(3)} u against the class radius ${frame.radius.toFixed(1)}`;
+    default: return `${r.turrets.length} turret${r.turrets.length === 1 ? '' : 's'}, `
+      + 'each with its box to itself';
+  }
 }
 
 // ------------------------------------------------------- stock designs --
