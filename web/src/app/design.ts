@@ -1013,7 +1013,9 @@ export const cellAt = (n: number): readonly [number, number, number] =>
  *  record inside the library's 64 KB. */
 export const DRAWN_MAX = 20000;
 
-const rasterSig = (d: Design): string =>
+/** A design's identity for caching. Paint is not in it: the raster does not
+ *  depend on it, and anything that draws colour keys on this plus the paint. */
+export const rasterSig = (d: Design): string =>
   d.classKey + '|' + d.armour + '|'
   + d.parts.map(p => p.socket + ':' + p.module + ':' + (p.rot ?? 0)).sort().join(',') + '|'
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'

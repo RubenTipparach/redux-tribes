@@ -143,7 +143,10 @@ node web/tests/playthrough.mjs --mobile   # 390x844, touch
 
 It drives the real console (target a hostile, aim at one of its volumes, arm a
 mount, drop it in a fire slot, end the turn, watch the playback out) until the
-header says VICTORY, and exits non zero if it cannot get there. The aim strip is
+header says VICTORY, and exits non zero if it cannot get there. It also checks
+that the map is drawing SHIPS: a quad count per hull, which would go back to
+zero the day the cone returned, and cells actually coming off them with chunks
+in the air. The aim strip is
 checked the only way that means anything: the chip is tapped and the ORDER is
 read back, because a chip that highlights and still sends the hull across the
 boundary is a light rather than a feature. It needs a browser, so it is not in CI;
@@ -362,6 +365,37 @@ Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
 either side of the commit. Reading it off the shipped figure instead would have
 charged it 14002, which is gravity, the reach chart and the scenario table as
 well.
+
+## The battlefield draws the ship you built
+
+Every hull on the map used to be a five sided cone. It reads at a glance and it
+is a lie: a player spends an hour in the shipyard and then flies a triangle.
+The map draws the design now, and a hit takes cells off it.
+
+**Faces, greedily merged, not a cube per cell.** A box per cell is twelve
+triangles whichever way it is turned: 4644 cells and 55728 triangles for one
+Terran, and four of those took a headless frame from 22 fps to 2.2. What can be
+seen is the faces between a solid cell and the space OUTSIDE, which is 4064 of
+them, and merging runs of one colour into rectangles brings that to 1303 quads.
+Four hulls are 7200 quads and cost about a fifth of a headless software frame
+(15.2 fps against 19.3 with them hidden). Outside is a flood fill from the edge of
+the lattice, not "any empty neighbour": a frigate is full of gaps between its
+frame and its parts, and counting those drew most of the ship twice.
+
+**Cells coming off is the CLIENT's, and deliberately so.** What a hole means is
+already the subsystem model's job; the cells follow the damage rather than
+deciding it, so none of this is hashed and none of it crosses the boundary. Two
+screens still agree, because both draw the same event stream and the chunks'
+drift is hashed from the event rather than rolled. It is a pure function of
+(turn, tick): scrubbing back puts cells on and takes chunks out of the air, and
+a scar from turn three is still there in turn four.
+
+**A hit event lands on the collision SPHERE, not on the hull.** The sphere
+circumscribes the long axis, so on a Terran it is 3.29 units against a hull 1.2
+by 0.76 by 3.2, and a carve measured from the event's own position took nothing
+at all: every shot landed in space beside the ship. The carve starts from the
+nearest cell to it instead, which is the cell the shot came in at, because the
+sphere point is in the direction the shot arrived from.
 
 ## Damage is spatial: the layout IS the damage model
 

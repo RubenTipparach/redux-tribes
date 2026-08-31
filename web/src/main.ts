@@ -10,15 +10,16 @@
 
 import { Sim } from './sim/wasm.js';
 import type { Match } from './sim/match.js';
-import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View } from './app/view.js';
+import * as THREE from 'three';
+import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
-import { mountsOf, partsOf, rasterise, useCore, type Design } from './app/design.js';
+import { mountsOf, partsOf, rasterise, stockFor, useCore, type Design } from './app/design.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
   type SubState, type Vec3,
-  CLASS_NAMES, classIndexOf, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
+  CLASS_KEYS, CLASS_NAMES, classIndexOf, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
   SCENARIO_BY_NAME, SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
 } from './sim/types.js';
 
@@ -310,6 +311,16 @@ function start(): void {
       : `${launch.hullName ?? 'that design'} is not legal, flying the class hull`;
   }
   match.start(seed, scenario, launch.humanSides);
+  // What each ship is flying, so the map draws the hull rather than a stand in
+  // for it: the picked design for the side that picked it, and each class's
+  // stock hull for everyone else.
+  const hullOf = new Map<number, Design>();
+  for (const s of match.ships()) {
+    hullOf.set(s.id, picked && s.side === launch.side
+      ? picked
+      : stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
+  }
+  view.setDesigns(hullOf);
   // Say what was taken out, on the panel that lists it. A design picked in the
   // lobby and never mentioned again is a pick a player cannot check.
   $('hullNote').textContent = flying;
@@ -1905,8 +1916,12 @@ $('tFit').onclick = () => view.fit();
 /** The turn whose track and events are on screen: the one being watched in
  * the review panel, else the one just resolved. */
 function shownRecord(): typeof match.history[number] | undefined {
-  return watching() && review ? match.history[review.at]
-    : match.history[match.history.length - 1];
+  return match.history[shownIndex()];
+}
+
+/** Which turn record is on screen, as an index into the history. */
+function shownIndex(): number {
+  return watching() && review ? review.at : match.history.length - 1;
 }
 
 function showTick(tick: number): void {
@@ -1931,6 +1946,13 @@ function showTick(tick: number): void {
                  && tick >= e.tick && tick < e.tick + BEAM_TICKS)
     .map(e => ({ from: e.pos, to: e.to, age: (tick - e.tick) / BEAM_TICKS })));
   view.setBlasts(blastsAt(events, tick));
+  // What the turn has taken off each hull, and the chunks still in the air.
+  // Both are drawn from the same event stream, so scrubbing back puts the
+  // cells back and a re-watch throws the same debris.
+  // One monotone axis for the whole match, so a scar from turn three is still
+  // there in turn four and scrubbing backwards puts cells back: a turn index
+  // and a tick inside it, which the view compares against the same number.
+  view.setDamage(carveHistory(), shownIndex() * TICKS_PER_TURN + tick);
 
   // The tail past the end of the turn is effects finishing, not time passing,
   // so the scrubber and the clock both stop at the turn's own length.
@@ -2123,6 +2145,70 @@ function renderTrails(): void {
  * Derived rather than spawned, so scrubbing back through a kill runs it
  * backwards and holding on a tick holds the flame where it was.
  */
+/**
+ * Where each hit landed on the hull it hit, in that hull's own space.
+ *
+ * Worked out once per turn record rather than per tick: it costs a pose lookup
+ * per event, and a playback asks sixty times a second. The pose is the one the
+ * ship was in AT THE TICK, because a hull that has moved on since is a hull
+ * whose scar would be in the wrong place.
+ */
+const carveCache = new WeakMap<object, HullHit[]>();
+
+/**
+ * Every hit of the match so far, on the one axis the view scrubs along.
+ *
+ * A hull shot to pieces in turn three is still in pieces in turn four, so the
+ * carve cannot be a function of the turn on screen alone. Turns before the one
+ * being watched contribute all of their hits; the one being watched
+ * contributes the hits up to the tick.
+ */
+let carveAll: { upTo: number; len: number; list: HullHit[] } | null = null;
+function carveHistory(): HullHit[] {
+  const upTo = shownIndex();
+  // Rebuilt when the turn on screen changes, not sixty times a second: the
+  // list is the same list all the way through a turn.
+  if (carveAll && carveAll.upTo === upTo && carveAll.len === match.history.length) {
+    return carveAll.list;
+  }
+  const list: HullHit[] = [];
+  for (let n = 0; n <= upTo && n < match.history.length; n++) {
+    const rec = match.history[n];
+    if (!rec) continue;
+    for (const h of carveHits(rec)) list.push({ ...h, tick: n * TICKS_PER_TURN + h.tick });
+  }
+  carveAll = { upTo, len: match.history.length, list };
+  return list;
+}
+
+function carveHits(rec: { events: readonly SimEvent[] } | null | undefined): HullHit[] {
+  if (!rec) return [];
+  const found = carveCache.get(rec);
+  if (found) return found;
+  const out: HullHit[] = [];
+  const q = new THREE.Quaternion();
+  const v = new THREE.Vector3();
+  for (const e of rec.events) {
+    const kill = e.kind === EventKind.ShipDestroyed || e.kind === EventKind.ShipCritical;
+    if (!kill && e.kind !== EventKind.ShotHit && e.kind !== EventKind.Collision) continue;
+    if (e.ship < 0) continue;
+    const pose = match.poses(e.tick).find(p => p.id === e.ship);
+    if (!pose) continue;
+    q.set(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w).invert();
+    v.set(e.pos.x - pose.pos.x, e.pos.y - pose.pos.y, e.pos.z - pose.pos.z).applyQuaternion(q);
+    out.push({
+      ship: e.ship,
+      local: [v.x, v.y, v.z],
+      world: e.pos,
+      tick: e.tick,
+      // A kill opens the hull up; a shot takes a bite out of it.
+      radius: kill ? 2.2 : e.kind === EventKind.Collision ? 1.1 : 0.55,
+    });
+  }
+  carveCache.set(rec, out);
+  return out;
+}
+
 function blastsAt(events: readonly SimEvent[], tick: number)
   : Array<{ pos: Vec3; age: number; radius: number; kill: boolean }> {
   const out = [];
@@ -2243,6 +2329,16 @@ Object.defineProperty(window, 'ftDebug', {
     /** Every hull's position right now, for checking a preview against what
      * the turn actually did. */
     poses: () => ships.map(s => ({ id: s.id, side: s.side, destroyed: s.destroyed, pos: s.pos })),
+    /** Where a ship is on screen, so a harness can aim at one. */
+    screenOf: (id: number) => {
+      const s = ships.find(x => x.id === id);
+      return s ? view.screenOf(s.pos) : null;
+    },
+    /** What has been shot off the hulls, and what is still in the air. */
+    damage: () => view.damageState(),
+    /** What the hulls cost to draw, and a switch to weigh it against. */
+    hullQuads: () => view.hullQuads(),
+    hullsVisible: (on: boolean) => view.hullsVisible(on),
     /** Who is in the match and what they are flying. */
     ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull })),
     /** What the effects layer is drawing right now, and how far the biggest

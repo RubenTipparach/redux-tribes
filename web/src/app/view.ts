@@ -18,8 +18,45 @@ import {
 } from './spline.js';
 import {
   type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
-  isCommitted, Mode, PROBE_STEPS,
+  CLASS_KEYS, isCommitted, Mode, PROBE_STEPS,
 } from '../sim/types.js';
+import { stockFor, type Design } from './design.js';
+import { hullMesh, type HullMesh } from './hull.js';
+
+/** How long a chunk of hull stays on screen, in ticks: three seconds. */
+const DEBRIS_TICKS = 180;
+/** Chunks one hit may throw, and how many may be in the air at once. A hull
+ *  coming apart is a few dozen cells, not a snowstorm. */
+const DEBRIS_PER_HIT = 14;
+const DEBRIS_MAX = 400;
+
+/** A hit, in the frame the hull is drawn in and the frame the chunks fly in. */
+export interface HullHit {
+  readonly ship: number;
+  /** Where it landed in the hull's OWN space, which is where cells live. */
+  readonly local: readonly [number, number, number];
+  /** And in the world, which is where the chunks come from. */
+  readonly world: Vec3;
+  readonly tick: number;
+  readonly radius: number;
+}
+
+interface Debris {
+  readonly at: THREE.Vector3;
+  readonly dir: THREE.Vector3;
+  readonly hex: number;
+}
+
+interface Carved {
+  readonly hull: HullMesh;
+  /** This ship's own copy, so a hole in one is not a hole in every hull of the
+   *  same design. */
+  readonly geo: THREE.BufferGeometry;
+  readonly dead: Uint8Array;
+  readonly born: Map<number, Debris[]>;
+  readonly cells: Set<number>;
+  upTo: number;
+}
 
 const CYAN = 0x35c7ff;
 const ORANGE = 0xfa6a0a;
@@ -172,6 +209,169 @@ export class View {
   workAlt = 0;
 
   #hulls = new Map<number, THREE.Mesh>();
+  /**
+   * Which design each ship is flying, so the battlefield can draw the hull a
+   * player built rather than a cone standing in for it.
+   *
+   * Set by the app, because which design a ship carries is a match fact the
+   * console knows and the renderer does not: side 0 flies what was picked in
+   * the lobby, everybody else flies their class's stock hull.
+   */
+  #designs = new Map<number, Design>();
+  /** What each hull is currently tinted for, so a repaint that would change
+   *  nothing does not touch the GPU. */
+  #tint = new Map<number, number>();
+  /** What has been shot off each hull, and the chunks it threw. */
+  #carved = new Map<number, Carved>();
+  #debris: THREE.InstancedMesh | null = null;
+
+  /**
+   * This ship's own copy of its hull, made the first time it takes damage.
+   *
+   * Designs are shared: four ships out of one design draw one geometry, which
+   * is the whole reason the map can afford them. The moment one of them starts
+   * losing cells it needs its own, or a hole in one would be a hole in all of
+   * them.
+   */
+  #carveOf(id: number): Carved | null {
+    const found = this.#carved.get(id);
+    if (found) return found;
+    const mesh = this.#hulls.get(id);
+    const s = this.#ships.find(x => x.id === id);
+    if (!mesh || !s) return null;
+    const design = this.#designs.get(id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    const hull = hullMesh(design);
+    const geo = hull.geo.clone();
+    mesh.geometry = geo;
+    const c: Carved = {
+      hull, geo, dead: new Uint8Array(hull.quads), born: new Map(), cells: new Set(), upTo: -1,
+    };
+    this.#carved.set(id, c);
+    return c;
+  }
+
+  /** Put a hull back together, which is what scrubbing backwards means. */
+  #resetCarve(id: number): void {
+    const c = this.#carved.get(id);
+    if (!c) return;
+    const mesh = this.#hulls.get(id);
+    if (mesh) mesh.geometry = c.hull.geo;
+    c.geo.dispose();
+    this.#carved.delete(id);
+  }
+
+  /**
+   * Take the cells one hit reached off a hull.
+   *
+   * A quad is collapsed rather than removed: four vertices onto one point is a
+   * pair of degenerate triangles the rasteriser throws away, and it costs one
+   * write to a buffer that is already on the card. Rebuilding the index for
+   * every hit would cost the whole hull.
+   */
+  #applyHit(c: Carved, h: HullHit): void {
+    const pos = c.geo.getAttribute('position') as THREE.BufferAttribute;
+    const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const born: Debris[] = [];
+
+    // Where the shot actually met the hull.
+    //
+    // A hit event carries the point on the ship's COLLISION SPHERE, and that
+    // sphere circumscribes the long axis: on a Terran it is 3.29 units against
+    // a hull 1.2 by 0.76 by 3.2, so a hit abeam lands two units off the flank
+    // and a carve measured from it took nothing at all. The nearest cell is
+    // the cell the shot came in at, and it is on the right side of the ship
+    // because the sphere point is in the direction the shot arrived from.
+    let near = -1, best = Infinity;
+    for (let q = 0; q < c.hull.quads; q++) {
+      if (c.dead[q]) continue;
+      const dx = (c.hull.centre[q * 3] as number) - h.local[0];
+      const dy = (c.hull.centre[q * 3 + 1] as number) - h.local[1];
+      const dz = (c.hull.centre[q * 3 + 2] as number) - h.local[2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < best) { best = d2; near = q; }
+    }
+    if (near < 0) return;
+    const ax = c.hull.centre[near * 3] as number;
+    const ay = c.hull.centre[near * 3 + 1] as number;
+    const az = c.hull.centre[near * 3 + 2] as number;
+
+    const r2 = h.radius * h.radius;
+    for (let q = 0; q < c.hull.quads; q++) {
+      if (c.dead[q]) continue;
+      const dx = (c.hull.centre[q * 3] as number) - ax;
+      const dy = (c.hull.centre[q * 3 + 1] as number) - ay;
+      const dz = (c.hull.centre[q * 3 + 2] as number) - az;
+      if (dx * dx + dy * dy + dz * dz > r2) continue;
+      c.dead[q] = 1;
+      const b = q * 12;
+      for (let v = 1; v < 4; v++) {
+        arr[b + v * 3] = arr[b] as number;
+        arr[b + v * 3 + 1] = arr[b + 1] as number;
+        arr[b + v * 3 + 2] = arr[b + 2] as number;
+      }
+      // One chunk per CELL, not per face: a corner cell has three quads and
+      // three chunks off one cell is three times the debris nobody asked for.
+      // The cell is counted whether or not it throws one, because how much of
+      // a hull is gone and how much of it is in the air are two questions.
+      const cell = c.hull.cellOf[q] as number;
+      if (c.cells.has(cell)) continue;
+      c.cells.add(cell);
+      if (born.length >= DEBRIS_PER_HIT) continue;
+      // Away from the hit, jittered by a hash of the cell so the same shot
+      // throws the same chunks on both screens and on a re-watch.
+      const rnd = (salt: number) => {
+        const x = Math.imul(cell ^ (h.tick * 2654435761) ^ salt, 2246822519) >>> 0;
+        return (x % 2048) / 1024 - 1;
+      };
+      born.push({
+        at: new THREE.Vector3(h.world.x, h.world.y, h.world.z),
+        dir: new THREE.Vector3(dx + rnd(1) * 0.6, dy + rnd(2) * 0.6, dz + rnd(3) * 0.6)
+          .normalize().multiplyScalar(0.6 + 0.5 * (rnd(4) + 1)),
+        hex: new THREE.Color(
+          col.array[q * 12] as number, col.array[q * 12 + 1] as number,
+          col.array[q * 12 + 2] as number).getHex(),
+      });
+    }
+    pos.needsUpdate = true;
+    if (born.length) c.born.set(h.tick, [...(c.born.get(h.tick) ?? []), ...born]);
+  }
+
+  /** The chunks in flight, as one instanced mesh however many there are. */
+  #drawDebris(chunks: ReadonlyArray<{ at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number }>): void {
+    if (!this.#debris) {
+      this.#debris = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshLambertMaterial({ transparent: true }),
+        DEBRIS_MAX);
+      this.#debris.frustumCulled = false;
+      this.#scene.add(this.#debris);
+    }
+    const mesh = this.#debris;
+    const n = Math.min(chunks.length, DEBRIS_MAX);
+    mesh.count = n;
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const at = new THREE.Vector3();
+    const scale = new THREE.Vector3();
+    const c = new THREE.Color();
+    for (let i = 0; i < n; i++) {
+      const d = chunks[i] as { at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number };
+      // Out and slowing, shrinking as it goes, so the field does not silt up
+      // with the wreckage of a long match.
+      const t = d.age * (2 - d.age);
+      at.copy(d.at).addScaledVector(d.dir, t * 6);
+      q.setFromAxisAngle(d.dir, d.age * 7);
+      const s = 0.16 * (1 - d.age * 0.75);
+      scale.set(s, s, s);
+      mesh.setMatrixAt(i, m.compose(at, q, scale));
+      mesh.setColorAt(i, c.setHex(d.hex));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    (mesh.material as THREE.MeshLambertMaterial).opacity = 1;
+    mesh.visible = n > 0;
+  }
   #ring = new THREE.Mesh();
   #planLine: THREE.Line;
   #planPip: THREE.Mesh;
@@ -494,29 +694,154 @@ export class View {
 
   // --------------------------------------------------------------- state --
 
+  /**
+   * What each ship is flying. Call before `setShips`, whenever a match starts.
+   *
+   * Rebuilding a hull is a rasterisation, so it happens here rather than per
+   * frame; `hullCells` caches by design, and a skirmish is four ships out of
+   * at most five distinct designs.
+   */
+  setDesigns(designs: ReadonlyMap<number, Design>): void {
+    this.#designs = new Map(designs);
+    for (const [, mesh] of this.#hulls) {
+      this.#scene.remove(mesh);
+      // The geometry belongs to the design cache and is shared; the material
+      // is this ship's own.
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.#hulls.clear();
+    this.#tint.clear();
+  }
+
+  /**
+   * A ship's hull, as the cells it is built out of.
+   *
+   * Tinted toward its side rather than painted over: whose ship this is has to
+   * be readable across the map at a glance, and a hull in its own faction
+   * colours alone is a hull a player has to squint at. Sixty percent the
+   * design's own colour, forty percent the side, which keeps a Karisen stripe
+   * a Karisen stripe and still says whose it is.
+   */
+  #buildHull(s: ShipState): THREE.Mesh {
+    const design = this.#designs.get(s.id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    const hull: HullMesh = hullMesh(design);
+    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshLambertMaterial({
+      vertexColors: true,
+    }));
+    this.#tintHull(mesh, s);
+    return mesh;
+  }
+
+  /**
+   * Whose ship this is, said in colour.
+   *
+   * A hull in nothing but its own faction paint is a hull a player has to
+   * squint at, and which ships are yours is the first thing the map has to
+   * answer. The design's colours stay: the MATERIAL is tinted rather than the
+   * cells, so a Karisen stripe is still a Karisen stripe under a cyan wash,
+   * and a repaint is one number rather than a walk over every face.
+   */
+  #tintHull(mesh: THREE.Mesh, s: ShipState): void {
+    const tone = s.destroyed ? 0x33404f
+      : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE;
+    if (this.#tint.get(s.id) === tone) return;
+    this.#tint.set(s.id, tone);
+    const mat = mesh.material as THREE.MeshLambertMaterial;
+    // Lambert MULTIPLIES this by the vertex colour, so the full side colour
+    // would wash a red gun to near black. Halfway from white keeps the hue and
+    // still says whose it is, with a little emissive so a hull reads against
+    // the field rather than sinking into it.
+    mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), s.destroyed ? 0.8 : 0.5);
+    mat.emissive.setHex(s.destroyed ? 0x000000 : tone).multiplyScalar(0.12);
+    mat.needsUpdate = true;
+  }
+
+  /**
+   * Where a world point lands on screen, in CSS pixels.
+   *
+   * The reverse of the pick ray, and the thing a harness needs to aim a click
+   * at a particular ship rather than at the middle of the canvas.
+   */
+  screenOf(at: Vec3): { x: number; y: number } {
+    const v = new THREE.Vector3(at.x, at.y, at.z).project(this.#camera);
+    const r = this.#renderer.domElement.getBoundingClientRect();
+    return {
+      x: r.left + (v.x * 0.5 + 0.5) * r.width,
+      y: r.top + (0.5 - v.y * 0.5) * r.height,
+    };
+  }
+
+  /**
+   * What a turn has taken off each hull, as a pure function of the tick.
+   *
+   * A hit removes the cells it reached, and the chunks fly off and fade. Both
+   * are the CLIENT's: what a hole means is already the subsystem model's job,
+   * and the cells coming off follow the damage rather than deciding it. That
+   * is why none of this is in the state hash and none of it crosses the
+   * boundary. It still matches on two screens, because both are drawing the
+   * same event stream and the drift directions are hashed from the event
+   * rather than rolled.
+   *
+   * Scrubbing backwards un-carves: the hits are re-applied from nothing when
+   * the tick goes back, which is what makes the picture a function of the tick
+   * rather than a pile of side effects.
+   */
+  setDamage(hits: ReadonlyArray<HullHit>, tick: number): void {
+    const live = new Set<number>();
+    for (const h of hits) live.add(h.ship);
+    for (const [id, c] of this.#carved) {
+      if (!live.has(id) || tick < c.upTo) this.#resetCarve(id);
+    }
+    const chunks: Array<{ at: THREE.Vector3; dir: THREE.Vector3; age: number; hex: number }> = [];
+    for (const h of hits) {
+      if (h.tick > tick) continue;
+      const c = this.#carveOf(h.ship);
+      if (!c) continue;
+      if (h.tick > c.upTo) this.#applyHit(c, h);
+      const age = (tick - h.tick) / DEBRIS_TICKS;
+      if (age >= 0 && age < 1) {
+        for (const d of c.born.get(h.tick) ?? []) {
+          chunks.push({ at: d.at, dir: d.dir, age, hex: d.hex });
+        }
+      }
+    }
+    for (const c of this.#carved.values()) c.upTo = Math.max(c.upTo, tick);
+    this.#drawDebris(chunks);
+  }
+
+  /** What has come off the hulls, and what is in the air: cells carved per
+   *  ship, and chunks currently drawn. Observation only. */
+  damageState(): { carved: Array<[number, number]>; chunks: number } {
+    return {
+      carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
+      chunks: this.#debris?.visible ? this.#debris.count : 0,
+    };
+  }
+
+  /** How many quads each hull on screen is, for weighing what they cost. */
+  hullQuads(): number[] {
+    return [...this.#hulls.values()].map(m => (m.geometry.getIndex()?.count ?? 0) / 6);
+  }
+
+  /** Hide every hull, to measure what the rest of the frame costs without
+   *  them. Observation only: nothing in the console turns this off. */
+  hullsVisible(on: boolean): void {
+    for (const m of this.#hulls.values()) m.visible = on;
+  }
+
   setShips(ships: ShipState[]): void {
     this.#ships = ships;
     for (const s of ships) {
       let mesh = this.#hulls.get(s.id);
       if (!mesh) {
-        // A five sided cone: cheap, and its nose reads at a glance, which is
-        // the one thing a player must be able to see about a ship in a game
-        // where facing decides what the guns can reach.
-        const geo = new THREE.ConeGeometry(s.radius * 0.62, s.radius * 2.1, 5);
-        geo.rotateX(Math.PI / 2);
-        mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
-          color: s.side === this.mySide ? CYAN : ORANGE, flatShading: true, roughness: 0.55,
-        }));
+        mesh = this.#buildHull(s);
         this.#hulls.set(s.id, mesh);
         this.#scene.add(mesh);
       }
       mesh.position.set(s.pos.x, s.pos.y, s.pos.z);
       mesh.quaternion.set(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
       mesh.visible = !s.destroyed;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.color.setHex(
-        s.destroyed ? 0x33404f : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE,
-      );
+      this.#tintHull(mesh, s);
     }
   }
 

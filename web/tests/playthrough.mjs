@@ -69,6 +69,8 @@ let shotsQueued = 0;
 /** Whether the aim strip was used, and whether the pick reached an order. */
 let aimedAtAVolume = false;
 let aimedShotQueued = false;
+/** The most chunks of hull seen in the air at once. */
+let chunksSeen = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -83,6 +85,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();
+  if (attempt === 1) await checkHullsAreShips(page);
 
   outcome = await playMatch();
   final = await state();
@@ -101,6 +104,23 @@ if (!aimedShotQueued) {
 }
 log('shots can be aimed at a subsystem, and the order carries it');
 
+// A hit takes cells off the hull it hit, and they fly. Both are drawn from the
+// event stream, so this is the check that the stream is actually reaching the
+// renderer: a match full of hits and nothing off any hull means the carve
+// stopped finding the cells.
+const carved = await page.evaluate(() => window.ftDebug.damage().carved);
+const total = carved.reduce((a, [, n]) => a + n, 0);
+if (!total) {
+  console.log('\nFAIL: a whole match of hits and not one cell off a hull');
+  process.exit(1);
+}
+if (!chunksSeen) {
+  console.log('\nFAIL: cells came off and nothing flew');
+  process.exit(1);
+}
+log(`hulls come apart: ${total} cells off ${carved.length} ships, `
+  + `${chunksSeen} chunks in the air at once`);
+
 /**
  * Nothing a player needs may sit UNDER a sheet.
  *
@@ -114,6 +134,32 @@ log('shots can be aimed at a subsystem, and the order carries it');
  * which is why it catches a case that a screenshot and a visibility check both
  * pass.
  */
+/**
+ * The map draws the ships, not stand ins for them.
+ *
+ * Every hull used to be a five sided cone. It reads at a glance and it is a
+ * lie: a player spends an hour in the shipyard and then flies a triangle. A
+ * quad count is the cheapest thing that can tell the difference, and it is the
+ * one that would go back to zero if the cone ever returned.
+ */
+async function checkHullsAreShips(page) {
+  const quads = await page.evaluate(() => window.ftDebug.hullQuads());
+  if (quads.length < 2) {
+    console.log(`\nFAIL: only ${quads.length} hulls on the map`);
+    process.exit(1);
+  }
+  if (quads.some(q => q < 200)) {
+    console.log(`\nFAIL: a hull is ${Math.min(...quads)} quads, which is not a ship`);
+    process.exit(1);
+  }
+  const total = quads.reduce((a, b) => a + b, 0);
+  if (total > 24000) {
+    console.log(`\nFAIL: ${total} quads of hull on screen, which is a budget rather than a ship`);
+    process.exit(1);
+  }
+  log(`hulls are drawn from their own cells: ${quads.join(', ')} quads, ${total} in all`);
+}
+
 async function checkNothingIsBuried() {
   await sheet(true);
   await assertNothingBuried('an open sheet');
@@ -322,6 +368,16 @@ async function playMatch() {
   const endBtn = page.locator('#bEnd');
   if (await endBtn.isDisabled()) { outcome = 'End Turn was disabled while planning'; break; }
   await tap('#bEnd');
+
+  // Cells come off a hull where it was hit, and the chunks fly. Sampled until
+  // chunks are actually seen, because an early turn where nothing connects is
+  // an early turn where nothing should fly: waiting for the first two turns
+  // and giving up is a check that fails on a match that opened at long range.
+  if (!chunksSeen) {
+    await page.waitForTimeout(1500);
+    const d = await page.evaluate(() => window.ftDebug.damage());
+    chunksSeen = Math.max(chunksSeen, d.chunks);
+  }
 
   // Playback must run out and hand control back. A turn that never returns to
   // planning is the freeze this harness exists to catch.
