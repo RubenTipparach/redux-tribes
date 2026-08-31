@@ -39,7 +39,11 @@ jobs:
         with: { node-version: '22' }
       - run: node prototype/cli.js test
       - name: Generated assets match their generators (GUIDELINES rule 3)
-        run: python3 tools/make_ember_texture.py --check
+        run: |
+          python3 tools/make_ember_texture.py --check
+          python3 tools/make_surface_textures.py --check
+      - name: Mockups match their sources (GUIDELINES rule 2.1)
+        run: python3 tools/build_mockups.py --check
       - name: No dashes anywhere (GUIDELINES rule 1)
         run: |
           if grep -rlP '[\x{2013}\x{2014}]' --exclude-dir=.git --exclude-dir=vendor \

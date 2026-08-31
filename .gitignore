@@ -5,3 +5,7 @@ target/
 *.db-wal
 *.db-shm
 web/public/sim_core.wasm
+
+# Python bytecode, a build artifact of the texture generators.
+__pycache__/
+*.pyc

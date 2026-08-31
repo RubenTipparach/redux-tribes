@@ -46,19 +46,19 @@ answered 403 through the agent proxy. So this file holds the same contract a
 real export would, and the first session that can install Material Maker should
 replace it with a `.ptex` graph committed beside the PNG.
 
-No third party imaging library: the PNG encoder below is thirty lines and the
-alternative is a dependency in a repo that has none.
+The noise, the PNG encoder and the drift check live in `texkit.py`, because a
+second generator wanted all three and two copies of a thing is one copy too many
+(GUIDELINES 5.1).
 """
 
 import argparse
 import hashlib
-import math
-import struct
 import sys
-import zlib
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from texkit import ROOT, encode_png, fbm, value_noise   # noqa: E402
+
 OUT = ROOT / "web" / "public" / "ember.png"
 
 TILE = 64
@@ -93,52 +93,6 @@ CRACK_EDGE = 0.84
 # samples as char at this size and goes out, which is exactly what the first
 # cut did on a ship.
 TARGET_HOT = 0.52
-
-
-def rng(seed: int):
-    """A tiny deterministic generator, so a regeneration is bit identical."""
-    state = seed & 0xFFFFFFFF
-
-    def nxt() -> float:
-        nonlocal state
-        state = (state * 1664525 + 1013904223) & 0xFFFFFFFF
-        return state / 0x100000000
-
-    return nxt
-
-
-def value_noise(period: int, seed: int):
-    """Periodic value noise on a `period` x `period` lattice.
-
-    Periodic so a tile meets itself without a seam, which matters because a
-    face may be seen next to another face carrying the same tile.
-    """
-    r = rng(seed)
-    lattice = [[r() for _ in range(period)] for _ in range(period)]
-
-    def at(x: float, y: float) -> float:
-        fx, fy = x * period, y * period
-        x0, y0 = int(math.floor(fx)), int(math.floor(fy))
-        tx, ty = fx - x0, fy - y0
-        # Smoothstep, so the lattice does not show as a grid of diamonds.
-        tx = tx * tx * (3 - 2 * tx)
-        ty = ty * ty * (3 - 2 * ty)
-        a = lattice[y0 % period][x0 % period]
-        b = lattice[y0 % period][(x0 + 1) % period]
-        c = lattice[(y0 + 1) % period][x0 % period]
-        d = lattice[(y0 + 1) % period][(x0 + 1) % period]
-        return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty
-
-    return at
-
-
-def fbm(x: float, y: float, octaves, ) -> float:
-    total, amp, norm = 0.0, 1.0, 0.0
-    for oct_at in octaves:
-        total += amp * oct_at(x, y)
-        norm += amp
-        amp *= 0.5
-    return total / norm
 
 
 def lava(t: float):
@@ -217,19 +171,7 @@ def main() -> int:
             r, g, b = lava(min(1.0, max(0.0, t + bias * (1.0 - abs(2 * t - 1)))))
             rows += bytes((int(255 * r), int(255 * g), int(255 * b)))
 
-    raw = bytearray()
-    for y in range(SIZE):
-        raw.append(0)                      # filter 0, none
-        raw += rows[y * SIZE * 3:(y + 1) * SIZE * 3]
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return (struct.pack(">I", len(data)) + kind + data
-                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
-
-    png = (b"\x89PNG\r\n\x1a\n"
-           + chunk(b"IHDR", struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0))
-           + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-           + chunk(b"IEND", b""))
+    png = encode_png(SIZE, SIZE, bytes(rows))
 
     if args.check:
         if not OUT.exists():
