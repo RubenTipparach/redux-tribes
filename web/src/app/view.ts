@@ -312,6 +312,21 @@ export class View {
   #carved = new Map<number, Carved>();
   /** Each ship's turrets, built with its hull and posed every frame. */
   #rigs = new Map<number, Rig[]>();
+  /**
+   * Whether the CORE says a mount has been knocked off, ship and mount index.
+   *
+   * Handed in rather than reached for, because the view draws and does not own
+   * a match. Absent until the console sets it, and a view with no answer keeps
+   * every turret, which is the safe way round: drawing a gun that is gone is a
+   * wrong picture, and taking one off that is still there is a wrong picture
+   * AND a player wondering where their weapon went.
+   */
+  #mountGone: ((ship: number, mount: number) => boolean) | null = null;
+
+  /** Tell the view how to ask whether a mount is still on its hull. */
+  setMountGone(fn: (ship: number, mount: number) => boolean): void {
+    this.#mountGone = fn;
+  }
   /** What each hull's guns are tracking, in world space. Set by the console,
    *  because WHO a ship is shooting at is a match fact and this only draws
    *  where the barrels ended up. */
@@ -462,7 +477,7 @@ export class View {
     ];
   }
 
-  #applyHit(c: Carved, h: HullHit): void {
+  #applyHit(id: number, c: Carved, h: HullHit): void {
     const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
     const born: Debris[] = [];
 
@@ -511,22 +526,14 @@ export class View {
       }
     }
 
-    // Knocked loose. A mount is bolted to the frame and plating around it, and
-    // when every one of those cells is gone there is nothing holding it on, so
-    // it goes too, in one piece and at the same tick. This is the only way a
-    // turret leaves a hull, which is what makes the rule above hold: it is
-    // whole, or it is not there.
+    // A mount that has been knocked off is taken off, and the CORE says which:
+    // `mountGone` is the resolver's own answer, permanent, and the same one
+    // that stops the gun firing. This used to be decided here, from whether
+    // every cell bolting a turret on had gone, which made the renderer the
+    // author of a rule the simulation did not know about: the turret vanished
+    // and the gun kept shooting out of the empty socket. One rule, asked.
     for (let r = 0; r < c.hull.rigs.length; r++) {
-      const holds = c.hull.rigSupport[r];
-      // A mount with nothing recorded as holding it can never come off. That
-      // is deliberate: it means the design put it somewhere this cannot reason
-      // about, and dropping it on a guess is worse than leaving it standing.
-      if (!holds || !holds.length) continue;
-      let attached = false;
-      for (const n of holds) {
-        if (!c.cells.has(n)) { attached = true; break; }
-      }
-      if (attached) continue;
+      if (!this.#mountGone || !this.#mountGone(id, r)) continue;
       const own = c.hull.rigCells[r];
       if (!own) continue;
       for (const n of own) {
@@ -1526,7 +1533,7 @@ export class View {
       if (h.tick > tick) continue;
       const c = this.#carveOf(h.ship);
       if (!c) continue;
-      if (h.tick > c.upTo) this.#applyHit(c, h);
+      if (h.tick > c.upTo) this.#applyHit(h.ship, c, h);
       const age = (tick - h.tick) / DEBRIS_TICKS;
       if (age >= 0 && age < 1) {
         for (const d of c.born.get(h.tick) ?? []) {

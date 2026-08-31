@@ -102,15 +102,6 @@ export interface HullMesh {
   readonly rigOfCell: ReadonlyMap<number, number>;
   /** Every cell of each rig, so a mount can be taken off in one piece. */
   readonly rigCells: ReadonlyArray<Int32Array>;
-  /**
-   * What bolts each rig to the ship: the solid cells touching it that are not
-   * part of a turret themselves.
-   *
-   * A mount is never partly shot away, so the only way one leaves a hull is
-   * for everything holding it to go. This is that set, and when all of it is
-   * gone the turret is knocked loose.
-   */
-  readonly rigSupport: ReadonlyArray<Int32Array>;
 }
 
 /**
@@ -418,28 +409,6 @@ export function hullMesh(d: Design): HullMesh {
     (rigCells[r] as number[]).push(n);
   }
 
-  // What holds each one on. Filled only after every rig's cells are known, so
-  // one turret standing against another is not mistaken for the structure
-  // bolting it down.
-  const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
-    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
-  ];
-  const rigSupport: Int32Array[] = rigs.map(() => new Int32Array(0));
-  rigCells.forEach((cells, r) => {
-    const holds = new Set<number>();
-    for (const n of cells) {
-      const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
-      for (const [di, dj, dk] of NEIGHBOURS) {
-        const ni = i + di, nj = j + dj, nk = k + dk;
-        if (ni < 0 || nj < 0 || nk < 0 || ni >= NX || nj >= NY || nk >= NZ) continue;
-        const m = idx(ni, nj, nk);
-        if (!grid[m] || rigOfCell.has(m)) continue;
-        holds.add(m);
-      }
-    }
-    rigSupport[r] = new Int32Array([...holds].sort((x, y) => x - y));
-  });
-
   const out: HullMesh = {
     geo,
     cell,
@@ -447,7 +416,6 @@ export function hullMesh(d: Design): HullMesh {
     rigs,
     rigOfCell,
     rigCells: rigCells.map(v => new Int32Array(v)),
-    rigSupport,
     cellOf: new Int32Array(cellOf),
     centre,
     quads,

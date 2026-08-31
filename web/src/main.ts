@@ -75,6 +75,9 @@ useCore((cls, geo, parts) => sim.derive(cls, geo, parts));
 // core's definition of its own mask, not something to rebuild out of Math.sin.
 useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 const view = new View(canvas, match, sim);
+// The map takes a turret off when the CORE says the mount has gone, rather
+// than working it out from the hull it drew.
+view.setMountGone((ship, mount) => match.mountGone(ship, mount));
 
 let seed = randomSeed();
 let ships: ShipState[] = [];
