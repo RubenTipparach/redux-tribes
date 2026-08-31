@@ -834,25 +834,31 @@ async function playMatch() {
   // chunks are actually seen, because an early turn where nothing connects is
   // an early turn where nothing should fly: waiting for the first two turns
   // and giving up is a check that fails on a match that opened at long range.
-  if (!chunksSeen) {
-    await page.waitForTimeout(1500);
-    const d = await page.evaluate(() => window.ftDebug.damage());
-    chunksSeen = Math.max(chunksSeen, d.chunks);
-  }
-
-  // Where the shot effects are actually drawn. Sampled through the playback
-  // rather than once, because a beam lasts a few ticks and a blast a few more,
-  // so a single look almost always finds an empty screen.
-  for (let s = 0; s < 12; s++) {
-    await page.waitForTimeout(220);
-    const fx = await page.evaluate(() => window.ftDebug.fx());
-    for (const b of fx.onHull) {
+  // ONE pass over the playback for everything that only exists while a turn is
+  // being watched: chunks in the air, blasts, beams. Every one of them lives a
+  // few ticks, so a single look at a fixed moment mostly finds an empty screen.
+  //
+  // The chunks check used to take exactly that single look, 1500 ms after End
+  // Turn, and it went red twice on runs where the look landed in a gap: not a
+  // defect in the game, and not a flake to wait out either, but a check asking
+  // a question at one instant about something that is only true at some
+  // instants. Sampling it the same way the other two are sampled fixes it, and
+  // one loop is the right number of loops over one playback.
+  for (let s = 0; s < 16; s++) {
+    const snap = await page.evaluate(() => ({
+      chunks: window.ftDebug.damage().chunks,
+      fx: window.ftDebug.fx(),
+      done: window.ftDebug.playing() === null,
+    }));
+    chunksSeen = Math.max(chunksSeen, snap.chunks);
+    for (const b of snap.fx.onHull) {
       if (b.kill || !b.hullR) continue;
       blastsSeen++;
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
-    for (const len of fx.beamLen) longestBeam = Math.max(longestBeam, len);
-    if (await page.evaluate(() => window.ftDebug.playing() === null)) break;
+    for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);
+    if (snap.done) break;
+    await page.waitForTimeout(200);
   }
 
   // Playback must run out and hand control back. A turn that never returns to
