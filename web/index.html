@@ -363,6 +363,18 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #inspect { grid-column:2; grid-row:2; position:relative; z-index:5;
   pointer-events:none; overflow:hidden; }
 #inspect.hidden { display:none; }
+/* The part tooltip: what the pointer is resting on, out on the map. A sibling
+   of the canvas and pointer transparent, because a label that swallowed the
+   pointer would be a label that hides the thing it names the moment it
+   appears, and then flickers as the pointer leaves it again. */
+#partTip { position:fixed; z-index:9; pointer-events:none;
+  max-width:230px; padding:5px 8px; border-radius:6px;
+  font-size:11px; line-height:1.4; color:var(--ink);
+  background:#0d141df2; border:1px solid var(--line);
+  -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
+#partTip.hidden { display:none; }
+#partTip .nm { font-weight:600; }
+#partTip .sub { color:var(--dim); display:block; margin-top:2px; }
 .ibox { position:absolute; pointer-events:auto;
   width:max-content; max-width:200px; padding:4px 7px; border-radius:5px;
   font-size:10px; line-height:1.35; color:var(--ink);
@@ -1391,6 +1403,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
        from the projection of each volume, so they follow the ship rather than
        the ship having to hold still for them. -->
   <div id="inspect" class="hidden" aria-hidden="true"></div>
+  <!-- What the pointer is resting on out on the map. Follows the cursor, so it
+       is fixed to the viewport rather than to the canvas grid cell. -->
+  <div id="partTip" class="hidden" aria-hidden="true"></div>
   <!-- Offered only once the camera is actually looking at a ship, which is why
        it lives on the canvas and not in the rail: it is about where the camera
        is standing, and the rail cannot say. -->

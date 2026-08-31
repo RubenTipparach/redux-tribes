@@ -55,7 +55,8 @@ export interface SchematicVolume {
   readonly hpMax: number;
   readonly dead: boolean;
   readonly blockPct: number;
-  readonly radius: number;
+  /** Half extents of the box, in the hull's own frame. */
+  readonly half: Vec3;
   /** In the HULL's own frame, which is the frame its mesh is built in. */
   readonly at: Vec3;
 }
@@ -85,6 +86,9 @@ export class Schematic {
   #ray = new THREE.Raycaster();
   #centre = new THREE.Vector3();
   #half = new THREE.Vector3(1, 1, 1);
+  /** The HULL's own extents, without the volumes the frame also holds: the
+   *  camera may come right up to the plating and no closer. */
+  #solid = new THREE.Vector3(1, 1, 1);
   #subject: SchematicSubject | null = null;
   /** Which volume the pointer or the list is on, by index, or -1. */
   #hot = -1;
@@ -184,7 +188,7 @@ export class Schematic {
     if (!this.#renderer) return;
     // Reframed per frame rather than on demand: the viewport changes size when
     // a phone turns, and the fit depends on the aspect it is solving for.
-    frameBox(this.#camera, this.#cam, this.#centre, this.#half);
+    frameBox(this.#camera, this.#cam, this.#centre, this.#half, this.#solid);
     this.#renderer.render(this.#scene, this.#camera);
   };
 
@@ -227,10 +231,13 @@ export class Schematic {
         color: hue, wireframe: true, transparent: true, opacity: QUIET_CAGE, depthWrite: false,
       });
       this.#owned.push(skin, wire);
-      // Coarse on purpose. At 20 x 14 six overlapping cages are a ball of wool
-      // with a ship somewhere inside it; at 12 x 8 they read as spheres and the
-      // hull reads through them.
-      const geo = new THREE.SphereGeometry(v.radius, 12, 8);
+      // A BOX, because that is the shape the resolver tests against. Spheres
+      // were drawn here first and they were a ball of wool with a ship
+      // somewhere inside it: a sphere big enough to hold a drive bay stands
+      // proud of the plating on all six sides, and six of them overlapped into
+      // one lump. The volumes are boxes in the core now and this draws them at
+      // the extents it is given.
+      const geo = new THREE.BoxGeometry(v.half.x * 2, v.half.y * 2, v.half.z * 2);
       this.#geoms.push(geo);
       const ball = new THREE.Mesh(geo, skin);
       ball.position.set(v.at.x, v.at.y, v.at.z);
@@ -240,9 +247,9 @@ export class Schematic {
       this.#spheres.push({ index: v.index, mesh: ball, cage });
     }
 
-    // Framed on the hull AND its volumes: a drive bell sphere can stand proud
-    // of the plating, and a marker cropped at the edge of the viewport is the
-    // one a player was looking for. Around the box the two make together, not
+    // Framed on the hull AND its volumes: a box can stand proud of the
+    // plating, and a marker cropped at the edge of the viewport is the one a
+    // player was looking for. Around the box the two make together, not
     // around the origin: a hull is not symmetric about the point it turns on.
     let lo = [
       hull.mid[0] - hull.half[0], hull.mid[1] - hull.half[1], hull.mid[2] - hull.half[2],
@@ -252,8 +259,9 @@ export class Schematic {
     ];
     for (const v of s.volumes) {
       const at = [v.at.x, v.at.y, v.at.z];
-      lo = lo.map((n, i) => Math.min(n, (at[i] as number) - v.radius));
-      hi = hi.map((n, i) => Math.max(n, (at[i] as number) + v.radius));
+      const h = [v.half.x, v.half.y, v.half.z];
+      lo = lo.map((n, i) => Math.min(n, (at[i] as number) - (h[i] as number)));
+      hi = hi.map((n, i) => Math.max(n, (at[i] as number) + (h[i] as number)));
     }
     this.#centre.set(
       ((lo[0] as number) + (hi[0] as number)) / 2,
@@ -265,6 +273,8 @@ export class Schematic {
       Math.max(0.2, ((hi[1] as number) - (lo[1] as number)) / 2),
       Math.max(0.2, ((hi[2] as number) - (lo[2] as number)) / 2),
     );
+    this.#solid.set(
+      Math.max(0.2, hull.half[0]), Math.max(0.2, hull.half[1]), Math.max(0.2, hull.half[2]));
 
     this.#paintMarks();
     this.#renderHead();
@@ -380,14 +390,24 @@ export class Schematic {
         ? '<b>Offline.</b> '
         : `<b>${v.hp.toFixed(0)}</b> of ${v.hpMax.toFixed(0)} (${pct.toFixed(0)}%). `}`
       + `Soaks <b>${v.blockPct.toFixed(0)}%</b> of a hit that reaches it; the rest `
-      + `goes through to the hull. Volume radius <b>${v.radius.toFixed(2)}</b> u.`
+      + `goes through to the hull. Box `
+      + `<b>${(v.half.x * 2).toFixed(1)} x ${(v.half.y * 2).toFixed(1)}`
+      + ` x ${(v.half.z * 2).toFixed(1)}</b> u.`
       + `</p>`
       + `<p class="sub">${SUB_BLURB[v.kind] ?? ''}</p>`;
   }
 
   /** For the harness: what is on screen, without letting it write any of it. */
-  debug(): { title: string; volumes: number; hot: number } {
+  debug(): {
+    title: string; volumes: number; hot: number;
+    cam: { yaw: number; pitch: number; dist: number };
+  } {
     return {
+      cam: {
+        yaw: +this.#cam.yaw.toFixed(3),
+        pitch: +this.#cam.pitch.toFixed(3),
+        dist: +this.#camera.position.distanceTo(this.#centre).toFixed(3),
+      },
       title: this.#subject?.title ?? '',
       volumes: this.#subject?.volumes.length ?? 0,
       hot: this.#hot,

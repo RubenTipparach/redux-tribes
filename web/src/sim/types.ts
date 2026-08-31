@@ -221,7 +221,9 @@ export interface SubState {
   readonly hpMax: number;
   readonly dead: boolean;
   readonly pos: Vec3;
-  readonly radius: number;
+  /** Half extents of the BOX, in the SHIP's own frame. A volume is a box, so
+   *  drawing or picking one means orienting it by the hull's quaternion. */
+  readonly half: Vec3;
   readonly blockPct: number;
 }
 

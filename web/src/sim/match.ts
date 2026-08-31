@@ -28,7 +28,7 @@ const DERIVE_PARTS = OUT + 32;
  *  different effects and nothing fits. */
 const WEAPON_KEY: Record<string, number> = { beam: 0, projectile: 1, missile: 3 };
 const SHIP_STRIDE = 34;
-const SUB_STRIDE = 11;
+const SUB_STRIDE = 13;
 const EVENT_STRIDE = 14;
 const POSE_STRIDE = 9;
 const PROJ_STRIDE = 5;
@@ -336,8 +336,8 @@ export class Match {
         hpMax: s[b + 4] ?? 1,
         dead: (s[b + 5] ?? 0) !== 0,
         pos: v3(s, b + 6),
-        radius: s[b + 9] ?? 1,
-        blockPct: s[b + 10] ?? 0,
+        half: v3(s, b + 9),
+        blockPct: s[b + 12] ?? 0,
       });
     }
     return out;

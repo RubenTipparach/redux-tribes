@@ -75,6 +75,30 @@
     return (t >= 0 && t <= 1) ? t : -1;
   }
 
+  // segment (a->b) vs the axis aligned box (c +/- half), both endpoints
+  // already in the box's own frame: t in [0,1] of the first intersection, or
+  // -1. The slab method, with a zero direction tested against the slab rather
+  // than divided by: an infinity through the min/max chain becomes a NaN, and
+  // every NaN comparison is false, so a hit reads as a miss.
+  function segBox(a, b, c, half) {
+    const d = V.sub(b, a);
+    let lo = 0, hi = 1;
+    const axes = [["x", half.x], ["y", half.y], ["z", half.z]];
+    for (const [k, h] of axes) {
+      const min = c[k] - h, max = c[k] + h;
+      if (Math.abs(d[k]) < 1e-9) {
+        if (a[k] < min || a[k] > max) return -1;
+        continue;
+      }
+      const t0 = (min - a[k]) / d[k], t1 = (max - a[k]) / d[k];
+      const near = Math.min(t0, t1), far = Math.max(t0, t1);
+      if (near > lo) lo = near;
+      if (far < hi) hi = far;
+      if (lo > hi) return -1;
+    }
+    return lo;
+  }
+
   // Raycast a segment against every live ship, naming the subsystem volume it
   // struck if it struck one. Returns { ship, sub|null, t, pos } or null.
   //
@@ -89,10 +113,15 @@
       if (ship.destroyed || ship.id === ignoreShipId) continue;
       const cls = SHIP_CLASSES[ship.classKey];
       const hullT = segSphere(a, b, ship.pos, cls.radius);
+      // The volumes are boxes in the SHIP's frame, so the segment goes into
+      // that frame once and the six slab tests are then axis aligned.
+      const inv = Q.inv(ship.quat);
+      const la = Q.rot(inv, V.sub(a, ship.pos));
+      const lb = Q.rot(inv, V.sub(b, ship.pos));
       let subHit = null;
       for (const sub of ship.subsystems) {
         if (sub.dead) continue;
-        const t = segSphere(a, b, subWorldPos(ship, sub), sub.radius);
+        const t = segBox(la, lb, sub.offset, sub.half);
         if (t >= 0 && (!subHit || t < subHit.t)) subHit = { sub, t };
       }
       // Where the segment reaches this hull at all: the sphere if it clipped

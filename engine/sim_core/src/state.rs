@@ -52,7 +52,7 @@ impl Faction {
 #[derive(Clone, Debug)]
 pub struct Sub {
     /// Index into the class's static subsystem table, which carries the
-    /// unchanging half (id, kind, offset, radius, block share).
+    /// unchanging half (id, kind, offset, box, block share).
     pub def: usize,
     pub hp: f32,
     pub max_hp: f32,
@@ -485,6 +485,43 @@ impl Sim {
         }
     }
 
+    /// Segment a->b against the axis aligned box (c +/- half): the parameter
+    /// of the first intersection in [0, 1], or None. Both endpoints must
+    /// already be in the box's own frame.
+    ///
+    /// The slab method: clip the parameter range against each pair of faces
+    /// in turn and see whether anything survives. Divisions and comparisons
+    /// only, so it is portable; a zero component is handled by testing the
+    /// origin against that slab rather than by dividing, because an infinity
+    /// through the min/max chain is a NaN waiting to happen.
+    pub fn seg_box(a: V3, b: V3, c: V3, half: V3) -> Option<f32> {
+        let d = b.sub(a);
+        let (mut lo, mut hi) = (0.0f32, 1.0f32);
+        let axes = [(a.x, d.x, c.x, half.x), (a.y, d.y, c.y, half.y), (a.z, d.z, c.z, half.z)];
+        for (o, dir, ce, h) in axes {
+            let (min, max) = (ce - h, ce + h);
+            if dir.abs() < 1e-9 {
+                if o < min || o > max {
+                    return None;
+                }
+                continue;
+            }
+            let t0 = (min - o) / dir;
+            let t1 = (max - o) / dir;
+            let (near, far) = if t0 <= t1 { (t0, t1) } else { (t1, t0) };
+            if near > lo {
+                lo = near;
+            }
+            if far < hi {
+                hi = far;
+            }
+            if lo > hi {
+                return None;
+            }
+        }
+        Some(lo)
+    }
+
     /// Sweep a segment against every live ship and return the nearest hit,
     /// naming the subsystem volume it struck if it struck one.
     ///
@@ -504,13 +541,21 @@ impl Sim {
                 continue;
             }
             let hull_t = Self::seg_sphere(a, b, ship.pos, ship.radius);
+            // The volumes are boxes in the SHIP's frame, so the segment goes
+            // into that frame once and the six slab tests are then axis
+            // aligned. Rotating a box into the world instead would be an
+            // oriented box test per volume, which is the same answer for more
+            // arithmetic and more places to disagree.
+            let inv = ship.quat.inv();
+            let la = inv.rot(a.sub(ship.pos));
+            let lb = inv.rot(b.sub(ship.pos));
             let mut sub_hit: Option<(usize, f32)> = None;
             for (bi, sub) in ship.subs.iter().enumerate() {
                 if sub.dead {
                     continue;
                 }
                 let def = &ship.class_def().subsystems[sub.def];
-                if let Some(t) = Self::seg_sphere(a, b, ship.sub_world_pos(sub), def.radius) {
+                if let Some(t) = Self::seg_box(la, lb, def.offset, def.half) {
                     if sub_hit.is_none_or(|(_, u)| t < u) {
                         sub_hit = Some((bi, t));
                     }

@@ -27,9 +27,28 @@
 import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, Mat,
-  armourColour, cellColour, frameFor, rasterise, rasterSig,
+  armourColour, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
   type Design,
 } from './design.js';
+
+/**
+ * One gun on a hull, as the map needs it: where it turns and which quads turn
+ * with it.
+ *
+ * In `mountsOf` order, which is the core's weapon index, so rig `n` is the
+ * mount the resolver calls `n` and the arc mask `arcMasks(d)[n]` describes.
+ * Three lists in the same order rather than three lookups.
+ */
+export interface HullRig {
+  /** The weapon key, for naming it. */
+  readonly key: string;
+  /** Which placement it is, so a pick can name the part. */
+  readonly part: number;
+  /** The socket it turns on, in ship units. */
+  readonly pivot: readonly [number, number, number];
+  /** The rest facing the design gave it, in radians about the up axis. */
+  readonly rest: number;
+}
 
 export interface HullMesh {
   readonly geo: THREE.BufferGeometry;
@@ -69,6 +88,10 @@ export interface HullMesh {
    * the difference off the edge of the picture.
    */
   readonly mid: readonly [number, number, number];
+  /** Which rig each QUAD belongs to, or -1 for the hull itself. */
+  readonly rigOf: Int32Array;
+  /** The guns, in the core's own mount order. */
+  readonly rigs: readonly HullRig[];
 }
 
 /**
@@ -153,8 +176,33 @@ export function hullMesh(d: Design): HullMesh {
 
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
-  const { grid, purp } = rasterise(d);
+  const { grid, purp, own } = rasterise(d);
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
+
+  // The guns, and which placement each one is, so the quads that belong to a
+  // turret can be turned without moving the hull it is bolted to. Walked the
+  // same way `mountsOf` walks it, because the order IS the core's weapon
+  // index: a rig that did not line up would swing the wrong barrel.
+  const socks = socketsOf(frame, d.parts);
+  const rigs: HullRig[] = [];
+  const rigOfPart = new Map<number, number>();
+  d.parts.forEach((p, pi) => {
+    const m = moduleById(p.module);
+    if (!m?.weapon) return;
+    const sock = socks.find(k => k.id === p.socket);
+    if (!sock) return;
+    rigOfPart.set(pi, rigs.length);
+    rigs.push({
+      key: m.weapon,
+      part: pi,
+      pivot: [
+        ((sock.at[0] as number) - NX / 2) * cell,
+        ((sock.at[1] as number) - NY / 2) * cell,
+        ((sock.at[2] as number) - NZ / 2) * cell,
+      ],
+      rest: -(p.rot ?? 0) * Math.PI / 2,
+    });
+  });
 
   // What the outside can reach: a flood fill through empty cells from the
   // boundary of the lattice. "Any empty neighbour" is not the same question: a
@@ -329,9 +377,17 @@ export function hullMesh(d: Design): HullMesh {
     centre[q * 3 + 2] = (k - NZ / 2 + 0.5) * cell;
   }
 
+  const rigOf = new Int32Array(quads);
+  for (let q = 0; q < quads; q++) {
+    const owner = own[cellOf[q] as number] as number;
+    rigOf[q] = owner > 0 ? (rigOfPart.get(owner - 1) ?? -1) : -1;
+  }
+
   const out: HullMesh = {
     geo,
     cell,
+    rigOf,
+    rigs,
     cellOf: new Int32Array(cellOf),
     centre,
     quads,
