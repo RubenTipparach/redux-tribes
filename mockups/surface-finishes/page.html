@@ -161,11 +161,14 @@ change. <b>Specular shading</b> swaps Lambert for Phong to show what a highlight
 on top, which is more, and is a separate decision with its own cost.</div>
 
 <h2><span class="num">3</span> Windows are a decal, and the paint stays underneath</h2>
-<p class="say">A window is not a colour. It is a recess in the normals and a glow in the
-emission, laid over a cell that keeps whatever the player painted it: paint the hull
-Karisen rust and the porthole is a lit window in a rust coloured hull, not a sticker.
-Two window cells side by side merge into one quad carrying two windows, because the
-decal tiles like every other texture here.</p>
+<p class="say">A window is three maps, not one. A recess in the normals, a glow in the
+emission, and between them the one that matters: a glass map that MULTIPLIES the hull's
+paint down to nearly nothing where the glass is. Without it an unlit pane is plain armour
+in the armour's own colour, which is a rectangle of hull where a window should be, and a
+lit pane reads as the hull's colour with a wash over it rather than as light coming out.
+The frame keeps the paint, so paint the hull Karisen rust and it is a window in a rust
+coloured hull rather than a sticker. Two window cells side by side merge into one quad
+carrying two windows, because the decal tiles like every other texture here.</p>
 <p class="say">Press <b>Lights out</b> above to kill the key light and see what the
 emission alone is doing. Not every pane is lit: one dark pane in four is what makes a
 row of windows read as a ship with somebody aboard rather than as a texture.</p>
@@ -257,6 +260,7 @@ FINISH.forEach(function (f) { if (f[0] !== 'smooth') want.push(['armour_' + f[0]
 WINDOW.forEach(function (w) {
   want.push(['window_' + w[0] + '_n', false]);
   want.push(['window_' + w[0] + '_e', true]);
+  want.push(['window_' + w[0] + '_c', true]);
 });
 
 var left = want.length;
@@ -742,6 +746,12 @@ function ship() {
         })
       : new THREE.MeshLambertMaterial({ color: colourOf(role) });
     if (role.indexOf('win:') === 0) {
+      // Three maps, and the middle one is the point. `map` MULTIPLIES the
+      // colour, so the glass takes the hull's paint down to nearly nothing and
+      // the emission then adds whatever is on inside. Without it an unlit pane
+      // is plain armour in the armour's own colour, which is a rectangle of
+      // hull where a window should be.
+      m.map = TEX['window_' + state.windows + '_c'] || null;
       m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
       m.emissive = new THREE.Color(0xffffff);
       m.emissiveIntensity = 1.0;
@@ -788,6 +798,7 @@ function ship() {
       var m = mats[role], r = baseRole(role);
       m.color.setHex(colourOf(role));
       if (role.indexOf('win:') === 0) {
+        m.map = TEX['window_' + state.windows + '_c'] || null;
         m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
       }
       if (m.metalness !== undefined) {

@@ -13,8 +13,9 @@ zooms in on one hull. Two things fix that without touching a single rule:
   that colour is lit as though it had that surface, and
 
   a WINDOW DECAL per cell, painted on in the shipyard, which adds a recess to
-  the normals and a glow to the emission while the cell keeps the paint colour
-  it already had.
+  the normals, takes the hull's paint off the glass, and puts a glow behind it.
+  Three maps, and the middle one is the one that makes an unlit window read as
+  a window rather than as a rectangle of hull.
 
 Neither changes an outcome, so neither crosses the boundary: meshes and
 materials are the client's business (CLAUDE.md, the boundary). What a player
@@ -307,8 +308,18 @@ WARM = (1.00, 0.86, 0.62)     # lived in: galley light, crew spaces
 DEEP = (1.00, 0.62, 0.26)     # the falloff at the edge of a warm pane
 COOL = (0.80, 0.92, 1.00)     # instrument light, which is what a bridge is
 AMBER = (1.00, 0.72, 0.20)    # running lights and bay markers
-# How much an UNLIT pane still gives back. Not zero: see `_panes`.
-DARK_PANE = 0.16
+
+# How dark the GLASS is, as a multiplier on whatever the hull is painted.
+#
+# This is the map the first two cuts did not have, and not having it is why a
+# window with its light off looked like no window at all. Emission only ADDS:
+# it can put a glow on a pane and it cannot take the hull's paint off one, so
+# an unlit pane rendered as plain armour in the armour's own colour, which on a
+# blue hull is a blue rectangle indistinguishable from the plating around it.
+# A window is dark glass. It multiplies the paint down to nearly nothing and
+# THEN the emission adds whatever is on inside, which is also why a lit pane
+# now reads in its own colour instead of the hull's colour plus a wash.
+GLASS = 0.06
 
 
 def lerp3(a, b, t):
@@ -346,16 +357,21 @@ def _panes(spec):
             if x0 < x < x1 and y0 < y < y1:
                 inset = min(x - x0, x1 - x, y - y0, y1 - y)
                 k = smoothstep(0.0, 0.026, inset)
-                # A pane with nothing on behind it is cold glass catching the
-                # sky, not an absence. Below a quarter lit it takes the cool
-                # tint and a floor, so it still reads as a window.
-                if lit < 0.25:
-                    return tuple(v * DARK_PANE * (0.45 + 0.55 * k) for v in COOL)
+                # A pane with nothing on behind it emits nothing. It is still
+                # obviously a window, because the glass map has taken the
+                # hull's paint off it and left it black.
                 return tuple(v * lit * (0.35 + 0.65 * k)
                              for v in lerp3(cold, hot, k))
         return (0.0, 0.0, 0.0)
 
-    return height, emission
+    def glass(x, y):
+        for (x0, y0, x1, y1, _lit) in spec:
+            if x0 < x < x1 and y0 < y < y1:
+                inset = min(x - x0, x1 - x, y - y0, y1 - y)
+                return smoothstep(0.0, 0.012, inset)
+        return 0.0
+
+    return height, emission, glass
 
 
 def w_porthole():
@@ -376,7 +392,12 @@ def w_porthole():
         # from the centre reads as a lit BALL rather than as a lit room.
         k = smoothstep(0.252, 0.205, r)
         return tuple(v * (0.30 + 0.70 * k) for v in lerp3(DEEP, WARM, k))
-    return height, emission
+
+    def glass(x, y):
+        dx, dy = x - 0.5, y - 0.5
+        r = (dx * dx + dy * dy) ** 0.5
+        return smoothstep(0.262, 0.248, r)
+    return height, emission, glass
 
 
 def w_panes():
@@ -387,8 +408,8 @@ def w_panes():
         for bx in (0.5 + g, 0.5 - g - 0.30):
             spec.append((bx, by, bx + 0.30, by + 0.30, lit[i]))
             i += 1
-    height, emission = _panes(spec)
-    return height, lambda x, y: emission(x, y, WARM, DEEP)
+    height, emission, glass = _panes(spec)
+    return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
 def w_strip():
@@ -398,8 +419,8 @@ def w_strip():
     for i in range(n):
         x0 = 0.10 + i * (0.80 / n)
         spec.append((x0 + 0.014, 0.40, x0 + 0.80 / n - 0.014, 0.60, lit[i]))
-    height, emission = _panes(spec)
-    return height, lambda x, y: emission(x, y, WARM, DEEP)
+    height, emission, glass = _panes(spec)
+    return height, lambda x, y: emission(x, y, WARM, DEEP), glass
 
 
 def w_bridge():
@@ -423,7 +444,10 @@ def w_bridge():
         d = min(0.68 - y, y - 0.32)
         k = smoothstep(0.0, 0.05, d)
         return tuple(v * (0.45 + 0.55 * k) for v in lerp3(WARM, COOL, k))
-    return height, emission
+
+    def glass(x, y):
+        return 1.0 if shape(x, y) else 0.0
+    return height, emission, glass
 
 
 def w_beacons():
@@ -448,7 +472,15 @@ def w_beacons():
                 k = smoothstep(0.062, 0.0, r)
                 return tuple(v * (0.25 + 0.75 * k) for v in lerp3(AMBER, (1, 1, 0.92), k))
         return (0.0, 0.0, 0.0)
-    return height, emission
+
+    def glass(x, y):
+        out = 0.0
+        for (cx, cy) in pts:
+            dx, dy = x - cx, y - cy
+            r = (dx * dx + dy * dy) ** 0.5
+            out = max(out, smoothstep(0.068, 0.056, r))
+        return out
+    return height, emission, glass
 
 
 def w_hangar():
@@ -473,7 +505,13 @@ def w_hangar():
         floor = smoothstep(0.70, 0.24, y)
         c = lerp3(DEEP, (1.0, 0.93, 0.80), k)
         return tuple(v * (0.20 + 0.80 * k) * (0.55 + 0.45 * floor) for v in c)
-    return height, emission
+
+    def glass(x, y):
+        if not (x0 < x < x1 and y0 < y < y1):
+            return 0.0
+        inset = min(x - x0, x1 - x, y - y0, y1 - y)
+        return smoothstep(0.0, 0.012, inset)
+    return height, emission, glass
 
 
 WINDOWS = [
@@ -503,13 +541,22 @@ def main() -> int:
         files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, strength, True)))
 
     for key, _label, _blurb, build in WINDOWS:
-        height, emission = build()
+        height, emission, glass = build()
         h = [height((x + 0.5) / SIZE, (y + 0.5) / SIZE)
              for y in range(SIZE) for x in range(SIZE)]
         e = [emission((x + 0.5) / SIZE, (y + 0.5) / SIZE)
              for y in range(SIZE) for x in range(SIZE)]
+        # The glass map, as a MULTIPLIER on whatever the hull is painted:
+        # white where the hull shows through and near black on the glass.
+        c = []
+        for y in range(SIZE):
+            for x in range(SIZE):
+                g = glass((x + 0.5) / SIZE, (y + 0.5) / SIZE)
+                v = 1.0 + (GLASS - 1.0) * g
+                c.append((v, v, v))
         files.append((f"tex/window_{key}_n.png", normal_png(h, SIZE, WINDOW_STRENGTH, True)))
         files.append((f"tex/window_{key}_e.png", rgb_png(e, SIZE)))
+        files.append((f"tex/window_{key}_c.png", rgb_png(c, SIZE)))
 
     # The same bytes again as data URIs, because GUIDELINES 2.1 gives a mockup
     # no network at all and that includes a file sitting next to it.
