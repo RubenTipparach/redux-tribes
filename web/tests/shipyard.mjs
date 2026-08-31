@@ -24,8 +24,8 @@ const fail = (msg) => { console.log('  FAIL ' + msg); failures++; };
 const ok = (msg) => console.log('  ok   ' + msg);
 
 /** Every control a player needs, and the tap has to ARRIVE at it. */
-const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTabParts', 'dzTabArmour',
-  'dzTabStats', 'dzReset', 'dzBare', 'dzStrip'];
+const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTrack', 'dzTabParts',
+  'dzTabArmour', 'dzTabStats', 'dzReset', 'dzBare', 'dzStrip'];
 /** Phone only: the desk layout has the panel beside the view and hides it. */
 const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
@@ -212,18 +212,24 @@ async function checkGhostAndPicking(page) {
 async function checkTurrets(page) {
   await (await page.$$('#dzClasses button'))[0].click();
   await page.waitForTimeout(450);
-  const seq = [];
-  for (let n = 0; n < 3; n++) {
-    await page.click('#dzArcs');
-    await page.waitForTimeout(500);
-    seq.push(await page.evaluate(() => window.ftDebug.designer().turrets));
-  }
-  if (seq.join(' -> ') !== 'arcs -> track -> off')
-    fail(`the arcs toggle cycles ${seq.join(' -> ')}, not arcs -> track -> off`);
-  else ok('the arcs toggle cycles off, arcs, tracking');
+  // Two independent switches, and each has to work without the other.
+  const read = () => page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { arcs: d.arcs, target: d.target };
+  });
+  await page.click('#dzArcs'); await page.waitForTimeout(400);
+  const onlyArcs = await read();
+  await page.click('#dzArcs'); await page.click('#dzTrack');
+  await page.waitForTimeout(400);
+  const onlyTarget = await read();
+  await page.click('#dzArcs'); await page.waitForTimeout(400);
+  const both = await read();
+  if (!(onlyArcs.arcs && !onlyArcs.target)) fail('the Arcs button did not turn on the arcs alone');
+  else if (!(onlyTarget.target && !onlyTarget.arcs)) fail('the Target button did not turn on the target alone');
+  else if (!(both.arcs && both.target)) fail('the two gunnery switches do not combine');
+  else ok('Arcs and Target are independent switches');
 
-  await page.click('#dzArcs'); await page.click('#dzArcs');   // into tracking
-  await page.waitForTimeout(900);
+  await page.waitForTimeout(700);
   const a = await page.evaluate(() => window.ftDebug.designer());
   if (!a.rigs.length) { fail('no turret rigs at all'); return; }
   await page.waitForTimeout(2600);
@@ -259,16 +265,14 @@ async function checkTurrets(page) {
   else ok(`turrets ease rather than snap: ${swept.toFixed(0)} degrees swept, `
     + `worst step ${jump.toFixed(1)} in 130 ms`);
 
-  // Turned off, every turret comes home to its mount's own forward.
-  await page.click('#dzArcs');            // off
-  await page.waitForTimeout(200);
-  await page.click('#dzArcs');            // arcs, so the rigs still exist
+  // With the target off, every turret comes home to its mount's own forward.
+  await page.click('#dzTrack');
   await page.waitForTimeout(1400);
   const home = await page.evaluate(() => window.ftDebug.designer());
   const away = home.rigs.filter(r => Math.abs(r.yaw - r.rest) > 6 || Math.abs(r.pitch) > 6);
   if (away.length) fail(`${away.length} turrets did not return to their mount's forward`);
   else ok('with nothing to track, every turret returns to straight ahead');
-  await page.click('#dzArcs'); await page.click('#dzArcs');   // back to tracking
+  await page.click('#dzTrack');
   await page.waitForTimeout(600);
 
   // Never past the limit, in either sample.
@@ -287,6 +291,7 @@ async function checkTurrets(page) {
   else ok(`turrets bearing on the target: ${a.bearing} then ${b.bearing} of ${a.rigs.length}`);
 
   await page.click('#dzArcs');
+  await page.click('#dzTrack');
   await page.waitForTimeout(400);
 }
 

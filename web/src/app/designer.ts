@@ -25,8 +25,14 @@ import {
 /** What the plate is doing: solid, see through, or off. */
 type PlateView = 'on' | 'ghost' | 'off';
 
-/** What the gunnery preview is doing. */
-type TurretView = 'off' | 'arcs' | 'track';
+/**
+ * Gunnery preview: two independent switches, not one three way cycle.
+ *
+ * They were one button reading "Arcs off / Arcs on / Tracking", and the target
+ * was three presses deep behind a label that never mentioned it. Two toggles
+ * that each say what they do: you can watch the wedges without the target, or
+ * the target without the wedges.
+ */
 
 /** One turret drawn in its own group so it can be swung without the hull. */
 interface Rig {
@@ -77,7 +83,8 @@ export class Designer {
   #marks = new THREE.Group();
   #arcs = new THREE.Group();
   #rigs: Rig[] = [];
-  #turrets: TurretView = 'off';
+  #showArcs = false;
+  #showTarget = false;
   #target = new THREE.Vector3();
   #clock = 0;
   #last = performance.now();
@@ -406,8 +413,8 @@ export class Designer {
         (hiZ - loZ + 1) * cell / 2);
       // Arcs are part of the picture when they are on, so they are part of
       // what has to fit in the frame.
-      if (this.#turrets !== 'off') {
-        const reach = this.#arcReach() * (this.#turrets === 'track' ? 1.45 : 1.06);
+      if (this.#showArcs || this.#showTarget) {
+        const reach = this.#arcReach() * (this.#showTarget ? 1.45 : 1.06);
         for (const r of this.#rigs) {
           this.#half.x = Math.max(this.#half.x, Math.abs(r.pivot.x - this.#centre.x) + reach);
           this.#half.y = Math.max(this.#half.y, Math.abs(r.pivot.y - this.#centre.y) + reach * 0.6);
@@ -654,8 +661,9 @@ export class Designer {
   #arcReach(): number { return Math.max(0.6, this.#derived.radius) * 0.72; }
 
   #buildArcs(full: number): void {
-    if (this.#turrets === 'off') return;
-    const SEG = 48;
+    if (!this.#showArcs && !this.#showTarget) return;
+    if (this.#showArcs)
+    { const SEG = 48;
     for (const r of this.#rigs) {
       const pu = PURPOSE[r.gun.key === 'missile' ? 'ordnance' : 'gun'];
       const fan = (arc: readonly [number, number], vertical: boolean) => {
@@ -715,14 +723,34 @@ export class Designer {
       };
       fan(r.gun.arcH, false);
       if (!allRound(r.gun.arcV)) fan(r.gun.arcV, true);
-    }
+    } }
 
-    if (this.#turrets === 'track') {
-      const mk = new THREE.Mesh(
-        this.#geo(new THREE.OctahedronGeometry(full * 0.1)),
-        this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B, wireframe: true })));
+    if (this.#showTarget) {
+      // Big enough to find. It was a wireframe pip a tenth of a wedge across
+      // and the question it kept getting asked was where it had gone.
+      const mk = new THREE.Group();
       mk.name = 'target';
+      const core = new THREE.Mesh(
+        this.#geo(new THREE.OctahedronGeometry(full * 0.14)),
+        this.#mat(new THREE.MeshBasicMaterial({ color: 0xFFD24B })));
+      const cage = new THREE.Mesh(
+        this.#geo(new THREE.OctahedronGeometry(full * 0.27)),
+        this.#mat(new THREE.MeshBasicMaterial({
+          color: 0xFFD24B, wireframe: true, transparent: true, opacity: 0.7 })));
+      mk.add(core, cage);
       this.#arcs.add(mk);
+
+      // Its path, so the thing is findable when it is round the far side.
+      const ring: number[] = [];
+      const orbit = full * 1.35;
+      for (let n = 0; n <= 96; n++) {
+        const a = (n / 96) * Math.PI * 2;
+        ring.push(Math.sin(a) * orbit, 0, Math.cos(a) * orbit);
+      }
+      const rg = this.#geo(new THREE.BufferGeometry());
+      rg.setAttribute('position', new THREE.Float32BufferAttribute(ring, 3));
+      this.#arcs.add(new THREE.Line(rg, this.#mat(new THREE.LineBasicMaterial({
+        color: 0xFFD24B, transparent: true, opacity: 0.32 }))));
       // One sight line per turret, shown only while that turret bears. Which
       // guns can actually reach the thing is the question the preview exists
       // to answer, and a swung barrel alone does not answer it.
@@ -748,7 +776,7 @@ export class Designer {
   #aimTurrets(dt: number): void {
     if (!this.#rigs.length) return;
     const reach = this.#arcReach() * 1.35;
-    if (this.#turrets === 'track') {
+    if (this.#showTarget) {
       this.#clock += dt;
       // About seven seconds a lap. Eleven was a screensaver: a preview you
       // have to wait on is one nobody watches to the end.
@@ -775,7 +803,7 @@ export class Designer {
       let goalYaw = 0, goalPitch = 0;
       r.bears = false;
 
-      if (this.#turrets === 'track') {
+      if (this.#showTarget) {
         const d = this.#target.clone().sub(r.pivot);
         // The core's own angles: yaw round from the nose, pitch as a true
         // elevation off the horizontal plane (math.rs arc_test_3d). Roll does
@@ -1140,7 +1168,7 @@ export class Designer {
         + 'mount, because that is what the core measures: <code>arc_test_3d</code> takes '
         + 'the ship\u2019s rotation and <code>sim_core</code> has no per mount facing yet. '
         + 'Facing sets the model\u2019s rest pose. Turn the arcs on over the model to see '
-        + 'them, and again to give the turrets something to track.</p>';
+        + 'them, and Target for something to track.</p>';
 
       // What each gun gets through THIS ship's own belt, which is the whole
       // reason penetration exists as a field.
@@ -1178,11 +1206,15 @@ export class Designer {
       this.#syncPlateButton();
       this.#refresh();
     };
-    // Gunnery: off, the arcs alone, or the arcs with a target for the turrets
-    // to track. On canvas, because it is a thing you watch rather than set.
+    // Gunnery, on canvas because it is a thing you watch rather than set.
+    // Two switches: the wedges, and the target the turrets chase.
     $('dzArcs').onclick = () => {
-      this.#turrets = this.#turrets === 'off' ? 'arcs'
-        : this.#turrets === 'arcs' ? 'track' : 'off';
+      this.#showArcs = !this.#showArcs;
+      this.#syncArcButton();
+      this.#refresh();
+    };
+    $('dzTrack').onclick = () => {
+      this.#showTarget = !this.#showTarget;
       this.#syncArcButton();
       this.#refresh();
     };
@@ -1220,10 +1252,10 @@ export class Designer {
   }
 
   #syncArcButton(): void {
-    const b = $('dzArcs');
-    b.className = this.#turrets === 'off' ? '' : this.#turrets === 'track' ? 'ghost' : 'on';
-    b.textContent = this.#turrets === 'off' ? 'Arcs off'
-      : this.#turrets === 'arcs' ? 'Arcs on' : 'Tracking';
+    $('dzArcs').className = this.#showArcs ? 'on' : '';
+    $('dzArcs').textContent = this.#showArcs ? 'Arcs on' : 'Arcs';
+    $('dzTrack').className = this.#showTarget ? 'ghost' : '';
+    $('dzTrack').textContent = this.#showTarget ? 'Target on' : 'Target';
   }
 
   #syncPlateButton(): void {
@@ -1255,7 +1287,8 @@ export class Designer {
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
       plate: this.#plate,
-      turrets: this.#turrets,
+      arcs: this.#showArcs,
+      target: this.#showTarget,
       rigs: this.#rigs.map(r => ({ label: r.label, key: r.gun.key,
         arcH: r.gun.arcH, arcV: r.gun.arcV, bears: r.bears,
         yaw: +(r.group.rotation.y * 180 / Math.PI).toFixed(1),

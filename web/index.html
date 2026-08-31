@@ -642,7 +642,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   /* One row of class chips rather than two, at every phone width. */
   .dzclasses { gap:4px; }
   .dzclasses button { padding:5px 8px; font-size:10px; }
-  #dzHint { font-size:9px; }
+  /* Three tool buttons share this line on a phone, so the hint gives way
+     rather than running underneath them. */
+  #dzHint { font-size:9px; max-width:52%; }
   #dzGrow { display:block; flex:0 0 44px; font-size:10px; color:var(--muted); }
   #designer.wide #dzGrow { color:var(--cyan); }
 }
@@ -732,7 +734,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <div id="dzClasses" class="dzclasses"></div>
     <!-- On canvas, not in a sheet: taking the plate off to see what is under
          it is the single most used action in a voxel editor. -->
-    <div id="dzTools" class="dzclasses"><button id="dzArcs">Arcs off</button><button id="dzPlate" class="on">Plate on</button></div>
+    <div id="dzTools" class="dzclasses"><button id="dzArcs">Arcs</button><button id="dzTrack">Target</button><button id="dzPlate" class="on">Plate on</button></div>
     <!-- What you just tapped. On canvas because that is where you tapped, and
          because a card that only lives in a sheet is one nothing says exists. -->
     <div id="dzPick" class="hidden"></div>
