@@ -56,6 +56,28 @@ export function heatOf(diedAt: number, tick: number): number {
   return Math.max(0, Math.min(1, 1 - (tick - diedAt) / COOL_TICKS));
 }
 
+/**
+ * How far the whole wound has cooled, quantised.
+ *
+ * The heat is a continuous function of the tick, so repainting whenever it
+ * "changed" is repainting every frame: a walk over every torn vertex and a
+ * colour buffer back to the card, per ship, sixty times a second, to move an
+ * orange by a thousandth. The eye cannot see a step this small, so the repaint
+ * waits until the step is real. Thirty two buckets over the whole burn is one
+ * repaint every 28 ticks, and the ramp is smooth enough that they do not read
+ * as steps.
+ */
+const HEAT_STEPS = 32;
+export function heatKey(dead: ReadonlyMap<number, number>, tick: number): number {
+  let hottest = 0;
+  for (const diedAt of dead.values()) {
+    const h = heatOf(diedAt, tick);
+    if (h > hottest) hottest = h;
+    if (hottest >= 1) break;
+  }
+  return Math.round(hottest * HEAT_STEPS);
+}
+
 function ramp(heat: number, out: [number, number, number]): void {
   for (let i = 1; i < HEAT.length; i++) {
     const hi = HEAT[i - 1] as readonly [number, number, number, number];

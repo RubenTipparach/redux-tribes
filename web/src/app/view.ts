@@ -23,7 +23,7 @@ import {
 } from '../sim/types.js';
 import { NX, NY, NZ, rasterise, stockFor, type Design } from './design.js';
 import { hullMesh, hullTone, tintFar, tintHull, tintMix, type HullMesh } from './hull.js';
-import { buildWound, coolWound, heatOf, type Wound } from './wound.js';
+import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
 
 /**
  * How close the camera has to be for the ship inspector to be offered, as
@@ -91,6 +91,8 @@ interface Carved {
   woundGlow: THREE.Mesh | null;
   /** How many cells the wound was built for, so it rebuilds on change only. */
   woundFor: number;
+  /** And how hot it was last painted, so a cold wound costs nothing. */
+  woundHeat: number;
   upTo: number;
 }
 
@@ -282,7 +284,8 @@ export class View {
     mesh.geometry = geo;
     const c: Carved = {
       hull, design, geo, dead: new Uint8Array(hull.quads), born: new Map(),
-      cells: new Map(), wound: null, woundSkin: null, woundGlow: null, woundFor: -1, upTo: -1,
+      cells: new Map(), wound: null, woundSkin: null, woundGlow: null, woundFor: -1,
+      woundHeat: -1, upTo: -1,
     };
     this.#carved.set(id, c);
     return c;
@@ -312,6 +315,7 @@ export class View {
     c.woundSkin = null;
     c.woundGlow = null;
     c.woundFor = -1;
+    c.woundHeat = -1;
   }
 
   /**
@@ -463,8 +467,17 @@ export class View {
         tintHull(c.woundSkin.material as THREE.MeshLambertMaterial,
           hullTone(s, this.mySide), s.destroyed, tintFar(this.#dist));
       }
+      c.woundHeat = heatKey(c.cells, tick);
     } else if (c.wound) {
-      coolWound(c.wound, c.cells, tick);
+      // Only when the heat has actually moved a step. Without this the glow
+      // was a walk over every torn vertex and a colour buffer back to the card
+      // on every frame of every damaged ship, to move an orange by a
+      // thousandth: the wound cost more to cool than to cut.
+      const heat = heatKey(c.cells, tick);
+      if (heat !== c.woundHeat) {
+        c.woundHeat = heat;
+        coolWound(c.wound, c.cells, tick);
+      }
     }
   }
 
