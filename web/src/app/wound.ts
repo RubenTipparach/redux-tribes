@@ -36,19 +36,29 @@ import type { HullMesh } from './hull.js';
 export const COOL_TICKS = 900;
 
 /**
- * The heat ramp, hottest first.
+ * The heat ramp, hottest first, as a MULTIPLIER over the ember texture.
  *
- * Unlit colours, so these ARE the light coming off the wound rather than a
- * surface waiting to be lit. The last one is not black: a cold wound is still
- * a hole with a burnt edge, and pure black reads as a gap in the mesh, which
- * is the exact failure this file exists to fix.
+ * White at full heat on purpose: `ember.png` already carries the colour of a
+ * burn, from white hot cores through orange to char, so a fresh wound wants
+ * that gradient shown as authored. This ramp is how hot the cell is NOW, and
+ * it cools the whole thing down: the highlights go first, then the orange, and
+ * what is left is a dark burnt edge.
+ *
+ * It used to carry the colour itself, and the texture was neutral. That cannot
+ * reach a white hot core, because a grey times an orange is only ever a darker
+ * orange. Which of the two carries the hue is the whole difference between a
+ * wound that looks molten and one that looks painted.
+ *
+ * The last stop is not black: a cold wound is still a hole with a burnt edge,
+ * and pure black reads as a gap in the mesh, which is the exact failure this
+ * file exists to fix.
  */
 const HEAT: ReadonlyArray<readonly [number, number, number, number]> = [
-  [1.00, 1.00, 0.86, 0.55],
-  [0.72, 1.00, 0.62, 0.16],
-  [0.42, 0.86, 0.20, 0.03],
-  [0.18, 0.36, 0.07, 0.02],
-  [0.00, 0.10, 0.08, 0.08],
+  [1.00, 1.00, 1.00, 1.00],
+  [0.70, 1.00, 0.82, 0.62],
+  [0.40, 0.88, 0.44, 0.22],
+  [0.18, 0.52, 0.20, 0.09],
+  [0.00, 0.22, 0.17, 0.16],
 ];
 
 /** Where a cell sits on that ramp, given how long ago it died. */
