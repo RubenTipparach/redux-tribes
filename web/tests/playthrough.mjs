@@ -126,6 +126,30 @@ if (!chunksSeen) {
 log(`hulls come apart: ${total} cells off ${carved.length} ships, `
   + `${chunksSeen} chunks in the air at once`);
 
+// A TURRET IS NEVER PARTLY SHOT AWAY.
+//
+// A mount takes damage as a unit: enough to silence it, which the core decides
+// by killing the weapons volume, or not at all. The only thing that removes
+// one is being knocked loose when everything bolting it on has gone, and that
+// takes the whole mount at once. Before this, the carve worked over the
+// lattice without knowing what a cell belonged to, so a blast beside a barrel
+// bit a piece out of it and the mount was drawn with holes in it.
+//
+// Stated as an invariant rather than as a picture: every mount is whole or it
+// is gone, and nothing in between is legal at any point in a match.
+const mounts = await page.evaluate(() => window.ftDebug.damage().turrets);
+const chewed = mounts.filter(m => m.gone > 0 && m.gone < m.cells);
+if (chewed.length) {
+  console.log('\nFAIL: a turret was partly shot away, which cannot happen:');
+  for (const m of chewed.slice(0, 6)) {
+    console.log(`  ship ${m.ship} mount ${m.rig}: ${m.gone} of ${m.cells} cells gone`);
+  }
+  process.exit(1);
+}
+const lost = mounts.filter(m => m.cells > 0 && m.gone === m.cells).length;
+log(`turrets stay whole: ${mounts.length} mounts on damaged hulls, `
+  + `none part eaten, ${lost} knocked clean off`);
+
 /**
  * Nothing a player needs may sit UNDER a sheet.
  *

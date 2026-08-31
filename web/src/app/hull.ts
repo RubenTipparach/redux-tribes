@@ -26,7 +26,7 @@
 
 import * as THREE from 'three';
 import {
-  NX, NY, NZ, RUNG, Mat,
+  CELLS, NX, NY, NZ, RUNG, Mat,
   armourColour, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
   type Design,
 } from './design.js';
@@ -92,6 +92,25 @@ export interface HullMesh {
   readonly rigOf: Int32Array;
   /** The guns, in the core's own mount order. */
   readonly rigs: readonly HullRig[];
+  /**
+   * Which rig each CELL belongs to, for the cells that belong to one.
+   *
+   * `rigOf` answers the same question per quad, which is what POSING a turret
+   * needs. Damage asks it per cell, because the carve works over the lattice,
+   * and answering per quad let a blast take a bite out of a barrel.
+   */
+  readonly rigOfCell: ReadonlyMap<number, number>;
+  /** Every cell of each rig, so a mount can be taken off in one piece. */
+  readonly rigCells: ReadonlyArray<Int32Array>;
+  /**
+   * What bolts each rig to the ship: the solid cells touching it that are not
+   * part of a turret themselves.
+   *
+   * A mount is never partly shot away, so the only way one leaves a hull is
+   * for everything holding it to go. This is that set, and when all of it is
+   * gone the turret is knocked loose.
+   */
+  readonly rigSupport: ReadonlyArray<Int32Array>;
 }
 
 /**
@@ -383,11 +402,52 @@ export function hullMesh(d: Design): HullMesh {
     rigOf[q] = owner > 0 ? (rigOfPart.get(owner - 1) ?? -1) : -1;
   }
 
+  // The same question at CELL resolution, because that is the resolution
+  // damage works at. A turret is atomic under fire: it is whole or it is gone,
+  // never chewed, so the carve has to be able to step over its cells and to
+  // take all of them at once.
+  const rigOfCell = new Map<number, number>();
+  const rigCells: number[][] = rigs.map(() => []);
+  for (let n = 0; n < CELLS; n++) {
+    if (!grid[n]) continue;
+    const owner = own[n] as number;
+    if (owner <= 0) continue;
+    const r = rigOfPart.get(owner - 1);
+    if (r === undefined) continue;
+    rigOfCell.set(n, r);
+    (rigCells[r] as number[]).push(n);
+  }
+
+  // What holds each one on. Filled only after every rig's cells are known, so
+  // one turret standing against another is not mistaken for the structure
+  // bolting it down.
+  const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
+    [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+  ];
+  const rigSupport: Int32Array[] = rigs.map(() => new Int32Array(0));
+  rigCells.forEach((cells, r) => {
+    const holds = new Set<number>();
+    for (const n of cells) {
+      const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+      for (const [di, dj, dk] of NEIGHBOURS) {
+        const ni = i + di, nj = j + dj, nk = k + dk;
+        if (ni < 0 || nj < 0 || nk < 0 || ni >= NX || nj >= NY || nk >= NZ) continue;
+        const m = idx(ni, nj, nk);
+        if (!grid[m] || rigOfCell.has(m)) continue;
+        holds.add(m);
+      }
+    }
+    rigSupport[r] = new Int32Array([...holds].sort((x, y) => x - y));
+  });
+
   const out: HullMesh = {
     geo,
     cell,
     rigOf,
     rigs,
+    rigOfCell,
+    rigCells: rigCells.map(v => new Int32Array(v)),
+    rigSupport,
     cellOf: new Int32Array(cellOf),
     centre,
     quads,

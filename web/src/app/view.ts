@@ -449,11 +449,43 @@ export class View {
           if (dx * dx + dy * dy + dz * dz > r2) continue;
           const id = i + j * NX + k * NX * NY;
           if (!grid[id] || c.cells.has(id)) continue;
+          // A TURRET IS NEVER PARTLY SHOT AWAY. A mount takes damage as a
+          // unit: enough to silence it, or not at all, and the core says which
+          // by killing the weapons volume rather than by chewing a barrel. So
+          // the blast steps over a turret's cells here and the only thing that
+          // ever removes one is the loop below, which takes it off whole.
+          if (c.hull.rigOfCell.has(id)) continue;
           c.cells.set(id, h.tick);
           fresh.push(id);
         }
       }
     }
+
+    // Knocked loose. A mount is bolted to the frame and plating around it, and
+    // when every one of those cells is gone there is nothing holding it on, so
+    // it goes too, in one piece and at the same tick. This is the only way a
+    // turret leaves a hull, which is what makes the rule above hold: it is
+    // whole, or it is not there.
+    for (let r = 0; r < c.hull.rigs.length; r++) {
+      const holds = c.hull.rigSupport[r];
+      // A mount with nothing recorded as holding it can never come off. That
+      // is deliberate: it means the design put it somewhere this cannot reason
+      // about, and dropping it on a guess is worse than leaving it standing.
+      if (!holds || !holds.length) continue;
+      let attached = false;
+      for (const n of holds) {
+        if (!c.cells.has(n)) { attached = true; break; }
+      }
+      if (attached) continue;
+      const own = c.hull.rigCells[r];
+      if (!own) continue;
+      for (const n of own) {
+        if (c.cells.has(n)) continue;
+        c.cells.set(n, h.tick);
+        fresh.push(n);
+      }
+    }
+
     if (!fresh.length) return;
 
     // Chunks come off the cells that just went, outward from the hit and
@@ -1462,10 +1494,26 @@ export class View {
 
   /** What has come off the hulls, and what is in the air: cells carved per
    *  ship, and chunks currently drawn. Observation only. */
-  damageState(): { carved: Array<[number, number]>; chunks: number } {
+  damageState(): {
+    carved: Array<[number, number]>;
+    chunks: number;
+    turrets: Array<{ ship: number; rig: number; gone: number; cells: number }>;
+  } {
+    // Per mount, how many of its cells are gone out of how many it has. A
+    // turret is whole or it is gone, so `gone` is only ever 0 or `cells`, and
+    // a harness can assert that rather than read the code that makes it true.
+    const turrets: Array<{ ship: number; rig: number; gone: number; cells: number }> = [];
+    for (const [id, c] of this.#carved) {
+      c.hull.rigCells.forEach((cells, rig) => {
+        let gone = 0;
+        for (const n of cells) if (c.cells.has(n)) gone++;
+        turrets.push({ ship: id, rig, gone, cells: cells.length });
+      });
+    }
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
+      turrets,
     };
   }
 
