@@ -6,6 +6,7 @@ import { mkdirSync, copyFileSync } from 'node:fs';
 const watch = process.argv.includes('--watch');
 mkdirSync('dist', { recursive: true });
 copyFileSync('public/sim_core.wasm', 'dist/sim_core.wasm');
+copyFileSync('public/ember.png', 'dist/ember.png');
 copyFileSync('index.html', 'dist/index.html');
 
 const opts = {

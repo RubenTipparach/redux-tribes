@@ -117,6 +117,29 @@ export interface Wound {
   readonly whole: Uint8Array;
 }
 
+/**
+ * The ember atlas is 4 x 4 tiles, and a face picks one by a hash of its own
+ * cell. One tile on every face of a wound reads as a repeating pattern rather
+ * than as burning, and sixteen is enough that the eye stops finding the repeat.
+ *
+ * Inset by half a texel so the sampler cannot bleed a neighbouring tile in
+ * along the seam, which shows as a bright rim on every face.
+ */
+const ATLAS = 4;
+const ATLAS_STEP = 1 / ATLAS;
+const ATLAS_PAD = 0.5 / (64 * ATLAS);
+
+function tileUV(cell: number): readonly [number, number] {
+  const h = Math.imul(cell ^ 0x9e3779b9, 2246822519) >>> 0;
+  const t = h % (ATLAS * ATLAS);
+  return [(t % ATLAS) * ATLAS_STEP, Math.floor(t / ATLAS) * ATLAS_STEP];
+}
+
+/** The four corners of a tile, in the corner order `faceCorners` emits. */
+const CORNER_UV: ReadonlyArray<readonly [number, number]> = [
+  [0, 0], [1, 0], [1, 1], [0, 1],
+];
+
 const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
   [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
 ];
@@ -169,7 +192,7 @@ export function buildWound(
 
   const whole = new Uint8Array(hull.quads);
   const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [];
-  const gPos: number[] = [], gNrm: number[] = [], gCol: number[] = [];
+  const gPos: number[] = [], gNrm: number[] = [], gCol: number[] = [], gUv: number[] = [];
   const glowCell: number[] = [];
   const vents: Vent[] = [];
   const rgb: [number, number, number] = [0, 0, 0];
@@ -227,12 +250,19 @@ export function buildWound(
       // The face belongs to the LIVE neighbour and looks into the hole, so it
       // is built on that cell with the normal pointing back the way we came.
       const back = [-(d[0] as number), -(d[1] as number), -(d[2] as number)] as const;
+      const [u0, v0] = tileUV(c);
       let cx = 0, cy = 0, cz = 0;
+      let corner = 0;
       for (const [ax, ay, az] of faceCorners(ni, nj, nk, back)) {
         world(ax, ay, az, gPos);
         gNrm.push(back[0], back[1], back[2]);
         gCol.push(rgb[0], rgb[1], rgb[2]);
+        const cu = CORNER_UV[corner] as readonly [number, number];
+        gUv.push(
+          u0 + ATLAS_PAD + (cu[0] as number) * (ATLAS_STEP - 2 * ATLAS_PAD),
+          v0 + ATLAS_PAD + (cu[1] as number) * (ATLAS_STEP - 2 * ATLAS_PAD));
         glowCell.push(c);
+        corner++;
         cx += ax; cy += ay; cz += az;
       }
       vents.push({
@@ -247,7 +277,7 @@ export function buildWound(
 
   return {
     skin: quadGeometry(sPos, sNrm, sCol),
-    glow: quadGeometry(gPos, gNrm, gCol),
+    glow: quadGeometry(gPos, gNrm, gCol, gUv),
     glowCell: new Int32Array(glowCell),
     vents,
     whole,
@@ -255,7 +285,9 @@ export function buildWound(
 }
 
 /** Four vertices a quad, two indexed triangles, same as the hull's own. */
-function quadGeometry(pos: number[], nrm: number[], col: number[]): THREE.BufferGeometry {
+function quadGeometry(
+  pos: number[], nrm: number[], col: number[], uv?: number[],
+): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   const quads = pos.length / 12;
   const index = new Uint32Array(quads * 6);
@@ -267,6 +299,7 @@ function quadGeometry(pos: number[], nrm: number[], col: number[]): THREE.Buffer
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   geo.computeBoundingSphere();
   return geo;
