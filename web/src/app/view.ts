@@ -1647,7 +1647,10 @@ export class View {
    * scrubbing must be able to run one backwards.
    */
   #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }> = [];
-  #lastBlasts: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }> = [];
+  #lastBlasts: ReadonlyArray<{
+    pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
+    centre: Vec3; resolved: boolean;
+  }> = [];
 
   setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
     this.#lastBeams = list;
@@ -1684,7 +1687,10 @@ export class View {
    * cutting holes.
    */
   setBlasts(
-    list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }>,
+    list: ReadonlyArray<{
+      pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
+      centre: Vec3; resolved: boolean;
+    }>,
   ): void {
     this.#lastBlasts = list;
     for (const c of this.#fxGroup.children) {
@@ -2180,7 +2186,9 @@ export class View {
    */
   fxStats(): {
     blasts: number; beams: number; trails: number; widest: number;
-    onHull: Array<{ ship: number; kill: boolean; off: number; hullR: number }>;
+    onHull: Array<{
+      ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
+    }>;
     beamLen: number[];
   } {
     let widest = 0;
@@ -2190,19 +2198,22 @@ export class View {
       widest = Math.max(widest, g.boundingSphere?.radius ?? 0);
     }
     const onHull = this.#lastBlasts.map(b => {
-      const mesh = this.#hulls.get(b.ship);
       const c = this.#carved.get(b.ship);
       const half = c ? c.hull.half : null;
       const hullR = half
         ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
         : 0;
-      const off = mesh
-        ? Math.sqrt(
-          (b.pos.x - mesh.position.x) ** 2
-          + (b.pos.y - mesh.position.y) ** 2
-          + (b.pos.z - mesh.position.z) ** 2)
-        : 0;
-      return { ship: b.ship, kill: b.kill, off: +off.toFixed(3), hullR: +hullR.toFixed(3) };
+      // Against the centre the ship held AT THE HIT, not where it is now: a
+      // blast stays in the world while the ship flies on, so measuring from
+      // the current pose calls a ship leaving its own explosion a drift.
+      const off = Math.sqrt(
+        (b.pos.x - b.centre.x) ** 2
+        + (b.pos.y - b.centre.y) ** 2
+        + (b.pos.z - b.centre.z) ** 2);
+      return {
+        ship: b.ship, kill: b.kill, resolved: b.resolved,
+        off: +off.toFixed(3), hullR: +hullR.toFixed(3),
+      };
     });
     const beamLen = this.#lastBeams.map(b => +Math.sqrt(
       (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
