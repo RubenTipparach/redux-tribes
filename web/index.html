@@ -956,6 +956,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #lobby .s { font-size:11px; color:var(--muted); }
 .roomRow { cursor:pointer; }
 .roomRow:hover { border-color:var(--cyan); }
+/* Forgetting a saved game. Small, quiet and on the row itself, because it is
+   an action on that game rather than on the list. */
+.roomRow .drop { flex:0 0 auto; min-width:28px; padding:2px 8px; font-size:14px;
+  line-height:1; color:var(--dim); background:none; border:1px solid transparent; }
+.roomRow .drop:hover { color:var(--red); border-color:var(--line); }
 .tag { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:10px;
   letter-spacing:.12em; text-transform:uppercase; padding:2px 7px; border-radius:3px;
   border:1px solid var(--line); color:var(--muted); flex:0 0 auto; }
@@ -1183,6 +1188,20 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     </div>
 
     <div id="lobbyPanel">
+      <!-- Games this browser has in progress. Above the levels, because
+           carrying on with the one you were playing is the commoner intent,
+           and a player who lost the tab has no other handle on it: the address
+           they were on is the only other one, and they have just lost that
+           too. Hidden until there is something in it. -->
+      <div id="savedWrap" class="card" style="display:none">
+        <div class="row">
+          <div class="grow">
+            <div class="t">Carry on</div>
+            <div class="s">Games kept in this browser. Tap one to pick it up.</div>
+          </div>
+        </div>
+        <div id="savedList" class="rooms"></div>
+      </div>
       <div class="card">
         <div class="row">
           <div class="grow">
@@ -1477,6 +1496,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <span class="stat"><b id="hSec">0.0</b>s</span>
   </footer>
 </div>
-<script type="module" src="./main.js"></script>
+<!-- Absolute, not relative. Every screen has an address now, so the page is
+     served from `/play/<id>` and `/ship/<id>` as readily as from `/`, and a
+     relative src there asks for `/play/main.js`: the server answers anything
+     that is not an API route with the app shell, so the module arrived as
+     HTML and the page booted no further than its own markup. -->
+<script type="module" src="/main.js"></script>
 </body>
 </html>

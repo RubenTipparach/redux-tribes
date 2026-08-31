@@ -181,6 +181,18 @@ export class Api {
       ? { headers: this.#accountHeaders() } : {});
   }
 
+  /**
+   * One design by id.
+   *
+   * The server has had this route since the library was built; the client only
+   * ever needed the list until a design got an address of its own. A reload on
+   * `/ship/<id>` cannot wait for a list that may not contain it.
+   */
+  getDesign(designId: string): Promise<SavedDesign> {
+    return this.#json(`/v1/designs/${designId}`, this.#identity
+      ? { headers: this.#accountHeaders() } : {});
+  }
+
   saveDesign(body: {
     name: string; design: unknown; from?: string | null;
     mass?: number; hull?: number; legal?: boolean;
