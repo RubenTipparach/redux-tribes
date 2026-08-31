@@ -80,9 +80,17 @@ let blastsSeen = 0;
 /** Blasts that fell back to the raw event because the hull could not be
  *  consulted, which is the old behaviour surviving in a corner. */
 let unresolved = 0;
-/** The longest beam drawn, against the range of the weapon that fired it: a
- *  beam that hit used to be drawn out to full range and through the target. */
+/** The longest beam drawn that HIT something, against the range of the weapon
+ *  that fired it: a beam that hit used to be drawn out to full range and
+ *  through the target.
+ *
+ *  Hits only, because a beam that MISSED is supposed to run out to the
+ *  weapon's range and off into space. Measuring every beam made a clean miss
+ *  read as the overshoot defect, and did: a run failed at 297.8 u on a shot
+ *  that never connected with anything. `beamsHit` is counted so that a match
+ *  where no beam landed cannot pass this by having nothing to measure. */
 let longestBeam = 0;
+let beamsHit = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -93,7 +101,12 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.goto(URL, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#lobby:not(.hidden)');
   await page.waitForFunction(() => document.getElementById('whoName').textContent !== '...');
+  // Tapping a level opens its briefing; Launch is what starts the match. The
+  // hulls are left as the level authored them, which is what this suite is
+  // about: the game, not the chooser.
   await tap('#bPractice');
+  await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+  await tap('#briefGo');
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();
@@ -185,7 +198,14 @@ if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
   process.exit(1);
 }
 // And a beam stops at what it hit. The beam weapon's range is 300 units, so a
-// beam anywhere near that length is one drawn straight through its target.
+// beam that CONNECTED and is anywhere near that length is one drawn straight
+// through its target. A missed beam is not asked about: running out to the
+// weapon's range is what a miss looks like.
+if (!beamsHit) {
+  console.log('\nFAIL: a whole match and no beam was ever seen connecting, '
+    + 'so nothing was measured');
+  process.exit(1);
+}
 if (longestBeam > 200) {
   console.log(`\nFAIL: a beam was drawn ${longestBeam} u, which is its full `
     + 'range: it did not stop at the ship it hit');
@@ -193,7 +213,8 @@ if (longestBeam > 200) {
 }
 log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
   + `${worstBlast ? worstBlast.off : 0} u out against a hull radius of `
-  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam ${longestBeam} u`);
+  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam that connected `
+  + `${longestBeam} u over ${beamsHit} sample(s)`);
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -898,6 +919,7 @@ async function playMatch() {
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
     for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);
+    beamsHit += snap.fx.beamsHit;
     if (snap.done) break;
     await page.waitForTimeout(200);
   }

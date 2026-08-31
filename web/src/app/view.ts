@@ -1646,13 +1646,13 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
-  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }> = [];
+  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit: boolean }> = [];
   #lastBlasts: ReadonlyArray<{
     pos: Vec3; age: number; radius: number; kill: boolean; ship: number;
     centre: Vec3; resolved: boolean;
   }> = [];
 
-  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+  setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number; hit: boolean }>): void {
     this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
@@ -2183,6 +2183,10 @@ export class View {
    * explosion hangs in space beside the ship. `beamLen` is the same question
    * for a beam, which used to be drawn to the weapon's full range whether or
    * not it hit anything.
+   *
+   * Beams that HIT, only. A beam that missed is SUPPOSED to run out to the
+   * weapon's range and into space, so measuring every beam would call a clean
+   * miss the very defect this reports, and did.
    */
   fxStats(): {
     blasts: number; beams: number; trails: number; widest: number;
@@ -2190,6 +2194,7 @@ export class View {
       ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
     }>;
     beamLen: number[];
+    beamsHit: number;
   } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
@@ -2215,12 +2220,13 @@ export class View {
         off: +off.toFixed(3), hullR: +hullR.toFixed(3),
       };
     });
-    const beamLen = this.#lastBeams.map(b => +Math.sqrt(
+    const beamLen = this.#lastBeams.filter(b => b.hit).map(b => +Math.sqrt(
       (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
     ).toFixed(2));
     return {
       onHull,
       beamLen,
+      beamsHit: beamLen.length,
       blasts: this.#fxGroup.children.length,
       beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,

@@ -44,13 +44,16 @@ export interface Launch {
   /** Which side this client sits in. */
   readonly side: number;
   /**
-   * The design this side fields, or undefined for the hull the scenario
-   * authored. The whole record, not its class: the core derives what it
-   * weighs, what it can take and how it flies from the parts and the plate.
+   * The design each of this side's ships fields, by SLOT, or null for the hull
+   * the scenario authored. The whole record, not its class: the core derives
+   * what it weighs, what it can take and how it flies from the parts and the
+   * plate.
+   *
+   * A list rather than one design, because a player swapping one hull out of a
+   * pair is not asking for two of it. Slot n is the nth ship this side seats,
+   * which is the order the roster reports and the order the core fills.
    */
-  readonly hull?: unknown;
-  /** What that design is called, for the console to say so. */
-  readonly hullName?: string;
+  readonly hulls?: ReadonlyArray<{ readonly design: unknown; readonly name: string } | null>;
   readonly ticket?: Ticket;
   readonly roomName?: string;
 }
@@ -95,8 +98,21 @@ export class Lobby {
   #onWhere: ((where: { room?: string }) => void) | null = null;
 
   onWhere(fn: (where: { room?: string }) => void): void { this.#onWhere = fn; }
-  /** The design whose hull the next practice level is flown in, if any. */
-  #hull: SavedDesign | null = null;
+  /**
+   * The briefing: which level it is about, the ships that level seats, and the
+   * design picked for each of them.
+   *
+   * `#roster` is class indices in spawn order for THIS side, straight from the
+   * core, and `#picks` is the same length: slot n is the nth ship you field.
+   */
+  #brief: string | null = null;
+  #roster: number[] = [];
+  #picks: Array<SavedDesign | null> = [];
+  /** How to ask the core what a level seats. Wired by main.ts, because the
+   *  lobby does not own a match and should not learn to. */
+  #rosterOf: (scenario: string) => number[] = () => [];
+
+  onRoster(fn: (scenario: string) => number[]): void { this.#rosterOf = fn; }
 
   onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
@@ -341,7 +357,7 @@ export class Lobby {
       const b = document.createElement('button');
       if (n === 0) b.id = 'bPractice';
       b.innerHTML = `<span class="n">${p.name}</span><span class="d">${p.blurb}</span>`;
-      b.onclick = () => { this.#practice(p.key); };
+      b.onclick = () => { this.#openBrief(p.key); };
       host.appendChild(b);
     });
   }
@@ -349,43 +365,84 @@ export class Lobby {
   /**
    * Which hull to take into a practice level.
    *
-   * One chooser above the levels rather than one per level: it is a single
-   * choice that applies to whichever is tapped, and seven copies of it would
-   * be seven controls saying one thing. Anyone's design may be picked, the
-   * same rule the library itself follows.
+   * One card per SHIP the level seats, because the roster is what a player is
+   * choosing over: "swap the second one" is a thing you can only say if the
+   * second one is on screen. The roster comes from the core, so the list
+   * describes the match that is about to be played rather than a second copy
+   * of it kept here.
    */
-  #renderPracticeHull(): void {
-    const host = $('practiceHull');
+  #renderBriefing(): void {
+    const host = $('briefShips');
     host.innerHTML = '';
-    // `sub` is HTML the caller has already escaped, so a separator entity
-    // stays a separator instead of arriving on screen as its own source.
-    const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
-      const b = document.createElement('button');
-      b.className = on ? 'on' : '';
-      b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
-      b.onclick = fn;
-      host.appendChild(b);
-    };
-    pick('As authored', 'the level picks the hulls', !this.#hull, () => {
-      this.#hull = null;
-      this.#renderPracticeHull();
+    const scenario = this.#brief;
+    if (!scenario) return;
+    const level = PRACTICE.find(p => p.key === scenario);
+    $('briefName').textContent = level?.name ?? scenario;
+    $('briefBlurb').textContent = level?.blurb ?? '';
+
+    this.#roster.forEach((cls, slot) => {
+      const row = document.createElement('div');
+      row.className = 'card briefRow';
+      const chosen = this.#picks[slot] ?? null;
+      const authored = CLASS_NAMES[cls] ?? 'hull';
+      row.innerHTML =
+        `<div class="row"><div class="grow">`
+        + `<div class="t">Ship ${slot + 1}</div>`
+        + `<div class="s">${escape(chosen ? chosen.name : authored)}`
+        + `${chosen ? '' : ' &middot; as the level authored'}</div>`
+        + `</div></div>`;
+      const picks = document.createElement('div');
+      picks.className = 'picks hulls';
+      const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
+        const b = document.createElement('button');
+        b.className = on ? 'on' : '';
+        b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
+        b.onclick = fn;
+        picks.appendChild(b);
+      };
+      pick(authored, 'as authored', !chosen, () => {
+        this.#picks[slot] = null;
+        this.#renderBriefing();
+      });
+      for (const d of this.#library) {
+        if (classIndexOf(d.classKey) < 0) continue;
+        pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
+          + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
+          chosen?.designId === d.designId, () => {
+            this.#picks[slot] = d;
+            this.#renderBriefing();
+          });
+      }
+      row.appendChild(picks);
+      host.appendChild(row);
     });
-    for (const d of this.#library) {
-      if (classIndexOf(d.classKey) < 0) continue;
-      pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
-        + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
-        this.#hull?.designId === d.designId, () => {
-          this.#hull = d;
-          this.#renderPracticeHull();
-        });
-    }
-    // Say exactly how far the pick goes. A design that quietly flew as a stock
-    // hull would read as the editor not working.
-    $('practiceHullNote').innerHTML = this.#hull
-      ? `Every ship you field is this hull: its own mass, hull points, flight `
-        + 'envelope and guns, derived by the core from the parts and the plate '
-        + 'you fitted. The level still decides where they stand and how many.'
-      : 'Or take a hull out of the library. Anyone&rsquo;s will do.';
+
+    $('briefNote').innerHTML = this.#library.length
+      ? 'A swapped hull brings its own mass, hull points, flight envelope and '
+        + 'guns, derived by the core from the parts and the plate you fitted. '
+        + 'The level still decides where they stand and how many.'
+      : 'Nothing in the library yet. Build a hull in the shipyard and it will '
+        + 'be offered here.';
+  }
+
+  /**
+   * Open the briefing for a level: what it seats, and what you want to fly.
+   *
+   * A popup rather than one chooser above the levels, because the choice is
+   * per SHIP and per level: a single picker could only ever say "every hull I
+   * field is this one", which is not what swapping a ship out means.
+   */
+  #openBrief(scenario: string): void {
+    this.#brief = scenario;
+    this.#roster = this.#rosterOf(scenario);
+    this.#picks = this.#roster.map(() => null);
+    $('briefing').classList.remove('hidden');
+    this.#renderBriefing();
+  }
+
+  #closeBrief(): void {
+    this.#brief = null;
+    $('briefing').classList.add('hidden');
   }
 
   /**
@@ -397,20 +454,23 @@ export class Lobby {
    */
   #practice(scenario: string): void {
     this.#stopPolling();
+    this.#closeBrief();
     this.hide();
     const name = PRACTICE.find(p => p.key === scenario)?.name ?? scenario;
+    const hulls = this.#picks.map(d => (d ? { design: d.design, name: d.name } : null));
+    const flown = hulls.filter(Boolean).map(h => h?.name);
     const game = saves.create({
       id: newId(),
-      name: this.#hull ? `${name}, in ${this.#hull.name}` : name,
+      name: flown.length ? `${name}, in ${flown.join(', ')}` : name,
       seed: randomSeed(),
       scenario,
       humanSides: 0b01,
       side: 0,
-      ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
+      hulls,
     });
     this.#onLaunch({
       kind: 'offline', gameId: game.id, seed: game.seed, scenario, humanSides: 0b01, side: 0,
-      ...(this.#hull ? { hull: this.#hull.design, hullName: this.#hull.name } : {}),
+      hulls,
     });
   }
 
@@ -461,7 +521,7 @@ export class Lobby {
     this.#onLaunch({
       kind: 'offline', gameId: g.id, seed: g.seed, scenario: g.scenario,
       humanSides: g.humanSides, side: g.side, resume: g.turns,
-      ...(g.hull ? { hull: g.hull, hullName: g.hullName ?? 'your design' } : {}),
+      ...(g.hulls ? { hulls: g.hulls } : {}),
     });
   }
 
@@ -486,9 +546,10 @@ export class Lobby {
       this.#library = [];
     }
     this.#renderLibrary();
-    // The hull chooser is the library seen from the practice screen, so it is
-    // rebuilt from the same fetch rather than from a copy of it.
-    this.#renderPracticeHull();
+    // The briefing offers the library, so it is rebuilt from the same fetch
+    // rather than from a copy of it. Only while one is open: rebuilding a shut
+    // popup writes into a panel nobody is looking at.
+    if (this.#brief) this.#renderBriefing();
   }
 
   #renderLibrary(): void {
@@ -527,7 +588,8 @@ export class Lobby {
 
   #bind(): void {
     this.#renderPractice();
-    this.#renderPracticeHull();
+    $('briefClose').onclick = () => { this.#closeBrief(); };
+    $('briefGo').onclick = () => { if (this.#brief) this.#practice(this.#brief); };
     $('bLibAll').onclick = () => { this.#libMine = false; void this.refreshLibrary(); };
     $('bLibMine').onclick = () => { this.#libMine = true; void this.refreshLibrary(); };
     $('bNewPve').onclick = () => { void this.#create('pve'); };

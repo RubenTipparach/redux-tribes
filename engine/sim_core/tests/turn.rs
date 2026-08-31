@@ -761,27 +761,44 @@ fn a_side_can_field_a_hull_the_scenario_did_not_author() {
         (0..n).map(|i| (s[OUT + i * STRIDE + 3] as u32, s[OUT + i * STRIDE + 1] as u32)).collect::<Vec<_>>()
     };
 
-    ft_hull_choice(0, -1);
-    ft_hull_choice(1, -1);
+    ft_hull_choice(0, 0, -1);
+    ft_hull_choice(1, 0, -1);
     ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
     let authored = read();
     assert!(authored.iter().any(|(side, _)| *side == 0), "the skirmish seats a player");
 
-    // 2 is the Rogue. Every hull on side 0 becomes one; side 1 is untouched.
-    ft_hull_choice(0, 2);
+    // 2 is the Rogue, picked for the FIRST hull side 0 fields. Only that one
+    // changes: a player swapping one ship out of a pair is not asking for two
+    // of it, and the ship beside it keeps what the scenario authored.
+    ft_hull_choice(0, 0, 2);
     ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
     let picked = read();
+    let mut seen = 0;
     for ((side, cls), (_, was)) in picked.iter().zip(authored.iter()) {
-        if *side == 0 {
-            assert_eq!(*cls, 2, "a picked hull applies to every ship on that side");
-        } else {
+        if *side != 0 {
             assert_eq!(cls, was, "the other side keeps what the scenario authored");
+            continue;
         }
+        if seen == 0 {
+            assert_eq!(*cls, 2, "the picked slot is the picked hull");
+        } else {
+            assert_eq!(cls, was, "the ship beside it is untouched");
+        }
+        seen += 1;
     }
+    assert!(seen >= 2, "the skirmish seats two, or this proves nothing");
+
+    // And the second slot is its own choice.
+    ft_hull_choice(0, 1, 4);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    let both = read();
+    let mine: Vec<u32> = both.iter().filter(|(side, _)| *side == 0).map(|(_, c)| *c).collect();
+    assert_eq!(mine, vec![2, 4], "each slot fields what it was given");
+    ft_hull_choice(0, 1, -1);
 
     // And clearing it puts the authored ships back, so the pick is a choice
     // rather than a one way door.
-    ft_hull_choice(0, -1);
+    ft_hull_choice(0, 0, -1);
     ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
     assert_eq!(read(), authored, "clearing the pick restores the authored hulls");
 }

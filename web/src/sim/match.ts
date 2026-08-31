@@ -40,14 +40,15 @@ export interface MatchExports {
   ft_scratch_ptr(): number;
   ft_scratch_len(): number;
   ft_match_new(seedHi: number, seedLo: number, scenario: number, humanSides: number): number;
-  ft_hull_choice(side: number, classIdx: number): number;
+  ft_hull_choice(side: number, slot: number, classIdx: number): number;
   ft_hull_design(
-    side: number, classIdx: number, plateCells: number,
+    side: number, slot: number, classIdx: number, plateCells: number,
     extX: number, extY: number, extZ: number,
     radiusCells: number, fouled: number, parts: number,
   ): number;
-  ft_hull_mount(side: number, key: number, x: number, y: number, z: number,
+  ft_hull_mount(side: number, slot: number, key: number, x: number, y: number, z: number,
     masked: number): number;
+  ft_scenario_roster(scenario: number): number;
   ft_hull_clear(side: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
@@ -142,23 +143,37 @@ export class Match {
     return this.#view;
   }
 
-  /**
-   * Start a match. The seed is the same 16 hex character string the server
-   * issues, split into halves because the boundary carries 32 bit values.
-   */
-  /**
-   * Start a match. `humanSides` is a bit per side, set where a person plays
-   * it. It goes to the core rather than staying here because it changes the
-   * simulation, and two clients that disagreed about it would part on turn one.
-   */
-  /** Both sides back to the hulls their scenario authored. */
+  /** Both sides back to the hulls their scenario authored, every slot. */
   clearHulls(): void {
     this.#ex.ft_hull_clear(0);
     this.#ex.ft_hull_clear(1);
   }
 
   /**
-   * The hull one side fields, as a design rather than a class.
+   * What a scenario fields, before anybody picks anything.
+   *
+   * The lobby offers a hull per SHIP, so it needs the roster to draw the list.
+   * Asked of the core rather than listed here: a second copy of who a scenario
+   * seats is a copy that goes out of step the first time one is retuned, and
+   * it would be the one the player was reading.
+   */
+  roster(scenario: Scenario): Array<{ side: number; cls: number }> {
+    const n = this.#ex.ft_scenario_roster(scenario);
+    const s = this.#s;
+    const out: Array<{ side: number; cls: number }> = [];
+    for (let i = 0; i < n; i++) {
+      out.push({ side: s[OUT + i * 2] ?? 0, cls: s[OUT + i * 2 + 1] ?? 0 });
+    }
+    return out;
+  }
+
+  /**
+   * The hull one SHIP fields, as a design rather than a class.
+   *
+   * `slot` is which of that side's ships: slot n is the nth it seats, and a
+   * slot nobody set spawns the hull the scenario authored. Per ship rather
+   * than per side, because a player swapping one hull out of a pair is not
+   * asking for two of it.
    *
    * The core derives it: mass, hull points, envelope, marines, boarding and
    * the guns, from the parts and the plate. What crosses from here is what the
@@ -171,11 +186,11 @@ export class Match {
     radiusCells: number; fouled: number;
   }, parts: readonly number[],
     mounts: ReadonlyArray<{ key: string; at: readonly [number, number, number] }>,
-    masks?: ReadonlyArray<Uint32Array>): boolean {
+    masks?: ReadonlyArray<Uint32Array>, slot = 0): boolean {
     const s = this.#s;
     if (DERIVE_PARTS + parts.length > s.length) return false;
     for (let i = 0; i < parts.length; i++) s[DERIVE_PARTS + i] = parts[i] as number;
-    const ok = this.#ex.ft_hull_design(side, classIdx, geo.plateCells,
+    const ok = this.#ex.ft_hull_design(side, slot, classIdx, geo.plateCells,
       geo.ext[0], geo.ext[1], geo.ext[2], geo.radiusCells, geo.fouled, parts.length);
     if (!ok) return false;
     for (let i = 0; i < mounts.length; i++) {
@@ -194,12 +209,21 @@ export class Match {
           w[DERIVE_PARTS + k * 2 + 1] = (v >>> 16) & 0xffff;
         }
       }
-      this.#ex.ft_hull_mount(side, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2],
+      this.#ex.ft_hull_mount(side, slot, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2],
         mask ? 1 : 0);
     }
     return true;
   }
 
+  /**
+   * Start a match.
+   *
+   * The seed is the same 16 hex character string the server issues, split into
+   * halves because the boundary carries 32 bit values. `humanSides` is a bit
+   * per side, set where a person plays it: it goes to the core rather than
+   * staying here because it changes the simulation, and two clients that
+   * disagreed about it would part on turn one.
+   */
   start(seed: string, scenario: Scenario, humanSides = 0b01): void {
     const clean = seed.replace(/[^0-9a-f]/gi, '').padStart(16, '0').slice(-16);
     const hi = parseInt(clean.slice(0, 8), 16) >>> 0;

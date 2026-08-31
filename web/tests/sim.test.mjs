@@ -223,21 +223,29 @@ test('a side fields the design it picked, derived by the core', () => {
   ]);
   m.start('deadbeefcafe0003', 0);
   const flown = m.ships();
-  for (const s of flown) {
-    if (s.side !== 0) continue;
-    assert.ok(Math.abs(s.hullMax - stats.hull) < 0.1,
-      `a designed hull carries its own hull points: ${s.hullMax} against ${stats.hull}`);
-    assert.ok(Math.abs(s.radius - stats.radius) < 0.01, `radius ${s.radius}`);
-    assert.equal(s.marines, stats.marines);
-  }
+  // Slot 0, so the FIRST hull this side seats and no other: a player swapping
+  // one ship out of a pair is not asking for two of it.
+  const ours = flown.filter(s => s.side === 0);
+  assert.ok(ours.length >= 2, 'the skirmish seats two, or the next check proves nothing');
+  assert.ok(Math.abs(ours[0].hullMax - stats.hull) < 0.1,
+    `a designed hull carries its own hull points: ${ours[0].hullMax} against ${stats.hull}`);
+  assert.ok(Math.abs(ours[0].radius - stats.radius) < 0.01, `radius ${ours[0].radius}`);
+  assert.equal(ours[0].marines, stats.marines);
+  const wasSecond = authored.filter(a => a[0] === 0)[1];
+  assert.equal(+ours[1].hullMax.toFixed(2), wasSecond[2], 'the ship beside it is untouched');
   assert.notEqual(m.hash, hashA, 'the design a side fields is in the hash');
 
+  // And the second slot is its own choice, filled independently.
+  m.setHull(0, 2, geo, parts, [{ key: 'projectile', at: [0, 0.2, 1.5] }], undefined, 1);
+  m.start('deadbeefcafe0003', 0);
+  const both = m.ships().filter(s => s.side === 0);
+  assert.ok(both.every(s => Math.abs(s.hullMax - stats.hull) < 0.1),
+    'each slot fields what it was given');
+
   // The other side keeps what the scenario authored, and clearing restores it.
-  const mineNow = flown.filter(s => s.side === 0).map(s => +s.hullMax.toFixed(2));
   const foeNow = flown.filter(s => s.side === 1).map(s => +s.hullMax.toFixed(2));
   const foeWas = authored.filter(a => a[0] === 1).map(a => a[2]);
   assert.deepEqual(foeNow, foeWas, 'a design is one side\'s, not the match\'s');
-  assert.ok(mineNow.every(h => Math.abs(h - 194.85) < 0.1), 'and mine are the design');
 
   m.clearHulls();
   m.start('deadbeefcafe0003', 0);

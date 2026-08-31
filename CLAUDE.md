@@ -110,8 +110,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 81, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 54, the wasm boundary and the addresses
+cd engine/sim_core && cargo test            # 82, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 55, the wasm boundary and the addresses
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -154,6 +154,14 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
+A check has to ask about the thing it names. The beam check measured EVERY beam
+against the weapon's range, on the reasoning that a long beam is one drawn
+through its target, and a run went red at 297.8 units on a beam that had simply
+missed: the core emits the full range endpoint on every shot and the client
+shortens the ones that hit, so running out into space is what a miss is
+supposed to look like. It reads the beams that CONNECTED now, and counts them,
+so a match where none landed cannot pass by having nothing to measure.
+
 ### And one for the addresses
 
 ```sh
@@ -168,6 +176,18 @@ restarted. Then the lobby offering it back, a design that reloads into the
 editor, a room that reloads into the room, an address naming a game that is
 gone falling back to the lobby AND rewriting itself, and Back walking the
 screens.
+
+It also checks the briefing, because a per ship pick is only worth having if it
+lands on one ship: it reads the roster each level seats (duel 1, skirmish 2),
+swaps the second ship alone, and reads the hulls back off the match. 300 and
+259.57 is a pass. Two equal numbers would be the old whole side behaviour
+wearing the new screen.
+
+And it opens that briefing at 390x844 and 390x560, because a modal is the easy
+way to draw a control nothing can press. It found one immediately: the box
+scrolled whole, so Launch sat under a library of hulls and was off the screen
+at both sizes. Header and Launch are fixed rows with only the roster scrolling
+between them now, and the check reads 24 of 24 controls taking a tap.
 
 It caught the defect that makes the whole feature fail: on a deep path a
 relative `src="./main.js"` asks for `/play/main.js`, and the server answers
@@ -190,7 +210,8 @@ hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
 selection that outlines it, a turret that turns 90 degrees and takes its
 cells with it, a saved hull taken out of the library into a practice level and
-actually spawned, a turret whose box has nothing standing in it and a pencil
+actually spawned on the ship it was picked FOR while the ship beside it stays
+stock, a turret whose box has nothing standing in it and a pencil
 that refuses to put anything there, and the armour pencil: a run that is fully reversible, a cell
 that reaches nothing refused with a reason, slabs that TILE the lattice rather
 than overlapping, the slab drawn on the model at the thickness the slider says,
@@ -407,7 +428,9 @@ Rules that came out of actually measuring this repo:
 Current figures, worth not regressing: a turn resolved in 452 microseconds,
 envelope 96 shell cells at 7.9 units, 61 fps while planning. The wasm is 152822
 bytes locally after the damage model, the design derivation and the turret arc
-scan; 153261 once the hit volumes became boxes;
+scan; 153261 once the hit volumes became boxes; 156798 once a hull pick became
+per ship rather than per side, which is 3537 bytes on the same compiler either
+side of the commit, four slots of registry and the roster query;
 quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
@@ -601,10 +624,28 @@ Two lessons from that texture are about the material and outlive the tool:
 ## A hull a side fields is a match fact too
 
 The practice screen lets a player take a saved design into a level. What
-crosses is `ft_hull_choice(side, class)` before `ft_match_new`, and the class
-index is hashed, for the same reason sides are: a seat that fielded a Rogue
-against one that spawned a Terran would agree for as long as the two happened
-to fly alike, and part several turns later.
+crosses is `ft_hull_choice(side, slot, class)` before `ft_match_new`, and the
+class index is hashed, for the same reason sides are: a seat that fielded a
+Rogue against one that spawned a Terran would agree for as long as the two
+happened to fly alike, and part several turns later.
+
+**A pick is per SHIP, not per side.** It used to be one design for a whole
+side, so bringing a hull into Skirmish quietly turned both of your ships into
+it, and there was no way to field one custom hull beside a stock one. The
+registry is `[[_; HULL_SLOTS]; 2]` now, `HULL_SLOTS` being 4, and
+`apply_designs` walks a side's ship ids in order and hands slot n to ship n. An
+empty slot means that ship spawns as the scenario authored it, which is what
+makes "swap this one, leave that one" expressible at all. `ft_hull_clear(side)`
+still clears every slot, because a launch starts from nothing.
+
+Which needs a screen. Picking a level opens a **briefing** naming what the
+level seats, one row per ship, each row offering that ship's stock hull and
+every saved design; Duel lists 1 row and Skirmish 2. The roster comes from
+`ft_scenario_roster(scenario)`, which builds the scenario and reports the side
+and class of every ship in it: what a level fields is the core's own answer,
+not a table beside it in the client that a new scenario would leave stale. It
+saves, clears and restores `HULL_CHOICE` around the probe, since asking must
+not disturb a launch being assembled.
 
 The design's own numbers cross too, and the core is what turns them into a
 ship. `design.rs` holds the parts table and the arithmetic; `ft_derive` answers
