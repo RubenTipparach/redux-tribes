@@ -1470,7 +1470,8 @@ function renderChip(core, would, act){
       'The core prices the design that WOULD result before the tap is spent.</s>';
     return;
   }
-  var verb=act && act.verb ? act.verb : "place";
+  var VERB={place:"place", replace:"swap to", remove:"take back"};
+  var verb=VERB[act && act.verb ? act.verb : "place"];
   var mn=act && act.m!==undefined ? modUI(act.m).name : modUI(S.kind).name;
   var v=verdictOf(would);
   var head='<b>'+verb+' '+mn+' at '+S.probe.i+','+S.probe.j+','+S.probe.k+'</b>'+
@@ -1491,9 +1492,10 @@ function renderChip(core, would, act){
     var a=core.stats[i], b=would.stat[a.id];
     if(!b || Math.abs(b.v-a.v)<1e-6) continue;
     var uu=statUI(a.id);
-    moved.push(uu.k+" <u>"+a.v.toFixed(uu.dp)+"</u> to <u>"+b.v.toFixed(uu.dp)+"</u>");
+    // One element per stat so a desktop wraps them and never clips a number.
+    moved.push('<s>'+uu.k+" <u>"+a.v.toFixed(uu.dp)+"</u> to <u>"+b.v.toFixed(uu.dp)+"</u></s>");
   }
-  body+='<s>'+(moved.length?moved.join(" &middot; "):"no stat moves")+'</s>';
+  body+=(moved.length?moved.join(""):'<s>no stat moves</s>');
   el.innerHTML=head+body;
 }
 

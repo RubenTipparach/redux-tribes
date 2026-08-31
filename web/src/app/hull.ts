@@ -44,6 +44,85 @@ export interface HullMesh {
   readonly quads: number;
   /** Half extents in ship units, about the hull's own centre. */
   readonly half: readonly [number, number, number];
+  /**
+   * Where that centre is, in ship units.
+   *
+   * Not the origin. A hull is not symmetric about the point it turns around:
+   * a Terran runs from its drive bells behind the origin to a nose well in
+   * front of it, and anything framing this mesh on (0,0,0) with `half` puts
+   * the difference off the edge of the picture.
+   */
+  readonly mid: readonly [number, number, number];
+}
+
+/**
+ * The side colours a hull is washed with, and the wash itself.
+ *
+ * Here rather than in `view.ts` because three pictures now draw the same
+ * hulls: the map, the fleet chip thumbnails and the schematic modal. Whose
+ * ship a hull is has to read identically in all three, and a second copy of
+ * the tint is a copy that goes its own way the first time one of them is
+ * tuned (GUIDELINES 5.1).
+ */
+export const SIDE_TONE = {
+  mine: 0x35c7ff,
+  theirs: 0xfa6a0a,
+  adrift: 0xff4b4b,
+  lost: 0x33404f,
+} as const;
+
+/** Which of those a hull wears, given the seat looking at it. */
+export function hullTone(
+  s: { destroyed: boolean; drifting: boolean; side: number }, mySide: number,
+): number {
+  return s.destroyed ? SIDE_TONE.lost
+    : s.drifting ? SIDE_TONE.adrift
+    : s.side === mySide ? SIDE_TONE.mine : SIDE_TONE.theirs;
+}
+
+/**
+ * How far the side wash goes, at the two ends of the range.
+ *
+ * Whose ship this is matters at MAP range, where a hull is a few pixels; what
+ * it is built out of matters up CLOSE, where the tint is just paint over the
+ * thing being looked at. A wreck is washed out whatever the range, because
+ * "this one is gone" outranks both.
+ */
+const TINT_NEAR = 0.05, TINT_FAR = 0.40, TINT_LOST = 0.8;
+/** How much the hull glows at map range, so it reads against the field. */
+const GLOW_FAR = 0.09;
+
+/**
+ * The camera's distance as a 0 to 1 "far": 0 up close, 1 out at map range.
+ *
+ * Twelve to fifty four units, which is the span between inspecting one ship
+ * and planning a move with a fleet.
+ */
+export const tintFar = (dist: number): number =>
+  Math.max(0, Math.min(1, (dist - 14) / 40));
+
+/** How much of the side colour a hull wears at that range. */
+export const tintMix = (destroyed: boolean, far: number): number =>
+  destroyed ? TINT_LOST : TINT_NEAR + (TINT_FAR - TINT_NEAR) * far;
+
+/**
+ * Wash a hull material toward its side, keeping the design's own paint.
+ *
+ * Lambert MULTIPLIES this by the vertex colour, so the full side colour would
+ * wash a red gun to near black. A lerp from white keeps the hue.
+ *
+ * `far` is what the three callers differ on and the only thing they differ on,
+ * which is why it is a parameter rather than three copies of this: the map
+ * passes the camera's own range so a hull repaints as it is zoomed in on, a
+ * chip thumbnail passes 1 because a 44 pixel picture IS map range, and the
+ * schematic passes 0 because it exists to show what a hull is made of.
+ */
+export function tintHull(
+  mat: THREE.MeshLambertMaterial, tone: number, destroyed: boolean, far: number,
+): void {
+  mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), tintMix(destroyed, far));
+  mat.emissive.setHex(destroyed ? 0x000000 : tone).multiplyScalar(GLOW_FAR * far);
+  mat.needsUpdate = true;
 }
 
 const cache = new Map<string, HullMesh>();
@@ -232,6 +311,11 @@ export function hullMesh(d: Design): HullMesh {
       Math.max(1, hiX - loX + 1) * cell / 2,
       Math.max(1, hiY - loY + 1) * cell / 2,
       Math.max(1, hiZ - loZ + 1) * cell / 2,
+    ],
+    mid: [
+      ((loX + hiX + 1) / 2 - NX / 2) * cell,
+      ((loY + hiY + 1) / 2 - NY / 2) * cell,
+      ((loZ + hiZ + 1) / 2 - NZ / 2) * cell,
     ],
   };
   if (cache.size >= CACHE_MAX) {

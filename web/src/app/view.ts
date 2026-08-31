@@ -17,11 +17,23 @@ import {
   sliceOutline, sliceRegion, type Fitted, type SliceCut,
 } from './spline.js';
 import {
-  type Flight, type PlannedOrder, type Pose, type ShipState, type Vec3, type Well,
+  type Flight, type PlannedOrder, type Pose, type ShipState, type SubState,
+  type Vec3, type Well,
   CLASS_KEYS, isCommitted, Mode, PROBE_STEPS,
 } from '../sim/types.js';
 import { stockFor, type Design } from './design.js';
-import { hullMesh, type HullMesh } from './hull.js';
+import { hullMesh, hullTone, tintFar, tintHull, tintMix, type HullMesh } from './hull.js';
+
+/**
+ * How close the camera has to be for the ship inspector to be offered, as
+ * multiples of the hull's own radius: distance, and how far off the hull the
+ * camera may be aimed. Ten radii puts a frigate at about a third of the
+ * screen, which is the point at which its parts are worth labelling, and it
+ * clears the camera's own closest approach of 18 u for the smallest hull the
+ * span floor allows, so a fully zoomed in ship is always inside it.
+ */
+const INSPECT_SPANS = 10;
+const INSPECT_OFF = 4;
 
 /** How long a chunk of hull stays on screen, in ticks: three seconds. */
 const DEBRIS_TICKS = 180;
@@ -709,6 +721,53 @@ export class View {
     return (sel ? sel.pos.y : 0) + this.workAlt;
   }
 
+  /**
+   * Is the camera close enough to one hull to read the parts on it?
+   *
+   * Two conditions, because either alone lies. Zoomed right in on empty space
+   * a hundred units from the fleet is close, and it is not close TO anything;
+   * centred on a ship from six hundred units away is aimed at it and shows a
+   * dot. So the camera has to be both near in distance and pointed near the
+   * hull, measured against the hull's own size so a freighter and a frigate
+   * both have to be looked at properly rather than a fixed number suiting one
+   * of them.
+   *
+   * Framing, so it is the client's (CLAUDE.md, "What the client may compute").
+   * Nothing downstream of it changes the simulation: it decides whether an
+   * overlay is offered.
+   */
+  closeUpOn(ship: ShipState): boolean {
+    const span = Math.max(ship.radius, 2);
+    if (this.#dist > span * INSPECT_SPANS) return false;
+    return this.#focus.distanceTo(v(ship.pos)) <= span * INSPECT_OFF;
+  }
+
+  /**
+   * Which of one ship's hit volumes is under a screen point, or -1.
+   *
+   * The volumes come in from the core already placed in the world, so this
+   * only turns a ray into an index. Nearest wins, since a belt sphere and a
+   * drive sphere overlap on most hulls.
+   */
+  pickSub(clientX: number, clientY: number, volumes: ReadonlyArray<SubState>): number {
+    const rect = this.#canvas.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    ), this.#camera);
+    let best = -1;
+    let bestT = Infinity;
+    const hit = new THREE.Vector3();
+    for (const b of volumes) {
+      if (ray.ray.intersectSphere(new THREE.Sphere(v(b.pos), b.radius), hit)) {
+        const t = hit.distanceTo(this.#camera.position);
+        if (t < bestT) { bestT = t; best = b.index; }
+      }
+    }
+    return best;
+  }
+
   /** The ship under a screen point, or -1. Hull spheres, generously sized. */
   pickShip(clientX: number, clientY: number): number {
     const rect = this.#canvas.getBoundingClientRect();
@@ -782,23 +841,15 @@ export class View {
    * and a repaint is one number rather than a walk over every face.
    */
   #tintHull(mesh: THREE.Mesh, s: ShipState): void {
-    const tone = s.destroyed ? 0x33404f
-      : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE;
-    // And it FADES as the camera closes in. Whose ship this is matters at map
-    // range, where a hull is a few pixels; what it is built out of matters up
-    // close, where the tint is just paint over the thing being looked at.
+    const tone = hullTone(s, this.mySide);
+    // And it FADES as the camera closes in, which is `hull.ts`'s rule now: the
+    // chips and the schematic draw the same hulls and pass their own range.
     // Quantised so drifting a millimetre does not repaint four hulls.
-    const far = Math.max(0, Math.min(1, (this.#dist - 14) / 40));
-    const mix = s.destroyed ? 0.8 : 0.05 + 0.35 * far;
-    const key = tone * 100 + Math.round(mix * 40);
+    const far = tintFar(this.#dist);
+    const key = tone * 100 + Math.round(tintMix(s.destroyed, far) * 40);
     if (this.#tint.get(s.id) === key) return;
     this.#tint.set(s.id, key);
-    const mat = mesh.material as THREE.MeshLambertMaterial;
-    // Lambert MULTIPLIES this by the vertex colour, so the full side colour
-    // would wash a red gun to near black. A lerp from white keeps the hue.
-    mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), mix);
-    mat.emissive.setHex(s.destroyed ? 0x000000 : tone).multiplyScalar(0.09 * far);
-    mat.needsUpdate = true;
+    tintHull(mesh.material as THREE.MeshLambertMaterial, tone, s.destroyed, far);
   }
 
   /**

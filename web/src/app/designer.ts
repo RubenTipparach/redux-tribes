@@ -13,6 +13,7 @@
  */
 
 import * as THREE from 'three';
+import { bindOrbit, frameBox } from './orbitcam.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -238,62 +239,15 @@ export class Designer {
     this.#scene.add(this.#hull, this.#rig, this.#sockets, this.#marks, this.#arcs,
       this.#slabBox);
 
-    // Orbit. One finger drags, two pinch, and the buttons do the same job for
-    // anyone who would rather tap. There is no second mouse button on a phone.
-    const pts = new Map<number, { x: number; y: number }>();
-    let drag: { x: number; y: number } | null = null, pinch = 0;
-    const gap = () => {
-      const v = [...pts.values()];
-      const a = v[0], b = v[1];
-      return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
-    };
-    // A tap picks and a drag orbits, told apart by how far the pointer moved.
-    // There is no second mouse button on a phone and no hover either, so the
-    // only gesture that can name a part is the one that also turns the camera.
-    let downAt: { x: number; y: number; t: number } | null = null;
-    let moved = 0;
-    cv.addEventListener('pointerdown', e => {
-      cv.setPointerCapture(e.pointerId);
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size === 1) {
-        drag = { x: e.clientX, y: e.clientY };
-        downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
-        moved = 0;
-      } else { drag = null; pinch = gap(); downAt = null; }
-      e.preventDefault();
-    });
-    cv.addEventListener('pointermove', e => {
-      if (!pts.has(e.pointerId)) return;
-      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (pts.size >= 2) {
-        const d = gap();
-        if (pinch > 0 && d > 0) { this.#zoom(pinch / d); pinch = d; }
-        return;
-      }
-      if (!drag) return;
-      moved += Math.abs(e.clientX - drag.x) + Math.abs(e.clientY - drag.y);
-      this.#cam.yaw -= (e.clientX - drag.x) * 0.008;
-      this.#cam.pitch = Math.max(-1.35, Math.min(1.35, this.#cam.pitch + (e.clientY - drag.y) * 0.008));
-      drag = { x: e.clientX, y: e.clientY };
-    });
-    const up = (e: PointerEvent) => {
-      const tap = downAt && pts.size === 1 && moved < 6
-        && performance.now() - downAt.t < 700;
-      pts.delete(e.pointerId);
-      if (pts.size < 2) pinch = 0;
-      if (pts.size === 0) { drag = null; downAt = null; }
-      if (tap) this.#pickAt(e.clientX, e.clientY);
-    };
-    cv.addEventListener('pointerup', up);
-    cv.addEventListener('pointercancel', up);
-    cv.addEventListener('wheel', e => { e.preventDefault(); this.#zoom(e.deltaY > 0 ? 1.09 : 0.92); },
-      { passive: false });
+    // Orbit. One finger drags, two pinch, and a press that did not travel is a
+    // tap on a part rather than a turn of the camera. Shared with the
+    // schematic modal, which orbits the same hulls and would otherwise be a
+    // second copy of the same gestures.
+    bindOrbit(cv, this.#cam, { onTap: (x, y) => this.#pickAt(x, y) });
 
     if (window.ResizeObserver) new ResizeObserver(() => this.#resize()).observe($('dzView'));
     window.addEventListener('resize', () => this.#resize());
   }
-
-  #zoom(f: number): void { this.#cam.zoom = Math.max(0.4, Math.min(2.8, this.#cam.zoom * f)); }
 
   #resize(): void {
     if (!this.#renderer) return;
@@ -312,47 +266,9 @@ export class Designer {
     this.#last = now;
     this.#aimTurrets(dt);
     // Framed on the hull's own extent, not on an empty berth, so a small ship
-    // does not sit in the corner of a void.
-    // Frame the hull's BOX as it actually projects, not its sphere.
-    //
-    // A frigate is six units long and three across, so its sphere is mostly
-    // empty: fitting the sphere left a third of a phone's screen as margin the
-    // ship was never going to reach. This projects the eight corners onto the
-    // camera's own right and up axes and solves for the distance that just
-    // contains them, in both angles, so the ship fills whatever shape the
-    // viewport happens to be.
-    const fovV = this.#camera.fov * Math.PI / 180;
-    const fovH = 2 * Math.atan(Math.tan(fovV / 2) * Math.max(0.05, this.#camera.aspect));
-    const cp0 = Math.cos(this.#cam.pitch), sp0 = Math.sin(this.#cam.pitch);
-    const cy0 = Math.cos(this.#cam.yaw), sy0 = Math.sin(this.#cam.yaw);
-    const fwd = new THREE.Vector3(-sy0 * cp0, -sp0, -cy0 * cp0);   // camera looks in
-    const right = new THREE.Vector3(-cy0, 0, sy0);
-    const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
-    const h = this.#half;
-    // Solve the eight corners exactly. A corner at offset c sits at depth
-    // D + c.fwd, so it stays in frame when D >= |c.right| / tanH - c.fwd, and
-    // likewise vertically; the answer is the largest of those sixteen bounds.
-    // Allowing for the box's whole depth instead pushed the camera back far
-    // enough for its NEAREST face, which on a six unit ship was a third of the
-    // screen given away as margin.
-    const tanH = Math.tan(fovH / 2), tanV = Math.tan(fovV / 2);
-    let need = 0;
-    for (let sx = -1; sx <= 1; sx += 2) for (let sy = -1; sy <= 1; sy += 2)
-      for (let sz = -1; sz <= 1; sz += 2) {
-        const ox = sx * h.x, oy = sy * h.y, oz = sz * h.z;
-        const u = Math.abs(ox * right.x + oy * right.y + oz * right.z);
-        const v = Math.abs(ox * up.x + oy * up.y + oz * up.z);
-        const w = ox * fwd.x + oy * fwd.y + oz * fwd.z;
-        need = Math.max(need, u / tanH - w, v / tanV - w);
-      }
-    const dist = Math.max(0.4, need * 1.05) * this.#cam.zoom;
-    const c = this.#centre;
-    const cp = Math.cos(this.#cam.pitch);
-    this.#camera.position.set(
-      c.x + Math.sin(this.#cam.yaw) * cp * dist,
-      c.y + Math.sin(this.#cam.pitch) * dist,
-      c.z + Math.cos(this.#cam.yaw) * cp * dist);
-    this.#camera.lookAt(c);
+    // does not sit in the corner of a void. The fit is `orbitcam`'s, shared
+    // with the schematic modal.
+    frameBox(this.#camera, this.#cam, this.#centre, this.#half);
     this.#renderer.render(this.#scene, this.#camera);
   };
 

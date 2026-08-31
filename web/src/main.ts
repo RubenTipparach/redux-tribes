@@ -16,12 +16,16 @@ import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
 import { arcMasks, mountsOf, partsOf, rasterise, stockFor, useArcDirs, useCore, type Design }
   from './app/design.js';
+import { hullTone } from './app/hull.js';
+import { shipThumb } from './app/thumb.js';
+import { Schematic, type SchematicSubject } from './app/schematic.js';
 import { Api } from './net/api.js';
 import {
   type Flight, type PlannedShot, type PlannedOrder, type Pose, type ShipState, type SimEvent,
   type SubState, type Vec3,
   CLASS_KEYS, CLASS_NAMES, classIndexOf, EventKind, FACTION_NAMES, isCommitted, Mode, Scenario,
-  SCENARIO_BY_NAME, SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS, WEAPON_NAMES,
+  SCENARIO_BY_NAME, SUB_BLURB, SUB_LABEL, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS,
+  WEAPON_NAMES,
 } from './sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
@@ -73,6 +77,17 @@ let ships: ShipState[] = [];
  * would be a client that can disagree with the thing resolving the turn.
  */
 let subs: SubState[] = [];
+/**
+ * What each ship is flying, by ship id.
+ *
+ * One answer for the map, the chip thumbnails and the schematic. Three places
+ * deciding for themselves what hull a ship has is three chances for a chip to
+ * show a picture of a ship that is not on the map.
+ */
+const hulls = new Map<number, Design>();
+const hullOf = (s: ShipState): Design =>
+  hulls.get(s.id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+
 function readShips(): void {
   ships = match.ships();
   subs = match.subs();
@@ -317,14 +332,16 @@ function start(): void {
   match.start(seed, scenario, launch.humanSides);
   // What each ship is flying, so the map draws the hull rather than a stand in
   // for it: the picked design for the side that picked it, and each class's
-  // stock hull for everyone else.
-  const hullOf = new Map<number, Design>();
+  // stock hull for everyone else. Kept rather than handed straight over,
+  // because the chips and the schematic draw the same hulls and would
+  // otherwise each work out their own answer to "what is this ship".
+  hulls.clear();
   for (const s of match.ships()) {
-    hullOf.set(s.id, picked && s.side === launch.side
+    hulls.set(s.id, picked && s.side === launch.side
       ? picked
       : stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
   }
-  view.setDesigns(hullOf);
+  view.setDesigns(hulls);
   // Say what was taken out, on the panel that lists it. A design picked in the
   // lobby and never mentioned again is a pick a player cannot check.
   $('hullNote').textContent = flying;
@@ -352,6 +369,8 @@ function start(): void {
   view.setShips(ships);
   view.setSelection(selected);
   view.fit();
+  closeSchematic();
+  setInspect(false);
   restoreFacing();
   refreshAiPlans();
   view.invalidateEnvelope();
@@ -407,45 +426,81 @@ const canPlan = (): boolean => {
 
 // ------------------------------------------------------------- panels --
 
+/**
+ * One ship's hit volumes, sorted the way every rail and card shows them.
+ *
+ * The core reports them in its own order and that order is the contract a shot
+ * carries, so this never renumbers them: it sorts a COPY for display, and the
+ * `index` on each one is still the core's.
+ */
+const volumesOf = (id: number): SubState[] =>
+  subsOf(id).slice().sort((a, b) => a.kind - b.kind || a.index - b.index);
+
+/** The volumes that are gone, which is what a chip has to say at a glance. */
+const offlineOf = (id: number): SubState[] => volumesOf(id).filter(v => v.dead);
+
+/** Which of my hulls are aiming at this one, nearest thing to a threat list. */
+const aimersOf = (enemyId: number): ShipState[] =>
+  ships.filter(s => mine(s) && !s.destroyed && targetShip(s.id)?.id === enemyId);
+
+/**
+ * The fleet rail, as chips.
+ *
+ * A chip is a button with a picture of the ship on it, because a player who
+ * spent an hour in the shipyard should be able to pick their hull out of the
+ * rail without reading. Beside it, and only when there is something to say,
+ * the systems that have gone offline: a hull at 80 hull points with its jets
+ * out is in far more trouble than one at 50 with everything working, and the
+ * bar alone cannot tell those apart.
+ *
+ * Hover fills in the rest (hover being a desk affordance), and the info button
+ * opens the schematic, which is the same detail on a device with no pointer.
+ */
 function renderFleet(): void {
-  const aimed = targetShip();
   const rows = (list: ShipState[], host: HTMLElement, enemy: boolean) => {
     host.innerHTML = '';
     for (const s of list) {
-      const div = document.createElement('div');
-      // A hostile row is the target picker, so it marks the ship under the
+      // A hostile chip is the target picker, so it marks the ship under the
       // guns rather than the ship being flown. Selecting an enemy as though it
       // were yours only ever made the whole rail inert, because planning needs
       // one of your own hulls.
-      const isAimed = enemy && !!aimed && s.id === aimed.id;
-      div.className = `shipRow${enemy ? ' enemy' : ''}`
-        + `${!enemy && s.id === selected ? ' sel' : ''}${isAimed ? ' tg' : ''}`
+      const aimed = enemy && targetShip()?.id === s.id && selected >= 0
+        && !!selectedShip() && mine(selectedShip()!);
+      const chip = document.createElement('div');
+      chip.dataset.ship = String(s.id);
+      chip.className = `chip${enemy ? ' enemy' : ''}`
+        + `${!enemy && s.id === selected ? ' sel' : ''}${aimed ? ' tg' : ''}`
         + `${s.destroyed ? ' gone' : ''}`;
+
+      const pick = document.createElement('button');
+      pick.className = 'chipPick';
+      pick.type = 'button';
       const hullPct = Math.max(0, (100 * s.hull) / s.hullMax);
-      // Named, because "sub 2" is a number and "engines" is a decision. The
-      // order is the core's, so the label and the index a shot carries cannot
-      // drift apart.
-      const volumes = subsOf(s.id)
-        .map(x => `<div class="sub${x.dead ? ' dead' : ''}"><span>${volumeName(s.id, x.index)}</span>`
-          + `<span>${x.dead ? 'out' : x.hp.toFixed(0)}</span></div>`)
-        .join('');
-      div.innerHTML =
-        `<div class="nm">${shipName(s)}${isAimed ? ' &middot; TARGET' : ''}`
-        + `${s.destroyed ? ' &middot; LOST' : s.drifting ? ' &middot; ADRIFT' : ''}</div>`
-        + `<div class="bar"><i style="width:${hullPct.toFixed(0)}%"></i></div>`
-        + `<div class="sub"><span>hull ${s.hull.toFixed(0)}</span><span>${FACTION_NAMES[s.faction] ?? '?'}</span></div>`
-        + `<div class="sub"><span>marines ${s.marines}</span><span>${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s</span></div>`
-        // Who this hull is aiming at, on the hull's own row, because targeting
-        // is per ship: one pick for the whole fleet was narrower than the
-        // orders underneath it, which already carry a target per SHOT. For a
-        // hostile it is `aiTarget`, which the core keeps and reports, so the
-        // row says what the enemy is set on rather than guessing.
-        + (s.destroyed ? '' : `<div class="sub aim"><span>${enemy ? 'hunting' : 'target'}</span>`
+      const speed = Math.hypot(s.vel.x, s.vel.y, s.vel.z);
+      const thumb = shipThumb(hullOf(s), hullTone(s, launch.side));
+      // No picture on a machine that would not give up a third GL context, so
+      // the chip falls back to the class initial rather than a broken image.
+      const art = thumb
+        ? `<img class="th" src="${thumb}" alt="">`
+        : `<span class="th nogl">${(CLASS_NAMES[s.cls] ?? '?').slice(0, 1)}</span>`;
+      // Who this hull is aiming at, on the hull's own chip, because targeting
+      // is per ship. For a hostile it is `aiTarget`, which the core keeps and
+      // reports, so the chip says what the enemy is set on rather than guessing.
+      const aimLine = s.destroyed ? ''
+        : `<span class="ln aim"><span>${enemy ? 'hunting' : 'target'}</span>`
           + `<span>${enemy
             ? (s.aiTarget >= 0 ? nameOf(s.aiTarget) : 'nobody yet')
-            : (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')}</span></div>`)
-        + volumes;
-      div.onclick = () => {
+            : (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')}</span></span>`;
+      pick.innerHTML = art
+        + `<span class="body">`
+        + `<span class="nm">${shipName(s)}`
+        + `${s.destroyed ? ' <i>lost</i>' : s.drifting ? ' <i>adrift</i>' : ''}</span>`
+        + `<span class="bar"><i style="width:${hullPct.toFixed(0)}%"></i></span>`
+        + `<span class="ln"><span>hull ${s.hull.toFixed(0)}</span>`
+        + `<span>${speed.toFixed(1)} u/s</span></span>`
+        + aimLine
+        + `</span>`;
+      pick.onclick = () => {
         if (enemy) {
           if (s.destroyed || selected < 0) return;
           targets.set(selected, s.id);
@@ -454,11 +509,416 @@ function renderFleet(): void {
           select(s.id);
         }
       };
-      host.appendChild(div);
+      hoverCardOn(pick, s.id);
+      chip.appendChild(pick);
+
+      // The systems that are gone, listed beside the chip rather than folded
+      // into it: a chip listing all six of a frigate's volumes every turn is a
+      // chip nobody reads, and the ones that matter are the ones that are out.
+      const side = document.createElement('div');
+      side.className = 'chipSide';
+      const info = document.createElement('button');
+      info.className = 'chipInfo';
+      info.type = 'button';
+      info.title = `Schematic of ${shipName(s)}`;
+      info.setAttribute('aria-label', `Schematic of ${shipName(s)}`);
+      info.textContent = 'i';
+      info.onclick = ev => { ev.stopPropagation(); openSchematic(s.id); };
+      side.appendChild(info);
+      for (const v of offlineOf(s.id)) {
+        const tag = document.createElement('span');
+        tag.className = 'off';
+        tag.textContent = volumeName(s.id, v.index);
+        tag.title = `${volumeName(s.id, v.index)} offline. ${SUB_BLURB[v.kind] ?? ''}`;
+        side.appendChild(tag);
+      }
+      chip.appendChild(side);
+
+      // On a hostile, who of mine has it under the guns. The chip of the ship
+      // doing the aiming is highlighted, so "which of my ships is on this one"
+      // is answered on the chip rather than by clicking through the fleet.
+      if (enemy && !s.destroyed) {
+        const by = aimersOf(s.id);
+        if (by.length) {
+          const line = document.createElement('div');
+          line.className = 'aimedBy';
+          line.innerHTML = '<span class="k">aimed by</span>' + by.map(a =>
+            `<button class="who${a.id === selected ? ' on' : ''}" type="button" `
+            + `data-ship="${a.id}">${shipName(a).split(' ')[0]}</button>`).join('');
+          for (const b of [...line.querySelectorAll<HTMLButtonElement>('button.who')]) {
+            b.onclick = ev => { ev.stopPropagation(); select(Number(b.dataset.ship)); };
+          }
+          chip.appendChild(line);
+        }
+      }
+      host.appendChild(chip);
     }
   };
   rows(ships.filter(mine), $('fleet'), false);
   rows(ships.filter(s => !mine(s)), $('hostiles'), true);
+  restoreHoverCard();
+}
+
+// -------------------------------------------------------- the schematic --
+
+const schematic = new Schematic();
+/** Which hull the modal is describing, so a resolved turn can refresh it. */
+let schemaOf = -1;
+
+/**
+ * One ship as the schematic wants it: named, measured and placed.
+ *
+ * Everything here came from the core. The volumes arrive in WORLD space
+ * because that is where the map needs them, and the modal draws a hull in its
+ * own frame, so they are turned back through the ship's orientation. That is a
+ * change of frame and not a rule: which way the hull is pointing is still the
+ * core's answer, this only reads it.
+ */
+function schematicOf(id: number): SchematicSubject | null {
+  const s = ships.find(x => x.id === id);
+  if (!s) return null;
+  const inv = new THREE.Quaternion(s.quat.x, s.quat.y, s.quat.z, s.quat.w).invert();
+  const at = new THREE.Vector3();
+  return {
+    title: shipName(s),
+    subtitle: `${CLASS_NAMES[s.cls] ?? '?'} &middot; ${FACTION_NAMES[s.faction] ?? '?'}`
+      + ` &middot; ${mine(s) ? 'yours' : 'hostile'}`
+      + `${s.destroyed ? ' &middot; lost' : s.drifting ? ' &middot; adrift' : ''}`,
+    design: hullOf(s),
+    tone: hullTone(s, launch.side),
+    lost: s.destroyed,
+    stats: [
+      ['hull', `${s.hull.toFixed(0)}/${s.hullMax.toFixed(0)}`],
+      ['speed', `${Math.hypot(s.vel.x, s.vel.y, s.vel.z).toFixed(1)} u/s`],
+      ['marines', String(s.marines)],
+      ['board', `${s.boardingRange.toFixed(0)} u`],
+    ],
+    volumes: volumesOf(id).map(v => {
+      at.set(v.pos.x - s.pos.x, v.pos.y - s.pos.y, v.pos.z - s.pos.z).applyQuaternion(inv);
+      return {
+        index: v.index,
+        name: volumeName(id, v.index),
+        kind: v.kind,
+        hp: v.hp,
+        hpMax: v.hpMax,
+        dead: v.dead,
+        blockPct: v.blockPct,
+        radius: v.radius,
+        at: { x: at.x, y: at.y, z: at.z },
+      };
+    }),
+  };
+}
+
+function openSchematic(id: number): void {
+  const subject = schematicOf(id);
+  if (!subject) return;
+  schemaOf = id;
+  schemaKey = '';
+  schematic.show(subject);
+}
+
+function closeSchematic(): void {
+  schemaOf = -1;
+  schematic.hide();
+}
+
+/**
+ * Keep an open schematic on the same hull as the match moves under it.
+ *
+ * Guarded on what the picture depends on, because `refreshAll` runs on every
+ * pointer move that changes a plan and rebuilding a scene per event is the
+ * mistake the envelope probe already taught this client once.
+ */
+let schemaKey = '';
+function refreshSchematic(): void {
+  if (schemaOf < 0 || !schematic.visible) return;
+  const s = ships.find(x => x.id === schemaOf);
+  if (!s) return;
+  const key = `${s.hull.toFixed(1)}|${s.destroyed}|${s.drifting}|${s.marines}|`
+    + subsOf(schemaOf).map(v => `${v.index}:${v.hp.toFixed(1)}:${v.dead}`).join(',');
+  if (key === schemaKey) return;
+  schemaKey = key;
+  const subject = schematicOf(schemaOf);
+  if (subject) schematic.update(subject);
+}
+
+// ------------------------------------------------------- the inspector --
+
+/**
+ * Labels on the parts of one hull, out on the map.
+ *
+ * Offered rather than always on: the boxes are useful at the zoom where a hull
+ * fills a third of the screen and are a fog of text at the zoom where a match
+ * is planned. So the button only appears once the camera is actually looking
+ * at a ship (`closeUpOn`), and the mode drops the moment that stops being
+ * true, which is exactly "if I move or zoom away". Changing the selection
+ * drops it too, because the boxes belonged to the old hull.
+ */
+let inspect = -1;
+/** Which volume the pointer is over out on the map, or -1. */
+let inspectHot = -1;
+
+const inspectSubject = (): ShipState | undefined => {
+  const s = selectedShip();
+  return s && !s.destroyed ? s : undefined;
+};
+
+/** May the inspector be offered right now? */
+function inspectReady(): boolean {
+  const s = inspectSubject();
+  return !!s && view.closeUpOn(s);
+}
+
+function setInspect(on: boolean): void {
+  const s = inspectSubject();
+  inspect = on && s ? s.id : -1;
+  inspectHot = -1;
+  renderInspect();
+}
+
+/**
+ * The button, and the boxes.
+ *
+ * Called from the frame loop, because what it depends on is the camera and the
+ * camera moves without anything else happening. It writes only when something
+ * changed: a rebuild a frame would throw away the hover the boxes exist for.
+ */
+let inspectKey = '';
+function renderInspect(): void {
+  const ready = inspectReady();
+  const btn = $('bInspect');
+  btn.classList.toggle('hidden', !ready && inspect < 0);
+  btn.classList.toggle('on', inspect >= 0);
+  const s = inspectSubject();
+  btn.textContent = inspect >= 0 ? 'Hide ship data' : 'Ship data';
+
+  // Moved off it, or onto another hull: the boxes described a ship that is no
+  // longer the one being looked at.
+  if (inspect >= 0 && (!s || s.id !== inspect || !ready)) {
+    inspect = -1;
+    inspectHot = -1;
+    btn.classList.remove('on');
+    btn.textContent = 'Ship data';
+  }
+
+  const host = $('inspect');
+  const list = inspect >= 0 && s ? volumesOf(s.id) : [];
+  const key = `${inspect}|${list.map(v => `${v.index}:${v.hp.toFixed(0)}:${v.dead}`).join(',')}`;
+  if (key !== inspectKey) {
+    inspectKey = key;
+    host.innerHTML = '';
+    for (const v of list) {
+      const box = document.createElement('div');
+      box.className = `ibox${v.dead ? ' dead' : ''}`;
+      box.dataset.sub = String(v.index);
+      const pct = v.hpMax > 0 ? Math.max(0, (100 * v.hp) / v.hpMax) : 0;
+      box.innerHTML =
+        `<span class="k">${volumeName(s!.id, v.index)}</span>`
+        + `<span class="bar"><i style="width:${pct.toFixed(0)}%"></i></span>`
+        + `<span class="v">${v.dead ? 'offline' : `${v.hp.toFixed(0)}/${v.hpMax.toFixed(0)}`}</span>`
+        + `<span class="why">Soaks ${v.blockPct.toFixed(0)}% of what reaches it. `
+        + `${SUB_BLURB[v.kind] ?? ''}</span>`;
+      // Hover for a mouse, tap for everything else. A phone has no hover and
+      // the sentence about what losing this volume costs is the reason the box
+      // exists, so it cannot be behind one.
+      box.onpointerenter = ev => {
+        if (ev.pointerType !== 'mouse') return;
+        inspectHot = v.index;
+        markInspect();
+      };
+      box.onpointerleave = ev => {
+        if (ev.pointerType !== 'mouse') return;
+        inspectHot = -1;
+        markInspect();
+      };
+      box.onclick = () => {
+        inspectHot = inspectHot === v.index ? -1 : v.index;
+        markInspect();
+      };
+      host.appendChild(box);
+    }
+    markInspect();
+  }
+  host.classList.toggle('hidden', inspect < 0);
+  placeInspect();
+}
+
+function markInspect(): void {
+  for (const b of [...$('inspect').children] as HTMLElement[]) {
+    b.classList.toggle('hot', Number(b.dataset.sub) === inspectHot);
+  }
+}
+
+/**
+ * Put each box where its volume is on screen.
+ *
+ * Every frame the inspector is up, because the hull is moving during playback
+ * and a label that lags the thing it names is a label pointing at the wrong
+ * part. Behind the camera means off, not wrapped round to the other side of
+ * the screen, which is what an unchecked projection does.
+ *
+ * Six volumes on a seven unit hull put six labels inside about two hundred
+ * pixels, so they are laid out rather than dropped where they land: each goes
+ * to the side of the hull its marker is already on, and then all of them are
+ * pushed apart vertically until none overlaps another. The MARKER does not
+ * move with the label. It stays on the volume and a leader runs back to it,
+ * because a label nudged clear of its neighbours is only useful while it is
+ * still visibly attached to the thing it names.
+ */
+const LEAD = 16;
+/** Clear air between two stacked labels. */
+const LABEL_GAP = 3;
+
+function placeInspect(): void {
+  if (inspect < 0) return;
+  const boxes = [...$('inspect').children] as HTMLElement[];
+  if (!boxes.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const live = subsOf(inspect);
+
+  interface Placed {
+    el: HTMLElement; ax: number; ay: number; w: number; h: number; y: number;
+    /** Reaching left from its marker, because the marker is on the right side. */
+    flip: boolean;
+  }
+  const placed: Placed[] = [];
+  for (const b of boxes) {
+    const v = live.find(x => x.index === Number(b.dataset.sub));
+    if (!v) { b.style.display = 'none'; continue; }
+    const at = view.screenOf(v.pos);
+    const ax = at.x - rect.left, ay = at.y - rect.top;
+    if (ax < -80 || ay < -80 || ax > rect.width + 80 || ay > rect.height + 80) {
+      b.style.display = 'none';
+      continue;
+    }
+    b.style.display = '';
+    const w = b.offsetWidth, h = b.offsetHeight;
+    // Away from the middle of the hull, so labels fan outwards instead of all
+    // piling up on the same flank.
+    placed.push({ el: b, ax, ay, w, h, y: ay - h / 2, flip: ax > rect.width * 0.52 });
+  }
+
+  // Stacked across ALL of them rather than per side. Splitting the labels
+  // left and right halves how far each leader has to run, and it does NOT
+  // stop two of them colliding: a label reaching left from a marker on the
+  // right meets one reaching right from a marker on the left, in the middle,
+  // which is exactly where a hull's volumes are.
+  placed.sort((a, b) => a.y - b.y);
+  let floor = 4;
+  for (const p of placed) {
+    p.y = Math.max(p.y, floor);
+    floor = p.y + p.h + LABEL_GAP;
+  }
+  // Anything pushed off the bottom comes back up, which keeps a cluster near
+  // the lower edge on screen rather than marching off it.
+  let ceil = rect.height - 4;
+  for (let i = placed.length - 1; i >= 0; i--) {
+    const p = placed[i] as Placed;
+    p.y = Math.min(p.y, ceil - p.h);
+    ceil = p.y - LABEL_GAP;
+  }
+  for (const p of placed) {
+    const x = p.flip ? p.ax - LEAD - p.w : p.ax + LEAD;
+    p.el.style.left = `${Math.round(x)}px`;
+    p.el.style.top = `${Math.round(p.y)}px`;
+    // Where the marker sits, in the label's own frame, and the leader back to
+    // it from the label's near edge.
+    const dx = p.ax - x, dy = p.ay - p.y;
+    const ex = p.flip ? p.w : 0;
+    p.el.style.setProperty('--dx', `${dx.toFixed(1)}px`);
+    p.el.style.setProperty('--dy', `${dy.toFixed(1)}px`);
+    p.el.style.setProperty('--len', `${Math.hypot(ex - dx, p.h / 2 - dy).toFixed(1)}px`);
+    p.el.style.setProperty('--ang', `${Math.atan2(p.h / 2 - dy, ex - dx).toFixed(3)}rad`);
+  }
+}
+
+// ------------------------------------------------------- the hover card --
+
+/**
+ * The full read on one hull, shown while a pointer rests on its chip.
+ *
+ * A desk affordance and only ever an addition: everything in it is reachable
+ * by tapping the info button, because a phone has no hover and CLAUDE.md is
+ * explicit that nothing may depend on one to be discoverable. Bound on
+ * `(hover: hover)` so a touch device never gets a card stuck under a thumb.
+ */
+const canHover = (): boolean =>
+  typeof matchMedia === 'function' && matchMedia('(hover: hover)').matches;
+
+/** Which hull the card is on, so a rebuilt rail can put it back. */
+let hoverShip = -1;
+
+function hoverCardOn(el: HTMLElement, id: number): void {
+  if (!canHover()) return;
+  el.onpointerenter = () => { hoverShip = id; showHoverCard(el, id); };
+  el.onpointerleave = hideHoverCard;
+  el.onfocus = () => { hoverShip = id; showHoverCard(el, id); };
+  el.onblur = hideHoverCard;
+}
+
+function hideHoverCard(): void {
+  hoverShip = -1;
+  $('shipCard').classList.add('hidden');
+}
+
+/**
+ * Put the card back on the chip it was on.
+ *
+ * The rail is rebuilt wholesale on every refresh, and a refresh happens
+ * whenever a plan changes. That takes the element the card was anchored to out
+ * from under it, and no `pointerleave` fires for an element that no longer
+ * exists: without this the card either vanishes mid read or hangs over the map
+ * describing a chip that is gone.
+ */
+function restoreHoverCard(): void {
+  if (hoverShip < 0) return;
+  const el = document.querySelector<HTMLElement>(`.chip[data-ship="${hoverShip}"] .chipPick`);
+  if (el) showHoverCard(el, hoverShip);
+  else hideHoverCard();
+}
+
+function showHoverCard(el: HTMLElement, id: number): void {
+  const s = ships.find(x => x.id === id);
+  const card = $('shipCard');
+  if (!s) { card.classList.add('hidden'); return; }
+  const pct = Math.max(0, (100 * s.hull) / s.hullMax);
+  const speed = Math.hypot(s.vel.x, s.vel.y, s.vel.z);
+  const rows = volumesOf(s.id).map(v => {
+    const vp = v.hpMax > 0 ? Math.max(0, (100 * v.hp) / v.hpMax) : 0;
+    return `<div class="vrow${v.dead ? ' dead' : ''}">`
+      + `<span>${volumeName(s.id, v.index)}</span>`
+      + `<span class="bar"><i style="width:${vp.toFixed(0)}%"></i></span>`
+      + `<span>${v.dead ? 'offline' : `${v.hp.toFixed(0)}/${v.hpMax.toFixed(0)}`}</span>`
+      + `</div>`;
+  }).join('');
+  card.innerHTML =
+    `<div class="hd">${shipName(s)}</div>`
+    + `<div class="s">${CLASS_NAMES[s.cls] ?? '?'} &middot; `
+    + `${FACTION_NAMES[s.faction] ?? '?'} &middot; ${mine(s) ? 'yours' : 'hostile'}</div>`
+    + `<div class="vrow"><span>hull</span>`
+    + `<span class="bar"><i style="width:${pct.toFixed(0)}%"></i></span>`
+    + `<span>${s.hull.toFixed(0)}/${s.hullMax.toFixed(0)}</span></div>`
+    + `<div class="vrow"><span>speed</span><span></span><span>${speed.toFixed(1)} u/s</span></div>`
+    + `<div class="vrow"><span>marines</span><span></span><span>${s.marines}</span></div>`
+    + (s.destroyed ? '' : `<div class="vrow"><span>${mine(s) ? 'target' : 'hunting'}</span>`
+      + `<span></span><span>${mine(s)
+        ? (targetShip(s.id) ? shipName(targetShip(s.id)!) : 'none')
+        : (s.aiTarget >= 0 ? nameOf(s.aiTarget) : 'nobody yet')}</span></div>`)
+    + `<div class="sect">Volumes</div>${rows}`
+    + `<div class="hint">Tap <b>i</b> for the schematic.</div>`;
+  card.classList.remove('hidden');
+
+  // Beside the chip, and pushed back on screen rather than off it: the rail is
+  // 250 px on a desk and the card is wider than that, so it hangs over the map.
+  const r = el.getBoundingClientRect();
+  card.style.visibility = 'hidden';
+  card.style.left = '0px';
+  card.style.top = '0px';
+  const h = card.getBoundingClientRect().height;
+  card.style.left = `${Math.round(r.right + 8)}px`;
+  card.style.top = `${Math.round(Math.max(8, Math.min(innerHeight - h - 8, r.top)))}px`;
+  card.style.visibility = '';
 }
 
 function renderModes(): void {
@@ -1082,7 +1542,8 @@ function renderHeader(): void {
 function renderHelp(): void {
   $('help').innerHTML =
     '<b>Left drag</b> inside the <span style="color:var(--green)">green outline</span> sets a '
-    + 'destination; anywhere else it pans. <b>Right drag</b> orbits. Scroll or pinch to zoom.'
+    + 'destination; anywhere else it pans. <b>Middle drag</b> always pans and never '
+    + 'touches a plan, whatever is under it. <b>Right drag</b> orbits. Scroll or pinch to zoom.'
     + '<br><br>'
     + 'Hold <kbd>Shift</kbd> and drag inside the outline to swing the heading instead.<br><br>'
     + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
@@ -1095,7 +1556,12 @@ function renderHelp(): void {
     + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
     + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
     + 'do. On a phone, one finger does what the left button does and the '
-    + '<span style="color:var(--cyan)">&#10227;</span> button swaps it for orbiting.';
+    + '<span style="color:var(--cyan)">&#10227;</span> button swaps it for orbiting; '
+    + '<b>two fingers</b> pan and pinch together, and never touch a plan.<br><br>'
+    + '<b>Reading a ship:</b> the chips list what is offline beside each hull, hovering '
+    + 'one gives the full state, and <b>i</b> opens its schematic. Zoom in on a ship and '
+    + '<b>Ship data</b> appears in the corner of the map, which labels its systems where '
+    + 'they are until you move away.';
 }
 
 function refreshAll(): void {
@@ -1112,6 +1578,8 @@ function refreshAll(): void {
   renderLog();
   renderHeader();
   renderTrails();
+  renderInspect();
+  refreshSchematic();
   draw();
   const s = selectedShip();
   $('env').innerHTML = s ? view.envelopeSummary(s, flightOf(s.id)) : 'no ship selected';
@@ -1342,6 +1810,9 @@ function envelopeProgress(shipId: number): string {
 }
 
 function select(id: number): void {
+  // Changing hull drops the inspector: the boxes on screen described the last
+  // one, and leaving them up over a different ship is worse than nothing.
+  if (id !== selected) setInspect(false);
   selected = id;
   openSlot = null;
   view.setSelection(id);
@@ -1362,11 +1833,32 @@ interface Drag {
 let drag: Drag | null = null;
 const pointers = new Map<number, { x: number; y: number }>();
 let pinchDist = 0;
+/**
+ * Where the two fingers are between them, so a two finger drag can pan.
+ *
+ * Pinch was reading the gap and throwing the rest away, which made the only
+ * way to move the camera on a phone the one finger gesture that the toolbar
+ * toggle has to be flipped to reach. Two fingers is what every map on the
+ * device does, so it does that here: the gap still zooms, and the midpoint
+ * pans, both in the same gesture.
+ */
+let pinchMid: { x: number; y: number } | null = null;
+
+/** The midpoint of the first two live pointers, or null with fewer than two. */
+function twoFingerMid(): { x: number; y: number } | null {
+  const [a, b] = [...pointers.values()];
+  return a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
+}
 
 // The right button is a camera control now, so its menu has to go. Bound on
 // the canvas only: a right click on a panel should still behave like the rest
 // of the page.
 canvas.addEventListener('contextmenu', ev => ev.preventDefault());
+// The middle button pans, so the browser's own middle click behaviours (paste
+// on X11, the autoscroll puck on Windows) have to be off it. `pointerdown`
+// alone does not stop autoscroll in every engine, so the click that follows is
+// cancelled as well.
+canvas.addEventListener('auxclick', ev => { if (ev.button === 1) ev.preventDefault(); });
 
 canvas.addEventListener('pointerdown', ev => {
   // Capture is a convenience, not a precondition: it keeps a drag alive when
@@ -1382,6 +1874,10 @@ canvas.addEventListener('pointerdown', ev => {
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     pinchDist = Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0));
+    pinchMid = twoFingerMid();
+    // A second finger cancels whatever the first one had started. Half a move
+    // order left under a pinch would finish wherever the fingers happened to
+    // end up.
     drag = null;
     return;
   }
@@ -1391,6 +1887,19 @@ canvas.addEventListener('pointerdown', ev => {
   // near their own ships.
   if (ev.pointerType === 'mouse' && ev.button === 2) {
     drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'orbit' };
+    return;
+  }
+
+  // Middle button is always the camera, panning, and it is decided BEFORE
+  // anything that reads the world: not the yaw knob, not a ship under the
+  // cursor, not a destination inside the envelope. That order is the whole
+  // point of it. Left drag pans too when it starts outside the reachable area,
+  // which means the gesture that moves the camera is also the gesture that
+  // moves a ship, and near your own hull the difference is a few pixels. The
+  // middle button is the one that cannot be wrong.
+  if (ev.pointerType === 'mouse' && ev.button === 1) {
+    ev.preventDefault();
+    drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false, kind: 'pan' };
     return;
   }
 
@@ -1431,11 +1940,25 @@ canvas.addEventListener('pointermove', ev => {
   const prev = pointers.get(ev.pointerId);
   if (prev) { prev.x = ev.clientX; prev.y = ev.clientY; }
 
+  // With the inspector up, a mouse resting on a volume out on the map lights
+  // its box. Mouse only: on a phone the box IS the control, and a finger
+  // dragging the camera would light every part it crossed.
+  if (inspect >= 0 && ev.pointerType === 'mouse' && !prev) {
+    const at = view.pickSub(ev.clientX, ev.clientY, subsOf(inspect));
+    if (at !== inspectHot) { inspectHot = at; markInspect(); }
+  }
+
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     const d = Math.hypot((a?.x ?? 0) - (b?.x ?? 0), (a?.y ?? 0) - (b?.y ?? 0));
     if (pinchDist > 0 && d > 0) view.zoom(pinchDist / d);
+    // The gap zooms and the midpoint pans, out of the one gesture: two fingers
+    // that spread while sliding do both, which is what a hand expects from
+    // every other map it has ever moved.
+    const mid = twoFingerMid();
+    if (pinchMid && mid) view.pan(mid.x - pinchMid.x, mid.y - pinchMid.y);
     pinchDist = d;
+    pinchMid = mid;
     return;
   }
   if (!drag || drag.id !== ev.pointerId) return;
@@ -1489,7 +2012,7 @@ canvas.addEventListener('pointermove', ev => {
 
 function endPointer(ev: PointerEvent): void {
   pointers.delete(ev.pointerId);
-  if (pointers.size < 2) pinchDist = 0;
+  if (pointers.size < 2) { pinchDist = 0; pinchMid = null; }
   if (drag && drag.id === ev.pointerId) {
     canvas.classList.remove('rotating');
     const wasPlan = drag.kind === 'plan' || drag.kind === 'heading' || drag.kind === 'yaw';
@@ -1540,10 +2063,21 @@ function logPlacement(): void {
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 
-canvas.addEventListener('wheel', ev => {
+/**
+ * The wheel zooms, over the map AND over anything drawn on top of it.
+ *
+ * The inspector's labels are a sibling of the canvas rather than a child, so a
+ * wheel over one bubbles past the canvas and never reaches this. That is not a
+ * cosmetic gap: zooming out is how the inspector is left, so a label sitting
+ * where the pointer already is made the way out of the mode dead under the
+ * hand. One handler on both surfaces rather than a second copy on the overlay.
+ */
+const onWheel = (ev: WheelEvent) => {
   ev.preventDefault();
   view.zoom(ev.deltaY > 0 ? 1.1 : 1 / 1.1);
-}, { passive: false });
+};
+canvas.addEventListener('wheel', onWheel, { passive: false });
+$('inspect').addEventListener('wheel', onWheel, { passive: false });
 
 addEventListener('keydown', ev => {
   const s = selectedShip();
@@ -1688,6 +2222,8 @@ $('cMode').onclick = () => {
     : 'One finger on empty space orbits. Tap to pan instead. (Mouse: left pans, right orbits.)';
 };
 $('cCentre').onclick = () => { const s = selectedShip(); if (s) view.centreOn(s.pos); };
+$('bInspect').onclick = () => setInspect(inspect < 0);
+$('scClose').onclick = closeSchematic;
 /**
  * The heading dials, over the viewport.
  *
@@ -2301,6 +2837,11 @@ function frameBody(): void {
       refreshAll();
     }
   }
+  // The camera moves without anything else happening, so what the inspector
+  // offers is settled per frame rather than per refresh. `renderInspect` only
+  // rebuilds when its own contents changed; the boxes are placed every frame,
+  // because the hull under them is moving.
+  renderInspect();
   view.render();
 }
 
@@ -2392,6 +2933,11 @@ Object.defineProperty(window, 'ftDebug', {
     canPlan,
     /** The shipyard, read only. */
     designer: () => (designer.visible ? designer.debug() : null),
+    /** The schematic modal: what it is describing, or null when it is down. */
+    schematic: () => (schematic.visible ? schematic.debug() : null),
+    /** The map inspector: which hull it is labelling, whether it may be
+     *  offered at this zoom, and which volume the pointer is on. */
+    inspect: () => ({ ship: inspect, ready: inspectReady(), hot: inspectHot }),
   },
 });
 

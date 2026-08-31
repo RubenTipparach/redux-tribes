@@ -57,9 +57,9 @@ const state = () => page.evaluate(() => ({
   playTick: window.ftDebug.playing(),
   target: window.ftDebug.target(),
   canPlan: window.ftDebug.canPlan(),
-  mine: [...document.querySelectorAll('#fleet .shipRow')].map(r => ({
+  mine: [...document.querySelectorAll('#fleet .chip')].map(r => ({
     name: r.querySelector('.nm').textContent.trim(), gone: r.classList.contains('gone') })),
-  foes: [...document.querySelectorAll('#hostiles .shipRow')].map(r => ({
+  foes: [...document.querySelectorAll('#hostiles .chip')].map(r => ({
     name: r.querySelector('.nm').textContent.trim(), gone: r.classList.contains('gone') })),
 }));
 
@@ -86,6 +86,10 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();
   if (attempt === 1) await checkHullsAreShips(page);
+  if (attempt === 1) await checkFleetChips();
+  if (attempt === 1) await checkSchematic();
+  if (attempt === 1) await checkCameraGestures();
+  if (attempt === 1) await checkInspector();
 
   outcome = await playMatch();
   final = await state();
@@ -245,6 +249,258 @@ async function checkReview() {
   log(`review panel opens, aims without moving the match, and restores ${live.turn}/${live.hash}`);
 }
 
+/**
+ * Pull the camera back off whatever it is looking at.
+ *
+ * The wheel rather than the Fit button: the tab bar the button lives on only
+ * exists below 900px, so a desk run would be reaching for a control that is
+ * not there. The wheel is what a player uses at both sizes and it is the same
+ * gesture the inspector is meant to react to.
+ */
+async function wheelBy(steps, dir) {
+  const box = await page.locator('#cv').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < steps; i++) {
+    await page.mouse.wheel(0, dir * 100);
+    await page.waitForTimeout(20);
+  }
+  await page.waitForTimeout(250);
+}
+// Declarations, not consts: the checks below run at module top level before a
+// `const` further down the file has been initialised.
+async function zoomOut(steps = 26) { await wheelBy(steps, 1); }
+async function zoomIn(steps = 26) { await wheelBy(steps, -1); }
+
+/**
+ * The fleet rail says what the match says.
+ *
+ * A chip carries three claims a player acts on: which hull this is, what is
+ * broken on it, and who it is aiming at. All three are drawn from state the
+ * core owns, so all three can be checked against it rather than against a
+ * screenshot. The offline list is the one that matters most and the one a
+ * headless suite is blind to: a subsystem dies in the resolver and the only
+ * place a player learns it is a tag on a chip.
+ */
+async function checkFleetChips() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  await sheet(true);
+  const seen = await page.evaluate(() => {
+    const read = (host) => [...document.querySelectorAll(`#${host} .chip`)].map(c => ({
+      ship: Number(c.dataset.ship),
+      name: c.querySelector('.nm')?.textContent.trim() ?? '',
+      art: c.querySelector('.th')?.tagName ?? 'none',
+      src: (c.querySelector('img.th')?.getAttribute('src') ?? '').slice(0, 14),
+      info: !!c.querySelector('.chipInfo'),
+      offline: [...c.querySelectorAll('.off')].map(o => o.textContent.trim()).sort(),
+    }));
+    return {
+      mine: read('fleet'), foes: read('hostiles'),
+      subs: window.ftDebug.subs(), ships: window.ftDebug.ships(),
+    };
+  });
+  const chips = [...seen.mine, ...seen.foes];
+  if (chips.length !== seen.ships.length) {
+    fail(`${seen.ships.length} ships in the match and ${chips.length} chips in the rail`);
+  }
+  if (!chips.every(c => c.info)) fail('a chip has no info button, so its schematic is unreachable');
+  // A picture, or the deliberate fallback. Anything else is a broken image.
+  const art = chips.filter(c => c.art === 'IMG' && c.src.startsWith('data:image'));
+  const fallback = chips.filter(c => c.art === 'SPAN');
+  if (art.length + fallback.length !== chips.length) {
+    fail('a chip has neither a thumbnail nor the no-WebGL fallback');
+  }
+  if (!art.length) fail('not one chip drew a thumbnail');
+
+  // What the chips say is offline against what the core says is dead.
+  const dead = new Map();
+  for (const v of seen.subs) {
+    if (!v.dead) continue;
+    const list = dead.get(v.ship) ?? [];
+    list.push(v.index);
+    dead.set(v.ship, list);
+  }
+  let matched = 0;
+  for (const c of chips) {
+    const want = (dead.get(c.ship) ?? []).length;
+    const got = c.offline.length;
+    if (want !== got) fail(`${c.name} has ${want} volume(s) out and its chip lists ${got}`);
+    matched += got;
+  }
+  await sheet(false);
+  log(`fleet chips: ${chips.length} hulls, ${art.length} drawn, `
+    + `${matched} offline system(s) listed and every one of them real`);
+  return matched;
+}
+
+/**
+ * The schematic modal: it opens on the hull whose button was pressed, it draws
+ * that hull's volumes, and a row names one.
+ *
+ * Opened from the chip rather than by calling into the app, because the thing
+ * that has broken before is the route and not the renderer.
+ */
+async function checkSchematic() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  await sheet(true);
+  const chip = page.locator('#fleet .chip:not(.gone)').first();
+  const name = (await chip.locator('.nm').textContent()).trim();
+  await (MOBILE ? chip.locator('.chipInfo').tap() : chip.locator('.chipInfo').click());
+  await page.waitForSelector('#schema:not(.hidden)', { timeout: 5000 });
+  await page.waitForTimeout(400);
+
+  const open = await page.evaluate(() => ({
+    ...window.ftDebug.schematic(),
+    rows: document.querySelectorAll('#scList .scrow').length,
+    title: document.getElementById('scName').textContent.trim(),
+    subs: window.ftDebug.subs(),
+    canvas: (() => {
+      const c = document.getElementById('scCanvas');
+      return { w: c.clientWidth, h: c.clientHeight };
+    })(),
+  }));
+  if (!open.title.startsWith(name.split(' ')[0])) {
+    fail(`pressed info on ${name} and the schematic opened on ${open.title}`);
+  }
+  if (!open.rows) fail('the schematic lists no volumes');
+  if (open.rows !== open.volumes) {
+    fail(`${open.volumes} volumes drawn and ${open.rows} listed`);
+  }
+  if (open.canvas.w < 40 || open.canvas.h < 40) {
+    fail(`the schematic canvas is ${open.canvas.w}x${open.canvas.h}`);
+  }
+
+  // A row names a volume: the half of this that works with no pointer at all.
+  const row = page.locator('#scList .scrow').first();
+  await (MOBILE ? row.tap() : row.click());
+  await page.waitForTimeout(200);
+  const named = await page.evaluate(() => ({
+    hot: window.ftDebug.schematic().hot,
+    card: !document.getElementById('scCard').classList.contains('hidden'),
+    text: document.getElementById('scCard').textContent.trim().length,
+  }));
+  if (named.hot < 0) fail('tapping a volume row named nothing');
+  if (!named.card || named.text < 40) fail('a volume was named and the card said nothing');
+
+  await tap('#scClose');
+  // The class, not visibility: `waitForSelector` waits for an element to be
+  // SHOWN, and a hidden one never is, so it would time out on a modal that
+  // closed correctly.
+  await page.waitForFunction(
+    () => document.getElementById('schema').classList.contains('hidden'), null, { timeout: 3000 });
+  await sheet(false);
+  log(`schematic: ${open.rows} volumes on ${open.title}, a row names one, and Close puts it down`);
+}
+
+/**
+ * The map inspector: offered only close up, and it lets go on its own.
+ *
+ * Both halves matter. A button that never appears is a feature nobody finds; a
+ * mode that stays on while the camera flies away leaves labels floating over
+ * empty space. Zooming is done through the wheel, which is what a player uses,
+ * rather than by reaching into the camera.
+ */
+async function checkInspector() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  await sheet(false);
+
+  // Far out over the whole field the offer must not be there.
+  await zoomOut();
+  if (await page.evaluate(() => window.ftDebug.inspect().ready)) {
+    fail('the ship data button is offered from a whole fleet view');
+  }
+
+  // Now go and look at the selected hull. Far enough in to hit the camera's own
+  // closest approach, because that is what a player does when they want to
+  // look at a ship, and the offer has to be there when they get there.
+  await tap('#cCentre');
+  await zoomIn(45);
+  if (!(await page.evaluate(() => window.ftDebug.inspect().ready))) {
+    fail('zoomed all the way in on a ship and the inspector is still not offered');
+  }
+  await tap('#bInspect');
+  await page.waitForTimeout(250);
+  const on = await page.evaluate(() => ({
+    ship: window.ftDebug.inspect().ship,
+    boxes: document.querySelectorAll('#inspect .ibox').length,
+    shown: !document.getElementById('inspect').classList.contains('hidden'),
+    volumes: window.ftDebug.subs().filter(v => v.ship === window.ftDebug.selected()).length,
+  }));
+  if (on.ship < 0) fail('pressed Ship data and nothing turned on');
+  if (!on.shown) fail('the inspector is on and its layer is hidden');
+  if (on.boxes !== on.volumes) {
+    fail(`${on.volumes} volumes on the hull and ${on.boxes} labels on screen`);
+  }
+
+  // And it lets go when the camera leaves, which is the whole contract.
+  await zoomOut();
+  const after = await page.evaluate(() => window.ftDebug.inspect());
+  if (after.ship >= 0) fail('zoomed away and the labels stayed on the hull');
+  log(`inspector: offered close up only, labelled ${on.boxes} volumes, `
+    + 'and let go when the camera left');
+}
+
+/**
+ * The camera gestures that must never touch a plan.
+ *
+ * Middle drag on a desk and two fingers on a phone both mean "move the
+ * camera", and the failure they are guarding against is not a camera that will
+ * not move: it is a camera move that also picked a ship or dropped a
+ * destination. So the plan is read before and after and must be untouched,
+ * while the picture must have changed.
+ */
+async function checkCameraGestures() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  await sheet(false);
+  await zoomOut(10);
+  const box = await page.locator('#cv').boundingBox();
+  const before = await page.evaluate(() => ({
+    order: window.ftDebug.order(), selected: window.ftDebug.selected(),
+    // Where a ship lands on screen IS the camera, read through the projection
+    // the renderer uses rather than through its private state.
+    at: window.ftDebug.screenOf(window.ftDebug.selected()),
+  }));
+
+  if (MOBILE) {
+    // Two fingers, sliding together: pan without pinching.
+    const a = { x: box.x + box.width * 0.35, y: box.y + box.height * 0.55 };
+    const b = { x: box.x + box.width * 0.55, y: box.y + box.height * 0.55 };
+    const client = await page.context().newCDPSession(page);
+    const touch = (type, pts) => client.send('Input.dispatchTouchEvent', {
+      type, touchPoints: pts.map(p => ({ x: p.x, y: p.y })),
+    });
+    await touch('touchStart', [a, b]);
+    for (let i = 1; i <= 8; i++) {
+      await touch('touchMove', [{ x: a.x, y: a.y - i * 9 }, { x: b.x, y: b.y - i * 9 }]);
+      await page.waitForTimeout(16);
+    }
+    await touch('touchEnd', []);
+  } else {
+    // Middle button, dragged across the map.
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+    await page.mouse.down({ button: 'middle' });
+    for (let i = 1; i <= 8; i++) {
+      await page.mouse.move(box.x + box.width * 0.5 - i * 11, box.y + box.height * 0.5 - i * 7);
+      await page.waitForTimeout(16);
+    }
+    await page.mouse.up({ button: 'middle' });
+  }
+  await page.waitForTimeout(250);
+
+  const after = await page.evaluate(() => ({
+    order: window.ftDebug.order(), selected: window.ftDebug.selected(),
+    at: window.ftDebug.screenOf(window.ftDebug.selected()),
+  }));
+  const gesture = MOBILE ? 'a two finger drag' : 'a middle button drag';
+  if (after.selected !== before.selected) fail(`${gesture} changed the selected ship`);
+  if (JSON.stringify(after.order) !== JSON.stringify(before.order)) {
+    fail(`${gesture} changed the plan: ${JSON.stringify(before.order?.target)} `
+      + `became ${JSON.stringify(after.order?.target)}`);
+  }
+  const moved = Math.hypot(after.at.x - before.at.x, after.at.y - before.at.y);
+  if (moved < 12) fail(`${gesture} moved the camera ${moved.toFixed(1)} px, which is not a pan`);
+  log(`${gesture} pans ${moved.toFixed(0)} px and leaves the plan alone`);
+}
+
 async function playMatch() {
   let outcome = 'ran out of turns';
   for (let t = 0; t < MAX_TURNS; t++) {
@@ -255,13 +511,13 @@ async function playMatch() {
 
   // Aim at the first hostile still alive, chosen through the hostile list the
   // way a player does rather than left to whatever the client defaults to.
-  const foes = page.locator('#hostiles .shipRow:not(.gone)');
+  const foes = page.locator('#hostiles .chip:not(.gone) .chipPick');
   const foeCount = await foes.count();
   if (foeCount === 0) { outcome = 'no hostiles left'; break; }
   await (MOBILE ? foes.first().tap() : foes.first().click());
   await page.waitForTimeout(150);
 
-  const mineRows = page.locator('#fleet .shipRow:not(.gone)');
+  const mineRows = page.locator('#fleet .chip:not(.gone) .chipPick');
   const mineCount = await mineRows.count();
 
   // First give every ship the target and point it at one.
@@ -279,12 +535,12 @@ async function playMatch() {
   // the rows live in a sheet that covers it on a phone.
   for (let i = 0; i < mineCount; i++) {
     await sheet(true);
-    const row = page.locator('#fleet .shipRow:not(.gone)').nth(i);
+    const row = page.locator('#fleet .chip:not(.gone) .chipPick').nth(i);
     if (!(await row.count())) continue;
     await (MOBILE ? row.tap() : row.click());
     await page.waitForTimeout(150);
     if (!(await page.evaluate(() => window.ftDebug.canPlan()))) continue;
-    const foe = page.locator('#hostiles .shipRow:not(.gone)').first();
+    const foe = page.locator('#hostiles .chip:not(.gone) .chipPick').first();
     if (await foe.count()) {
       await (MOBILE ? foe.tap() : foe.click());
       await page.waitForTimeout(150);
@@ -301,7 +557,7 @@ async function playMatch() {
   let queuedThisTurn = 0;
   for (let i = 0; i < mineCount; i++) {
     await sheet(true);
-    const row = page.locator('#fleet .shipRow:not(.gone)').nth(i);
+    const row = page.locator('#fleet .chip:not(.gone) .chipPick').nth(i);
     if (!(await row.count())) continue;
     await (MOBILE ? row.tap() : row.click());
     await page.waitForTimeout(150);
@@ -406,6 +662,10 @@ log('shots queued   :', shotsQueued);
 log('my ships       :', final.mine.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 log('hostiles       :', final.foes.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 await checkReview();
+// Again at the end, where a fought match has actually put systems out: the
+// interesting half of the chip is the one that only exists after damage.
+const listed = await checkFleetChips();
+if (!listed) log('note: no system was knocked out this match, so the offline list stayed empty');
 log('page errors    :', errors.length ? errors : 'none');
 
 await page.screenshot({ path: MOBILE ? '/tmp/playthrough-mobile.png' : '/tmp/playthrough.png' });

@@ -1,0 +1,504 @@
+<title>Fleet Rail and Ship Data</title>
+<meta name="description" content="The console's ship readouts: fleet chips with hull thumbnails and an offline systems list, per ship targeting shown on both rails, the hit volume schematic, and the labels the map puts on a hull once it is zoomed in on.">
+<style>
+/* Self contained: no network, no remote fonts, no CDN (mockup rule 2.1). */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --red:#FF4B4B; --amber:#FFC24B;
+  --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 16px 96px;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.6;-webkit-text-size-adjust:100%}
+.wrap{max-width:1040px;margin:0 auto}
+header{padding:40px 0 20px;border-bottom:1px solid var(--line);margin-bottom:26px}
+h1{margin:0 0 6px;font-size:clamp(24px,5vw,38px);line-height:1.15;letter-spacing:-.02em}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:#1B6C8C;margin:0 0 12px}
+.lede{margin:0;color:var(--muted);font-size:17px;max-width:70ch}
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--cyan);margin:38px 0 6px}
+h2 .num{color:#1B6C8C;margin-right:8px}
+p.say{margin:0 0 14px;color:var(--muted);max-width:70ch}
+.note{border-left:2px solid var(--cyan);background:#0E1622;padding:10px 14px;margin:14px 0;
+  font-size:14px;color:var(--muted)}
+.note b{color:var(--ink)}
+code{font-family:var(--mono);font-size:.9em;color:var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);font-weight:400}
+td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+
+/* ---- the console, at the sizes it is actually used at ---- */
+.stage{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:16px;
+  margin:14px 0 6px;align-items:start}
+.panel{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px}
+.panel .cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 9px}
+.sect{font-family:var(--ui);font-weight:700;font-size:11px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted);margin:12px 0 6px}
+.sect:first-child{margin-top:0}
+
+/* Chips: the same rules as web/index.html, kept in step by hand and by eye. */
+.chip{display:grid;grid-template-columns:minmax(0,1fr) auto;border:1px solid var(--line);
+  border-radius:5px;margin-bottom:6px;background:var(--panel2)}
+.chip.sel{border-color:var(--cyan);background:#0d2231}
+.chip.tg{border-color:var(--orange);background:#2a1607}
+.chip.gone{opacity:.42}
+.chipPick{display:flex;align-items:center;gap:8px;min-width:0;padding:6px;border:0;
+  border-radius:4px 0 0 4px;background:transparent;text-align:left;font-family:inherit;
+  font-size:12px;color:var(--ink);width:100%;cursor:pointer}
+.chipPick:hover{background:#16202d}
+.chip.sel .chipPick:hover,.chip.tg .chipPick:hover{background:#ffffff0d}
+.th{flex:0 0 44px;width:44px;height:44px;border-radius:4px;background:#0a1017;
+  border:1px solid var(--line)}
+.body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px}
+.nm{font-weight:700;font-size:12px;letter-spacing:.06em;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.nm i{font-style:normal;color:var(--red);font-size:11px}
+.chip.tg .nm{color:var(--orange)}
+.ln{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted)}
+.ln.aim span:last-child{color:var(--red)}
+.enemy .ln.aim span:last-child{color:var(--orange)}
+.bar{height:4px;background:#1a2634;border-radius:2px;margin-top:3px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--cyan)}
+.enemy .bar i{background:var(--orange)}
+.chipSide{display:flex;flex-direction:column;align-items:flex-end;gap:3px;
+  padding:6px 6px 6px 0;max-width:92px}
+.chipInfo{flex:0 0 auto;width:24px;height:24px;padding:0;border-radius:50%;font-size:12px;
+  line-height:1;background:var(--panel);color:var(--ink);border:1px solid var(--line);
+  cursor:pointer}
+.chipInfo:hover{border-color:var(--cyan);color:var(--cyan)}
+.off{font-weight:700;font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--red);border:1px solid #6b2020;background:#1d0f0f;border-radius:3px;
+  padding:2px 5px;white-space:nowrap}
+.aimedBy{grid-column:1/3;display:flex;flex-wrap:wrap;align-items:center;gap:4px;
+  padding:0 6px 6px}
+.aimedBy .k{font-weight:700;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--muted)}
+.who{padding:2px 6px;font-size:10px;border-radius:3px;background:var(--panel);
+  border:1px solid var(--line);color:var(--ink)}
+.who.on{border-color:var(--cyan);color:var(--cyan);background:#0d2231}
+
+/* The hover card */
+.card{width:250px;padding:9px 11px;border-radius:7px;background:#0d141d;
+  border:1px solid var(--line);box-shadow:0 10px 28px #000a}
+.card .hd{font-weight:700;font-size:13px;letter-spacing:.06em;color:var(--cyan)}
+.card .s{font-size:11px;color:var(--muted);margin-bottom:6px}
+.vrow{display:grid;grid-template-columns:62px minmax(0,1fr) auto;gap:7px;align-items:center;
+  font-size:11px;color:var(--muted);padding:1px 0}
+.vrow .bar{margin:0}
+.vrow span:last-child{font-family:var(--mono)}
+.vrow.dead{color:var(--red)}
+.vrow.dead .bar i{background:var(--red)}
+.hint{font-size:11px;color:var(--muted);line-height:1.5}
+.hint b{color:var(--ink)}
+
+/* The schematic, drawn from the real offsets and radii */
+.scWrap{display:grid;grid-template-columns:minmax(0,1fr) 240px;gap:12px}
+@media (max-width:720px){.scWrap{grid-template-columns:minmax(0,1fr)}}
+.scView{position:relative;background:#070a0f;border:1px solid var(--line);border-radius:6px;
+  min-height:250px}
+.scView svg{display:block;width:100%;height:auto}
+.scCard{position:absolute;left:9px;bottom:9px;right:9px;padding:8px 10px;border-radius:7px;
+  background:#0d141de8;border:1px solid var(--line)}
+.scCard .hd{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.scCard .dot{width:11px;height:11px;border-radius:3px}
+.scCard .cn{font-weight:700;font-size:13px;letter-spacing:.06em;text-transform:uppercase}
+.scCard .id{font-family:var(--mono);font-size:10px;color:var(--muted)}
+.scCard p{margin:5px 0 0;font-size:11px;line-height:1.45;color:var(--muted)}
+.scCard p b{color:var(--cyan)}
+.scrow{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:4px 8px;align-items:center;
+  width:100%;margin-bottom:5px;padding:7px 9px;border:1px solid var(--line);border-radius:5px;
+  background:var(--panel);text-align:left;font-family:inherit;font-size:12px;color:var(--ink);
+  cursor:pointer}
+.scrow .sw{width:11px;height:11px;border-radius:3px}
+.scrow .rn{font-weight:700;font-size:12px;letter-spacing:.06em}
+.scrow .st{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.scrow .bar{grid-column:1/4;margin:1px 0 0}
+.scrow.hot{border-color:var(--cyan);background:#0d2231}
+.scrow.dead .rn{color:var(--red);text-decoration:line-through}
+/* Six volumes overlap on a frigate, so each one is faint enough that a stack
+   of them still reads as spheres over a ship rather than as paint. Same
+   weights as the modal, which draws them as wireframe balls in 3D. */
+svg .vol{cursor:pointer}
+/* Only the one being looked at is filled. Six filled discs at true radius on a
+   seven unit hull cover the ship completely, which is the same reason the
+   modal draws them as wireframe balls and fills only the hot one. */
+svg .vol .skin{opacity:0}
+/* non-scaling-stroke, so the width is PIXELS. In user units a 0.5 wide stroke
+   on a 10.8 unit viewBox is a 36 pixel band, which is a disc rather than a
+   circle and hid the ship completely. */
+svg .vol .cage{fill:none;vector-effect:non-scaling-stroke;stroke-width:1.1;opacity:.5}
+svg .vol.hot .skin{opacity:.22}
+svg .vol.hot .cage{opacity:1;stroke-width:2}
+
+/* The map inspector */
+/* Fixed at the viewBox's own size. The labels are positioned in page pixels,
+   the way the console positions them from a projection, so a scaled drawing
+   underneath them would put every marker somewhere the ship is not. */
+.map{position:relative;width:720px;max-width:100%;margin:0 auto;background:#070a0f;
+  border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.map svg{display:block;width:720px;height:300px}
+/* The marker stays on the volume and a leader runs back to it, so a label
+   nudged clear of its neighbours is still visibly attached to the thing it
+   names. `--dx` and `--dy` are where the marker is in the label's own frame;
+   the console computes them per frame from the projection. */
+.ibox{position:absolute;width:max-content;max-width:200px;
+  padding:4px 7px;border-radius:5px;font-size:10px;line-height:1.35;color:var(--ink);
+  background:#0d141de8;border:1px solid var(--line);display:grid;
+  grid-template-columns:auto minmax(26px,1fr) auto;gap:3px 6px;align-items:center}
+.ibox::before{content:"";position:absolute;left:var(--dx);top:var(--dy);width:7px;height:7px;
+  margin:-4px 0 0 -4px;border-radius:50%;background:var(--cyan);box-shadow:0 0 0 2px #0d141dcc}
+.ibox::after{content:"";position:absolute;left:var(--dx);top:var(--dy);width:var(--len);
+  height:1px;background:var(--cyan);opacity:.5;transform-origin:0 50%;transform:rotate(var(--ang))}
+.ibox .k{font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.ibox .v{color:var(--muted);font-family:var(--mono);white-space:nowrap}
+.ibox .why{grid-column:1/4;color:var(--muted)}
+.ibox.quiet .why{display:none}
+.ibox.hot{border-color:var(--cyan)}
+.ibox.dead{border-color:#6b2020;background:#1d0f0fe8}
+.ibox.dead::before,.ibox.dead::after{background:var(--red)}
+.ibox.dead .k,.ibox.dead .v{color:var(--red)}
+.mapBtn{position:absolute;top:9px;right:9px;padding:8px 12px;border-radius:7px;
+  background:#111823ee;border:1px solid var(--cyan);color:var(--cyan);font-size:12px;
+  font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);
+  font-size:13px}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kicker">fallen tribes</p>
+  <h1>Fleet Rail and Ship Data</h1>
+  <p class="lede">The console could tell you a hull was hurt. It could not tell you
+  <em>where</em>, and where is the whole question: a shot goes into one volume, and which
+  volume decides whether the ship stops turning, stops shooting, or just loses paint.
+  Four readouts, one subject.</p>
+</header>
+
+<div class="note">
+  <p>Every number on this page is read out of <code>engine/sim_core/src/data.rs</code>
+  (<code>frigate_subs</code>) and <code>engine/sim_core/src/turn.rs</code>, so the volumes
+  below sit where the damage model actually puts them and soak what it actually takes off.
+  The schematic is drawn to scale from those offsets and radii against a 3.5 unit hull
+  radius.</p>
+</div>
+
+<h2><span class="num">1</span>The fleet rail, as chips</h2>
+<p class="say">A chip is a button with a picture of the ship on it: a player who spent an
+hour in the shipyard should be able to find their hull without reading. What is
+<em>broken</em> sits beside it rather than inside it, because a chip listing all six
+volumes every turn is a chip nobody reads, and the two that matter are the two that are
+out. Targeting is per ship, so both rails carry it: your chip says who it is aiming at,
+and the hostile chip says which of yours are on it.</p>
+
+<div class="stage">
+  <div class="panel">
+    <p class="cap">fleet &middot; 250px rail</p>
+    <div class="sect">Fleet</div>
+
+    <div class="chip sel">
+      <button class="chipPick"><span class="th" data-art="frigate"></span><span class="body">
+        <span class="nm">P1 Terran Frigate</span>
+        <span class="bar"><i style="width:84%"></i></span>
+        <span class="ln"><span>hull 101</span><span>4.2 u/s</span></span>
+        <span class="ln aim"><span>target</span><span>E3 Rogue Frigate</span></span>
+      </span></button>
+      <div class="chipSide"><button class="chipInfo">i</button></div>
+    </div>
+
+    <div class="chip">
+      <button class="chipPick"><span class="th" data-art="frigate"></span><span class="body">
+        <span class="nm">P2 Karisen Frigate <i>adrift</i></span>
+        <span class="bar"><i style="width:41%"></i></span>
+        <span class="ln"><span>hull 49</span><span>6.8 u/s</span></span>
+        <span class="ln aim"><span>target</span><span>E4 Freighter</span></span>
+      </span></button>
+      <div class="chipSide">
+        <button class="chipInfo">i</button>
+        <span class="off">engines</span>
+        <span class="off">jets</span>
+      </div>
+    </div>
+
+    <div class="sect">Hostiles</div>
+
+    <div class="chip enemy tg">
+      <button class="chipPick"><span class="th" data-art="rogue"></span><span class="body">
+        <span class="nm">E3 Rogue Frigate</span>
+        <span class="bar"><i style="width:62%"></i></span>
+        <span class="ln"><span>hull 74</span><span>3.1 u/s</span></span>
+        <span class="ln aim"><span>hunting</span><span>P1 Terran Frigate</span></span>
+      </span></button>
+      <div class="chipSide">
+        <button class="chipInfo">i</button>
+        <span class="off">weapons</span>
+      </div>
+      <div class="aimedBy"><span class="k">aimed by</span>
+        <span class="who on">P1</span><span class="who">P3</span></div>
+    </div>
+
+    <div class="chip enemy gone">
+      <button class="chipPick"><span class="th" data-art="freighter"></span><span class="body">
+        <span class="nm">E4 Freighter <i>lost</i></span>
+        <span class="bar"><i style="width:0%"></i></span>
+        <span class="ln"><span>hull 0</span><span>2.0 u/s</span></span>
+      </span></button>
+      <div class="chipSide"><button class="chipInfo">i</button></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="cap">hover &middot; a desk affordance, never the only route</p>
+    <div class="card">
+      <div class="hd">P2 Karisen Frigate</div>
+      <div class="s">Karisen Frigate &middot; karisen &middot; yours</div>
+      <div class="vrow"><span>hull</span><span class="bar"><i style="width:41%"></i></span>
+        <span>49/120</span></div>
+      <div class="vrow"><span>speed</span><span></span><span>6.8 u/s</span></div>
+      <div class="vrow"><span>marines</span><span></span><span>12</span></div>
+      <div class="vrow"><span>target</span><span></span><span>E4 Freighter</span></div>
+      <div class="sect">Volumes</div>
+      <div class="vrow"><span>armour 1</span><span class="bar"><i style="width:34%"></i></span>
+        <span>34/100</span></div>
+      <div class="vrow"><span>armour 2</span><span class="bar"><i style="width:91%"></i></span>
+        <span>91/100</span></div>
+      <div class="vrow dead"><span>engines</span><span class="bar"><i style="width:0%"></i></span>
+        <span>offline</span></div>
+      <div class="vrow dead"><span>jets</span><span class="bar"><i style="width:0%"></i></span>
+        <span>offline</span></div>
+      <div class="vrow"><span>weapons</span><span class="bar"><i style="width:76%"></i></span>
+        <span>61/80</span></div>
+      <div class="vrow"><span>reactor</span><span class="bar"><i style="width:100%"></i></span>
+        <span>90/90</span></div>
+      <div class="hint" style="margin-top:8px">Tap <b>i</b> for the schematic.</div>
+    </div>
+    <p class="hint" style="margin-top:12px">A phone has no hover, so nothing here is only
+    here: the info button on every chip opens the same detail as a full screen.</p>
+  </div>
+</div>
+
+<h2><span class="num">2</span>The schematic</h2>
+<p class="say">The shipyard's view of a hull with the live damage model over it, so the
+thing a player designed and the thing being shot at are looked at the same way. Hover a
+sphere or a row; both light the other. Every sphere is drawn at the radius the core
+reports, because how much of a hull one covers is exactly what a player is deciding about
+when they aim at it.</p>
+
+<div class="scWrap">
+  <div class="scView">
+    <svg id="scSvg" viewBox="-5.4 -3.2 10.8 6.4" aria-label="Terran frigate hit volumes, seen from the side">
+      <!-- The hull, as a profile at true scale: 3.5 u class radius, nose at +Z.
+           Z runs right, Y runs up, so a reader sees the ship the way the map draws it. -->
+      <!-- Fills under the hull, cages over it: the ship is the solid thing and
+           the volumes are what is drawn on top of it. -->
+      <g id="volSkins"></g>
+      <g opacity=".95">
+        <path d="M 3.4 0 L 1.9 -0.85 L -2.2 -1.0 L -3.0 -0.62 L -3.0 0.62 L -2.2 1.0 L 1.9 0.85 Z"
+          fill="#22394d" stroke="#7FD8FF" stroke-width=".07" stroke-opacity=".7"></path>
+        <path d="M -3.0 -0.62 L -3.9 -0.42 L -3.9 0.42 L -3.0 0.62 Z"
+          fill="#16242f" stroke="#7FD8FF" stroke-width=".05" stroke-opacity=".45"></path>
+      </g>
+      <g id="vols"></g>
+    </svg>
+    <div class="scCard" id="scCard"></div>
+  </div>
+  <div><div id="scList"></div></div>
+</div>
+
+<table>
+  <tr><th>volume</th><th>kind</th><th class="n">hp</th><th class="n">soaks</th>
+    <th class="n">offset (x, y, z)</th><th class="n">radius</th></tr>
+  <tr><td>armour 1</td><td>armour</td><td class="n">100</td><td class="n">80%</td>
+    <td class="n">-1.6, 0.0, 0.5</td><td class="n">1.6</td></tr>
+  <tr><td>armour 2</td><td>armour</td><td class="n">100</td><td class="n">80%</td>
+    <td class="n">1.6, 0.0, 0.5</td><td class="n">1.6</td></tr>
+  <tr><td>engines</td><td>thruster</td><td class="n">100</td><td class="n">60%</td>
+    <td class="n">0.0, 0.0, -2.6</td><td class="n">1.4</td></tr>
+  <tr><td>jets</td><td>rcs</td><td class="n">60</td><td class="n">40%</td>
+    <td class="n">0.0, -1.0, 1.5</td><td class="n">1.0</td></tr>
+  <tr><td>weapons</td><td>weapon</td><td class="n">80</td><td class="n">50%</td>
+    <td class="n">0.0, 1.0, 1.2</td><td class="n">1.1</td></tr>
+  <tr><td>reactor</td><td>reactor</td><td class="n">90</td><td class="n">45%</td>
+    <td class="n">0.0, 0.0, -0.6</td><td class="n">1.0</td></tr>
+</table>
+<p class="hint">Terran armour blocks 80%; Karisen 75%, Rogue 90%, Benefactor 80%. The
+freighter carries three volumes rather than six and no armour at all.</p>
+
+<h2><span class="num">3</span>Ship data, out on the map</h2>
+<p class="say">The same volumes, labelled where they are. Offered rather than always on:
+the labels are useful at the zoom where a hull fills a third of the screen and are a fog
+of text at the zoom a match is planned at, so the button only appears once the camera is
+actually looking at a ship, and the mode lets go the moment that stops being true. The
+sentence about what losing a volume costs belongs to the one being pointed at, not to all
+six at once.</p>
+
+<div class="map">
+  <svg viewBox="0 0 720 300" aria-label="A frigate on the map with its systems labelled">
+    <defs>
+      <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#12202c"></stop>
+        <stop offset="100%" stop-color="#070a0f"></stop>
+      </radialGradient>
+    </defs>
+    <rect x="0" y="0" width="720" height="300" fill="url(#glow)"></rect>
+    <g stroke="#1E2A3A" stroke-width="1" opacity=".55">
+      <path d="M0 60 H720 M0 120 H720 M0 180 H720 M0 240 H720"></path>
+      <path d="M120 0 V300 M240 0 V300 M360 0 V300 M480 0 V300 M600 0 V300"></path>
+    </g>
+    <g transform="translate(300 158) rotate(-14) scale(20)">
+      <path d="M 3.4 0 L 1.9 -0.85 L -2.2 -1.0 L -3.0 -0.62 L -3.0 0.62 L -2.2 1.0 L 1.9 0.85 Z"
+        fill="#2b4c66" stroke="#7FD8FF" stroke-width=".07"></path>
+      <path d="M -3.0 -0.62 L -3.9 -0.42 L -3.9 0.42 L -3.0 0.62 Z"
+        fill="#1a2c3c" stroke="#7FD8FF" stroke-width=".05" stroke-opacity=".6"></path>
+      <circle cx="1.2" cy="-1.0" r="1.1" fill="#F03B3B" opacity=".16"></circle>
+      <circle cx="1.5" cy="1.0" r="1.0" fill="#2FD6E8" opacity=".16"></circle>
+      <circle cx="-2.6" cy="0" r="1.4" fill="#FF7A18" opacity=".16"></circle>
+    </g>
+  </svg>
+  <button class="mapBtn">Hide ship data</button>
+  <!-- Markers on the volumes at their real offsets through the ship's own
+       transform; labels stacked clear of each other with a leader back to each
+       marker, which is what `placeInspect` does per frame. -->
+  <div class="ibox quiet" style="left:334px;top:104px;--dx:-16px;--dy:29px;
+      --len:24.1px;--ang:-0.844rad">
+    <span class="k">weapons</span><span class="bar"><i style="width:76%"></i></span>
+    <span class="v">61/80</span></div>
+  <div class="ibox quiet" style="left:266px;top:150px;--dx:-16px;--dy:21px;
+      --len:18.9px;--ang:-0.558rad">
+    <span class="k">engines</span><span class="bar"><i style="width:38%"></i></span>
+    <span class="v">38/100</span></div>
+  <div class="ibox dead hot" style="left:350px;top:186px;--dx:-16px;--dy:-16px;
+      --len:57.3px;--ang:1.287rad">
+    <span class="k">jets</span><span class="bar"><i style="width:0%"></i></span>
+    <span class="v">offline</span>
+    <span class="why">Soaks 40% of what reaches it. Attitude jets. When the last one goes
+      the drive still pushes and the hull stops swinging, so it re-flies the rest of the
+      turn on an envelope with no turn left in it.</span></div>
+</div>
+
+<h2><span class="num">4</span>The camera gestures that must never touch a plan</h2>
+<p class="say">Left drag pans when it starts outside the reachable area, which means the
+gesture that moves the camera is also the gesture that moves a ship, and near your own
+hull the difference is a few pixels. So there is a gesture on each device that cannot be
+wrong: it is decided before anything reads the world, so it never picks a ship, never
+grabs the heading ring, and never drops a destination.</p>
+
+<table>
+  <tr><th>gesture</th><th>does</th><th>never</th></tr>
+  <tr><td>Middle button drag</td><td>Pans, always, whatever is under it</td>
+    <td>Picks a ship, moves a plan, grabs the heading ring</td></tr>
+  <tr><td>Two fingers</td><td>The gap zooms and the midpoint pans, out of the one gesture</td>
+    <td>Leaves half a move order under the first finger</td></tr>
+  <tr><td>Right button drag</td><td>Orbits, always</td><td>The same list as the middle button</td></tr>
+  <tr><td>Left button drag</td><td>Inside the reachable area, sets a destination; outside it, pans</td>
+    <td>-</td></tr>
+  <tr><td>One finger</td><td>What the left button does; the toolbar toggle swaps empty space to orbit</td>
+    <td>-</td></tr>
+</table>
+
+<footer>
+  Chips, cards, boxes and rows on this page carry the same class names and the same rules
+  as <code>web/index.html</code>, so a change to one is a visible change to the other.
+</footer>
+</div>
+
+<script>
+/* The volumes, exactly as data.rs authors them for a frigate. Kept as data so
+   the picture, the list and the table cannot drift apart on this page either. */
+var VOLS = [
+  { i:0, name:'armour 1', kind:'armour',   hp:34,  max:100, block:80, at:[-1.6, 0.0, 0.5], r:1.6, hue:'#8494A8' },
+  { i:1, name:'armour 2', kind:'armour',   hp:91,  max:100, block:80, at:[ 1.6, 0.0, 0.5], r:1.6, hue:'#8494A8' },
+  { i:2, name:'engines',  kind:'thruster', hp:38,  max:100, block:60, at:[ 0.0, 0.0,-2.6], r:1.4, hue:'#FF7A18' },
+  { i:3, name:'jets',     kind:'rcs',      hp:0,   max:60,  block:40, at:[ 0.0,-1.0, 1.5], r:1.0, hue:'#2FD6E8', dead:true },
+  { i:4, name:'weapons',  kind:'weapon',   hp:61,  max:80,  block:50, at:[ 0.0, 1.0, 1.2], r:1.1, hue:'#F03B3B' },
+  { i:5, name:'reactor',  kind:'reactor',  hp:90,  max:90,  block:45, at:[ 0.0, 0.0,-0.6], r:1.0, hue:'#3FD97C' }
+];
+var BLURB = {
+  armour: 'Belt armour. Nothing runs through it, so losing one costs no system: it is there to be shot instead of the hull, and once the belt is gone the hits land whole.',
+  thruster: 'Main drive. When the LAST one goes the ship is adrift from that instant: it coasts out the rest of the turn on the velocity it was carrying and cannot add to it.',
+  rcs: 'Attitude jets. When the last one goes the drive still pushes and the hull stops swinging, so it re-flies the rest of the turn on an envelope with no turn left in it.',
+  weapon: 'Weapon bay. With it out every mount on the ship is silent, whatever cooldown they have left.',
+  reactor: 'Reactor. Not damage that happens to be lethal: the hull is gone the moment the pile is, whatever was left of it.'
+};
+var DEAD = '#FF4B4B';
+var hot = 2;
+
+/* Seen from the side: Z runs right, Y runs up, which is how the map draws it.
+   X is the axis the two armour belts differ on, so they sit on top of each
+   other here and the list is what tells them apart. */
+function draw() {
+  var ring = function (v, kind) {
+    var hue = v.dead ? DEAD : v.hue;
+    var paint = kind === 'skin' ? 'fill="' + hue + '"' : 'stroke="' + hue + '"';
+    return '<g class="vol' + (v.i === hot ? ' hot' : '') + '" data-v="' + v.i + '">'
+      + '<circle class="' + kind + '" cx="' + v.at[2] + '" cy="' + (-v.at[1]) + '" r="'
+      + v.r + '" ' + paint + '></circle></g>';
+  };
+  document.getElementById('volSkins').innerHTML =
+    VOLS.map(function (v) { return ring(v, 'skin'); }).join('');
+  var g = document.getElementById('vols');
+  g.innerHTML = VOLS.map(function (v) { return ring(v, 'cage'); }).join('');
+
+  var list = document.getElementById('scList');
+  list.innerHTML = VOLS.map(function (v) {
+    var hue = v.dead ? DEAD : v.hue;
+    var pct = Math.round(100 * v.hp / v.max);
+    return '<button class="scrow' + (v.dead ? ' dead' : '') + (v.i === hot ? ' hot' : '')
+      + '" data-v="' + v.i + '">'
+      + '<span class="sw" style="background:' + hue + '"></span>'
+      + '<span class="rn">' + v.name + '</span>'
+      + '<span class="st">' + (v.dead ? 'offline' : v.hp + '/' + v.max) + '</span>'
+      + '<span class="bar"><i style="width:' + pct + '%;background:' + hue + '"></i></span>'
+      + '</button>';
+  }).join('');
+
+  var v = VOLS[hot];
+  var card = document.getElementById('scCard');
+  if (!v) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  var hue = v.dead ? DEAD : v.hue;
+  card.innerHTML = '<div class="hd"><span class="dot" style="background:' + hue + '"></span>'
+    + '<span class="cn">' + v.name + '</span>'
+    + '<span class="id">' + v.kind + ' &middot; volume ' + v.i + '</span></div>'
+    + '<p>' + (v.dead ? '<b>Offline.</b> '
+      : '<b>' + v.hp + '</b> of ' + v.max + ' (' + Math.round(100 * v.hp / v.max) + '%). ')
+    + 'Soaks <b>' + v.block + '%</b> of a hit that reaches it; the rest goes through to the '
+    + 'hull. Volume radius <b>' + v.r.toFixed(2) + '</b> u.</p>'
+    + '<p>' + BLURB[v.kind] + '</p>';
+}
+
+function bind(root) {
+  root.addEventListener('pointerover', function (e) {
+    var el = e.target.closest('[data-v]');
+    if (!el) return;
+    var n = Number(el.getAttribute('data-v'));
+    if (n === hot) return;
+    hot = n;
+    draw();
+  });
+}
+bind(document.getElementById('scSvg'));
+bind(document.getElementById('scList'));
+draw();
+
+/* The chip thumbnails. On the real console these are a render of the design's
+   own hull; here they are the same silhouette at the same 44px, so the rail is
+   laid out against something the right shape and the right weight. */
+var ART = {
+  frigate: 'M 30 22 L 20 15 L 8 16 L 6 20 L 6 24 L 8 28 L 20 29 Z',
+  rogue:   'M 32 22 L 22 16 L 10 14 L 5 20 L 10 30 L 22 28 Z',
+  freighter:'M 30 22 L 24 14 L 9 14 L 5 22 L 9 30 L 24 30 Z'
+};
+var TINT = { frigate: '#35C7FF', rogue: '#FA6A0A', freighter: '#FA6A0A' };
+Array.prototype.forEach.call(document.querySelectorAll('.th[data-art]'), function (el) {
+  var k = el.getAttribute('data-art');
+  el.innerHTML = '<svg viewBox="0 0 40 44" width="42" height="42" aria-hidden="true">'
+    + '<path d="' + ART[k] + '" fill="' + TINT[k] + '" fill-opacity=".55" stroke="' + TINT[k]
+    + '" stroke-width="1"></path></svg>';
+});
+</script>
