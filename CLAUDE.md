@@ -461,6 +461,44 @@ They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
 
+## Textures: Material Maker is the tool, the script is a stopgap
+
+GUIDELINES 4 says art comes from real tools driven headlessly, and for textures
+that tool is **[Material Maker](https://www.materialmaker.org/)**. It is a free,
+open source, node based procedural material editor, it is a Godot application so
+it runs under Xvfb with no desktop, and it exports from the command line, which
+is exactly the shape rule 4 asks for. It also gives what a hand written
+generator does not: PBR outputs together (albedo, normal, roughness, emission,
+ambient occlusion) from one graph, a live preview on a real material while the
+graph is being tuned, seamless tiling for free, and a library of erosion, rust,
+scratch and molten nodes that would each be an afternoon of numerical code here.
+
+Use it for anything new. When exporting, GUIDELINES 3 wants the SOURCE beside
+the product, so the `.ptex` graph is committed next to the PNG it produced, and
+GUIDELINES 4 wants every dimension a power of two.
+
+`tools/make_ember_texture.py` is the exception and is NOT the pattern to copy.
+It hand rolls periodic value noise and a PNG encoder because Material Maker
+could not be fetched from the sandbox it was written in: every GitHub release
+download path answered 403 through the agent proxy, and itch.io needs a browser.
+The script therefore holds `web/public/ember.png` to the same contract a real
+export would (a static file, a committed source, `--check` to catch drift), and
+should be replaced by a Material Maker graph the first time a session can
+actually install the thing.
+
+Two lessons from that texture are about the material and outlive the tool:
+
+- **The map carries the colour, the vertex ramp carries the state.**
+  `MeshBasicMaterial` multiplies `map` by the vertex colour, and a grey times an
+  orange is only ever a darker orange, so white hot cores are unreachable if the
+  hue is left to the ramp. Author the full gradient into the texture and let the
+  ramp be a multiplier that starts at white and cools.
+- **Detail has to survive being three pixels across.** A wound is hundreds of
+  cell faces about a tenth of a unit wide. A fine bright web over a dark ground
+  samples as the dark ground almost every time, which once put the wound out
+  altogether on a ship while looking correct at 1:1. Keep the octaves coarse and
+  keep the hot share near half.
+
 ## A hull a side fields is a match fact too
 
 The practice screen lets a player take a saved design into a level. What

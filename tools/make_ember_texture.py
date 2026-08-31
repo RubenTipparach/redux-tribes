@@ -38,6 +38,14 @@ the glow out altogether. Whatever is drawn here has to survive being three
 pixels across, which is why every octave is coarse and why the molten share is
 held near half.
 
+WHY THIS IS A SCRIPT AND SHOULD NOT STAY ONE. GUIDELINES 4 wants textures out of
+Material Maker (https://www.materialmaker.org/), which is node based, runs
+headless and exports the whole PBR set from one graph. It could not be fetched
+from the sandbox this was written in: every GitHub release download path
+answered 403 through the agent proxy. So this file holds the same contract a
+real export would, and the first session that can install Material Maker should
+replace it with a `.ptex` graph committed beside the PNG.
+
 No third party imaging library: the PNG encoder below is thirty lines and the
 alternative is a dependency in a repo that has none.
 """
