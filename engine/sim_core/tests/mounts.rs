@@ -67,16 +67,37 @@ fn fire_on_the_structure_around_a_mount_knocks_it_off() {
 }
 
 #[test]
-fn a_shot_down_the_hull_does_not_take_a_mount_with_it() {
+fn a_shot_elsewhere_on_the_hull_does_not_take_a_mount_with_it() {
     let mut sim = pair();
-    // Well outside MOUNT_RADIUS of anything, and far more damage than a mount
-    // has: distance is what protects it, not luck.
-    let far = mount_world(&sim, 0).add(V3::new(0.0, 0.0, 40.0));
+    // ON the ship, and away from this mount. The first version of this test
+    // fired forty units off the hull entirely, which is a distance no radius
+    // could fail, and it passed happily while MOUNT_RADIUS was wide enough to
+    // swallow the whole frigate. A test has to be able to fail.
+    let far = mount_world(&sim, 0).add(V3::new(0.0, 0.0, 1.5));
     let mut events = Vec::new();
     for _ in 0..40 {
         sim.apply_damage(0, None, 10.0, None, &mut events, 0, Some(far));
     }
-    assert!(!sim.ships[0].weapons[0].destroyed());
+    assert!(
+        !sim.ships[0].weapons[0].destroyed(),
+        "a mount should survive fire 1.5 units away, which is elsewhere on the same hull",
+    );
+}
+
+#[test]
+fn the_catch_radius_is_a_turret_and_not_a_ship() {
+    // The number that went wrong, pinned as the relationship it has to hold.
+    // A sphere of MOUNT_RADIUS must be small beside the hull it sits on, or
+    // every hit anywhere damages every mount and a ship loses all its guns at
+    // once, which is what happened at 1.1.
+    let sim = pair();
+    let hull = sim.ships[0].radius;
+    assert!(
+        data::MOUNT_RADIUS < hull * 0.25,
+        "MOUNT_RADIUS {} is not small beside a hull of radius {}",
+        data::MOUNT_RADIUS,
+        hull,
+    );
 }
 
 #[test]

@@ -187,11 +187,20 @@ pub enum SubKind {
 /// land to count toward it.
 ///
 /// A mount is not repairable: a turret that comes off is gone for the match.
-/// That is why this is generous next to the volumes around it, and why a hit
-/// has to land close: a gun should be lost to fire that was actually chewing
-/// the structure it is bolted to, not to a lucky shell somewhere down the hull.
-pub const MOUNT_HP: f32 = 70.0;
-pub const MOUNT_RADIUS: f32 = 1.1;
+/// So a gun must be lost to fire that was actually chewing the structure it is
+/// bolted to, not to a shell somewhere else on the ship.
+///
+/// THE RADIUS IS ABOUT THE SIZE OF A TURRET, and that is the whole of it. The
+/// first cut was 1.1, which is a sphere of 5.58 cubic units around each mount
+/// on a hull that is 1.2 by 0.76 by 3.2, or 2.92: the catch radius had nearly
+/// twice the volume of the entire frigate, so every hit anywhere damaged every
+/// mount and three beam hits stripped a ship of all its guns at once. It did
+/// not read as a bug, it read as combat going quiet: matches that had been
+/// ending on turn ten ran past twenty-three with both sides disarmed and
+/// unable to finish. A cell is 7/64 of a unit and a turret is a handful of
+/// them, so 0.45 is "on the mount" and 1.1 was "on the ship".
+pub const MOUNT_HP: f32 = 110.0;
+pub const MOUNT_RADIUS: f32 = 0.45;
 
 pub const CRITICAL_RADIUS: f32 = 14.0;
 pub const CRITICAL_DAMAGE: f32 = 140.0;
