@@ -345,6 +345,28 @@ The slice drawer was one of three shipyard explorations (`mockups/ship-designer-
 
 **It composes rather than replaces.** Two lists on the record, `plate` and `cut`, as cell indices, applied after everything else the raster does. The useful thing is rarely a hull drawn from nothing: it is the class hull with a sponson added here and a hangar mouth cut there. Cut is applied before fill so a player who carves a mouth and lines it in one pass gets what they drew rather than what the order happened to be.
 
+**A turret keeps its own box.** A gun on a trunnion swivels through the volume
+it stands in, so that volume belongs to it and to nothing else: no plate, no
+other part. Enforced in three places because there is no single one that would
+do. The generated exterior carves round the boxes, in both modes and in the
+pylon walk, so a hull the editor builds is legal by construction. The pencil
+refuses a cell inside one and says why, because a pencil that puts a cell
+somewhere the rasteriser will not keep is a pencil that lies. And a seventh
+gate reports what is standing in a box on a design that arrived with something
+in one: an older save, or a part nudged into a turret.
+
+Guns are also placed FIRST, before every other part. A box only exists once its
+turret is placed, so seating a bay before the gun beside it means the gun
+arrives to find its box occupied and the design is illegal with no legal move
+left, since parts are fitted rather than dragged. Placing the turrets first
+makes that unreachable rather than merely unlikely, and the nudge counts a
+reserved cell as a loss so a part walks out of a box rather than settling in
+one.
+
+It costs plate, which is the point: the Terran drops 5031 cells to 4825 and its
+budget goes 85 to 83 percent, and all five classes are still legal out of the
+box with zero cells fouled.
+
 **Only armour is drawable.** Neither list can touch the frame or a fitted part: those are the class and the fitting, both placed rather than drawn. They are shown on the slice, dimmed, so you can work around them.
 
 **Every drawn cell must reach the ship.** A cell is refused unless a face neighbour is already solid: armour, frame, part, or another drawn cell. A run still works outward from the hull, because each cell it lays is itself something for the next one to touch. And the invariant is kept rather than checked once: cutting can strand what was drawn on top of it, so after every cut a flood fill from the anchored cells drops whatever no longer reaches. Plate hanging in space beside a hull is the defect the pylons were written to end, and a pencil that can make it is a pencil that will.

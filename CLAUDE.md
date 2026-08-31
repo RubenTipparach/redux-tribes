@@ -165,7 +165,8 @@ the hull, every enclosed mount inside the hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
 selection that outlines it, a turret that turns 90 degrees and takes its
 cells with it, a saved hull taken out of the library into a practice level and
-actually spawned, and the armour pencil: a run that is fully reversible, a cell
+actually spawned, a turret whose box has nothing standing in it and a pencil
+that refuses to put anything there, and the armour pencil: a run that is fully reversible, a cell
 that reaches nothing refused with a reason, slabs that TILE the lattice rather
 than overlapping, the slab drawn on the model at the thickness the slider says,
 and the optional x and y mirrors turning one tap into two and then four. Run it

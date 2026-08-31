@@ -339,13 +339,18 @@ async function checkDrawing(page) {
     const b = await (await page.$('#dzSliceCanvas')).boundingBox();
     return { ...b, cell: b.width / 32 };
   };
-  const tap = async (i, row) => {
+  // (i, j) are CELLS, and y grows upward on the ship and downward on a canvas,
+  // so a row is NY - 1 - j. Taking the row for the cell aimed a whole check at
+  // the mirror of the cell it named, which passed only because the hull is
+  // symmetric about that axis.
+  const tap = async (i, j) => {
     const b = await box();
-    await page.mouse.click(b.x + b.cell * (i + 0.5), b.y + b.cell * (row + 0.5));
+    await page.mouse.click(b.x + b.cell * (i + 0.5), b.y + b.cell * (32 - 1 - j + 0.5));
     await page.waitForTimeout(420);
   };
-  const run = async (row) => {
+  const run = async (j) => {
     const b = await box();
+    const row = 32 - 1 - j;
     await page.mouse.move(b.x + b.cell * 3.5, b.y + b.cell * (row + 0.5));
     await page.mouse.down();
     for (let n = 4; n < 13; n++)
@@ -353,7 +358,55 @@ async function checkDrawing(page) {
     await page.mouse.up();
     await page.waitForTimeout(500);
   };
-  await run(16);
+
+  /**
+   * A cell the pencil should accept, found rather than hardcoded.
+   *
+   * The column that is "just outside the skin" moves whenever the raster does,
+   * and a harness that names one goes on testing something else entirely: the
+   * turret carve shifted it by a cell and three checks started aiming at a
+   * part. Empty through the whole slab, clear of every turret box, touching
+   * something solid, and with its mirror images equally clear when a mirror is
+   * on, because the count a mirrored tap must produce is the whole assertion.
+   */
+  const findEdge = (mx = false, my = false) => page.evaluate(([mirX, mirY]) => {
+    const d = window.ftDebug.designer();
+    const [za, zb] = d.slabZ;
+    const N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    const inT = (i, j, k) => d.turrets.some(t =>
+      i >= t.i0 && i <= t.i1 && j >= t.j0 && j <= t.j1 && k >= t.k0 && k <= t.k1);
+    const free = (i, j) => {
+      for (let k = za; k <= zb; k++) {
+        if (d.cellAt(i, j, k) || inT(i, j, k)) return false;
+        if (!N.some(([a, b, c]) => d.cellAt(i + a, j + b, k + c))) return false;
+      }
+      return true;
+    };
+    for (let j = 0; j < 32; j++) for (let i = 0; i < 32; i++) {
+      const cols = [[i, j]];
+      if (mirX) cols.push([31 - i, j]);
+      if (mirY) cols.push([i, 31 - j]);
+      if (mirX && mirY) cols.push([31 - i, 31 - j]);
+      const uniq = [...new Set(cols.map(c => c.join(',')))].map(t => t.split(',').map(Number));
+      if (uniq.length !== cols.length) continue;      // on a mirror plane
+      if (uniq.every(([a, b]) => free(a, b))) return { i, j, cells: uniq.length };
+    }
+    return null;
+  }, [mx, my]);
+
+  /** A row that crosses generated plate, so a cut has something to take. */
+  const findPlateRow = () => page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    const k = d.slabZ[0];
+    for (let j = 0; j < 32; j++) {
+      let n = 0;
+      for (let i = 3; i < 13; i++) { const m = d.cellAt(i, j, k); if (m === 1 || m === 7) n++; }
+      if (n >= 3) return j;
+    }
+    return 16;
+  });
+  const plateRow = await findPlateRow();
+  await run(plateRow);
   const drawn = await read();
   if (!drawn.drawn) { fail('dragging across the slice drew nothing'); return; }
   if (drawn.plate <= before.plate)
@@ -370,7 +423,7 @@ async function checkDrawing(page) {
   // cells come off first and the run carries on into the shell behind them.
   await page.click('#dzBrushCut');
   await page.waitForTimeout(150);
-  await run(16);
+  await run(plateRow);
   const carved = await read();
   if (!carved.cut) fail('the cut brush removed nothing');
   else ok(`the cut brush takes ${carved.cut} cells out of the generated skin`);
@@ -387,6 +440,61 @@ async function checkDrawing(page) {
   await page.click('#dzBrushAdd');
   await page.waitForTimeout(150);
 
+  // A turret swings through its own box, so nothing else may be in it. Three
+  // things have to hold at once: the generated exterior carves round them, the
+  // pencil refuses a cell inside one with a reason, and the gate stays green
+  // on a hull the editor built.
+  const gun = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { turrets: d.turrets, fouled: d.fouled,
+      gate: (d.derived.checks.find(c => c.id === 'turrets') ?? {}).ok };
+  });
+  if (!gun.turrets.length) fail('the Terran shows no turret boxes at all');
+  else if (gun.fouled) fail(`${gun.fouled} cells of armour are inside a turret`);
+  else if (!gun.gate) fail('the turret gate is red on a hull the editor built');
+  else ok(`${gun.turrets.length} turret boxes, nothing standing in any of them`);
+
+  // And the pencil refuses one. The cell is chosen rather than hoped for: in a
+  // turret box, empty, and touching something solid, so the refusal that comes
+  // back can only be the turret and not the connectivity rule.
+  const aim = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    const N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+    for (const t of d.turrets) {
+      for (let k = t.k0; k <= t.k1; k++) for (let j = t.j0; j <= t.j1; j++) {
+        for (let i = t.i0; i <= t.i1; i++) {
+          if (d.cellAt(i, j, k)) continue;
+          if (!N.some(([a, b, c]) => d.cellAt(i + a, j + b, k + c))) continue;
+          return { i, j, k };
+        }
+      }
+    }
+    return null;
+  });
+  if (!aim) {
+    fail('no empty cell inside any turret box, so the pencil cannot be tested against one');
+  } else {
+    await page.evaluate((k) => {
+      const e = document.getElementById('dzSliceAt');
+      e.value = String(k); e.dispatchEvent(new Event('input', { bubbles: true }));
+    }, aim.k);
+    await page.waitForTimeout(300);
+    const was = await read();
+    await tap(aim.i, aim.j);
+    const now = await read();
+    const said = await page.evaluate(() => window.ftDebug.designer().drawSaid);
+    if (now.drawn !== was.drawn)
+      fail(`a cell inside a turret at ${aim.i},${aim.j},${aim.k} was drawn anyway`);
+    else if (!/turret/.test(said))
+      fail(`a cell inside a turret was refused without saying so: "${said}"`);
+    else ok(`the pencil refuses a turret's box: "${said}"`);
+  }
+  await page.evaluate(() => {
+    const e = document.getElementById('dzSliceAt');
+    e.value = '32'; e.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.waitForTimeout(250);
+
   // Armour has to reach the ship. A cell in the far corner of the lattice
   // touches nothing, and plate hanging in space is the defect the pylons were
   // written to end: a pencil that can make it is a pencil that will.
@@ -397,12 +505,15 @@ async function checkDrawing(page) {
   else if (!said) fail('a refused cell was refused silently');
   else ok(`armour must reach the ship: "${said}"`);
 
-  // And one against the hull is taken. z 32 on the Terran puts the skin at
-  // column 6, so column 5 is the first empty cell that touches it.
-  await tap(5, 16);
+  // And one against the hull is taken, at a cell the harness went and found:
+  // naming a column made three checks aim at a part the moment the raster
+  // moved under them.
+  const edge = await findEdge();
+  if (!edge) { fail('no empty cell against the hull anywhere on this slab'); return; }
+  await tap(edge.i, edge.j);
   const beside = await read();
-  if (!beside.drawn) fail('a cell against the hull was refused');
-  else ok('a cell against the hull is taken');
+  if (!beside.drawn) fail(`a cell against the hull at ${edge.i},${edge.j} was refused`);
+  else ok(`a cell against the hull is taken (${edge.i}, ${edge.j})`);
 
   // Thickness makes a slice DEEPER rather than overlapping the next one, so
   // the slabs tile the 64 cells of the lattice and there are fewer of them.
@@ -448,7 +559,9 @@ async function checkDrawing(page) {
     + `units with the thickness`);
 
   // A stroke paints every z of the slab, not just the face of it.
-  await tap(4, 16);
+  const deepAt = await findEdge();
+  if (!deepAt) { fail('no cell to draw a column at'); return; }
+  await tap(deepAt.i, deepAt.j);
   const deep = await read();
   if (deep.drawn - beside.drawn < 4)
     fail(`a thickness 6 stroke drew ${deep.drawn - beside.drawn} cells, not a column`);
@@ -474,20 +587,24 @@ async function checkDrawing(page) {
   if (off.drawn) { fail('Clear all left drawing behind before the mirror check'); return; }
   await page.click('#dzMirrorX');
   await page.waitForTimeout(200);
-  await tap(5, 16);
+  const one = await findEdge(true, false);
+  if (!one) { fail('no cell whose mirror across the keel is drawable too'); return; }
+  await tap(one.i, one.j);
   const mx = await read();
   if (mx.drawn !== 2)
-    fail(`mirror x drew ${mx.drawn} cells from one tap, not 2`);
+    fail(`mirror x drew ${mx.drawn} cells from one tap at ${one.i},${one.j}, not 2`);
   else ok('mirror x paints the cell and its opposite number across the keel');
 
   await page.click('#dzDrawClear');
   await page.waitForTimeout(500);
   await page.click('#dzMirrorY');
   await page.waitForTimeout(200);
-  await tap(5, 16);
+  const four = await findEdge(true, true);
+  if (!four) { fail('no cell whose four quarters are all drawable'); return; }
+  await tap(four.i, four.j);
   const mxy = await read();
   if (mxy.drawn !== 4)
-    fail(`mirror x and y drew ${mxy.drawn} cells from one tap, not 4`);
+    fail(`mirror x and y drew ${mxy.drawn} cells from one tap at ${four.i},${four.j}, not 4`);
   else ok('mirror x and y together paint all four quarters');
 
   await page.click('#dzMirrorX');

@@ -890,6 +890,12 @@ export interface Derived {
   readonly massMax: number;
   readonly hull: number;
   readonly radius: number;
+  /** The boxes turrets keep clear, in placement order. */
+  readonly turrets: readonly TurretBox[];
+  /** Cells inside a turret box that something else is standing in. Zero on
+   *  anything this rasteriser built; above zero means a part was placed into
+   *  one, or a design saved before the rule came in. */
+  readonly fouled: number;
   readonly extent: readonly [number, number, number];
   readonly accelFwd: number;
   readonly accelRetro: number;
@@ -940,6 +946,33 @@ const TURN_SECONDS = 10;
  * what makes the frame impossible to edit and what stops two solids sharing a
  * cell, which is what removed the z fighting.
  */
+/**
+ * The box a turret occupies, which is illegal placement for anything else.
+ *
+ * A turret swivels: it is not a shape that armour may be packed around cell by
+ * cell, it is a volume it has to keep clear. The generated exterior carves
+ * round these, the pencil refuses a cell inside one, and a design that arrives
+ * with something in one (an older save, a part nudged into one) is illegal
+ * rather than quietly rebuilt, because moving a player's parts for them is
+ * worse than telling them.
+ */
+export interface TurretBox {
+  /** Placement index, so the offender can be named. */
+  readonly part: number;
+  readonly i0: number; readonly i1: number;
+  readonly j0: number; readonly j1: number;
+  readonly k0: number; readonly k1: number;
+}
+
+/** Is this cell inside a turret's box? One implementation, because the pencil,
+ *  the picture and the gate all have to agree about where a turret is. */
+export function inTurret(turrets: readonly TurretBox[], i: number, j: number, k: number): boolean {
+  for (const t of turrets) {
+    if (i >= t.i0 && i <= t.i1 && j >= t.j0 && j <= t.j1 && k >= t.k0 && k <= t.k1) return true;
+  }
+  return false;
+}
+
 export interface Raster {
   /** One material per cell, x fastest then y then z. */
   readonly grid: Uint8Array;
@@ -958,6 +991,12 @@ export interface Raster {
    *  which is what a recessed thruster looks like; a whole block standing off
    *  the flank on a pylon is what this number is here to catch. */
   readonly flushProud: number;
+  /** The boxes turrets keep clear, in placement order. */
+  readonly turrets: readonly TurretBox[];
+  /** Cells inside a turret box that something else is standing in. Zero on
+   *  anything this rasteriser built; above zero means a part was placed into
+   *  one, or a design saved before the rule came in. */
+  readonly fouled: number;
   readonly extent: readonly [number, number, number];
   /** The true bounding sphere, in cells, about the hull's own centre.
    *  A box diagonal is not one: it measures corners a long thin ship has
@@ -1056,8 +1095,21 @@ export function rasterise(d: Design): Raster {
   // back to it below, because a pod hanging in space beside its own ship is
   // exactly the slop that voxels were supposed to end.
   const outboard: number[] = [];
+  /** The boxes turrets sweep, which nothing else may occupy. */
+  const turrets: TurretBox[] = [];
   let enclosedOutside = 0, flushProud = 0;
-  for (let pi = 0; pi < d.parts.length; pi++) {
+  // Guns first, then everything else.
+  //
+  // A turret's box is its own, and a box only exists once the turret is
+  // placed: seating a bay before the gun beside it means the gun arrives to
+  // find the box already occupied, and the design is illegal with no legal
+  // move left, because parts are fitted rather than dragged. Placing the
+  // turrets first makes that unreachable rather than merely unlikely.
+  const isGun = (n: number) => !!moduleById((d.parts[n] as Placement).module)?.weapon;
+  const every = d.parts.map((_, n) => n);
+  const order = [...every.filter(isGun), ...every.filter(n => !isGun(n))];
+  const reserved = new Uint8Array(CELLS);
+  for (const pi of order) {
     const p = d.parts[pi] as Placement;
     const sock = allSockets.find(k => k.id === p.socket);
     const m = moduleById(p.module);
@@ -1071,15 +1123,18 @@ export function rasterise(d: Design): Raster {
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
 
-    // How many of the part's cells another part is already standing in.
+    // How many of the part's cells another part is already standing in, and a
+    // cell inside a turret's box counts, so the nudge walks out of one rather
+    // than settling in it.
     const lossAt = (ox: number, oy: number, oz: number): number => {
       let lost = 0;
       for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
         if (!v.data[i + j * v.sx + k * v.sx * v.sy]) continue;
         const x = ox + i, y = oy + j, z = oz + k;
         if (!inBounds(x, y, z)) { lost++; continue; }
-        const at = grid[idx3(x, y, z)] as number;
-        if (at && at !== Mat.Frame) lost++;
+        const n = idx3(x, y, z);
+        const at = grid[n] as number;
+        if ((at && at !== Mat.Frame) || reserved[n]) lost++;
       }
       return lost;
     };
@@ -1101,6 +1156,21 @@ export function rasterise(d: Design): Raster {
         if (lost < best) { best = lost; ox = tx; oy = ty; oz = tz; }
         if (best === 0) break;
       }
+    }
+
+    // A turret swivels, so its own volume belongs to it and to nothing else.
+    // Recorded as the placed box rather than as its filled cells, because the
+    // gaps in a gun (under the barrel, beside the base) are the gaps the shell
+    // used to grow into, and a barrel buried in plate is exactly what a player
+    // sees and calls broken.
+    if (m.weapon) {
+      const box: TurretBox = { part: pi,
+        i0: ox, i1: ox + v.sx - 1, j0: oy, j1: oy + v.sy - 1, k0: oz, k1: oz + v.sz - 1 };
+      turrets.push(box);
+      for (let k = Math.max(0, box.k0); k <= Math.min(NZ - 1, box.k1); k++)
+        for (let j = Math.max(0, box.j0); j <= Math.min(NY - 1, box.j1); j++)
+          for (let i = Math.max(0, box.i0); i <= Math.min(NX - 1, box.i1); i++)
+            reserved[idx3(i, j, k)] = 1;
     }
 
     // A part mounts THROUGH the frame, so it takes a rib cell if it needs one.
@@ -1132,6 +1202,11 @@ export function rasterise(d: Design): Raster {
       }
     }
   }
+
+  // `reserved` is now every turret's box, filled as each one was placed. It is
+  // read by every pass that lays armour below: a flag rather than a test per
+  // writer, because there are five places that write plate and the one that
+  // forgot would be the one nobody noticed.
 
   // --- plate --------------------------------------------------------------
   const sec = d.sections;
@@ -1171,6 +1246,7 @@ export function rasterise(d: Design): Raster {
           const ux = (i + 0.5 - CX) / a, uy = (j + 0.5 - CY) / b;
           if (ux * ux + uy * uy <= 1) continue;
           const n = idx3(i, j, k);
+          if (reserved[n]) continue;
           if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
           else set(i, j, k, Mat.Plate, STRUCT);
         }
@@ -1190,6 +1266,7 @@ export function rasterise(d: Design): Raster {
           const dx = (i + 0.5 - CX) / hw;
           if (dx * dx + dy * dy > 1) continue;
           const n = idx3(i, j, k);
+          if (reserved[n]) continue;
           if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
           else set(i, j, k, Mat.Plate, STRUCT);
         }
@@ -1206,7 +1283,7 @@ export function rasterise(d: Design): Raster {
     // length of a fully plated hull as two grey planks, 915 bare cells of
     // them. A skin covers its own ribs, including the ones that stick out.
     for (let n = 0; n < CELLS; n++) {
-      if (grid[n] !== Mat.Frame) continue;
+      if (grid[n] !== Mat.Frame || reserved[n]) continue;
       const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
       const exposed =
         i === 0 || !grid[n - 1] || i === NX - 1 || !grid[n + 1] ||
@@ -1238,7 +1315,9 @@ export function rasterise(d: Design): Raster {
         for (let t = 1; t <= layers; t++) {
           const x = i + dx * t, y = j + dy * t, z = k + dz * t;
           if (!inBounds(x, y, z)) break;
-          const at = grid[idx3(x, y, z)] as number;
+          const n = idx3(x, y, z);
+          if (reserved[n]) break;
+          const at = grid[n] as number;
           if (at && at !== Mat.Plate) break;
           set(x, y, z, Mat.Plate, STRUCT);
         }
@@ -1268,6 +1347,7 @@ export function rasterise(d: Design): Raster {
       else y += uy > 0 ? -1 : 1;
       if (!inBounds(x, y, k)) break;
       if (grid[idx3(x, y, k)]) break;          // met the ship: attached
+      if (reserved[idx3(x, y, k)]) break;      // met a turret, which is also the ship
       set(x, y, k, Mat.Plate, STRUCT);
       const vx = (x + 0.5 - CX) / hw, vy = (y + 0.5 - CY) / hh;
       if (vx * vx + vy * vy <= 1) break;       // reached the hull line
@@ -1288,7 +1368,7 @@ export function rasterise(d: Design): Raster {
     else if (at === Mat.Skinned) grid[n] = Mat.Frame;
   }
   for (const n of d.plate ?? []) {
-    if (n < 0 || n >= CELLS || grid[n]) continue;
+    if (n < 0 || n >= CELLS || grid[n] || reserved[n]) continue;
     grid[n] = Mat.Plate;
     purp[n] = STRUCT;
   }
@@ -1330,8 +1410,25 @@ export function rasterise(d: Design): Raster {
     if (d2 > r2) r2 = d2;
   }
 
+  // What is standing in a turret's box that should not be. The passes above
+  // carve round them, so anything here came in with the design: a part nudged
+  // into one, or a save made before the rule existed.
+  let fouled = 0;
+  for (const t of turrets) {
+    for (let k = Math.max(0, t.k0); k <= Math.min(NZ - 1, t.k1); k++)
+      for (let j = Math.max(0, t.j0); j <= Math.min(NY - 1, t.j1); j++)
+        for (let i = Math.max(0, t.i0); i <= Math.min(NX - 1, t.i1); i++) {
+          const n = idx3(i, j, k);
+          if (!grid[n]) continue;
+          const owner = own[n] as number;
+          if (owner === t.part + 1) continue;          // the turret itself
+          if (grid[n] === Mat.Frame) continue;         // it is bolted to the frame
+          fouled++;
+        }
+  }
+
   const raster: Raster = { grid, purp, own, plateCells, solidCells: cells.length / 3,
-    enclosedOutside, flushProud, extent, radiusCells: Math.sqrt(r2) };
+    enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
   return raster;
 }
@@ -1436,6 +1533,16 @@ export function derive(d: Design): Derived {
       detail: `${mass.toFixed(3)} of ${frame.massMax.toFixed(2)} mass units` },
     { id: 'sphere', label: 'inside the collision sphere', ok: radius <= frame.radius + 1e-9,
       detail: `${radius.toFixed(3)} u against the class radius ${frame.radius.toFixed(1)}` },
+    // A turret swivels through its own box, so the box is its own and nothing
+    // else may stand in it. The generated exterior carves round them, so this
+    // fails on a design that arrived with something in one rather than on one
+    // the editor built: an older save, or a part nudged into a turret.
+    { id: 'turrets', label: 'turrets swing clear', ok: raster.fouled === 0,
+      detail: raster.fouled === 0
+        ? `${raster.turrets.length} turret${raster.turrets.length === 1 ? '' : 's'}, `
+          + 'each with its box to itself'
+        : `${raster.fouled} cell${raster.fouled === 1 ? '' : 's'} of armour or another `
+          + 'part inside a turret' },
   ];
 
   return {
@@ -1445,6 +1552,7 @@ export function derive(d: Design): Derived {
     marines: frame.baseMarines + marines,
     capacity: frame.baseCapacity + capacity,
     boardingRange: frame.baseReach + reach,
+    turrets: raster.turrets, fouled: raster.fouled,
     mounts, belt, checks, legal: checks.every(c => c.ok), parts,
   };
 }

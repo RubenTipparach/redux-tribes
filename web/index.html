@@ -855,7 +855,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       neither can be touched. Thick cuts the hull into deeper slabs rather than
       overlapping slices, so there are fewer of them to walk through and a run
       paints the whole depth. The slab you are standing in is boxed on the
-      model. Mirror is off until you ask for it, and only x and y.</p>
+      model. Mirror is off until you ask for it, and only x and y. A turret
+      swings through its own box, hatched in red: nothing may be drawn there,
+      and the generated exterior carves round it.</p>
       <div class="dzslice">
         <div class="row">
           <button id="dzSliceDown">&lt;</button>

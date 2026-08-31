@@ -18,7 +18,7 @@ import {
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
-  gunByKey, allRound, zeroSections, cellIndex, DRAWN_MAX,
+  gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
@@ -1334,6 +1334,25 @@ export class Designer {
       ctx.stroke();
     }
 
+    // Where a turret swings. Hatched rather than filled, because these cells
+    // are not occupied: they are RESERVED, and a player who cannot see the
+    // difference between "there is something there" and "nothing may go
+    // there" will keep drawing into it and keep being refused.
+    const { turrets } = rasterise(this.#design);
+    if (turrets.length) {
+      ctx.strokeStyle = '#F03B3B55';
+      ctx.lineWidth = 1;
+      for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        let hit = false;
+        for (let z = za; z <= zb && !hit; z++) if (inTurret(turrets, i, j, z)) hit = true;
+        if (!hit || inSlab(i, j)) continue;
+        const x = i * px, y = (NY - 1 - j) * px;
+        ctx.beginPath();
+        ctx.moveTo(x, y + px); ctx.lineTo(x + px, y);
+        ctx.stroke();
+      }
+    }
+
     // The mirror planes, so a symmetric stroke has something to aim at.
     ctx.strokeStyle = '#35C7FF66';
     ctx.lineWidth = 1;
@@ -1373,7 +1392,7 @@ export class Designer {
    */
   #paintCell(i: number, j: number): boolean {
     if (i < 0 || j < 0 || i >= NX || j >= NY) return false;
-    const { grid } = rasterise(this.#design);
+    const { grid, turrets } = rasterise(this.#design);
     const plate = (this.#design.plate ??= []);
     const cut = (this.#design.cut ??= []);
     const drop = (list: number[], set: Set<number>, v: number) => {
@@ -1385,6 +1404,7 @@ export class Designer {
     };
     let changed = false;
     let blocked = false;
+    let inGun = false;
 
     // Where the stroke lands: this column, plus its mirror images if either
     // axis is on. Deduped, because a cell on a mirror plane is its own mirror
@@ -1402,6 +1422,11 @@ export class Designer {
         const mat = grid[n] as number;
 
         if (this.#brush === 'add') {
+          // A turret swings through its own box, so nothing may be drawn in
+          // one. Refused here as well as carved out of the generated exterior,
+          // because a pencil that can put a cell somewhere the rasteriser will
+          // not keep is a pencil that lies.
+          if (inTurret(turrets, ci, cj, k)) { inGun = true; continue; }
           // Undoing a cut is the same gesture as adding, which is what anyone
           // expects from a pencil that has just rubbed something out.
           if (drop(cut, this.#cutSet, n)) { changed = true; continue; }
@@ -1425,8 +1450,9 @@ export class Designer {
     }
 
     if (changed && this.#brush === 'cut') this.#dropOrphans(grid);
-    this.#drawSaid = blocked && !changed
-      ? 'that cell touches nothing: armour has to reach the ship'
+    this.#drawSaid = changed ? ''
+      : inGun ? 'a turret swings through there: nothing else may be in its box'
+      : blocked ? 'that cell touches nothing: armour has to reach the ship'
       : '';
     return changed;
   }
@@ -1912,6 +1938,13 @@ export class Designer {
       livery: this.#liveryColours,
       enclosedOutside: rasterise(this.#design).enclosedOutside,
       flushProud: rasterise(this.#design).flushProud,
+      turrets: rasterise(this.#design).turrets.map(t => ({ ...t })),
+      fouled: rasterise(this.#design).fouled,
+      /** One cell's material. Observation only: the harness uses it to aim a
+       *  gesture at a cell it can describe, rather than at a pixel it hopes
+       *  about. Nothing in the editor reads it back. */
+      cellAt: (i: number, j: number, k: number) =>
+        rasterise(this.#design).grid[cellIndex(i, j, k)] ?? 0,
       marks: this.#marks.children.length,
       note: this.#note,
       gridHash: this.#gridHash,
