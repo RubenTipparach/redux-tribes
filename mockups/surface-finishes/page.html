@@ -65,10 +65,19 @@ button:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 .sw[aria-pressed="true"]{outline:2px solid var(--cyan);outline-offset:2px;border-color:#0A0E14}
 select{font-family:var(--ui);font-size:13px;color:var(--ink);background:var(--panel);
   border:1px solid var(--line);border-radius:5px;padding:6px 8px;min-height:34px}
-.chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
-  border-radius:6px;padding:6px 8px}
-.chip .dot{width:18px;height:18px;border-radius:4px;flex:none;border:1px solid #0006}
-.chip .nm{font-size:12px;color:var(--muted);min-width:64px}
+.chip{display:grid;grid-template-columns:18px 1fr;gap:6px 8px;align-items:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px}
+.chip .dot{width:18px;height:18px;border-radius:4px;border:1px solid #0006}
+.chip .nm{font-size:12px;color:var(--ink)}
+.chip select{grid-column:1/-1;width:100%}
+.chip .sl{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:11px;
+  font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chip .sl span:first-child{min-width:52px}
+.chip .sl output{min-width:30px;text-align:right;color:var(--ink)}
+.chip input[type=range]{flex:1;accent-color:var(--cyan);min-width:0}
+input[type=color]{width:34px;height:34px;padding:0;border:1px solid var(--line);
+  border-radius:5px;background:var(--panel);cursor:pointer}
+input[type=color][aria-pressed="true"]{outline:2px solid var(--cyan);outline-offset:2px}
 .roleGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(214px,1fr));gap:8px}
 .hint{font-size:12px;color:var(--muted);margin:8px 0 0}
 .bad{color:var(--amber)}
@@ -128,13 +137,14 @@ per part, so painting a hull green and choosing ablative makes every green cell 
   <div class="rows">
     <div class="row"><span class="lbl">faction</span><span id="uFaction"></span></div>
     <div class="row"><span class="lbl">armour</span><span id="uSwatch"></span></div>
-    <div class="row"><span class="lbl">finish</span></div>
+    <div class="row"><span class="lbl">custom</span><span id="uCustom"></span></div>
+    <div class="row"><span class="lbl">material</span></div>
     <div class="roleGrid" id="uRoles"></div>
     <div class="row"><span class="lbl">windows</span><span id="uWindow"></span></div>
     <div class="row">
       <span class="lbl">view</span>
       <button id="bDark" aria-pressed="false">Lights out</button>
-      <button id="bSpec" aria-pressed="false">Specular shading</button>
+      <button id="bPbr" aria-pressed="true">PBR shading</button>
       <button id="bFlat" aria-pressed="false">Finishes off</button>
     </div>
   </div>
@@ -333,8 +343,14 @@ function mesh(grid, win) {
   // Buckets, one per role plus one for window quads, so each becomes a group
   // with a material of its own and a finish can be changed without a rebuild.
   var buckets = {};
-  ROLE_ORDER.forEach(function (r) { buckets[r] = { pos:[], nrm:[], uv:[], q:0 }; });
-  buckets.window = { pos:[], nrm:[], uv:[], q:0 };
+  ROLE_ORDER.forEach(function (r) {
+    buckets[r] = { pos:[], nrm:[], uv:[], q:0 };
+    // A window is STAMPED on the cell it lands on, so it keeps that cell's
+    // colour and that cell's finish. One bucket per role rather than one for
+    // every window on the ship: a porthole in the bridge block was being drawn
+    // in the armour colour with the armour's finish under it.
+    buckets['win:' + r] = { pos:[], nrm:[], uv:[], q:0 };
+  });
 
   var at = [0, 0, 0];
   function put(a, axis, u, v, ww) {
@@ -364,7 +380,7 @@ function mesh(grid, win) {
         // which is the per FACE decision the shipyard would make. Painting a
         // whole cell would put a porthole on its roof.
         var isWin = win && w[ix(i, j, k)] && (axis === 0 || (axis === 2 && dir.step > 0));
-        mask[u + v * uN] = isWin ? 100 : role;
+        mask[u + v * uN] = isWin ? 100 + role : role;
       }
       for (var vv = 0; vv < vN; vv++) {
         for (var uu = 0; uu < uN;) {
@@ -388,7 +404,9 @@ function mesh(grid, win) {
           var corners = ccw
             ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
             : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
-          var bkt = key === 100 ? buckets.window : buckets[ROLE_ORDER[key - 1]];
+          var bkt = key >= 100
+            ? buckets['win:' + ROLE_ORDER[key - 100 - 1]]
+            : buckets[ROLE_ORDER[key - 1]];
           for (var c = 0; c < 4; c++) {
             var du = corners[c][0], dv = corners[c][1];
             put(at, axis, uu + du, vv + dv, ww + face);
@@ -396,7 +414,14 @@ function mesh(grid, win) {
             bkt.nrm.push(dir.n[0], dir.n[1], dir.n[2]);
             // One repeat of the texture per CELL, however many cells the
             // greedy rectangle turned out to cover.
-            bkt.uv.push(du, dv);
+            //
+            // And the texture's V runs along the HULL's up axis, which is not
+            // the layer's own V. On the x faces the layer's u IS y, so a decal
+            // came out rotated a quarter turn and the bridge viewport lay on
+            // its side. Swapping there puts every side face's up in the same
+            // place; the y faces have no up to agree about and keep theirs.
+            if (axis === 0) bkt.uv.push(dv, du);
+            else bkt.uv.push(du, dv);
           }
           bkt.q++;
           uu += wide;
@@ -481,6 +506,71 @@ function start() {
 
 function normalMapFor(key) {
   return key === 'smooth' ? null : (TEX['armour_' + key + '_n'] || null);
+}
+
+// ---------------------------------------------------- stamping a window --
+//
+// A window is not a tile that REPLACES the finish under it. It is a recess
+// stamped on top, so a porthole in riveted plate is a porthole in riveted
+// plate: the seams and rivets carry on around the frame.
+//
+// Two normal maps cannot simply be added. Reoriented Normal Mapping is the
+// standard way to sit one on the other: build the base's frame, express the
+// detail in it, and normalise. Done once per (finish, window) pair that is
+// actually used and cached, because it is one pass over 16384 texels and
+// nobody should pay for it twice.
+var STAMP = {};
+function readTexels(tex) {
+  var img = tex.image;
+  var cv = document.createElement('canvas');
+  cv.width = img.width; cv.height = img.height;
+  var cx = cv.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0);
+  return cx.getImageData(0, 0, cv.width, cv.height);
+}
+
+function stampNormal(finishKey, winKey) {
+  var key = finishKey + '|' + winKey;
+  if (STAMP[key]) return STAMP[key];
+  var detail = TEX['window_' + winKey + '_n'];
+  if (!detail) return null;
+  var base = normalMapFor(finishKey);
+  // Nothing to sit on: a smooth finish IS the window's own normal.
+  if (!base) { STAMP[key] = detail; return detail; }
+
+  var A = readTexels(base), B = readTexels(detail);
+  var n = Math.min(A.width, B.width), m = Math.min(A.height, B.height);
+  var cv = document.createElement('canvas');
+  cv.width = n; cv.height = m;
+  var cx = cv.getContext('2d');
+  var out = cx.createImageData(n, m);
+  for (var y = 0; y < m; y++) {
+    for (var x = 0; x < n; x++) {
+      var i = (y * n + x) * 4;
+      var tx = A.data[i] / 255 * 2 - 1;
+      var ty = A.data[i + 1] / 255 * 2 - 1;
+      var tz = A.data[i + 2] / 255 * 2;
+      var ux = B.data[i] / 255 * -2 + 1;
+      var uy = B.data[i + 1] / 255 * -2 + 1;
+      var uz = B.data[i + 2] / 255 * 2 - 1;
+      var d = tx * ux + ty * uy + tz * uz;
+      var k = tz === 0 ? 0 : d / tz;
+      var rx = tx * k - ux, ry = ty * k - uy, rz = tz * k - uz;
+      var len = Math.sqrt(rx * rx + ry * ry + rz * rz) || 1;
+      out.data[i] = Math.round((rx / len * 0.5 + 0.5) * 255);
+      out.data[i + 1] = Math.round((ry / len * 0.5 + 0.5) * 255);
+      out.data[i + 2] = Math.round((rz / len * 0.5 + 0.5) * 255);
+      out.data[i + 3] = 255;
+    }
+  }
+  cx.putImageData(out, 0, 0);
+  var t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.NoColorSpace;
+  t.anisotropy = 8;
+  t.needsUpdate = true;
+  STAMP[key] = t;
+  return t;
 }
 
 // ---- stage 1: the nine finishes on plates ----
@@ -576,10 +666,42 @@ function ship() {
   key.position.set(0.4, 1, 0.25);
   scene.add(hemi); scene.add(key);
 
+  // Metalness needs something to REFLECT. A metal with no environment is
+  // black, so showing metalness under the map's two lights alone would be
+  // showing it at its worst and calling that the answer. This is the same
+  // sky and ground the hemisphere light already uses, as an equirectangular
+  // strip run through PMREM, which is a 64 by 32 canvas and a one off cost.
+  // Worth stating plainly: the battlefield has no environment map today, so
+  // adopting metalness means adding one there too.
+  var envCv = document.createElement('canvas');
+  envCv.width = 64; envCv.height = 32;
+  var envCx = envCv.getContext('2d');
+  var grad = envCx.createLinearGradient(0, 0, 0, 32);
+  grad.addColorStop(0, '#5f7fa0');
+  grad.addColorStop(0.55, '#26313f');
+  grad.addColorStop(1, '#0a0e14');
+  envCx.fillStyle = grad; envCx.fillRect(0, 0, 64, 32);
+  var envSrc = new THREE.CanvasTexture(envCv);
+  envSrc.mapping = THREE.EquirectangularReflectionMapping;
+  envSrc.colorSpace = THREE.SRGBColorSpace;
+  var pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromEquirectangular(envSrc).texture;
+  scene.environmentIntensity = 0.55;
+  pmrem.dispose(); envSrc.dispose();
+
   var state = {
     faction: 0, swatch: 0, windows: 'porthole',
     finish: { armour:'plate', structure:'ribbed', engine:'greeble', gun:'tread', command:'plate' },
-    dark: false, spec: false, flat: false
+    // What a colour is MADE of, not just what colour it is. Metalness and
+    // roughness are the two numbers that decide whether plating reads as
+    // painted steel, bare alloy or a matte composite, and they belong to the
+    // palette entry beside the hue rather than to the renderer.
+    metal: { armour:0.25, structure:0.55, engine:0.70, gun:0.60, command:0.20 },
+    rough: { armour:0.55, structure:0.45, engine:0.35, gun:0.40, command:0.60 },
+    // Four slots a player fills with anything, alongside the faction's eight.
+    custom: ['#c8d2dc', '#8a5a2b', '#2f6f6f', '#b02b4a'],
+    pick: -1,
+    dark: false, pbr: true, flat: false
   };
 
   var grid = buildGrid();
@@ -587,25 +709,44 @@ function ship() {
   scene.add(group);
   var mats = {}, meshes = {}, counts = {};
 
+  /** A window bucket wears the colour and the finish of the cell it is
+   *  stamped on, so 'win:command' is the bridge, not the armour. */
+  function baseRole(role) {
+    return role.indexOf('win:') === 0 ? role.slice(4) : role;
+  }
   function colourOf(role) {
-    if (role === 'armour') return FACTION[state.faction].sw[state.swatch];
-    if (role === 'window') return FACTION[state.faction].sw[state.swatch];
-    return HUE[role];
+    var r = baseRole(role);
+    if (r !== 'armour') return HUE[r];
+    // The armour colour is whichever of the twelve is picked: eight the
+    // faction ships with, and four the player chose freely.
+    if (state.pick >= 0) return parseInt(state.custom[state.pick].slice(1), 16);
+    return FACTION[state.faction].sw[state.swatch];
+  }
+
+  /** The normal map a bucket wears: the finish, with a window stamped into it
+   *  where the bucket is a window. */
+  function normalFor(role) {
+    if (state.flat) return null;
+    var r = baseRole(role);
+    if (role.indexOf('win:') === 0) return stampNormal(state.finish[r], state.windows);
+    return normalMapFor(state.finish[r]);
   }
 
   function makeMaterial(role) {
-    var Ctor = state.spec ? THREE.MeshPhongMaterial : THREE.MeshLambertMaterial;
-    var opts = { color: colourOf(role) };
-    if (state.spec) { opts.shininess = 60; opts.specular = 0x6c8194; }
-    var m = new Ctor(opts);
-    if (role === 'window') {
-      if (!state.flat) m.normalMap = TEX['window_' + state.windows + '_n'] || null;
+    var r = baseRole(role);
+    var m = state.pbr
+      ? new THREE.MeshStandardMaterial({
+          color: colourOf(role),
+          metalness: state.metal[r],
+          roughness: state.rough[r],
+        })
+      : new THREE.MeshLambertMaterial({ color: colourOf(role) });
+    if (role.indexOf('win:') === 0) {
       m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
       m.emissive = new THREE.Color(0xffffff);
       m.emissiveIntensity = 1.0;
-    } else if (!state.flat) {
-      m.normalMap = normalMapFor(state.finish[role]);
     }
+    m.normalMap = normalFor(role);
     if (m.normalMap) m.normalScale.set(1, 1);
     return m;
   }
@@ -644,14 +785,16 @@ function ship() {
   function repaint() {
     Object.keys(mats).forEach(function (role) {
       if (!meshes[role] || !meshes[role].parent) return;
-      var m = mats[role];
+      var m = mats[role], r = baseRole(role);
       m.color.setHex(colourOf(role));
-      if (role === 'window') {
-        m.normalMap = state.flat ? null : (TEX['window_' + state.windows + '_n'] || null);
+      if (role.indexOf('win:') === 0) {
         m.emissiveMap = TEX['window_' + state.windows + '_e'] || null;
-      } else {
-        m.normalMap = state.flat ? null : normalMapFor(state.finish[role]);
       }
+      if (m.metalness !== undefined) {
+        m.metalness = state.metal[r];
+        m.roughness = state.rough[r];
+      }
+      m.normalMap = normalFor(role);
       if (m.normalMap) m.normalScale.set(1, 1);
       m.needsUpdate = true;
     });
@@ -664,8 +807,11 @@ function ship() {
   }
 
   function report() {
-    var total = 0, winq = counts.window || 0;
-    Object.keys(counts).forEach(function (k) { total += counts[k]; });
+    var total = 0, winq = 0;
+    Object.keys(counts).forEach(function (k) {
+      total += counts[k];
+      if (k.indexOf('win:') === 0) winq += counts[k];
+    });
     var base = countWithout();
     stat.textContent = total + ' quads, of which ' + winq + ' carry a window. '
       + 'Without windows the same hull is ' + base + ', so the decals cost '
@@ -696,7 +842,9 @@ function ship() {
 
   var uF = document.getElementById('uFaction');
   FACTION.forEach(function (f, i) {
-    chipBtn(uF, f.name, i === state.faction, function () { state.faction = i; swatches(); repaint(); });
+    chipBtn(uF, f.name, i === state.faction, function () {
+      state.faction = i; state.pick = -1; swatches(); customs(); repaint();
+    });
   });
 
   var uS = document.getElementById('uSwatch');
@@ -711,27 +859,68 @@ function ship() {
       b.setAttribute('aria-pressed', i === state.swatch ? 'true' : 'false');
       b.onclick = function () {
         state.swatch = i;
-        Array.prototype.forEach.call(uS.children, function (c) { c.setAttribute('aria-pressed', 'false'); });
+        state.pick = -1;
+        clearPicked();
         b.setAttribute('aria-pressed', 'true');
         repaint();
       };
       uS.appendChild(b);
     });
   }
+
+  // Four slots the player fills with ANYTHING, beside the eight the faction
+  // ships with. The presets are a scheme somebody designed and are worth
+  // keeping; these are the answer to wanting a colour nobody thought of.
+  var uC = document.getElementById('uCustom');
+  function clearPicked() {
+    Array.prototype.forEach.call(uS.children, function (c) {
+      c.setAttribute('aria-pressed', 'false');
+    });
+    Array.prototype.forEach.call(uC.children, function (c) {
+      c.setAttribute('aria-pressed', 'false');
+    });
+  }
+  function customs() {
+    uC.innerHTML = '';
+    state.custom.forEach(function (hex, i) {
+      var inp = document.createElement('input');
+      inp.type = 'color';
+      inp.value = hex;
+      inp.title = 'custom ' + (i + 1);
+      inp.setAttribute('aria-label', 'custom colour ' + (i + 1));
+      inp.setAttribute('aria-pressed', 'false');
+      // A click picks the slot; changing the colour picks it too, because
+      // nobody opens a colour wheel to leave the hull the way it was.
+      inp.onclick = function () {
+        state.pick = i; clearPicked();
+        inp.setAttribute('aria-pressed', 'true'); repaint();
+      };
+      inp.oninput = function () {
+        state.custom[i] = inp.value;
+        state.pick = i; clearPicked();
+        inp.setAttribute('aria-pressed', 'true'); repaint();
+      };
+      uC.appendChild(inp);
+    });
+  }
   swatches();
+  customs();
 
   var uR = document.getElementById('uRoles');
   ROLE_ORDER.forEach(function (role) {
     var chip = document.createElement('div');
     chip.className = 'chip';
+
     var dot = document.createElement('span');
     dot.className = 'dot';
     dot.id = 'dot_' + role;
     chip.appendChild(dot);
+
     var nm = document.createElement('span');
     nm.className = 'nm';
     nm.textContent = ROLE_LABEL[role];
     chip.appendChild(nm);
+
     var sel = document.createElement('select');
     sel.setAttribute('aria-label', ROLE_LABEL[role] + ' finish');
     FINISH.forEach(function (f) {
@@ -742,8 +931,34 @@ function ship() {
     });
     sel.onchange = function () { state.finish[role] = sel.value; repaint(); };
     chip.appendChild(sel);
+
+    // Metalness and roughness belong to the palette entry, not to the
+    // renderer: they are what says whether this colour is painted steel,
+    // bare alloy or a matte composite.
+    [['metal', 'Metal'], ['rough', 'Rough']].forEach(function (pair) {
+      var which = pair[0];
+      var row = document.createElement('span');
+      row.className = 'sl';
+      var lab = document.createElement('span');
+      lab.textContent = pair[1];
+      var sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '0'; sl.max = '1'; sl.step = '0.05';
+      sl.value = String(state[which][role]);
+      sl.setAttribute('aria-label', ROLE_LABEL[role] + ' ' + pair[1].toLowerCase());
+      var out = document.createElement('output');
+      out.textContent = Number(sl.value).toFixed(2);
+      sl.oninput = function () {
+        state[which][role] = parseFloat(sl.value);
+        out.textContent = parseFloat(sl.value).toFixed(2);
+        repaint();
+      };
+      row.appendChild(lab); row.appendChild(sl); row.appendChild(out);
+      chip.appendChild(row);
+    });
+
     uR.appendChild(chip);
   });
+
   function dots() {
     ROLE_ORDER.forEach(function (role) {
       var d = document.getElementById('dot_' + role);
@@ -763,10 +978,10 @@ function ship() {
     bD.setAttribute('aria-pressed', state.dark ? 'true' : 'false');
     relight();
   };
-  var bP = document.getElementById('bSpec');
+  var bP = document.getElementById('bPbr');
   bP.onclick = function () {
-    state.spec = !state.spec;
-    bP.setAttribute('aria-pressed', state.spec ? 'true' : 'false');
+    state.pbr = !state.pbr;
+    bP.setAttribute('aria-pressed', state.pbr ? 'true' : 'false');
     rebuild();
   };
   var bF = document.getElementById('bFlat');

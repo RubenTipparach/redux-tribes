@@ -399,6 +399,69 @@ export class View {
    * write to a buffer that is already on the card. Rebuilding the index for
    * every hit would cost the whole hull.
    */
+  /**
+   * The cell of a hull nearest a point in that hull's own space, or -1.
+   *
+   * Two questions ask this and they differ in one thing, so it takes that one
+   * thing as an argument rather than existing twice (GUIDELINES 5.1).
+   *
+   * The CARVE wants the nearest cell still standing, because that is where it
+   * starts eating and a hole is not a place to start from. The PICTURE wants
+   * the nearest cell of the hull as built, because a blast is drawn where the
+   * shot met the ship and that answer must not drift as the ship comes apart,
+   * and because it is cached per turn and a carve dependent answer cached once
+   * would be frozen at whatever the hull looked like the first time it was
+   * asked.
+   */
+  static #nearestCell(
+    c: Carved, local: readonly [number, number, number], liveOnly: boolean,
+  ): number {
+    const cell = c.hull.cell;
+    let near = -1, best = Infinity;
+    for (let q = 0; q < c.hull.quads; q++) {
+      const from = c.hull.quadAt[q] as number, to = c.hull.quadAt[q + 1] as number;
+      for (let n = from; n < to; n++) {
+        const id = c.hull.quadCells[n] as number;
+        if (liveOnly && c.cells.has(id)) continue;
+        const i = id % NX, j = ((id / NX) | 0) % NY, k = (id / (NX * NY)) | 0;
+        const dx = (i - NX / 2 + 0.5) * cell - local[0];
+        const dy = (j - NY / 2 + 0.5) * cell - local[1];
+        const dz = (k - NZ / 2 + 0.5) * cell - local[2];
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 < best) { best = d2; near = id; }
+      }
+    }
+    return near;
+  }
+
+  /**
+   * Where a shot MET a hull, in that hull's own space.
+   *
+   * A hit event carries the point on the ship's collision SPHERE, and that
+   * sphere circumscribes the long axis: on a Terran it is 3.29 units against a
+   * hull 1.2 by 0.76 by 3.2, so a hit abeam lands about two units off the
+   * flank, in open space. The carve has always had to solve this to take any
+   * cells at all. The blast and the end of a beam were still being drawn at
+   * the raw event, which is why an explosion hung beside the ship and a beam
+   * carried on through it: the core cannot answer this, because the core has a
+   * sphere and boxes and only the client has the hull.
+   */
+  contactOf(
+    ship: number, local: readonly [number, number, number],
+  ): [number, number, number] | null {
+    const c = this.#carveOf(ship);
+    if (!c) return null;
+    const near = View.#nearestCell(c, local, false);
+    if (near < 0) return null;
+    const cell = c.hull.cell;
+    const i = near % NX, j = ((near / NX) | 0) % NY, k = (near / (NX * NY)) | 0;
+    return [
+      (i - NX / 2 + 0.5) * cell,
+      (j - NY / 2 + 0.5) * cell,
+      (k - NZ / 2 + 0.5) * cell,
+    ];
+  }
+
   #applyHit(c: Carved, h: HullHit): void {
     const col = c.hull.geo.getAttribute('color') as THREE.BufferAttribute;
     const born: Debris[] = [];
@@ -412,20 +475,7 @@ export class View {
     // standing is the cell the shot came in at, because the sphere point is in
     // the direction the shot arrived from.
     const cell = c.hull.cell;
-    let near = -1, best = Infinity;
-    for (let q = 0; q < c.hull.quads; q++) {
-      const from = c.hull.quadAt[q] as number, to = c.hull.quadAt[q + 1] as number;
-      for (let n = from; n < to; n++) {
-        const id = c.hull.quadCells[n] as number;
-        if (c.cells.has(id)) continue;
-        const i = id % NX, j = ((id / NX) | 0) % NY, k = (id / (NX * NY)) | 0;
-        const dx = (i - NX / 2 + 0.5) * cell - h.local[0];
-        const dy = (j - NY / 2 + 0.5) * cell - h.local[1];
-        const dz = (k - NZ / 2 + 0.5) * cell - h.local[2];
-        const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 < best) { best = d2; near = id; }
-      }
-    }
+    const near = View.#nearestCell(c, h.local, true);
     if (near < 0) return;
     const ai = near % NX, aj = ((near / NX) | 0) % NY, ak = (near / (NX * NY)) | 0;
 
@@ -449,11 +499,43 @@ export class View {
           if (dx * dx + dy * dy + dz * dz > r2) continue;
           const id = i + j * NX + k * NX * NY;
           if (!grid[id] || c.cells.has(id)) continue;
+          // A TURRET IS NEVER PARTLY SHOT AWAY. A mount takes damage as a
+          // unit: enough to silence it, or not at all, and the core says which
+          // by killing the weapons volume rather than by chewing a barrel. So
+          // the blast steps over a turret's cells here and the only thing that
+          // ever removes one is the loop below, which takes it off whole.
+          if (c.hull.rigOfCell.has(id)) continue;
           c.cells.set(id, h.tick);
           fresh.push(id);
         }
       }
     }
+
+    // Knocked loose. A mount is bolted to the frame and plating around it, and
+    // when every one of those cells is gone there is nothing holding it on, so
+    // it goes too, in one piece and at the same tick. This is the only way a
+    // turret leaves a hull, which is what makes the rule above hold: it is
+    // whole, or it is not there.
+    for (let r = 0; r < c.hull.rigs.length; r++) {
+      const holds = c.hull.rigSupport[r];
+      // A mount with nothing recorded as holding it can never come off. That
+      // is deliberate: it means the design put it somewhere this cannot reason
+      // about, and dropping it on a guess is worse than leaving it standing.
+      if (!holds || !holds.length) continue;
+      let attached = false;
+      for (const n of holds) {
+        if (!c.cells.has(n)) { attached = true; break; }
+      }
+      if (attached) continue;
+      const own = c.hull.rigCells[r];
+      if (!own) continue;
+      for (const n of own) {
+        if (c.cells.has(n)) continue;
+        c.cells.set(n, h.tick);
+        fresh.push(n);
+      }
+    }
+
     if (!fresh.length) return;
 
     // Chunks come off the cells that just went, outward from the hit and
@@ -1462,10 +1544,26 @@ export class View {
 
   /** What has come off the hulls, and what is in the air: cells carved per
    *  ship, and chunks currently drawn. Observation only. */
-  damageState(): { carved: Array<[number, number]>; chunks: number } {
+  damageState(): {
+    carved: Array<[number, number]>;
+    chunks: number;
+    turrets: Array<{ ship: number; rig: number; gone: number; cells: number }>;
+  } {
+    // Per mount, how many of its cells are gone out of how many it has. A
+    // turret is whole or it is gone, so `gone` is only ever 0 or `cells`, and
+    // a harness can assert that rather than read the code that makes it true.
+    const turrets: Array<{ ship: number; rig: number; gone: number; cells: number }> = [];
+    for (const [id, c] of this.#carved) {
+      c.hull.rigCells.forEach((cells, rig) => {
+        let gone = 0;
+        for (const n of cells) if (c.cells.has(n)) gone++;
+        turrets.push({ ship: id, rig, gone, cells: cells.length });
+      });
+    }
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
+      turrets,
     };
   }
 
@@ -1548,7 +1646,11 @@ export class View {
    * vanishes never does. `age` is passed in for the same reason a blast's is:
    * scrubbing must be able to run one backwards.
    */
+  #lastBeams: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }> = [];
+  #lastBlasts: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }> = [];
+
   setBeams(list: ReadonlyArray<{ from: Vec3; to: Vec3; age: number }>): void {
+    this.#lastBeams = list;
     for (const c of this.#beamGroup.children) {
       (c as THREE.Line).geometry.dispose();
       ((c as THREE.Line).material as THREE.Material).dispose();
@@ -1581,7 +1683,10 @@ export class View {
    * it. Additive and depth-write off, so they light each other instead of
    * cutting holes.
    */
-  setBlasts(list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean }>): void {
+  setBlasts(
+    list: ReadonlyArray<{ pos: Vec3; age: number; radius: number; kill: boolean; ship: number }>,
+  ): void {
+    this.#lastBlasts = list;
     for (const c of this.#fxGroup.children) {
       const m = c as THREE.Mesh;
       m.geometry.dispose();
@@ -2061,14 +2166,50 @@ export class View {
 
   /** How much blast and how much history is on screen, and how big the biggest
    * blast has grown. Observation only, for the harness and the console. */
-  fxStats(): { blasts: number; beams: number; trails: number; widest: number } {
+  /**
+   * What the effects layer is drawing, and whether it is drawing it ON the
+   * ship.
+   *
+   * `off` is how far a blast sits from its ship's centre and `hullR` is that
+   * hull's own bounding radius. A blast drawn at the raw event sits on the
+   * COLLISION sphere, which circumscribes the long axis and is about twice the
+   * hull radius on a frigate, so `off > hullR` is exactly the defect where an
+   * explosion hangs in space beside the ship. `beamLen` is the same question
+   * for a beam, which used to be drawn to the weapon's full range whether or
+   * not it hit anything.
+   */
+  fxStats(): {
+    blasts: number; beams: number; trails: number; widest: number;
+    onHull: Array<{ ship: number; kill: boolean; off: number; hullR: number }>;
+    beamLen: number[];
+  } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
       const g = (c as THREE.Mesh).geometry;
       g.computeBoundingSphere();
       widest = Math.max(widest, g.boundingSphere?.radius ?? 0);
     }
+    const onHull = this.#lastBlasts.map(b => {
+      const mesh = this.#hulls.get(b.ship);
+      const c = this.#carved.get(b.ship);
+      const half = c ? c.hull.half : null;
+      const hullR = half
+        ? Math.sqrt(half[0] * half[0] + half[1] * half[1] + half[2] * half[2])
+        : 0;
+      const off = mesh
+        ? Math.sqrt(
+          (b.pos.x - mesh.position.x) ** 2
+          + (b.pos.y - mesh.position.y) ** 2
+          + (b.pos.z - mesh.position.z) ** 2)
+        : 0;
+      return { ship: b.ship, kill: b.kill, off: +off.toFixed(3), hullR: +hullR.toFixed(3) };
+    });
+    const beamLen = this.#lastBeams.map(b => +Math.sqrt(
+      (b.to.x - b.from.x) ** 2 + (b.to.y - b.from.y) ** 2 + (b.to.z - b.from.z) ** 2,
+    ).toFixed(2));
     return {
+      onHull,
+      beamLen,
       blasts: this.#fxGroup.children.length,
       beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,

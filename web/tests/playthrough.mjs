@@ -71,6 +71,15 @@ let aimedAtAVolume = false;
 let aimedShotQueued = false;
 /** The most chunks of hull seen in the air at once. */
 let chunksSeen = 0;
+/** The worst blast seen, as how far it sat from the hull it was drawn on.
+ *  A shot's explosion belongs ON the ship, and the event it comes from carries
+ *  a point on the COLLISION sphere, which stands well proud of a hull. */
+let worstBlast = null;
+/** Blasts sampled at all, so "none seen" cannot pass as "all landed". */
+let blastsSeen = 0;
+/** The longest beam drawn, against the range of the weapon that fired it: a
+ *  beam that hit used to be drawn out to full range and through the target. */
+let longestBeam = 0;
 let outcome = 'ran out of turns';
 let final = null;
 
@@ -125,6 +134,58 @@ if (!chunksSeen) {
 }
 log(`hulls come apart: ${total} cells off ${carved.length} ships, `
   + `${chunksSeen} chunks in the air at once`);
+
+// A TURRET IS NEVER PARTLY SHOT AWAY.
+//
+// A mount takes damage as a unit: enough to silence it, which the core decides
+// by killing the weapons volume, or not at all. The only thing that removes
+// one is being knocked loose when everything bolting it on has gone, and that
+// takes the whole mount at once. Before this, the carve worked over the
+// lattice without knowing what a cell belonged to, so a blast beside a barrel
+// bit a piece out of it and the mount was drawn with holes in it.
+//
+// Stated as an invariant rather than as a picture: every mount is whole or it
+// is gone, and nothing in between is legal at any point in a match.
+const mounts = await page.evaluate(() => window.ftDebug.damage().turrets);
+const chewed = mounts.filter(m => m.gone > 0 && m.gone < m.cells);
+if (chewed.length) {
+  console.log('\nFAIL: a turret was partly shot away, which cannot happen:');
+  for (const m of chewed.slice(0, 6)) {
+    console.log(`  ship ${m.ship} mount ${m.rig}: ${m.gone} of ${m.cells} cells gone`);
+  }
+  process.exit(1);
+}
+const lost = mounts.filter(m => m.cells > 0 && m.gone === m.cells).length;
+log(`turrets stay whole: ${mounts.length} mounts on damaged hulls, `
+  + `none part eaten, ${lost} knocked clean off`);
+
+// A SHOT LANDS ON THE SHIP.
+//
+// The hit event carries the point where the segment entered the ship's
+// collision sphere, and that sphere circumscribes the long axis: on a frigate
+// it is about twice the hull's own radius, so a blast drawn at the raw event
+// hangs in open space beside the hull. One cell of slack, because the contact
+// is resolved to a cell centre and a cell has a size.
+if (!blastsSeen) {
+  console.log('\nFAIL: a whole match of hits and no blast was ever drawn');
+  process.exit(1);
+}
+if (worstBlast && worstBlast.off > worstBlast.hullR + 0.15) {
+  console.log('\nFAIL: a blast was drawn off the hull it belongs to:');
+  console.log(`  ship ${worstBlast.ship}: ${worstBlast.off} u from centre, `
+    + `hull radius ${worstBlast.hullR} u`);
+  process.exit(1);
+}
+// And a beam stops at what it hit. The beam weapon's range is 300 units, so a
+// beam anywhere near that length is one drawn straight through its target.
+if (longestBeam > 200) {
+  console.log(`\nFAIL: a beam was drawn ${longestBeam} u, which is its full `
+    + 'range: it did not stop at the ship it hit');
+  process.exit(1);
+}
+log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
+  + `${worstBlast ? worstBlast.off : 0} u out against a hull radius of `
+  + `${worstBlast ? worstBlast.hullR : 0} u, longest beam ${longestBeam} u`);
 
 /**
  * Nothing a player needs may sit UNDER a sheet.
@@ -773,10 +834,31 @@ async function playMatch() {
   // chunks are actually seen, because an early turn where nothing connects is
   // an early turn where nothing should fly: waiting for the first two turns
   // and giving up is a check that fails on a match that opened at long range.
-  if (!chunksSeen) {
-    await page.waitForTimeout(1500);
-    const d = await page.evaluate(() => window.ftDebug.damage());
-    chunksSeen = Math.max(chunksSeen, d.chunks);
+  // ONE pass over the playback for everything that only exists while a turn is
+  // being watched: chunks in the air, blasts, beams. Every one of them lives a
+  // few ticks, so a single look at a fixed moment mostly finds an empty screen.
+  //
+  // The chunks check used to take exactly that single look, 1500 ms after End
+  // Turn, and it went red twice on runs where the look landed in a gap: not a
+  // defect in the game, and not a flake to wait out either, but a check asking
+  // a question at one instant about something that is only true at some
+  // instants. Sampling it the same way the other two are sampled fixes it, and
+  // one loop is the right number of loops over one playback.
+  for (let s = 0; s < 16; s++) {
+    const snap = await page.evaluate(() => ({
+      chunks: window.ftDebug.damage().chunks,
+      fx: window.ftDebug.fx(),
+      done: window.ftDebug.playing() === null,
+    }));
+    chunksSeen = Math.max(chunksSeen, snap.chunks);
+    for (const b of snap.fx.onHull) {
+      if (b.kill || !b.hullR) continue;
+      blastsSeen++;
+      if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
+    }
+    for (const len of snap.fx.beamLen) longestBeam = Math.max(longestBeam, len);
+    if (snap.done) break;
+    await page.waitForTimeout(200);
   }
 
   // Playback must run out and hand control back. A turn that never returns to
