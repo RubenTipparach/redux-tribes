@@ -10,7 +10,7 @@
 
 use crate::data::{self, ShipClassId, SubKind, WeaponKey};
 use crate::flight::{Body, Flight, Mode, Well};
-use crate::math::{Quat, V3};
+use crate::math::{Quat, ARC_WORDS, V3};
 
 pub type ShipId = u16;
 
@@ -63,6 +63,14 @@ pub struct Sub {
 pub struct WeaponSlot {
     pub key: WeaponKey,
     pub mount: V3,
+    /// Where this mount's own ship is in the way, one bit per direction.
+    ///
+    /// A turret is omnidirectional until its hull stops it, and where the hull
+    /// stops it is geometry rather than a number anyone can author, so it is
+    /// scanned rather than declared. A set bit is blocked; a mount with an
+    /// empty mask has nothing in its way, which is what a class hull's mounts
+    /// get until a design says otherwise.
+    pub arc_mask: [u32; ARC_WORDS],
     /// Absolute tick this mount last fired on, or -1. Absolute rather than per
     /// turn, so one comparison covers both a second shot later in the same
     /// turn and a shot early in the next one.
@@ -189,7 +197,12 @@ impl Ship {
             weapons: cls
                 .weapons
                 .iter()
-                .map(|m| WeaponSlot { key: m.key, mount: m.mount, last_fired_tick: -99 })
+                .map(|m| WeaponSlot {
+                    key: m.key,
+                    mount: m.mount,
+                    arc_mask: [0; ARC_WORDS],
+                    last_fired_tick: -99,
+                })
                 .collect(),
             marines: cls.marines,
             boarding_parties: Vec::new(),

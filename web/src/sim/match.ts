@@ -46,7 +46,8 @@ export interface MatchExports {
     extX: number, extY: number, extZ: number,
     radiusCells: number, fouled: number, parts: number,
   ): number;
-  ft_hull_mount(side: number, key: number, x: number, y: number, z: number): number;
+  ft_hull_mount(side: number, key: number, x: number, y: number, z: number,
+    masked: number): number;
   ft_hull_clear(side: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
@@ -84,6 +85,7 @@ export interface MatchExports {
   ft_read_mount(classIdx: number, mount: number): number;
   ft_nominal_reach(ship: number): number;
   ft_can_fire(ship: number, weapon: number): number;
+  ft_can_bear(ship: number, weapon: number, target: number, sub: number): number;
   ft_weapon_bay(ship: number): number;
   ft_can_board(ship: number, target: number): number;
   ft_ship_forward(ship: number): number;
@@ -167,15 +169,33 @@ export class Match {
   setHull(side: number, classIdx: number, geo: {
     plateCells: number; ext: readonly [number, number, number];
     radiusCells: number; fouled: number;
-  }, parts: readonly number[], mounts: ReadonlyArray<{ key: string; at: readonly [number, number, number] }>): boolean {
+  }, parts: readonly number[],
+    mounts: ReadonlyArray<{ key: string; at: readonly [number, number, number] }>,
+    masks?: ReadonlyArray<Uint32Array>): boolean {
     const s = this.#s;
     if (DERIVE_PARTS + parts.length > s.length) return false;
     for (let i = 0; i < parts.length; i++) s[DERIVE_PARTS + i] = parts[i] as number;
     const ok = this.#ex.ft_hull_design(side, classIdx, geo.plateCells,
       geo.ext[0], geo.ext[1], geo.ext[2], geo.radiusCells, geo.fouled, parts.length);
     if (!ok) return false;
-    for (const m of mounts) {
-      this.#ex.ft_hull_mount(side, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2]);
+    for (let i = 0; i < mounts.length; i++) {
+      const m = mounts[i] as { key: string; at: readonly [number, number, number] };
+      // The mask goes through the same slots the part list just used, one
+      // mount at a time, because the core reads and copies it before the call
+      // returns. HALF a word per slot: the buffer is f32, which carries whole
+      // numbers exactly only to 2^24, so a word with bit 31 set would arrive
+      // rounded and hand the mount an arc nobody scanned.
+      const mask = masks?.[i];
+      if (mask) {
+        const w = this.#s;
+        for (let k = 0; k < mask.length; k++) {
+          const v = mask[k] as number;
+          w[DERIVE_PARTS + k * 2] = v & 0xffff;
+          w[DERIVE_PARTS + k * 2 + 1] = (v >>> 16) & 0xffff;
+        }
+      }
+      this.#ex.ft_hull_mount(side, WEAPON_KEY[m.key] ?? 0, m.at[0], m.at[1], m.at[2],
+        mask ? 1 : 0);
     }
     return true;
   }
@@ -380,6 +400,18 @@ export class Match {
    */
   canFire(ship: number, weapon: number): boolean {
     return this.#ex.ft_can_fire(ship, weapon) !== 0;
+  }
+
+  /**
+   * Can this mount swing onto that target, hull and all?
+   *
+   * Separate from `canFire`, which is the cooldown and the bay: a mount that
+   * is ready and cannot bear is a different thing to say, and a console that
+   * worked the arc out for itself would be the second copy of a rule the
+   * resolver already owns. `sub` is the volume aimed at, or -1 for the hull.
+   */
+  canBear(ship: number, weapon: number, target: number, sub = -1): boolean {
+    return this.#ex.ft_can_bear(ship, weapon, target, sub) !== 0;
   }
 
   canBoard(ship: number, target: number): boolean {

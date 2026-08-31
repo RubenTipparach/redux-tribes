@@ -498,6 +498,36 @@ impl Sim {
 
     // --------------------------------------------------------------- weapons --
 
+    /// Can this mount SWING onto that point, hull and all?
+    ///
+    /// Two gates and a shot passes both. The authored arc says what the WEAPON
+    /// can do, which is now everything except the ten degrees under its own
+    /// mount; the mask says where this hull is in the way, scanned off the
+    /// design that drew it rather than declared by anyone. A turret is
+    /// omnidirectional until its own ship stops it.
+    ///
+    /// One predicate, asked by the resolver before it fires and by the console
+    /// before it offers the shot, because an arc with two implementations is an
+    /// arc that greys out one mount and drops the shot from another.
+    pub fn bears(&self, si: usize, weapon_index: usize, aim_pos: V3) -> bool {
+        let Some(ship) = self.ships.get(si) else { return false };
+        let Some(w) = ship.weapons.get(weapon_index) else { return false };
+        let mount_pos = ship.mount_world_pos(w);
+        let dir = aim_pos.sub(mount_pos);
+        // A target on top of the mount has no direction to test, so nothing
+        // can be said to block it.
+        if dir.len2() < 1e-12 {
+            return true;
+        }
+        if crate::math::arc_blocked(&w.arc_mask, ship.quat.inv().rot(dir.norm())) {
+            return false;
+        }
+        let wd = data::weapon(w.key);
+        arc_test_3d(
+            mount_pos, ship.quat, aim_pos, wd.arc_h.0, wd.arc_h.1, wd.arc_v.0, wd.arc_v.1,
+        )
+    }
+
     fn fire_weapon(&mut self, si: usize, order: &FireOrder, tick: i32, events: &mut Vec<Event>) {
         let ti = order.target_ship as usize;
         if ti >= self.ships.len() || self.ships[ti].destroyed {
@@ -556,9 +586,7 @@ impl Sim {
             events.push(e);
             return;
         }
-        if !arc_test_3d(
-            mount_pos, quat, aim_pos, wd.arc_h.0, wd.arc_h.1, wd.arc_v.0, wd.arc_v.1,
-        ) {
+        if !self.bears(si, order.weapon_index, aim_pos) {
             let mut e = Event::new(EventKind::ShotSkippedArc, tick);
             e.ship = si as i32;
             e.aux = order.weapon_index as i32;
@@ -1204,6 +1232,17 @@ impl Sim {
             }
             for w in &s.weapons {
                 int(w.last_fired_tick, &mut byte);
+                // Where a mount sits and where its own hull stops it both
+                // decide whether a shot happens, and a design sets both. Two
+                // seats that scanned different arcs would agree for as long as
+                // nobody shot through the difference, and then part with no
+                // hint of why. Hashed, so they part on the turn it happens.
+                for v in [w.mount.x, w.mount.y, w.mount.z] {
+                    num(v, &mut byte);
+                }
+                for m in w.arc_mask {
+                    int(m as i32, &mut byte);
+                }
             }
             for p in &s.boarding_parties {
                 int(p.faction.index() as i32, &mut byte);
