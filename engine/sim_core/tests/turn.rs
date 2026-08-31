@@ -689,21 +689,21 @@ fn losing_the_weapon_bay_silences_every_mount() {
 }
 
 #[test]
-fn losing_the_jets_keeps_the_drive_and_takes_the_turn_rates() {
+fn losing_the_thrusters_keeps_the_drive_and_takes_the_turn_rates() {
     // Attitude authority and thrust are different systems, and losing one is
     // not losing the other: the hull still accelerates, it just cannot point
     // itself anywhere new.
     let mut sim = duel("seed-jets", 40.0);
     let authored = sim.ships[1].flight;
     let _ = pound(&mut sim, 3, 14);
-    assert!(sim.ships[1].subs[3].dead, "focused fire on the jets must eventually take them");
+    assert!(sim.ships[1].subs[3].dead, "focused fire on the thrusters must eventually take them");
 
     let now = sim.ships[1].effective_flight();
-    assert_eq!(now.yaw_rate, 0.0, "a hull with no jets cannot yaw");
-    assert_eq!(now.pitch_rate, 0.0, "a hull with no jets cannot pitch");
+    assert_eq!(now.yaw_rate, 0.0, "a hull with no thrusters cannot yaw");
+    assert_eq!(now.pitch_rate, 0.0, "a hull with no thrusters cannot pitch");
     assert_eq!(now.accel_fwd, authored.accel_fwd, "the drive is untouched");
     assert_eq!(now.max_speed, authored.max_speed, "and so is its top speed");
-    assert!(!sim.ships[1].drift_active, "no jets is not adrift: that is the engines");
+    assert!(!sim.ships[1].drift_active, "no thrusters is not adrift: that is the engines");
     // The authored stats are where they were. What changed is what the ship
     // can do with them, which is why this is derived rather than overwritten.
     assert_eq!(sim.ships[1].flight.yaw_rate, authored.yaw_rate);

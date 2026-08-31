@@ -42,6 +42,22 @@ export interface HullMesh {
   readonly centre: Float32Array;
   /** Quads, four vertices each. */
   readonly quads: number;
+  /**
+   * Every lattice cell each quad covers, concatenated, with `quadAt` marking
+   * where each quad's run starts.
+   *
+   * A greedy quad is a RECTANGLE of cells, and a whole plated flank is one of
+   * them. `cellOf` names only the first, so damage measured against it took a
+   * hit anywhere on the plate as a reason to delete the entire plate. What a
+   * shot actually reached is a handful of cells inside it, and that is the
+   * question this answers.
+   */
+  readonly quadCells: Int32Array;
+  /** Length quads + 1; quad q covers `quadCells[quadAt[q] .. quadAt[q+1]]`. */
+  readonly quadAt: Uint32Array;
+  /** The lattice box the hull occupies, so a carve does not sweep the void. */
+  readonly lo: readonly [number, number, number];
+  readonly hi: readonly [number, number, number];
   /** Half extents in ship units, about the hull's own centre. */
   readonly half: readonly [number, number, number];
   /**
@@ -175,6 +191,8 @@ export function hullMesh(d: Design): HullMesh {
   };
 
   const pos: number[] = [], nrm: number[] = [], col: number[] = [], cellOf: number[] = [];
+  // Every cell under every quad, and where each quad's run begins.
+  const quadCells: number[] = [], quadAt: number[] = [0];
   const c = new THREE.Color();
   let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
 
@@ -271,6 +289,16 @@ export function hullMesh(d: Design): HullMesh {
             col.push(c.r, c.g, c.b);
           }
           cellOf.push(owner[u + v * uN] as number);
+          // The rectangle's whole footprint, not just the corner it is named
+          // for: this is what lets a hit take the cells it reached and leave
+          // the rest of the plate standing.
+          for (let b = 0; b < tall; b++) {
+            for (let a = 0; a < wide; a++) {
+              put(at, axis, u + a, v + b, w);
+              quadCells.push(idx(at[0] as number, at[1] as number, at[2] as number));
+            }
+          }
+          quadAt.push(quadCells.length);
           u += wide;
         }
       }
@@ -307,6 +335,10 @@ export function hullMesh(d: Design): HullMesh {
     cellOf: new Int32Array(cellOf),
     centre,
     quads,
+    quadCells: new Int32Array(quadCells),
+    quadAt: new Uint32Array(quadAt),
+    lo: [loX, loY, loZ],
+    hi: [hiX, hiY, hiZ],
     half: [
       Math.max(1, hiX - loX + 1) * cell / 2,
       Math.max(1, hiY - loY + 1) * cell / 2,

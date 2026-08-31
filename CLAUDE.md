@@ -399,6 +399,24 @@ at all: every shot landed in space beside the ship. The carve starts from the
 nearest cell to it instead, which is the cell the shot came in at, because the
 sphere point is in the direction the shot arrived from.
 
+## They are THRUSTERS, never jets
+
+The attitude volume is called **thrusters** everywhere a person can read it,
+and everywhere a person writing the next change can read it: on screen, in
+comments, in docs, in commit messages. "Jets" is wrong and does not appear.
+
+The two are easy to mix up, so both names are worth having straight:
+
+| on screen | in the core | what it is |
+| --- | --- | --- |
+| engines | `SubKind::Thruster` | the main drive, the thing that makes speed |
+| thrusters | `SubKind::Rcs` | attitude authority, the thing that makes heading |
+
+The core's own enum keeps `Rcs`, because those discriminants cross the wasm
+boundary by position and renaming one is a contract change for nothing. What
+the rule governs is the WORDS: `SUB_LABEL` is the one place the on screen name
+is written, and everything else asks it rather than spelling a name again.
+
 ## Damage is spatial: the layout IS the damage model
 
 A shot is not scored against a health bar. It is aimed at a point, it travels,
@@ -409,12 +427,12 @@ six of them (three on the freighter), and each one does something when it dies:
 | --- | --- |
 | armour, two belts | absorbs its block share until it goes, then stops absorbing |
 | engines | the ship is adrift, from that tick, for the rest of the match |
-| jets | attitude authority gone: the drive still works, the hull cannot turn |
+| thrusters | attitude authority gone: the drive still works, the hull cannot turn |
 | weapons | one bay feeds every mount, so all of them fall silent at once |
 | reactor | the ship goes critical: hull to zero, and a blast to everything within 14 units |
 
 Two rules keep it honest. **Effects are derived, never written back into the
-authored stats**: losing the jets does not zero `flight.yaw_rate`, it makes
+authored stats**: losing the thrusters does not zero `flight.yaw_rate`, it makes
 `effective_flight()` report zero, so the class table still says what the class
 is and one function says what this hull can do right now. And **one gate, asked
 twice**: `fire_gate` is what the planner offers slots from and what the resolver

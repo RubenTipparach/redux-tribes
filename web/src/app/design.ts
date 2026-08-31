@@ -296,7 +296,7 @@ export interface Socket {
  * - **proud**: standing off the hull, where the frame put it. A drive has to
  *   see vacuum and a gun has to see its target.
  * - **flush**: set INTO the skin, so only its face is on the surface. This is
- *   what attitude jets are: a thruster block is part of the hull, not a pod
+ *   what attitude thrusters are: a thruster block is part of the hull, not a pod
  *   bolted to the outside of one, and standing them off left cyan bricks
  *   hanging off both flanks with a plate stub reaching back to the ship.
  * - **enclosed**: entirely inside, a cell under the plate. Berths, magazines,
@@ -713,7 +713,7 @@ export function seatOf(frame: FrameDef, sock: Socket,
     // FACE lands on the hull line, and stop there. Pulling until the corners
     // are inside instead sinks it a cell or two, and the shell then closes
     // over the top of it: on the Freighter's four layer plating only 9 of an
-    // attitude block's 108 cells still reached daylight, so the jets were
+    // attitude block's 108 cells still reached daylight, so the thrusters were
     // inside the ship.
     const onX = Math.abs(cx - CX) / Math.max(0.5, hw) >= Math.abs(cy - CY) / Math.max(0.5, hh);
     const s = onX ? (cx >= CX ? 1 : -1) : (cy >= CY ? 1 : -1);
@@ -971,7 +971,7 @@ export interface Raster {
   readonly solidCells: number;
   /** Cells of an ENCLOSED part that ended up outside the hull line. Should be
    *  zero: mounts live inside the frame, and only drives, retros, attitude
-   *  jets, gun rings and trunnions are allowed to stand proud of it. */
+   *  thrusters, gun rings and trunnions are allowed to stand proud of it. */
   readonly enclosedOutside: number;
   /** How far past the hull line the worst cell of a FLUSH part sits, in cells.
    *  A flat block set into a curved hull leaves its corners a fraction proud,
@@ -1165,7 +1165,7 @@ export function rasterise(d: Design): Raster {
     // A part mounts THROUGH the frame, so it takes a rib cell if it needs one.
     // Strict first writer wins ate whole parts here: a two cell RCS quad
     // landing on the Rogue's rib ring wrote nothing at all and the ship showed
-    // no attitude jets on that quarter. It still never takes another part's
+    // no attitude thrusters on that quarter. It still never takes another part's
     // cell, which is what the nudge above is for.
     for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
       const mat = v.data[i + j * v.sx + k * v.sx * v.sy] as number;
@@ -2034,7 +2034,7 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       break;
     }
     case 'rcs': {
-      // A box of jets, and they point the way the block actually pushes: a
+      // A box of thrusters, and they point the way the block actually pushes: a
       // yaw block throws sideways and a pitch block throws up and down, so
       // reading `latX` and `latY` is the difference between a thruster that
       // faces out of the hull and one that faces into it. Small parts too:

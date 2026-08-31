@@ -247,7 +247,7 @@ impl Ship {
         self.has_live(SubKind::Thruster)
     }
 
-    /// Attitude authority. A hull with no live jets keeps its main drive and
+    /// Attitude authority. A hull with no live thrusters keeps its main drive and
     /// loses the ability to point it anywhere.
     pub fn has_live_rcs(&self) -> bool {
         self.has_live(SubKind::Rcs)
@@ -271,8 +271,8 @@ impl Ship {
     /// The authored stats stay where they are: what changes is what the ship
     /// can do with them. Everything that flies a plan reads this rather than
     /// `flight`, so the preview a player is shown and the path the resolver
-    /// walks come from one number, and losing the jets looks like losing the
-    /// jets a turn before it is proved.
+    /// walks come from one number, and losing the thrusters looks like losing
+    /// the thrusters a turn before it is proved.
     pub fn effective_flight(&self) -> Flight {
         let mut fl = self.flight;
         if !self.has_live_rcs() {
