@@ -304,6 +304,61 @@ async function checkTurrets(page) {
 }
 
 /**
+ * The orbit, which has to be an ORBIT.
+ *
+ * The camera framed the hull as it PROJECTS from wherever it was standing,
+ * which fits tightly and turns horribly: a frigate is six units long and two
+ * across, so the distance that just contains it swings by a factor of three
+ * between bow on and broadside, and turning the model pulled the camera in and
+ * pushed it back out the whole way round. A player turning a thing to look at
+ * it does not expect the thing to breathe.
+ *
+ * So: drag the model a long way round and watch the distance. And zoom in
+ * past everything, and watch it stop at the plating rather than going inside.
+ */
+async function checkOrbitIsSteady(page) {
+  await (await page.$$('#dzClasses button'))[0].click();
+  await page.waitForTimeout(500);
+  const cam = () => page.evaluate(() => window.ftDebug.designer().cam);
+  const box = await (await page.$('#dzCanvas')).boundingBox();
+  const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+
+  const seen = [];
+  await page.mouse.move(mid.x, mid.y);
+  await page.mouse.down();
+  for (let n = 0; n < 8; n++) {
+    await page.mouse.move(mid.x + (n + 1) * 40, mid.y + (n % 3) * 12);
+    await page.waitForTimeout(120);
+    seen.push(await cam());
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const dists = seen.map(c => c.dist);
+  const lo = Math.min(...dists), hi = Math.max(...dists);
+  const turned = Math.abs((seen[seen.length - 1]?.yaw ?? 0) - (seen[0]?.yaw ?? 0));
+  if (turned < 1) fail(`the drag only turned the model ${turned.toFixed(2)} rad`);
+  else if (hi - lo > 0.01 * hi) {
+    fail(`the camera breathed from ${lo.toFixed(2)} to ${hi.toFixed(2)} u across `
+      + `${turned.toFixed(1)} rad of orbit`);
+  } else {
+    ok(`the orbit holds ${lo.toFixed(2)} u across ${turned.toFixed(1)} rad of turning`);
+  }
+
+  // And zooming all the way in stops outside the hull rather than inside it.
+  const before = (await cam()).dist;
+  for (let n = 0; n < 40; n++) await page.mouse.wheel(0, -120);
+  await page.waitForTimeout(300);
+  const after = await cam();
+  const half = await page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return d.derived.radius;
+  });
+  if (!(after.dist < before)) fail('the wheel did not zoom in at all');
+  else if (after.dist < 0.2) fail(`zoomed to ${after.dist} u, which is inside the ship`);
+  else ok(`zoom stops at ${after.dist.toFixed(2)} u on a hull of about ${half.toFixed(2)} u`);
+}
+
+/**
  * The firing arcs a turret finds for itself.
  *
  * Three properties, and none of them is visible to the unit suites. The scan
@@ -942,6 +997,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     await checkShips(page);
     await checkGhostAndPicking(page);
     await checkTurrets(page);
+    await checkOrbitIsSteady(page);
     await checkArcScan(page);
     await checkModesAndRotation(page);
     await checkDrawing(page);

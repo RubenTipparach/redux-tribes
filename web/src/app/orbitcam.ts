@@ -27,52 +27,70 @@ export interface OrbitState {
 export const orbitStart = (): OrbitState => ({ yaw: 0.9, pitch: 0.45, zoom: 1.15 });
 
 /**
- * Place the camera so a box just fills the viewport.
+ * Place the camera so a box just fills the viewport, at a distance that does
+ * not change as the box is turned.
  *
- * The box as it actually PROJECTS, not its bounding sphere. A frigate is six
- * units long and three across, so its sphere is mostly empty and fitting it
- * gave away a third of a phone screen as margin. This projects the eight
- * corners onto the camera's own right and up axes and solves for the distance
- * that just contains them in both angles, so the hull fills whatever shape the
- * viewport happens to be.
+ * The first version solved the fit for the box AS IT PROJECTS from the current
+ * angle, which frames tightly and orbits horribly: a frigate is six units long
+ * and two across, so the distance that just contains it swings by a factor of
+ * three between bow on and broadside, and turning the hull pulled the camera
+ * in and pushed it out the whole way round. A player turning a model to look
+ * at it does not expect the model to breathe.
  *
- * A corner at offset c sits at depth D + c.fwd, so it stays in frame when
- * D >= |c.right| / tanH - c.fwd, and likewise vertically; the answer is the
- * largest of those sixteen bounds. Allowing for the box's whole depth instead
- * pushes the camera back far enough for its NEAREST face, which on a six unit
- * ship is another third of the screen given away.
+ * So the radius is the box's own bounding SPHERE, which is the one measure of
+ * it that a rotation cannot change, and the distance is what puts that sphere
+ * inside both angles of the viewport. That is the tight fit's widest case held
+ * constant: the hull fills the frame broadside and sits inside it bow on,
+ * which is what "orbit" means.
  */
 export function frameBox(
   camera: THREE.PerspectiveCamera, cam: OrbitState,
   centre: THREE.Vector3, half: { x: number; y: number; z: number },
+  solid?: { x: number; y: number; z: number },
 ): void {
   const fovV = (camera.fov * Math.PI) / 180;
   const fovH = 2 * Math.atan(Math.tan(fovV / 2) * Math.max(0.05, camera.aspect));
+  const r = Math.hypot(half.x, half.y, half.z);
+  const fit = Math.max(r / Math.tan(fovH / 2), r / Math.tan(fovV / 2));
+
   const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
-  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
-  const fwd = new THREE.Vector3(-sy * cp, -sp, -cy * cp);   // the camera looks in
-  const right = new THREE.Vector3(-cy, 0, sy);
-  const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
-  const tanH = Math.tan(fovH / 2), tanV = Math.tan(fovV / 2);
-  let need = 0;
-  for (let sx = -1; sx <= 1; sx += 2) {
-    for (let sj = -1; sj <= 1; sj += 2) {
-      for (let sk = -1; sk <= 1; sk += 2) {
-        const ox = sx * half.x, oy = sj * half.y, oz = sk * half.z;
-        const u = Math.abs(ox * right.x + oy * right.y + oz * right.z);
-        const v = Math.abs(ox * up.x + oy * up.y + oz * up.z);
-        const w = ox * fwd.x + oy * fwd.y + oz * fwd.z;
-        need = Math.max(need, u / tanH - w, v / tanV - w);
-      }
-    }
-  }
-  const dist = Math.max(0.4, need * 1.05) * cam.zoom;
+  const out = new THREE.Vector3(Math.sin(cam.yaw) * cp, sp, Math.cos(cam.yaw) * cp);
+
+  // Zooming in is allowed to go a long way; going INSIDE the ship is not. The
+  // floor is where the eye would meet the hull along the direction it is
+  // actually looking from, which is a ray out of the centre through the solid
+  // box, plus a little air. Measured against the hull rather than the framing
+  // box: the framing box includes the hit volumes, which can stand proud of
+  // the plating, and stopping at those would hold the camera off a ship it
+  // could still have got closer to.
+  const clear = solid ? boxExit(out, solid) * 1.25 + 0.35 : 0;
+  const dist = Math.max(0.4, clear, fit * cam.zoom);
   camera.position.set(
-    centre.x + Math.sin(cam.yaw) * cp * dist,
-    centre.y + Math.sin(cam.pitch) * dist,
-    centre.z + Math.cos(cam.yaw) * cp * dist,
+    centre.x + out.x * dist,
+    centre.y + out.y * dist,
+    centre.z + out.z * dist,
   );
   camera.lookAt(centre);
+}
+
+/**
+ * How far out of a box centred on the origin a unit direction runs before it
+ * leaves: the smallest of the three slab exits.
+ *
+ * A box rather than the voxels themselves. The silhouette of a hull at any
+ * angle is a question the mesh could answer exactly and nobody would see the
+ * difference: this is a floor under a zoom, not a collision the game reads.
+ */
+function boxExit(dir: THREE.Vector3, half: { x: number; y: number; z: number }): number {
+  let t = Infinity;
+  const axis = (d: number, h: number) => {
+    if (Math.abs(d) < 1e-6) return;
+    t = Math.min(t, h / Math.abs(d));
+  };
+  axis(dir.x, half.x);
+  axis(dir.y, half.y);
+  axis(dir.z, half.z);
+  return Number.isFinite(t) ? t : 0;
 }
 
 export interface OrbitHooks {
@@ -161,4 +179,9 @@ export function bindOrbit(cv: HTMLCanvasElement, cam: OrbitState, hooks: OrbitHo
     e.preventDefault();
     zoom(e.deltaY > 0 ? 1.09 : 0.92);
   }, { passive: false });
+  // The right button is part of the gesture set here, so the browser's menu
+  // over it has to go: a drag that ends with a context menu open is a drag
+  // that ends with the model half turned and a list of bookmarks on top of it.
+  // On the canvas only, so a right click on a panel still behaves normally.
+  cv.addEventListener('contextmenu', e => e.preventDefault());
 }

@@ -98,18 +98,23 @@
     return 0.5 * fl.accelFwd * tAccel * tAccel + fl.maxSpeed * (T - tAccel);
   }
 
-  // The belts sit outboard and the core sits deep amidships behind them, which
-  // is the whole of the protection it gets. Nothing declares the reactor
-  // shielded: a shot from abeam meets a belt because a belt is in the way, and
-  // one from below does not. Geometry rather than a rule.
+  // A volume is a BOX, in half extents about its offset. A sphere big enough
+  // to hold a drive bay stands out through the plating on all six sides, and
+  // six of them on a frigate overlapped into one ball with the ship inside it:
+  // every aspect met a belt, so choosing one bought nothing.
+  //
+  // The belts are slabs down the flanks that meet over the keel, and their
+  // floor sits above the reactor's ceiling. That is the whole of the reactor's
+  // protection: a shot from abeam or from ahead crosses a belt because a belt
+  // is in the way, and one from below passes under them. Geometry, not a rule.
   function frigateSubsystems(armorBlock) {
     return [
-      { id: "armor_l", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: -1.6, y: 0, z: 0.5 }, radius: 1.6 },
-      { id: "armor_r", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: 1.6,  y: 0, z: 0.5 }, radius: 1.6 },
-      { id: "engines", type: "thruster", hp: 100, blockPct: 60,         offset: { x: 0, y: 0, z: -2.6 },  radius: 1.4 },
-      { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40,         offset: { x: 0, y: -1.0, z: 1.5 }, radius: 1.0 },
-      { id: "weapons", type: "weapon",   hp: 80,  blockPct: 50,         offset: { x: 0, y: 1.0, z: 1.2 },  radius: 1.1 },
-      { id: "reactor", type: "reactor",  hp: 90,  blockPct: 45,         offset: { x: 0, y: 0, z: -0.6 },   radius: 1.0 },
+      { id: "armor_l", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: -0.5, y: 0.15, z: -0.3 }, half: { x: 0.85, y: 0.45, z: 1.2 } },
+      { id: "armor_r", type: "armor",    hp: 100, blockPct: armorBlock, offset: { x: 0.5,  y: 0.15, z: -0.3 }, half: { x: 0.85, y: 0.45, z: 1.2 } },
+      { id: "engines", type: "thruster", hp: 100, blockPct: 60,         offset: { x: 0, y: 0, z: -2.4 },      half: { x: 0.65, y: 0.45, z: 0.65 } },
+      { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40,         offset: { x: 0, y: -0.55, z: 1.5 },   half: { x: 0.6, y: 0.25, z: 0.7 } },
+      { id: "weapons", type: "weapon",   hp: 80,  blockPct: 50,         offset: { x: 0, y: 0.5, z: 1.1 },     half: { x: 0.55, y: 0.3, z: 0.8 } },
+      { id: "reactor", type: "reactor",  hp: 90,  blockPct: 45,         offset: { x: 0, y: 0, z: -0.6 },      half: { x: 0.45, y: 0.4, z: 0.6 } },
     ];
   }
 
@@ -164,9 +169,9 @@
       // No weapon bay, because the hull has no mounts to lose. A volume whose
       // loss changes nothing teaches a player the wrong lesson.
       subsystems: () => [
-        { id: "engines", type: "thruster", hp: 100, blockPct: 60, offset: { x: 0, y: 0, z: -3.4 }, radius: 1.6 },
-        { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40, offset: { x: 0, y: -1.2, z: 2.0 }, radius: 1.2 },
-        { id: "reactor", type: "reactor",  hp: 120, blockPct: 45, offset: { x: 0, y: 0, z: -1.0 }, radius: 1.2 },
+        { id: "engines", type: "thruster", hp: 100, blockPct: 60, offset: { x: 0, y: 0, z: -3.3 },  half: { x: 0.9, y: 0.7, z: 0.8 } },
+        { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40, offset: { x: 0, y: -1.2, z: 2.0 }, half: { x: 0.9, y: 0.4, z: 1.1 } },
+        { id: "reactor", type: "reactor",  hp: 120, blockPct: 45, offset: { x: 0, y: 0, z: -1.0 },  half: { x: 0.8, y: 0.7, z: 1.0 } },
       ],
       weapons: [],
     },

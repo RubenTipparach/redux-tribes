@@ -90,6 +90,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   if (attempt === 1) await checkSchematic();
   if (attempt === 1) await checkCameraGestures();
   if (attempt === 1) await checkInspector();
+  if (attempt === 1) await checkLookingAtShips();
 
   outcome = await playMatch();
   final = await state();
@@ -381,6 +382,47 @@ async function checkSchematic() {
   if (named.hot < 0) fail('tapping a volume row named nothing');
   if (!named.card || named.text < 40) fail('a volume was named and the card said nothing');
 
+  // The modal turns the same way the shipyard does, because it is the same
+  // camera: a distance that changed with the angle made turning a hull to look
+  // at it feel like the hull was breathing.
+  if (!MOBILE) {
+    const cam = () => page.evaluate(() => window.ftDebug.schematic().cam);
+    const box = await (await page.$('#scCanvas')).boundingBox();
+    const mid = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const seen = [];
+    await page.mouse.move(mid.x, mid.y);
+    await page.mouse.down();
+    for (let n = 0; n < 6; n++) {
+      await page.mouse.move(mid.x + (n + 1) * 40, mid.y + (n % 3) * 10);
+      await page.waitForTimeout(110);
+      seen.push(await cam());
+    }
+    await page.mouse.up();
+    const d = seen.map(c => c.dist);
+    const lo = Math.min(...d), hi = Math.max(...d);
+    const turned = Math.abs((seen[seen.length - 1]?.yaw ?? 0) - (seen[0]?.yaw ?? 0));
+    if (turned < 0.8) fail(`the schematic drag turned it only ${turned.toFixed(2)} rad`);
+    if (hi - lo > 0.01 * hi) {
+      fail(`the schematic camera breathed from ${lo.toFixed(2)} to ${hi.toFixed(2)} u`);
+    }
+    log(`schematic orbit holds ${lo.toFixed(2)} u across ${turned.toFixed(1)} rad`);
+
+    // The right button is part of the gesture set in here, so the browser's own
+    // menu over it has to be off: a drag that ends with a context menu open is
+    // a drag that ends with the model half turned and a list on top of it.
+    const menu = await page.evaluate(() => new Promise(res => {
+      const cv = document.getElementById('scCanvas');
+      const r = cv.getBoundingClientRect();
+      cv.addEventListener('contextmenu', e => res(e.defaultPrevented), { once: true });
+      cv.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+      }));
+    }));
+    if (!menu) fail('the right click menu is still live over the schematic');
+    else log('the right click menu is suppressed over the schematic');
+  }
+
   await tap('#scClose');
   // The class, not visibility: `waitForSelector` waits for an element to be
   // SHOWN, and a hidden one never is, so it would time out on a modal that
@@ -399,6 +441,108 @@ async function checkSchematic() {
  * empty space. Zooming is done through the wheel, which is what a player uses,
  * rather than by reaching into the camera.
  */
+/**
+ * Looking at a ship: hover, focus, and the turrets that follow a target.
+ *
+ * Four things the unit suites cannot see, because every one of them is about
+ * a pointer over a picture. A hull names the part under the cursor; a turret
+ * names its gun and draws the cone its own hull blocks; a double click goes
+ * and looks at a ship; and a plain click on a hull is about that hull and not
+ * a move order, which is the defect that started this: your own frigate and
+ * the place you wanted to send it are a few pixels apart, and clicking the
+ * ship planted an order on top of it every time.
+ */
+async function checkLookingAtShips() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  await sheet(false);
+  const at = await page.evaluate(() => window.ftDebug.screenOf(window.ftDebug.selected()));
+  if (!at) fail('the selected ship is not on screen to look at');
+
+  // A phone has neither a hover nor a double click. What it DOES share is the
+  // rule that a press on a hull is about that hull: the fire slots and the
+  // heading dials both went the other way once, and a tap that planted a move
+  // order under your own frigate is the same defect in a third place.
+  if (MOBILE) {
+    const was = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));
+    await page.touchscreen.tap(at.x, at.y);
+    await page.waitForTimeout(300);
+    const now = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));
+    if (was !== now) fail(`tapping a hull moved the plan from ${was} to ${now}`);
+    log('a tap on a hull names it and does not plant a move order');
+    const rigs = await page.evaluate(() => window.ftDebug.turrets());
+    if (!rigs.some(r => Math.abs(r.yaw) > 1 || Math.abs(r.pitch) > 1)) {
+      fail(`${rigs.length} turrets and not one of them has turned`);
+    }
+    log(`turrets track on a phone too: ${rigs.length} mounts, `
+      + `${rigs.filter(r => r.bears).length} bearing`);
+    return;
+  }
+
+  // A double click goes there: centred AND closed, so the inspector is offered
+  // when it arrives.
+  const before = await page.evaluate(() => window.ftDebug.camera().dist);
+  await page.mouse.dblclick(at.x, at.y);
+  await page.waitForTimeout(900);
+  const after = await page.evaluate(() => window.ftDebug.camera().dist);
+  if (!(after < before - 1)) fail(`double clicked a hull and the camera stayed at ${after}`);
+  if (await page.evaluate(() => window.ftDebug.inspect().ship) < 0) {
+    fail('double clicked a hull and the ship data did not come up with it');
+  }
+  const allArcs = await page.evaluate(() => window.ftDebug.arcs());
+  if (allArcs < 1) fail('ship data is up and no firing arc is drawn');
+  log(`double click focuses: ${before.toFixed(0)} u to ${after.toFixed(0)} u, `
+    + `${allArcs} firing arcs drawn`);
+
+  // A plain click on the hull names it and leaves the plan alone.
+  const planBefore = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));
+  const here = await page.evaluate(() => window.ftDebug.screenOf(window.ftDebug.selected()));
+  await page.mouse.click(here.x, here.y);
+  await page.waitForTimeout(300);
+  const planAfter = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));
+  if (planBefore !== planAfter) {
+    fail(`clicking a hull moved the plan from ${planBefore} to ${planAfter}`);
+  }
+  log('a click on a hull names it and does not plant a move order');
+
+  // Hovering the hull names a part; hovering a TURRET names its gun and draws
+  // that one mount's cone rather than all of them.
+  const turret = await page.evaluate(() => {
+    const c = document.getElementById('cv').getBoundingClientRect();
+    for (let y = c.top + 20; y < c.bottom - 20; y += 6) {
+      for (let x = c.left + 20; x < c.right - 20; x += 6) {
+        const p = window.ftDebug.partAt(x, y);
+        if (p && p.rig >= 0) return { x, y, ...p };
+      }
+    }
+    return null;
+  });
+  if (!turret) fail('no turret anywhere on screen to hover');
+  await page.mouse.move(turret.x, turret.y);
+  await page.waitForTimeout(350);
+  const tip = await page.evaluate(() => window.ftDebug.tip());
+  if (!tip.shown || tip.rig < 0) fail('hovered a turret and no label came up');
+  if (!/dmg/.test(tip.text) || !/blocks/.test(tip.text)) {
+    fail(`a turret label without its gun or its arc: "${tip.text}"`);
+  }
+  const one = await page.evaluate(() => window.ftDebug.arcs());
+  if (one !== 1) fail(`hovering one turret drew ${one} cones`);
+  log(`hovering a turret says what it is and draws its own cone: "${tip.text.slice(0, 46)}"`);
+
+  // And the turrets are actually tracking. At least one has swung off its rest
+  // facing, and the ones that report a bearing are the ones that moved.
+  const rigs = await page.evaluate(() => window.ftDebug.turrets());
+  const swung = rigs.filter(r => Math.abs(r.yaw) > 1 || Math.abs(r.pitch) > 1);
+  const still = rigs.filter(r => !r.bears && Math.abs(r.yaw) < 0.5 && Math.abs(r.pitch) < 0.5);
+  if (!rigs.length) fail('no turrets on any hull');
+  if (!swung.length) fail(`${rigs.length} turrets and not one of them has turned`);
+  if (rigs.some(r => r.bears && Math.abs(r.yaw) < 1e-6 && Math.abs(r.pitch) < 1e-6)) {
+    fail('a turret reports a bearing without having moved onto it');
+  }
+  log(`turrets track: ${swung.length} of ${rigs.length} swung onto a target, `
+    + `${still.length} stood down with nothing they can bear on`);
+  await zoomOut();
+}
+
 async function checkInspector() {
   const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
   await sheet(false);

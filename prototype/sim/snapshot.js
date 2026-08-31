@@ -15,7 +15,7 @@
         id: s.id, classKey: s.classKey, faction: s.faction, isPlayer: s.isPlayer,
         pos: s.pos, quat: s.quat, vel: s.vel, flight: s.flight,
         hull: s.hull, hullMax: s.hullMax,
-        subsystems: s.subsystems.map(x => ({ id: x.id, type: x.type, hp: x.hp, maxHp: x.maxHp, blockPct: x.blockPct, offset: x.offset, radius: x.radius, dead: x.dead })),
+        subsystems: s.subsystems.map(x => ({ id: x.id, type: x.type, hp: x.hp, maxHp: x.maxHp, blockPct: x.blockPct, offset: x.offset, half: x.half, dead: x.dead })),
         weapons: s.weapons.map(w => ({ key: w.key, mount: w.mount, lastFiredTurn: w.lastFiredTurn })),
         marines: s.marines, boardingParties: s.boardingParties,
         drift: s.drift, move: s.move, destroyed: s.destroyed, ai: s.ai,

@@ -21,7 +21,8 @@ import {
   type Vec3, type Well,
   CLASS_KEYS, isCommitted, Mode, PROBE_STEPS,
 } from '../sim/types.js';
-import { stockFor, type Design } from './design.js';
+import { arcMasks, gunByKey, stockFor, type Design } from './design.js';
+import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
 import { hullMesh, hullTone, tintFar, tintHull, tintMix, type HullMesh } from './hull.js';
 
 /**
@@ -57,6 +58,32 @@ interface Debris {
   readonly at: THREE.Vector3;
   readonly dir: THREE.Vector3;
   readonly hex: number;
+}
+
+/**
+ * One turret on one ship, as the map draws it.
+ *
+ * Its quads are part of the hull's own geometry rather than a mesh of their
+ * own, so posing one means rewriting those vertices. That is a few hundred
+ * quads on a frigate and it only happens while the barrel is actually moving:
+ * a settled turret costs nothing at all. Meshes of their own would cost
+ * nothing while moving either, and would mean the carve had to know which of
+ * four buffers a quad lives in, which is a hole in a hull waiting to land in
+ * the wrong one.
+ */
+interface Rig {
+  readonly quads: number[];
+  readonly pivot: THREE.Vector3;
+  readonly rest: number;
+  readonly key: string;
+  readonly mask: Uint32Array | undefined;
+  yaw: number;
+  pitch: number;
+  bears: boolean;
+  /** What the buffer was last written at, so a settled mount is not rewritten
+   *  sixty times a second. */
+  drawnYaw: number;
+  drawnPitch: number;
 }
 
 interface Carved {
@@ -235,6 +262,24 @@ export class View {
   #tint = new Map<number, number>();
   /** What has been shot off each hull, and the chunks it threw. */
   #carved = new Map<number, Carved>();
+  /** Each ship's turrets, built with its hull and posed every frame. */
+  #rigs = new Map<number, Rig[]>();
+  /** What each hull's guns are tracking, in world space. Set by the console,
+   *  because WHO a ship is shooting at is a match fact and this only draws
+   *  where the barrels ended up. */
+  #aimAt = new Map<number, Vec3>();
+  #posedAt = 0;
+  /**
+   * The blocked cones, as a group hung on the hull whose turrets they belong
+   * to, so they turn with the ship and not with the barrel.
+   */
+  #ray = new THREE.Raycaster();
+  #arcShell = new THREE.Group();
+  #arcShellKey = '';
+  #arcShellMat = new THREE.MeshBasicMaterial({
+    color: 0xE0503A, transparent: true, opacity: 0.16,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
   #debris: THREE.InstancedMesh | null = null;
 
   /**
@@ -617,6 +662,21 @@ export class View {
     this.#focus.set(p.x, p.y, p.z);
   }
 
+  /**
+   * Put the camera on one hull, close enough to read it.
+   *
+   * Both halves at once, because either alone is the wrong thing: centring
+   * without closing leaves a ship a few pixels across in the middle of the
+   * screen, and closing without centring drives the camera through whatever
+   * it was already looking at. The range is the same one `closeUpOn` tests,
+   * so a hull focused here is a hull the inspector will offer itself on.
+   */
+  focusOn(ship: ShipState): void {
+    const span = Math.max(ship.radius, 2);
+    this.#focus.set(ship.pos.x, ship.pos.y, ship.pos.z);
+    this.#dist = Math.max(9, Math.min(this.#dist, span * (INSPECT_SPANS - 2)));
+  }
+
   /** Frame every live ship, so "where is everyone" is one tap away. */
   fit(): void {
     const live = this.#ships.filter(s => !s.destroyed);
@@ -745,27 +805,124 @@ export class View {
   /**
    * Which of one ship's hit volumes is under a screen point, or -1.
    *
-   * The volumes come in from the core already placed in the world, so this
-   * only turns a ray into an index. Nearest wins, since a belt sphere and a
-   * drive sphere overlap on most hulls.
+   * A volume is a BOX in the ship's own frame, so the ray goes into that frame
+   * once and the six slab tests are then axis aligned: the same shape and the
+   * same question the resolver asks, rather than a sphere drawn around it that
+   * would name a volume the shot would have missed. All the volumes belong to
+   * one ship, so its rotation is looked up here rather than passed in.
    */
   pickSub(clientX: number, clientY: number, volumes: ReadonlyArray<SubState>): number {
+    const first = volumes[0];
+    if (!first) return -1;
+    const ship = this.#ships.find(x => x.id === first.ship);
+    if (!ship) return -1;
     const rect = this.#canvas.getBoundingClientRect();
     const ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     ), this.#camera);
+    const inv = new THREE.Quaternion(
+      ship.quat.x, ship.quat.y, ship.quat.z, ship.quat.w).invert();
+    const at = new THREE.Vector3(ship.pos.x, ship.pos.y, ship.pos.z);
+    const o = ray.ray.origin.clone().sub(at).applyQuaternion(inv);
+    const d = ray.ray.direction.clone().applyQuaternion(inv);
+    const local = new THREE.Ray(o, d);
+    const box = new THREE.Box3();
+    const c = new THREE.Vector3();
+    const hit = new THREE.Vector3();
     let best = -1;
     let bestT = Infinity;
-    const hit = new THREE.Vector3();
     for (const b of volumes) {
-      if (ray.ray.intersectSphere(new THREE.Sphere(v(b.pos), b.radius), hit)) {
-        const t = hit.distanceTo(this.#camera.position);
+      c.set(b.pos.x - ship.pos.x, b.pos.y - ship.pos.y, b.pos.z - ship.pos.z)
+        .applyQuaternion(inv);
+      box.min.set(c.x - b.half.x, c.y - b.half.y, c.z - b.half.z);
+      box.max.set(c.x + b.half.x, c.y + b.half.y, c.z + b.half.z);
+      if (local.intersectBox(box, hit)) {
+        const t = hit.distanceTo(o);
         if (t < bestT) { bestT = t; best = b.index; }
       }
     }
     return best;
+  }
+
+  /**
+   * Which CELL of which hull is under a screen point.
+   *
+   * The picture is the grid: a raycast gives a triangle, two triangles are a
+   * quad, and `cellOf` says which lattice cell that quad was a face of. So
+   * naming what the pointer is on is a lookup rather than a guess, and it is
+   * the same lookup the shipyard does over the same cells.
+   *
+   * Against the drawn meshes, so a cell already shot away is not on the ship
+   * any more: its quads were collapsed to a point and a degenerate triangle
+   * cannot be hit.
+   */
+  pickHullCell(clientX: number, clientY: number): { ship: number; cell: number; rig: number } | null {
+    const rect = this.#canvas.getBoundingClientRect();
+    this.#ray.setFromCamera(new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
+    ), this.#camera);
+    let best: { ship: number; cell: number; rig: number } | null = null;
+    let bestT = Infinity;
+    for (const [id, mesh] of this.#hulls) {
+      if (!mesh.visible) continue;
+      const hits = this.#ray.intersectObject(mesh, false);
+      const first = hits[0];
+      if (!first || first.distance >= bestT || first.faceIndex == null) continue;
+      const hull = this.#carved.get(id)?.hull
+        ?? hullMesh(this.#designs.get(id) ?? stockFor(CLASS_KEYS[
+          this.#ships.find(x => x.id === id)?.cls ?? 0] ?? 'terran_frigate'));
+      const quad = (first.faceIndex as number) >> 1;
+      if (quad < 0 || quad >= hull.quads) continue;
+      bestT = first.distance;
+      best = {
+        ship: id,
+        cell: hull.cellOf[quad] as number,
+        rig: hull.rigOf[quad] as number,
+      };
+    }
+    return best;
+  }
+
+  /**
+   * Draw the blocked cone for one hull's turrets, or none.
+   *
+   * `only` picks a single mount, or -1 for all of them. The shell is bolted to
+   * the HULL rather than to the barrel, because that is where the blockage is:
+   * it does not swing when the turret does.
+   */
+  showArcs(ship: number, only: number): void {
+    const key = `${ship}/${only}`;
+    if (key === this.#arcShellKey) return;
+    this.#arcShellKey = key;
+    for (const m of this.#arcShell.children.slice()) {
+      this.#arcShell.remove(m);
+      (m as THREE.Mesh).geometry?.dispose();
+    }
+    this.#arcShell.removeFromParent();
+    const rigs = this.#rigs.get(ship);
+    const s = this.#ships.find(x => x.id === ship);
+    if (!rigs || !s || ship < 0) return;
+    // Hung on the hull's own mesh, so it inherits the ship's position and
+    // rotation for free: a shell that had to be moved every frame is a shell
+    // that lags the hull it describes by exactly one.
+    this.#hulls.get(ship)?.add(this.#arcShell);
+    const reach = Math.max(1.2, s.radius * 0.5);
+    for (let n = 0; n < rigs.length; n++) {
+      if (only >= 0 && n !== only) continue;
+      const r = rigs[n];
+      if (!r?.mask) continue;
+      const pts = blockedShell(r.mask, reach);
+      if (!pts.length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const mesh = new THREE.Mesh(geo, this.#arcShellMat);
+      mesh.position.copy(r.pivot);
+      mesh.renderOrder = 4;
+      this.#arcShell.add(mesh);
+    }
   }
 
   /** The ship under a screen point, or -1. Hull spheres, generously sized. */
@@ -808,8 +965,136 @@ export class View {
       // is this ship's own.
       (mesh.material as THREE.Material).dispose();
     }
+    this.#arcShell.removeFromParent();
+    this.#arcShellKey = '';
     this.#hulls.clear();
     this.#tint.clear();
+    this.#rigs.clear();
+  }
+
+  /**
+   * Which point each hull's turrets are following, or nothing to stand down.
+   *
+   * The console owns this, because who a ship is shooting at is a match fact
+   * and the map only draws where the barrels ended up. A view that picked its
+   * own targets would show a turret tracking a ship the order set never
+   * mentioned.
+   */
+  setTurretAim(aim: ReadonlyMap<number, Vec3>): void {
+    this.#aimAt = new Map(aim);
+  }
+
+  /**
+   * Swing every turret one frame toward what its ship is aiming at.
+   *
+   * The same two gates the resolver reads, through the same helper the
+   * shipyard's preview uses: the weapon's authored arc and the mask scanned
+   * off the hull. A mount that cannot bear returns to rest rather than
+   * straining at its stop, so the ones that CAN reach the target are the ones
+   * that moved, which is the whole of what this says at a glance.
+   */
+  #poseTurrets(dt: number): void {
+    for (const s of this.#ships) {
+      const rigs = this.#rigs.get(s.id);
+      if (!rigs || !rigs.length) continue;
+      const aim = s.destroyed ? undefined : this.#aimAt.get(s.id);
+      const q = new THREE.Quaternion(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
+      const inv = q.clone().invert();
+      const at = new THREE.Vector3(s.pos.x, s.pos.y, s.pos.z);
+      let moved = false;
+      for (const r of rigs) {
+        let goal = AT_REST;
+        if (aim) {
+          // From the MOUNT, not from the hull's centre: a turret out on a
+          // trunnion looks at a target from where it actually sits, and on a
+          // close pass that is a different bearing by tens of degrees.
+          const world = r.pivot.clone().applyQuaternion(q).add(at);
+          const dir = new THREE.Vector3(aim.x, aim.y, aim.z).sub(world).applyQuaternion(inv);
+          const gun = gunByKey(r.key);
+          if (gun) goal = turretGoal(dir, r.rest, gun, r.mask);
+        }
+        r.bears = goal.bears;
+        r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
+        r.pitch = easeAngle(r.pitch, goal.pitch, dt);
+        if (Math.abs(r.yaw - r.drawnYaw) > 1e-4 || Math.abs(r.pitch - r.drawnPitch) > 1e-4) {
+          moved = true;
+        }
+      }
+      if (moved) this.#writeTurrets(s.id, rigs);
+    }
+  }
+
+  /** Put the turret quads where their rigs now point. */
+  #writeTurrets(id: number, rigs: readonly Rig[]): void {
+    const c = this.#carveOf(id);
+    if (!c) return;
+    const src = c.hull.geo.getAttribute('position') as THREE.BufferAttribute;
+    const srcN = c.hull.geo.getAttribute('normal') as THREE.BufferAttribute;
+    const dst = c.geo.getAttribute('position') as THREE.BufferAttribute;
+    const dstN = c.geo.getAttribute('normal') as THREE.BufferAttribute;
+    const a = src.array as Float32Array, b = dst.array as Float32Array;
+    const an = srcN.array as Float32Array, bn = dstN.array as Float32Array;
+    const m = new THREE.Matrix4();
+    const e = new THREE.Euler(0, 0, 0, 'YXZ');
+    const p = new THREE.Vector3();
+    for (const r of rigs) {
+      r.drawnYaw = r.yaw;
+      r.drawnPitch = r.pitch;
+      e.set(r.pitch, r.yaw, 0);
+      m.makeRotationFromEuler(e);
+      for (const q of r.quads) {
+        // A quad the hull has already lost stays lost: its four vertices were
+        // collapsed onto one point, and rewriting them from the original would
+        // put the hole back together.
+        if (c.dead[q]) continue;
+        for (let v = 0; v < 4; v++) {
+          const i = q * 12 + v * 3;
+          p.set(a[i] as number, a[i + 1] as number, a[i + 2] as number)
+            .sub(r.pivot).applyMatrix4(m).add(r.pivot);
+          b[i] = p.x; b[i + 1] = p.y; b[i + 2] = p.z;
+          p.set(an[i] as number, an[i + 1] as number, an[i + 2] as number).applyMatrix4(m);
+          bn[i] = p.x; bn[i + 1] = p.y; bn[i + 2] = p.z;
+        }
+      }
+    }
+    dst.needsUpdate = true;
+    dstN.needsUpdate = true;
+  }
+
+  /** The turrets on one hull, sorted into the quads that turn with each. */
+  #buildRigs(id: number, design: Design, hull: HullMesh): void {
+    if (!hull.rigs.length) { this.#rigs.delete(id); return; }
+    const masks = arcMasks(design);
+    const rigs: Rig[] = hull.rigs.map((g, n) => ({
+      quads: [],
+      pivot: new THREE.Vector3(g.pivot[0], g.pivot[1], g.pivot[2]),
+      rest: g.rest,
+      key: g.key,
+      mask: masks[n],
+      yaw: 0, pitch: 0, bears: false, drawnYaw: 0, drawnPitch: 0,
+    }));
+    for (let q = 0; q < hull.quads; q++) {
+      const n = hull.rigOf[q] as number;
+      if (n >= 0) rigs[n]?.quads.push(q);
+    }
+    this.#rigs.set(id, rigs);
+  }
+
+  /** For the harness: how many blocked cones are drawn right now. */
+  arcShellCount(): number { return this.#arcShell.children.length; }
+
+  /** For the harness: where every turret is pointing and whether it bears. */
+  turretState(): Array<{ ship: number; n: number; yaw: number; pitch: number; bears: boolean }> {
+    const out: Array<{ ship: number; n: number; yaw: number; pitch: number; bears: boolean }> = [];
+    for (const [ship, rigs] of this.#rigs) {
+      rigs.forEach((r, n) => out.push({
+        ship, n,
+        yaw: +((r.yaw * 180) / Math.PI).toFixed(1),
+        pitch: +((r.pitch * 180) / Math.PI).toFixed(1),
+        bears: r.bears,
+      }));
+    }
+    return out;
   }
 
   /**
@@ -828,6 +1113,7 @@ export class View {
       vertexColors: true,
     }));
     this.#tintHull(mesh, s);
+    this.#buildRigs(s.id, design, hull);
     return mesh;
   }
 
@@ -1910,6 +2196,14 @@ export class View {
   }
 
   render(): void {
+    // The turrets swing here rather than on a turn boundary: they EASE, so
+    // they need a frame's worth of time and the frame is what has it. Clamped,
+    // because a tab that was in the background comes back with a gap of
+    // seconds in it and a turret should not teleport across that.
+    const now = performance.now();
+    const dt = this.#posedAt ? Math.min(0.1, (now - this.#posedAt) / 1000) : 0.016;
+    this.#posedAt = now;
+    this.#poseTurrets(dt);
     this.#applyCamera();
     this.#renderer.render(this.#scene, this.#camera);
   }
