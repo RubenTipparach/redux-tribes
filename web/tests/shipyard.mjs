@@ -126,8 +126,14 @@ async function checkShips(page) {
       ok(`${name}: legal at ${(100 * d.derived.mass / d.derived.massMax).toFixed(0)}% of budget, hull ${d.derived.hull.toFixed(0)}`);
     }
     // The whole point of eight swatches is that eight of them are on the ship.
-    if (d.livery < 8) fail(`${name}: only ${d.livery} of 8 swatches reach the hull`);
-    else ok(`${name}: all 8 ${d.faction} swatches on the hull`);
+    // The armour is the colour that was PICKED, and only that colour: nothing
+    // is chosen for the player and nothing varies by where a cell sits.
+    const tones = d.armourTones;
+    if (tones.length !== 1 || tones[0] !== d.paint) {
+      fail(`${name}: picked 0x${d.paint.toString(16)} and the hull came out `
+        + `${tones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
+    } else ok(`${name}: every armour cell is the picked ${d.faction} colour, `
+      + `0x${d.paint.toString(16)}`);
     // Mounts live inside the frame. Only drives, retros, attitude jets, gun
     // rings and trunnions are allowed to stand proud of the hull.
     if (d.enclosedOutside > 0)
@@ -752,6 +758,36 @@ async function checkModesAndRotation(page) {
   if (back.derived.plateCells !== wrapped.derived.plateCells)
     fail(`class hull did not come back: ${back.derived.plateCells} against ${wrapped.derived.plateCells}`);
   else ok('class hull comes back exactly');
+
+  // Picking another swatch repaints the hull to THAT colour, and picking the
+  // same one twice is not a repaint. A palette that suggests rather than sets
+  // is the thing this replaced.
+  // Plate on first: with the exterior hidden there is no armour to have a
+  // colour, and a check that passes because nothing was drawn is not a check.
+  for (let n = 0; n < 3; n++) {
+    if (await page.evaluate(() => window.ftDebug.designer().showPlate)) break;
+    await page.click('#dzPlate');
+    await page.waitForTimeout(350);
+  }
+  const swatches = await page.$$('#dzPaint button');
+  if (swatches.length < 8) fail(`only ${swatches.length} swatches offered, not 8`);
+  else {
+    const before = await page.evaluate(() => window.ftDebug.designer().armourTones);
+    await swatches[3].click();
+    await page.waitForTimeout(400);
+    const after = await page.evaluate(() => window.ftDebug.designer());
+    if (after.armourTones.length !== 1 || after.armourTones[0] !== after.paint)
+      fail(`the fourth swatch set paint 0x${after.paint.toString(16)} and the hull came out `
+        + `${after.armourTones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
+    else if (after.armourTones[0] === before[0])
+      fail('picking a different swatch did not change the hull colour');
+    else ok(`a picked swatch is the whole hull: 0x${(before[0] ?? 0).toString(16)} to `
+      + `0x${after.armourTones[0].toString(16)}`);
+    // Re-queried: picking a swatch rebuilds the palette, so the handles taken
+    // before the click are pointing at buttons that no longer exist.
+    await (await page.$$('#dzPaint button'))[0].click();
+    await page.waitForTimeout(300);
+  }
 
   // A turret is on a swivel: turning it has to move CELLS, not just a label.
   // The barbette under it is a drum and a drum is the same drum at 90 degrees,

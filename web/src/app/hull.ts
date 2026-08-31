@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import {
   NX, NY, NZ, RUNG, Mat,
-  armourColour, cellColour, frameFor, hullAt, paintFor, rasterise, rasterSig,
+  armourColour, cellColour, frameFor, rasterise, rasterSig,
   type Design,
 } from './design.js';
 
@@ -59,10 +59,6 @@ export function hullMesh(d: Design): HullMesh {
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
   const { grid, purp } = rasterise(d);
-  const sw = paintFor(d.faction).swatches;
-  const prof = frame.profile;
-  const z0 = Math.round(prof[0]![0] as number);
-  const z1 = Math.round(prof[prof.length - 1]![0] as number);
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
   // What the outside can reach: a flood fill through empty cells from the
@@ -94,11 +90,9 @@ export function hullMesh(d: Design): HullMesh {
   const colourAt = (i: number, j: number, k: number): number => {
     const n = idx(i, j, k);
     const mat = grid[n] as number;
-    if (mat === Mat.Plate || mat === Mat.Skinned) {
-      const st = hullAt(prof, k);
-      return armourColour(sw, d.paint, i, j, k, z0, z1, st[0] as number, st[1] as number);
-    }
-    return cellColour(mat, purp[n] as number, d.paint);
+    return mat === Mat.Plate || mat === Mat.Skinned
+      ? armourColour(d.paint)
+      : cellColour(mat, purp[n] as number, d.paint);
   };
 
   const pos: number[] = [], nrm: number[] = [], col: number[] = [], cellOf: number[] = [];
@@ -172,8 +166,19 @@ export function hullMesh(d: Design): HullMesh {
 
           // The rectangle's four corners, in lattice space, on the face's own
           // side of the cell.
+          //
+          // Which way round they go depends on the axis, not just on the sign.
+          // The layer's own two axes are (u, v) and the triangle is front
+          // facing when u cross v points along the normal: for the x faces
+          // that is Y cross Z which is +X, and for the z faces X cross Y which
+          // is +Z, but for the y faces it is X cross Z which is MINUS Y. So
+          // the top and bottom of every hull came out wound backwards, was
+          // culled, and the ship read as a flat slab you could see into. The
+          // normals were right the whole time, which is why it looked lit and
+          // wrong rather than black.
           const face = dir.step > 0 ? 1 : 0;
-          const corners: ReadonlyArray<readonly [number, number]> = dir.step > 0
+          const ccw = (dir.step > 0) !== (axis === 1);
+          const corners: ReadonlyArray<readonly [number, number]> = ccw
             ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
             : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
           c.setHex(hex);

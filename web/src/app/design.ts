@@ -87,16 +87,6 @@ export const FACTION_PAINT: ReadonlyArray<{ key: string; name: string; swatches:
     [0xD8E2EC, 0xB9C6D4, 0x8C949E, 0x4F4F4F, 0xF2F5F8, 0x2A2E33, 0x6E7680, 0xC0A24A] },
 ];
 
-/**
- * What each of the eight is FOR. A scheme, not a colour: one swatch on a whole
- * hull is a paint bucket, and a paint bucket makes every ship of a faction the
- * same flat lozenge.
- */
-export const PAINT_ROLE = {
-  primary: 0, panel: 1, secondary: 2, deep: 3,
-  highlight: 4, marking: 5, trim: 6, stripe: 7,
-} as const;
-
 export const paintFor = (key: string) =>
   FACTION_PAINT.find(f => f.key === key) ?? (FACTION_PAINT[0] as typeof FACTION_PAINT[number]);
 
@@ -1766,35 +1756,21 @@ export function cellColour(mat: number, code: number, paint: number): number {
 }
 
 /**
- * Where each of a faction's eight lands on the hull.
+ * What colour the armour is: the one that was picked.
  *
- * Position decides, not chance: the same cell is the same colour on both
- * seats and on a reload, which matters because a livery that reshuffled would
- * read as the ship having changed. Nothing here is hashed or sent to the core,
- * so two players who painted differently still agree on the match.
+ * It used to spread all eight of a faction's swatches over the hull by
+ * POSITION, as panels, an underside, a spine, a waist stripe, a nose flash and
+ * a transom band. It made a handsome ship and it took the decision away: a
+ * player picking a colour got a scheme built round it rather than the colour
+ * they picked. Now the pick IS the hull, and the eight are eight things to
+ * choose between rather than eight roles to be assigned.
  *
- * `primary` is the swatch the player picked. The other seven roles stay where
- * the faction authored them, so picking a different primary re-tints the hull
- * without wrecking the scheme: the underside stays dark, the markings stay
- * legible, the stripe stays the stripe.
+ * Everything that is not armour keeps its purpose colour, so a drive is still
+ * orange and a gun still red on anybody's ship. That is the part a player must
+ * be able to read on an unfamiliar hull, and it is not paint.
  */
-export function armourColour(sw: readonly number[], primary: number,
-  i: number, j: number, k: number,
-  z0: number, z1: number, hw: number, hh: number): number {
-  const P = (n: number) => (sw[n] ?? primary) as number;
-  const dx = (i + 0.5 - CX) / Math.max(1, hw);
-  const dy = (j + 0.5 - CY) / Math.max(1, hh);
-  const t = (k - z0) / Math.max(1, z1 - z0);        // 0 at the transom, 1 at the nose
-  if (t > 0.94) return P(PAINT_ROLE.marking);        // nose flash
-  if (t < 0.05) return P(PAINT_ROLE.trim);           // transom band
-  if (t > 0.70 && t < 0.78 && Math.abs(dy) < 0.6) return P(PAINT_ROLE.marking);
-  if (Math.abs(dy) <= 0.15) return P(PAINT_ROLE.stripe);   // the waist stripe
-  if (dy < -0.58) return P(PAINT_ROLE.deep);         // underside
-  if (dy > 0.70 && Math.abs(dx) < 0.42) return P(PAINT_ROLE.highlight);
-  // Plating panels, coarse enough to read at ship scale.
-  const panel = (((k / 7) | 0) + ((i / 5) | 0) + ((j / 5) | 0)) % 3;
-  return panel === 0 ? primary
-    : panel === 1 ? P(PAINT_ROLE.panel) : P(PAINT_ROLE.secondary);
+export function armourColour(primary: number): number {
+  return primary;
 }
 
 export interface VoxelModel {

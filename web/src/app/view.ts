@@ -377,6 +377,9 @@ export class View {
   #planPip: THREE.Mesh;
   #headingArrow: THREE.Line;
   #shell: THREE.Mesh;
+  /** Whether there is an envelope to show at all; how much of it is seen is
+   *  the camera's business. */
+  #shellShown = false;
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
@@ -592,7 +595,10 @@ export class View {
   }
 
   zoom(factor: number): void {
-    this.#dist = Math.max(18, Math.min(900, this.#dist * factor));
+    // Down to 9 rather than 18. The floor was set when every hull was a cone
+    // and there was nothing to see up close; a player who spent an hour in the
+    // shipyard should be able to go and look at what they built.
+    this.#dist = Math.max(9, Math.min(900, this.#dist * factor));
   }
 
   centreOn(p: Vec3): void {
@@ -610,7 +616,41 @@ export class View {
     this.#dist = Math.max(60, size * 1.4 + 40);
   }
 
+  /**
+   * Markers that mean "here" keep their size on SCREEN, not in the world.
+   *
+   * The plan pip is 1.1 units across, which is a dot on a map and a beach ball
+   * inside a six unit frigate: once the hulls became real models it covered
+   * the ship it was marking. Scaled by the camera distance it stays the same
+   * blob at every zoom, which is what a marker is for.
+   */
+  #sizeMarkers(): void {
+    const k = Math.max(0.22, Math.min(1.6, this.#dist / 70));
+    this.#planPip.scale.setScalar(k);
+
+    // And the envelope gets out of the way when you go in for a look.
+    //
+    // It is a surface tens of units across drawn round the ship, so a camera
+    // close enough to see the hull is a camera INSIDE it, and everything then
+    // reads through a green wash. Faded out below twenty units and gone by
+    // twelve, which is the range at which a player is inspecting a ship rather
+    // than planning a move with it.
+    // The hulls read differently at different ranges, so a zoom repaints them.
+    for (const s of this.#ships) {
+      const mesh = this.#hulls.get(s.id);
+      if (mesh) this.#tintHull(mesh, s);
+    }
+
+    const near = Math.max(0, Math.min(1, (this.#dist - 12) / 8));
+    const mat = this.#shell.material as THREE.MeshBasicMaterial;
+    mat.opacity = 0.022 * near;
+    (this.#shellLines.material as THREE.LineBasicMaterial).opacity = 0.5 * near;
+    this.#shell.visible = this.#shellShown && near > 0;
+    this.#shellLines.visible = this.#shellShown && near > 0;
+  }
+
   #applyCamera(): void {
+    this.#sizeMarkers();
     const cp = Math.cos(this.#pitch);
     this.#camera.position.set(
       this.#focus.x + this.#dist * cp * Math.sin(this.#yaw),
@@ -744,15 +784,20 @@ export class View {
   #tintHull(mesh: THREE.Mesh, s: ShipState): void {
     const tone = s.destroyed ? 0x33404f
       : s.drifting ? RED : s.side === this.mySide ? CYAN : ORANGE;
-    if (this.#tint.get(s.id) === tone) return;
-    this.#tint.set(s.id, tone);
+    // And it FADES as the camera closes in. Whose ship this is matters at map
+    // range, where a hull is a few pixels; what it is built out of matters up
+    // close, where the tint is just paint over the thing being looked at.
+    // Quantised so drifting a millimetre does not repaint four hulls.
+    const far = Math.max(0, Math.min(1, (this.#dist - 14) / 40));
+    const mix = s.destroyed ? 0.8 : 0.05 + 0.35 * far;
+    const key = tone * 100 + Math.round(mix * 40);
+    if (this.#tint.get(s.id) === key) return;
+    this.#tint.set(s.id, key);
     const mat = mesh.material as THREE.MeshLambertMaterial;
     // Lambert MULTIPLIES this by the vertex colour, so the full side colour
-    // would wash a red gun to near black. Halfway from white keeps the hue and
-    // still says whose it is, with a little emissive so a hull reads against
-    // the field rather than sinking into it.
-    mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), s.destroyed ? 0.8 : 0.5);
-    mat.emissive.setHex(s.destroyed ? 0x000000 : tone).multiplyScalar(0.12);
+    // would wash a red gun to near black. A lerp from white keeps the hue.
+    mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), mix);
+    mat.emissive.setHex(s.destroyed ? 0x000000 : tone).multiplyScalar(0.09 * far);
     mat.needsUpdate = true;
   }
 
@@ -815,6 +860,16 @@ export class View {
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
+    };
+  }
+
+  /** Where the camera is and what the wash over the ship is, for judging what
+   *  a close look actually shows. */
+  cameraState(): { dist: number; shell: boolean; shellOpacity: number } {
+    return {
+      dist: +this.#dist.toFixed(2),
+      shell: this.#shell.visible,
+      shellOpacity: +(this.#shell.material as THREE.MeshBasicMaterial).opacity.toFixed(4),
     };
   }
 
@@ -1435,6 +1490,7 @@ export class View {
   /** Show the envelope this ship already has, without probing anything. */
   drawEnvelope(ship: ShipState | undefined, order: PlannedOrder, flight: Flight): void {
     if (!ship || ship.destroyed || isCommitted(order.mode)) {
+      this.#shellShown = false;
       this.#shell.visible = false;
       this.#shellLines.visible = false;
       return;
@@ -1442,6 +1498,7 @@ export class View {
     this.requestShell(ship, order, flight);
     const built = this.#shells.get(ship.id)?.built;
     if (!built) {
+      this.#shellShown = false;
       this.#shell.visible = false;
       this.#shellLines.visible = false;
       return;
@@ -1476,8 +1533,8 @@ export class View {
       wgeo.setAttribute('position', new THREE.Float32BufferAttribute(wire, 3));
       this.#shellLines.geometry = wgeo;
     }
-    this.#shell.visible = built.tris > 0;
-    this.#shellLines.visible = built.tris > 0;
+    this.#shellShown = built.tris > 0;
+    this.#sizeMarkers();
   }
 
   /**

@@ -163,8 +163,9 @@ node web/tests/shipyard.mjs   # 1280x900, 390x844 and 390x560
 Same rules, different screen. It opens the designer at all three sizes and
 checks what only a browser can answer: no horizontal scroll, the centre of
 every control hits THAT control and not something drawn over it, all five
-classes legal out of the box, all eight of a faction's swatches actually on
-the hull, every enclosed mount inside the hull, both exteriors, the plate
+classes legal out of the box, the faction swatch a player PICKED actually on
+the hull and a different pick repainting it, every enclosed mount inside the
+hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
 selection that outlines it, a turret that turns 90 degrees and takes its
 cells with it, a saved hull taken out of the library into a practice level and

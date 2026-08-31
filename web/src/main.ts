@@ -2334,6 +2334,8 @@ Object.defineProperty(window, 'ftDebug', {
       const s = ships.find(x => x.id === id);
       return s ? view.screenOf(s.pos) : null;
     },
+    /** What the camera is doing and what is drawn over the ship. */
+    camera: () => view.cameraState(),
     /** What has been shot off the hulls, and what is still in the air. */
     damage: () => view.damageState(),
     /** What the hulls cost to draw, and a switch to weigh it against. */

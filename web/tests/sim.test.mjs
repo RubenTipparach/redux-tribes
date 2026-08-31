@@ -528,3 +528,47 @@ test('a snapshot from another match is refused', () => {
   b.start('00000000bbbbbbb2', 1, 0b01);
   assert.equal(b.restore(snap), false, 'restoring the wrong match is refused, not silently wrong');
 });
+
+test('every face of a drawn hull points outward', async () => {
+  // The defect this pins: the greedy mesher lays each face on the two axes of
+  // its own layer, and a triangle is front facing only when those two crossed
+  // give the normal. For the x faces that is Y cross Z which is +X and for the
+  // z faces X cross Y which is +Z, but for the y faces it is X cross Z which
+  // is MINUS Y. Every hull's top and bottom came out wound backwards, was
+  // culled, and the ship read as a flat slab you could see into.
+  // Bundled in memory like the client above, so the test exercises the real
+  // module rather than a copy of the mesher.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const hull = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const { hullMesh } = hull;
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, FRAMES, useCore } = design;
+  // hullMesh only rasterises, but design.ts refuses to derive without a core,
+  // and stockFor does not derive. Wire a stub so an accidental call is loud.
+  useCore(() => null);
+  for (const f of FRAMES) {
+    const h = hullMesh(stockFor(f.classKey));
+    const pos = h.geo.getAttribute('position').array;
+    const nrm = h.geo.getAttribute('normal').array;
+    let wrong = 0;
+    for (let q = 0; q < h.quads; q++) {
+      const b = q * 12;
+      const ax = pos[b + 3] - pos[b], ay = pos[b + 4] - pos[b + 1], az = pos[b + 5] - pos[b + 2];
+      const bx = pos[b + 6] - pos[b], by = pos[b + 7] - pos[b + 1], bz = pos[b + 8] - pos[b + 2];
+      // The winding's own normal, against the one the vertex carries.
+      const cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
+      const dot = cx * nrm[b] + cy * nrm[b + 1] + cz * nrm[b + 2];
+      if (dot <= 0) wrong++;
+    }
+    assert.equal(wrong, 0, `${f.classKey}: ${wrong} of ${h.quads} faces wound inward`);
+  }
+});

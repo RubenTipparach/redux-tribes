@@ -95,7 +95,7 @@ export class Designer {
   #cam = { yaw: 0.7, pitch: 0.35, zoom: 1 };
   #raf = 0;
   #voxelCount = 0;
-  #liveryColours = 0;
+  #armourTones: number[] = [];
   #gridHash = 0;
   #plate: PlateView = 'on';
   /** Cells behind each drawn mesh, so a click can be turned back into a part. */
@@ -371,18 +371,16 @@ export class Designer {
     const { grid, purp, own } = rasterise(this.#design);
     const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
-    // The livery needs the hull's own shape to know where a stripe or an
-    // underside is. Read once per station rather than per cell: it is the same
-    // answer 1024 times over.
+    // The hull's own shape, read once per station rather than per cell: it is
+    // the same answer 1024 times over. The livery no longer needs it, but the
+    // ghost skin and the proud part checks still do.
     const prof = frame.profile;
-    const z0 = Math.round(prof[0]![0]), z1 = Math.round(prof[prof.length - 1]![0]);
     const hwAt = new Float32Array(NZ), hhAt = new Float32Array(NZ);
     for (let k = 0; k < NZ; k++) {
       const st = hullAt(prof, k);
       hwAt[k] = st[0] as number;
       hhAt[k] = st[1] as number;
     }
-    const sw = paintFor(this.#design.faction).swatches;
 
     // --- draw only what can be seen ---------------------------------------
     // A cell with all six neighbours filled is invisible, and on a plated hull
@@ -441,8 +439,7 @@ export class Designer {
       if (hidden) continue;
       if (mat === Mat.Plate) {
         skin.push(i, j, k);
-        skinCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
-          hwAt[k] as number, hhAt[k] as number));
+        skinCol.push(armourColour(this.#design.paint));
       } else {
         const rig = rigOf.get((own[n] as number) - 1);
         const col = cellColour(mat, purp[n] as number, this.#design.paint);
@@ -468,8 +465,7 @@ export class Designer {
           k === 0 || !grid[n - NX * NY] || k === NZ - 1 || !grid[n + NX * NY];
         if (!open) continue;
         ghost.push(i, j, k);
-        ghostCol.push(armourColour(sw, this.#design.paint, i, j, k, z0, z1,
-          hwAt[k] as number, hhAt[k] as number));
+        ghostCol.push(armourColour(this.#design.paint));
       }
     }
 
@@ -503,9 +499,10 @@ export class Designer {
 
     this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3
       + rigCells.reduce((a, c) => a + c.length / 3, 0);
-    // How many of the faction's eight actually reached the hull. One means a
-    // paint bucket rather than a livery, which is the thing this replaced.
-    this.#liveryColours = new Set(skinCol.length ? skinCol : ghostCol).size;
+    // Every distinct colour the armour actually came out. One entry, and it is
+    // the one that was picked: that is the whole rule now, and a set is what
+    // can prove it rather than a sample of the first cell.
+    this.#armourTones = [...new Set(skinCol.length ? skinCol : ghostCol)];
     // FNV-1a over the occupancy grid. It exists so the harness can OBSERVE
     // that a rotation moved cells; nothing reads it back into the editor.
     let hsh = 0x811c9dc5;
@@ -1258,10 +1255,7 @@ export class Designer {
       return 0;
     };
 
-    const sw = paintFor(this.#design.faction).swatches;
     const prof = frameFor(this.#design.classKey).profile;
-    const z0 = Math.round((prof[0]![0] as number));
-    const z1 = Math.round((prof[prof.length - 1]![0] as number));
     const st = hullAt(prof, k);
 
     // The hull line for this station, so a player drawing knows where the
@@ -1297,8 +1291,7 @@ export class Designer {
       const mat = inSlab(i, j);
       if (!mat) continue;
       const col = mat === Mat.Plate || mat === Mat.Skinned
-        ? armourColour(sw, this.#design.paint, i, j, k, z0, z1,
-          st[0] as number, st[1] as number)
+        ? armourColour(this.#design.paint)
         : cellColour(mat, purpIn(i, j), this.#design.paint);
       ctx.fillStyle = `#${col.toString(16).padStart(6, '0')}`;
       // y grows upward on the ship and downward on a canvas.
@@ -1935,7 +1928,7 @@ export class Designer {
       onion: this.#onion,
       depth: this.#depth,
       drawSaid: this.#drawSaid,
-      livery: this.#liveryColours,
+      armourTones: [...this.#armourTones],
       enclosedOutside: rasterise(this.#design).enclosedOutside,
       flushProud: rasterise(this.#design).flushProud,
       turrets: rasterise(this.#design).turrets.map(t => ({ ...t })),
