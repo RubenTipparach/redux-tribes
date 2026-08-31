@@ -26,7 +26,9 @@
  */
 
 import * as THREE from 'three';
-import { NX, NY, NZ, RUNG, frameFor, rasterise, type Design } from './design.js';
+import {
+  Mat, NX, NY, NZ, RUNG, armourColour, cellColour, frameFor, rasterise, type Design,
+} from './design.js';
 import type { HullMesh } from './hull.js';
 
 /**
@@ -195,7 +197,15 @@ export function buildWound(
 ): Wound {
   const frame = frameFor(design.classKey);
   const cell = RUNG[frame.rung];
-  const { grid } = rasterise(design);
+  const { grid, purp } = rasterise(design);
+  // What a cell is made of, so the inside of a hull is drawn as the parts that
+  // are in it. Same answer `hull.ts` gives the outside, asked the same way.
+  const colourOf = (n: number): number => {
+    const mat = grid[n] as number;
+    return mat === Mat.Plate || mat === Mat.Skinned
+      ? armourColour(design.paint)
+      : cellColour(mat, purp[n] as number, design.paint);
+  };
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
   const solid = (i: number, j: number, k: number) =>
     i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ && !!grid[idx(i, j, k)];
@@ -261,12 +271,32 @@ export function buildWound(
       // is built on that cell with the normal pointing back the way we came.
       const back = [-(d[0] as number), -(d[1] as number), -(d[2] as number)] as const;
       const [u0, v0] = tileUV(c);
-      let cx = 0, cy = 0, cz = 0;
+      // The INSIDE of the ship, drawn as what it is made of.
+      //
+      // This face used to exist only as ember, on the heat ramp, which cools
+      // to char: a hole a minute old was a black void with the reactor and the
+      // drive somewhere inside it and nothing to see. They are parts, and the
+      // shipyard has always drawn them when the plate is turned off, so the
+      // battlefield draws them too. The ember sits OVER this on its own layer
+      // and fades off as it cools, uncovering the component underneath rather
+      // than leaving a hole where one should be.
+      const nc = idx(ni, nj, nk);
+      const own = colourOf(nc);
+      const or_ = ((own >> 16) & 255) / 255;
+      const og = ((own >> 8) & 255) / 255;
+      const ob = (own & 255) / 255;
+      const heat = heatOf(diedAt, tick);
       let corner = 0;
+      let cx = 0, cy = 0, cz = 0;
       for (const [ax, ay, az] of faceCorners(ni, nj, nk, back)) {
+        world(ax, ay, az, sPos);
+        sNrm.push(back[0], back[1], back[2]);
+        sCol.push(or_, og, ob);
         world(ax, ay, az, gPos);
         gNrm.push(back[0], back[1], back[2]);
-        gCol.push(rgb[0], rgb[1], rgb[2]);
+        // Alpha is the heat, so the ember layer takes itself off as it cools
+        // instead of settling to char over the part it is covering.
+        gCol.push(rgb[0], rgb[1], rgb[2], heat);
         const cu = CORNER_UV[corner] as readonly [number, number];
         gUv.push(
           u0 + ATLAS_PAD + (cu[0] as number) * (ATLAS_STEP - 2 * ATLAS_PAD),
@@ -287,7 +317,7 @@ export function buildWound(
 
   return {
     skin: quadGeometry(sPos, sNrm, sCol),
-    glow: quadGeometry(gPos, gNrm, gCol, gUv),
+    glow: quadGeometry(gPos, gNrm, gCol, gUv, 4),
     glowCell: new Int32Array(glowCell),
     vents,
     whole,
@@ -296,7 +326,7 @@ export function buildWound(
 
 /** Four vertices a quad, two indexed triangles, same as the hull's own. */
 function quadGeometry(
-  pos: number[], nrm: number[], col: number[], uv?: number[],
+  pos: number[], nrm: number[], col: number[], uv?: number[], colSize = 3,
 ): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
   const quads = pos.length / 12;
@@ -308,7 +338,7 @@ function quadGeometry(
   }
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), colSize));
   if (uv) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   geo.computeBoundingSphere();
@@ -328,12 +358,20 @@ export function coolWound(w: Wound, dead: ReadonlyMap<number, number>, tick: num
   const arr = col.array as Float32Array;
   const rgb: [number, number, number] = [0, 0, 0];
   let last = -1;
+  let heat = 0;
   for (let v = 0; v < w.glowCell.length; v++) {
     const c = w.glowCell[v] as number;
-    if (c !== last) { ramp(heatOf(dead.get(c) ?? tick, tick), rgb); last = c; }
-    arr[v * 3] = rgb[0];
-    arr[v * 3 + 1] = rgb[1];
-    arr[v * 3 + 2] = rgb[2];
+    if (c !== last) {
+      heat = heatOf(dead.get(c) ?? tick, tick);
+      ramp(heat, rgb);
+      last = c;
+    }
+    arr[v * 4] = rgb[0];
+    arr[v * 4 + 1] = rgb[1];
+    arr[v * 4 + 2] = rgb[2];
+    // Alpha is the heat: a cold edge takes itself off and uncovers the part
+    // underneath rather than sitting over it as char.
+    arr[v * 4 + 3] = heat;
   }
   col.needsUpdate = true;
 }

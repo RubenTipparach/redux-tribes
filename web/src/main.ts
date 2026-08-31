@@ -2975,7 +2975,11 @@ function carveHits(rec: { events: readonly SimEvent[] } | null | undefined): Hul
     out.push({
       ship: e.ship,
       local: [v.x, v.y, v.z],
-      world: e.pos,
+      // Where the shot MET the hull, not the point on the collision sphere the
+      // event carries. The blast was moved onto the hull and the debris was
+      // left behind on the sphere, so chunks came off a couple of units away
+      // from the explosion that threw them. One contact, both users of it.
+      world: contactWorld(e).pos,
       tick: e.tick,
       // A kill opens the hull up; a shot takes a bite out of it.
       radius: kill ? 2.2 : e.kind === EventKind.Collision ? 1.1 : 0.55,
