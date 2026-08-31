@@ -25,6 +25,10 @@ COPY web/package.json web/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 COPY web/tsconfig.json web/build.mjs web/index.html ./
 COPY web/src/ ./src/
+# Static assets: textures and anything else `build.mjs` copies into `dist/`.
+# This stage used to receive only the wasm below, so the first committed
+# texture built and tested everywhere and then failed the image with ENOENT.
+COPY web/public/ ./public/
 COPY --from=sim /build/engine/sim_core/target/wasm32-unknown-unknown/release/sim_core.wasm ./public/sim_core.wasm
 # Typecheck in the image too: a client that does not compile must not ship,
 # whatever CI did or did not manage to run.
