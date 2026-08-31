@@ -557,6 +557,50 @@ async function checkLibrary(page) {
     fail('the round trip changed the grid, so something in the record was lost');
   else ok(`opening it back gives the same hull: ${after.classKey}, ${after.parts} parts, same grid`);
   if (!after.slot.mine) fail('a design you saved does not come back marked as yours');
+
+  await checkHullPick(page, name, before.classKey);
+}
+
+/**
+ * Taking a saved hull into a practice level.
+ *
+ * The pick is worth nothing if it stops at the lobby, so this checks the thing
+ * that matters: the ships the match spawns. A Karisen design picked and a
+ * Terran fielded is a chooser that lights up and does nothing.
+ */
+async function checkHullPick(page, name, classKey) {
+  await page.click('#dzClose');
+  await page.waitForTimeout(1200);
+  const chips = await page.$$eval('#practiceHull button', bs =>
+    bs.map(b => (b.querySelector('.n')?.textContent ?? '').trim()));
+  const at = chips.findIndex(t => t.includes(name));
+  if (at < 0) { fail(`the saved hull is not offered on the practice screen: ${chips.join(', ')}`); return; }
+  ok(`the practice screen offers the saved hull among ${chips.length} choices`);
+
+  await (await page.$$('#practiceHull button'))[at].click();
+  await page.waitForTimeout(250);
+  await page.click('#bPractice');
+  await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'),
+    null, { timeout: 20000 });
+  await page.waitForTimeout(2500);
+  const flown = await page.evaluate(() => {
+    const d = window.ftDebug;
+    const side = d.side();
+    return { side, mine: d.ships().filter(s => s.side === side).map(s => s.cls),
+      foes: d.ships().filter(s => s.side !== side).map(s => s.cls),
+      note: document.getElementById('hullNote').textContent };
+  });
+  const want = ['terran_frigate', 'karisen_frigate', 'rogue_frigate',
+    'benefactor_frigate', 'freighter'].indexOf(classKey);
+  if (!flown.mine.length) fail('the match spawned nothing for the player');
+  else if (flown.mine.some(c => c !== want))
+    fail(`picked a ${classKey} and flew classes ${flown.mine.join(', ')}`);
+  else if (!flown.note.includes(name))
+    fail(`the console does not say which design was taken out: "${flown.note}"`);
+  else ok(`every hull the player fields is the picked ${classKey}, `
+    + `and the panel says "${flown.note}"`);
+  if (flown.foes.every(c => c === want) && want >= 0 && flown.foes.length)
+    fail('the pick reached the other side as well, which is not a pick, it is a mod');
 }
 
 async function checkModesAndRotation(page) {

@@ -13,6 +13,7 @@
  */
 
 import { Api, ApiError, type Room, type SavedDesign, type Ticket } from '../net/api.js';
+import { CLASS_NAMES, classIndexOf } from '../sim/types.js';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -29,6 +30,13 @@ export interface Launch {
   readonly humanSides: number;
   /** Which side this client sits in. */
   readonly side: number;
+  /**
+   * The class index this side fields, or undefined for the one the scenario
+   * authored. Set when a saved design is picked in the lobby.
+   */
+  readonly hull?: number;
+  /** What that design is called, for the console to say so. */
+  readonly hullName?: string;
   readonly ticket?: Ticket;
   readonly roomName?: string;
 }
@@ -62,6 +70,8 @@ export class Lobby {
   #libMine = false;
   /** Set by main.ts: opening a library design is the shipyard's job. */
   #onOpenDesign: ((d: SavedDesign) => void) | null = null;
+  /** The design whose hull the next practice level is flown in, if any. */
+  #hull: SavedDesign | null = null;
 
   onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
@@ -290,11 +300,56 @@ export class Lobby {
     });
   }
 
+  /**
+   * Which hull to take into a practice level.
+   *
+   * One chooser above the levels rather than one per level: it is a single
+   * choice that applies to whichever is tapped, and seven copies of it would
+   * be seven controls saying one thing. Anyone's design may be picked, the
+   * same rule the library itself follows.
+   */
+  #renderPracticeHull(): void {
+    const host = $('practiceHull');
+    host.innerHTML = '';
+    // `sub` is HTML the caller has already escaped, so a separator entity
+    // stays a separator instead of arriving on screen as its own source.
+    const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
+      const b = document.createElement('button');
+      b.className = on ? 'on' : '';
+      b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
+      b.onclick = fn;
+      host.appendChild(b);
+    };
+    pick('As authored', 'the level picks the hulls', !this.#hull, () => {
+      this.#hull = null;
+      this.#renderPracticeHull();
+    });
+    for (const d of this.#library) {
+      if (classIndexOf(d.classKey) < 0) continue;
+      pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
+        + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
+        this.#hull?.designId === d.designId, () => {
+          this.#hull = d;
+          this.#renderPracticeHull();
+        });
+    }
+    // Say exactly how far the pick goes. A design that quietly flew as a stock
+    // hull would read as the editor not working.
+    $('practiceHullNote').innerHTML = this.#hull
+      ? `Every ship you field is a `
+        + `${escape(CLASS_NAMES[classIndexOf(this.#hull.classKey)] ?? '?')}. `
+        + 'Its own plate, mass and mounts arrive when the core derives a design '
+        + 'rather than the editor, which is the next piece of work.'
+      : 'Or take a hull out of the library. Anyone&rsquo;s will do.';
+  }
+
   #practice(scenario: string): void {
     this.#stopPolling();
     this.hide();
+    const hull = this.#hull ? classIndexOf(this.#hull.classKey) : -1;
     this.#onLaunch({
       kind: 'offline', seed: randomSeed(), scenario, humanSides: 0b01, side: 0,
+      ...(hull >= 0 ? { hull, hullName: this.#hull!.name } : {}),
     });
   }
 
@@ -311,6 +366,9 @@ export class Lobby {
       this.#library = [];
     }
     this.#renderLibrary();
+    // The hull chooser is the library seen from the practice screen, so it is
+    // rebuilt from the same fetch rather than from a copy of it.
+    this.#renderPracticeHull();
   }
 
   #renderLibrary(): void {
@@ -349,6 +407,7 @@ export class Lobby {
 
   #bind(): void {
     this.#renderPractice();
+    this.#renderPracticeHull();
     $('bLibAll').onclick = () => { this.#libMine = false; void this.refreshLibrary(); };
     $('bLibMine').onclick = () => { this.#libMine = true; void this.refreshLibrary(); };
     $('bNewPve').onclick = () => { void this.#create('pve'); };

@@ -361,6 +361,31 @@ The slice drawer was one of three shipyard explorations (`mockups/ship-designer-
 
 **What the harness checks is that it is reversible.** Draw a run: the plate count and the mass go up and the grid digest changes. Cut: cells come out of the generated skin. Clear all: every one of those numbers returns to exactly where it started. A tool that can add but not undo is a tool nobody dares use. It also checks that a cell in the far corner is refused with a reason, that a cell against the hull is taken, that thickness 6 tiles the lattice into 11 slabs with the next one starting where this one stopped, that the box on the model grows with it, that one tap at that thickness lays a column rather than a cell, and that the mirrors turn one tap into two and then four.
 
+## Taking a saved hull into a level
+
+The practice screen offers the library above the levels: one chooser, because
+it is a single choice that applies to whichever level is tapped, and seven
+copies of it would be seven controls saying one thing. Anyone's design may be
+picked, the same rule the library itself follows.
+
+**What it changes today is the CLASS.** Every ship the player fields spawns as
+the picked design's hull class, the level still decides where they stand and
+how many there are, and the console names the design on the panel that lists
+the fleet. The choice reaches the core as `ft_hull_choice(side, class)` before
+`ft_match_new`, and the class index is in the state hash, because a seat that
+fielded a Rogue against one that spawned a Terran would otherwise agree for as
+long as the two happened to fly alike.
+
+**What it does not change yet is the design's own numbers**, and the chooser
+says so rather than letting a plated hull quietly fly as a stock one. Mass,
+hull points, the flight envelope and the mounts come out of `derive()`, which
+runs on the client over a raster the client computed, and a rule that decides
+outcomes cannot live there (ADR-2). The next piece of work is the one
+SHIP_DESIGNER has planned since slice 1: the module table and the derivation
+arithmetic into `sim_core`, the editor asking the core for its readout instead
+of computing it, and the match applying what the core derived. Then a design
+flies as itself, on both seats, with nothing to disagree about.
+
 ## The ship library
 
 **A design is storage plus provenance, and nothing else.** `designs` is a table of JSON records: id, owner, name, class, the client's own mass/hull/legal at save time, the body, and what it was cloned from. The server never interprets a body, and it cannot: what a design MEANS is the core's business and the core does not run on the server (ADR-6). So validation stops at "an object, with a `classKey`, under 64 KB", and the figures on a card are labelled as the client's own rather than presented as authority. `derive()` reading the body is the authority, on whichever client opens it.

@@ -91,6 +91,19 @@ export const ShipClass = {
 } as const;
 export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
 
+/**
+ * The class keys, in `sim_core::data::ALL_CLASSES` order.
+ *
+ * The same strings the designer uses for `classKey`, which is what lets a
+ * saved design name a hull the core can spawn. Positional, like the event and
+ * subsystem discriminants: an entry inserted in the middle here renumbers
+ * every class after it on one side of the boundary and not the other.
+ */
+export const CLASS_KEYS: readonly string[] = [
+  'terran_frigate', 'karisen_frigate', 'rogue_frigate', 'benefactor_frigate', 'freighter',
+];
+export const classIndexOf = (key: string): number => CLASS_KEYS.indexOf(key);
+
 export const CLASS_NAMES: Record<number, string> = {
   0: 'Terran Frigate',
   1: 'Karisen Frigate',

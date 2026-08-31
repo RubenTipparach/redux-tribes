@@ -45,7 +45,7 @@
 //!   pose    9 slots: id, destroyed, pos(3), quat(4)
 //!   proj    5 slots: id, kind, pos(3)
 
-use crate::data::{class_index, class_from_index, ship_class};
+use crate::data::{class_index, class_from_index, ship_class, ALL_CLASSES};
 use crate::flight::{
     can_reach, fly_span, fly_turn, Body, Flight, Mode, Well, TICKS_PER_SECOND, TICKS_PER_TURN,
 };
@@ -658,6 +658,42 @@ pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
 /// game against the AI, 3 is two people.
 ///
 /// Returns the number of ships.
+/// Which hull each side fields, or -1 for the one the scenario authored.
+///
+/// A match fact like every other: both seats pass the same pair or they are
+/// playing different matches, which is why it is hashed rather than treated as
+/// a preference. Set before `ft_match_new`, which consumes it; the scenario
+/// still decides where the ships stand and how many there are, because a
+/// player picking a hull is not a player redrawing the engagement.
+static mut HULL_CHOICE: [i32; 2] = [-1, -1];
+
+#[no_mangle]
+pub extern "C" fn ft_hull_choice(side: u32, class_idx: i32) -> u32 {
+    if side > 1 {
+        return 0;
+    }
+    unsafe {
+        HULL_CHOICE[side as usize] = if class_idx < 0 || class_idx as usize >= ALL_CLASSES.len() {
+            -1
+        } else {
+            class_idx
+        };
+    }
+    1
+}
+
+/// Apply the choice to one side's spawn list, in place.
+fn choose_hulls(side: usize, specs: &mut [SpawnSpec]) {
+    let pick = unsafe { HULL_CHOICE[side] };
+    if pick < 0 {
+        return;
+    }
+    let class = crate::data::class_from_index(pick as u32);
+    for s in specs.iter_mut() {
+        s.class = class;
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_sides: u32) -> u32 {
     // Written out by hand rather than with format!, which would drag Rust's
@@ -699,15 +735,31 @@ fn spec(class: crate::data::ShipClassId, p: (f32, f32, f32), f: (f32, f32, f32))
     SpawnSpec { class, pos: V3::new(p.0, p.1, p.2), facing: V3::new(f.0, f.1, f.2) }
 }
 
+/// Build a match from two spawn lists, applying each side's hull choice first.
+///
+/// Every scenario goes through here rather than calling `new_skirmish` itself,
+/// so a scenario added later cannot quietly be the one that ignores the pick.
+fn skirmish(
+    seed: &str,
+    mut player: Vec<SpawnSpec>,
+    mut enemy: Vec<SpawnSpec>,
+    faction: Faction,
+    human_sides: u8,
+) -> Sim {
+    choose_hulls(0, &mut player);
+    choose_hulls(1, &mut enemy);
+    Sim::new_skirmish(seed, &player, &enemy, faction, human_sides)
+}
+
 fn scenario_skirmish(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[
+        vec![
             spec(TerranFrigate, (-40.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
             spec(TerranFrigate, (-40.0, 5.0, -15.0), (1.0, 0.0, 0.0)),
         ],
-        &[
+        vec![
             spec(KarisenFrigate, (40.0, 0.0, 5.0), (-1.0, 0.0, 0.0)),
             spec(RogueFrigate, (40.0, -4.0, -10.0), (-1.0, 0.0, 0.0)),
         ],
@@ -718,10 +770,10 @@ fn scenario_skirmish(seed: &str, human_sides: u8) -> Sim {
 
 fn scenario_duel(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[spec(TerranFrigate, (-30.0, 0.0, 0.0), (1.0, 0.0, 0.0))],
-        &[spec(KarisenFrigate, (30.0, 0.0, 0.0), (-1.0, 0.0, 0.0))],
+        vec![spec(TerranFrigate, (-30.0, 0.0, 0.0), (1.0, 0.0, 0.0))],
+        vec![spec(KarisenFrigate, (30.0, 0.0, 0.0), (-1.0, 0.0, 0.0))],
         Faction::Karisen,
         human_sides,
     )
@@ -731,13 +783,13 @@ fn scenario_duel(seed: &str, human_sides: u8) -> Sim {
 /// objects. The boarding rules only bite when there is a hull worth boarding.
 fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    Sim::new_skirmish(
+    skirmish(
         seed,
-        &[
+        vec![
             spec(RogueFrigate, (-35.0, 0.0, -10.0), (1.0, 0.0, 0.0)),
             spec(TerranFrigate, (-35.0, 4.0, 10.0), (1.0, 0.0, 0.0)),
         ],
-        &[
+        vec![
             spec(Freighter, (40.0, 0.0, 0.0), (-1.0, 0.0, 0.0)),
             spec(BenefactorFrigate, (30.0, -3.0, 18.0), (-1.0, 0.0, 0.0)),
         ],
@@ -768,13 +820,13 @@ fn scenario_convoy(seed: &str, human_sides: u8) -> Sim {
 /// might have set it up differently.
 fn scenario_low_orbit(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    let mut sim = Sim::new_skirmish(
+    let mut sim = skirmish(
         seed,
-        &[
+        vec![
             spec(TerranFrigate, (-40.0, 20.0, 0.0), (1.0, 0.0, 0.0)),
             spec(TerranFrigate, (-40.0, 26.0, -15.0), (1.0, 0.0, 0.0)),
         ],
-        &[
+        vec![
             spec(KarisenFrigate, (40.0, 22.0, 5.0), (-1.0, 0.0, 0.0)),
             spec(RogueFrigate, (40.0, 16.0, -10.0), (-1.0, 0.0, 0.0)),
         ],
@@ -814,10 +866,10 @@ fn scenario_sandbox(seed: &str, human_sides: u8) -> Sim {
 /// back.
 fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    let mut sim = Sim::new_skirmish(
+    let mut sim = skirmish(
         seed,
-        &[spec(TerranFrigate, (0.0, 0.0, -35.0), (0.0, 0.0, 1.0))],
-        &[spec(KarisenFrigate, (0.0, 0.0, 35.0), (0.0, 0.0, -1.0))],
+        vec![spec(TerranFrigate, (0.0, 0.0, -35.0), (0.0, 0.0, 1.0))],
+        vec![spec(KarisenFrigate, (0.0, 0.0, 35.0), (0.0, 0.0, -1.0))],
         Faction::Karisen,
         human_sides,
     );
@@ -831,10 +883,10 @@ fn scenario_binary(seed: &str, human_sides: u8) -> Sim {
 /// was measured and empties the reachable set entirely.
 fn scenario_slingshot(seed: &str, human_sides: u8) -> Sim {
     use crate::data::ShipClassId::*;
-    let mut sim = Sim::new_skirmish(
+    let mut sim = skirmish(
         seed,
-        &[spec(TerranFrigate, (-55.0, 0.0, -30.0), (1.0, 0.0, 0.3))],
-        &[
+        vec![spec(TerranFrigate, (-55.0, 0.0, -30.0), (1.0, 0.0, 0.3))],
+        vec![
             spec(KarisenFrigate, (55.0, 0.0, -30.0), (-1.0, 0.0, 0.3)),
             spec(RogueFrigate, (60.0, 8.0, -45.0), (-1.0, 0.0, 0.3)),
         ],

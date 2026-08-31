@@ -170,6 +170,29 @@ test('a match starts with the scenario it was asked for', () => {
   }
 });
 
+test('a side can field a hull the scenario did not author', () => {
+  // Picked in the lobby, applied at spawn, hashed: which hull a side fields
+  // decides radius, boarding range, mounts and volumes, so two seats that
+  // disagreed about it would be playing different matches.
+  const m = sim.match();
+  m.start('deadbeefcafe0003', 0);
+  const authored = m.ships().map(s => [s.side, s.cls]);
+  const hashA = m.hash;
+
+  m.start('deadbeefcafe0003', 0, 0b01, [2, -1]);   // 2 is the Rogue
+  const picked = m.ships().map(s => [s.side, s.cls]);
+  assert.equal(picked.length, authored.length);
+  for (let i = 0; i < picked.length; i++) {
+    if (picked[i][0] === 0) assert.equal(picked[i][1], 2, 'side 0 flies what it picked');
+    else assert.equal(picked[i][1], authored[i][1], 'side 1 keeps what was authored');
+  }
+  assert.notEqual(m.hash, hashA, 'the hull a side fields is in the hash');
+
+  m.start('deadbeefcafe0003', 0, 0b01, [-1, -1]);
+  assert.deepEqual(m.ships().map(s => [s.side, s.cls]), authored, 'and clearing it restores them');
+  assert.equal(m.hash, hashA, 'exactly, hash and all');
+});
+
 test('a shot lands on the volume it was aimed at, not the hull in front of it', () => {
   // The defect this pins: a volume sits INSIDE the hull sphere, so a single
   // nearest-wins raycast over both always returned the sphere and every aimed

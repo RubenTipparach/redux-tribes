@@ -110,8 +110,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 64, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 42, the wasm boundary
+cd engine/sim_core && cargo test            # 65, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 43, the wasm boundary
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -164,7 +164,8 @@ classes legal out of the box, all eight of a faction's swatches actually on
 the hull, every enclosed mount inside the hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
 selection that outlines it, a turret that turns 90 degrees and takes its
-cells with it, and the armour pencil: a run that is fully reversible, a cell
+cells with it, a saved hull taken out of the library into a practice level and
+actually spawned, and the armour pencil: a run that is fully reversible, a cell
 that reaches nothing refused with a reason, slabs that TILE the lattice rather
 than overlapping, the slab drawn on the model at the thickness the slider says,
 and the optional x and y mirrors turning one tap into two and then four. Run it
@@ -399,6 +400,22 @@ asserted on the hull.
 They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
+
+## A hull a side fields is a match fact too
+
+The practice screen lets a player take a saved design into a level. What
+crosses is `ft_hull_choice(side, class)` before `ft_match_new`, and the class
+index is hashed, for the same reason sides are: a seat that fielded a Rogue
+against one that spawned a Terran would agree for as long as the two happened
+to fly alike, and part several turns later.
+
+The design's own numbers do NOT cross yet, and the chooser says so on screen.
+`derive()` runs in the client over a raster the client computed, and what a
+design MEANS is a rule (ADR-2), so shipping its mass and hull across as a
+config would be the shortcut this repo keeps refusing. The port is the planned
+work: the module table and the derivation arithmetic into `sim_core`, the
+editor asking the core for its own readout, and the match applying what the
+core derived.
 
 ## Sides are a match fact, not a point of view
 

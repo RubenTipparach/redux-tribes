@@ -33,6 +33,7 @@ export interface MatchExports {
   ft_scratch_ptr(): number;
   ft_scratch_len(): number;
   ft_match_new(seedHi: number, seedLo: number, scenario: number, humanSides: number): number;
+  ft_hull_choice(side: number, classIdx: number): number;
   ft_ship_count(): number;
   ft_turn_index(): number;
   ft_game_over(): number;
@@ -134,10 +135,20 @@ export class Match {
    * it. It goes to the core rather than staying here because it changes the
    * simulation, and two clients that disagreed about it would part on turn one.
    */
-  start(seed: string, scenario: Scenario, humanSides = 0b01): void {
+  /**
+   * Which hull each side fields, or -1 for the one the scenario authored.
+   *
+   * A match fact, not a preference: both seats must pass the same pair or they
+   * are playing different matches, which is why the core hashes it. Set before
+   * `start`, which is what consumes it.
+   */
+  start(seed: string, scenario: Scenario, humanSides = 0b01,
+        hulls: readonly [number, number] = [-1, -1]): void {
     const clean = seed.replace(/[^0-9a-f]/gi, '').padStart(16, '0').slice(-16);
     const hi = parseInt(clean.slice(0, 8), 16) >>> 0;
     const lo = parseInt(clean.slice(8), 16) >>> 0;
+    this.#ex.ft_hull_choice(0, hulls[0]);
+    this.#ex.ft_hull_choice(1, hulls[1]);
     this.#ex.ft_match_new(hi, lo, scenario, humanSides);
     this.orders.clear();
     this.history.length = 0;

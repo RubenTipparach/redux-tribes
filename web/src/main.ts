@@ -286,7 +286,15 @@ function start(): void {
   // The lobby has always carried a scenario name and this always ignored it,
   // so every match was a skirmish however it was entered.
   const scenario = SCENARIO_BY_NAME[launch.scenario] ?? Scenario.Skirmish;
-  match.start(seed, scenario, launch.humanSides);
+  // A hull picked in the lobby applies to the side that picked it. Passed to
+  // the core rather than applied here, because which hull a side fields is a
+  // match fact both seats have to agree on and the core is what hashes it.
+  const hulls: [number, number] = [-1, -1];
+  if (launch.hull !== undefined) hulls[launch.side] = launch.hull;
+  match.start(seed, scenario, launch.humanSides, hulls);
+  // Say what was taken out, on the panel that lists it. A design picked in the
+  // lobby and never mentioned again is a pick a player cannot check.
+  $('hullNote').textContent = launch.hullName ? `in ${launch.hullName}` : '';
   // The rings compare the field against the drive of a hull actually in the
   // match, so they mean something for the ships being flown.
   const own = match.ships().find(mine);
@@ -2217,6 +2225,8 @@ Object.defineProperty(window, 'ftDebug', {
     /** Every hull's position right now, for checking a preview against what
      * the turn actually did. */
     poses: () => ships.map(s => ({ id: s.id, side: s.side, destroyed: s.destroyed, pos: s.pos })),
+    /** Who is in the match and what they are flying. */
+    ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull })),
     /** What the effects layer is drawing right now, and how far the biggest
      * blast has grown, so "bigger and more visible" is a measurement. */
     fx: () => view.fxStats(),

@@ -1163,6 +1163,10 @@ impl Sim {
 
         for s in &self.ships {
             int(s.id as i32, &mut byte);
+            // Which hull it is, because a side may now pick one: a player who
+            // fielded a Rogue against a client that spawned a Terran would
+            // otherwise agree for as long as the two happened to fly alike.
+            int(data::class_index(s.class) as i32, &mut byte);
             int(s.faction.index() as i32, &mut byte);
             int(s.side as i32, &mut byte);
             int(s.destroyed as i32, &mut byte);

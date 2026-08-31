@@ -746,3 +746,42 @@ fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
     // eight units alive.
     assert!(!sim.ships[2].destroyed, "the blast falls off rather than clearing the field");
 }
+
+#[test]
+fn a_side_can_field_a_hull_the_scenario_did_not_author() {
+    // Picked in the lobby, applied at spawn, and hashed: which hull a side
+    // fields decides radius, boarding range, mounts and volumes, so two seats
+    // that disagreed about it would be playing different matches.
+    use sim_core::ffi::{ft_hull_choice, ft_match_new, ft_read_ships, ft_scratch_ptr};
+    const OUT: usize = 64;
+    const STRIDE: usize = sim_core::ffi::SHIP_STRIDE;
+    let read = || {
+        let n = ft_read_ships() as usize;
+        let s = unsafe { core::slice::from_raw_parts(ft_scratch_ptr(), 16384) };
+        (0..n).map(|i| (s[OUT + i * STRIDE + 3] as u32, s[OUT + i * STRIDE + 1] as u32)).collect::<Vec<_>>()
+    };
+
+    ft_hull_choice(0, -1);
+    ft_hull_choice(1, -1);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    let authored = read();
+    assert!(authored.iter().any(|(side, _)| *side == 0), "the skirmish seats a player");
+
+    // 2 is the Rogue. Every hull on side 0 becomes one; side 1 is untouched.
+    ft_hull_choice(0, 2);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    let picked = read();
+    for ((side, cls), (_, was)) in picked.iter().zip(authored.iter()) {
+        if *side == 0 {
+            assert_eq!(*cls, 2, "a picked hull applies to every ship on that side");
+        } else {
+            assert_eq!(cls, was, "the other side keeps what the scenario authored");
+        }
+    }
+
+    // And clearing it puts the authored ships back, so the pick is a choice
+    // rather than a one way door.
+    ft_hull_choice(0, -1);
+    ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
+    assert_eq!(read(), authored, "clearing the pick restores the authored hulls");
+}
