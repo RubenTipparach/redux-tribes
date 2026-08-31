@@ -187,6 +187,9 @@ impl Sim {
             w.i(s.weapons.len() as i32);
             for x in &s.weapons {
                 w.i(x.last_fired_tick);
+                // A mount that has been knocked off stays off across a restore.
+                // Without this a replay would hand a ship back a gun it lost.
+                w.f(x.hp);
             }
             w.i(s.boarding_parties.len() as i32);
             for p in &s.boarding_parties {
@@ -295,8 +298,10 @@ impl Sim {
             let weapons = r.i().max(0) as usize;
             for k in 0..weapons {
                 let fired = r.i();
+                let hp = r.f();
                 if let Some(w) = s.weapons.get_mut(k) {
                     w.last_fired_tick = fired;
+                    w.hp = hp;
                 }
             }
             let parties = r.i().max(0) as usize;

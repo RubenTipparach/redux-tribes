@@ -75,6 +75,21 @@ pub struct WeaponSlot {
     /// turn, so one comparison covers both a second shot later in the same
     /// turn and a shot early in the next one.
     pub last_fired_tick: i32,
+    /// What is left of the structure holding this mount on. At zero the mount
+    /// has been knocked loose, which is permanent: there is no repair, and a
+    /// gun that has left the hull never fires again.
+    ///
+    /// Per MOUNT, unlike the weapons bay, which feeds every gun and silences
+    /// all of them at once when it dies. Losing the bay is losing the feed and
+    /// it is a condition of the ship; losing a mount is losing that gun.
+    pub hp: f32,
+}
+
+impl WeaponSlot {
+    /// Whether this mount has been knocked off the hull.
+    pub fn destroyed(&self) -> bool {
+        self.hp <= 0.0
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -202,6 +217,7 @@ impl Ship {
                     mount: m.mount,
                     arc_mask: [0; ARC_WORDS],
                     last_fired_tick: -99,
+                    hp: crate::data::MOUNT_HP,
                 })
                 .collect(),
             marines: cls.marines,

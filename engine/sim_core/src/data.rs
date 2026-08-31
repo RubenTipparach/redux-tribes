@@ -183,6 +183,16 @@ pub enum SubKind {
 /// rather than a simplification: a breach that could reach another reactor
 /// would chain, and a chain is a recursion with no bound written anywhere.
 /// Falls off linearly to nothing at the edge.
+/// What it takes to knock a mount off its hull, and how near a shot has to
+/// land to count toward it.
+///
+/// A mount is not repairable: a turret that comes off is gone for the match.
+/// That is why this is generous next to the volumes around it, and why a hit
+/// has to land close: a gun should be lost to fire that was actually chewing
+/// the structure it is bolted to, not to a lucky shell somewhere down the hull.
+pub const MOUNT_HP: f32 = 70.0;
+pub const MOUNT_RADIUS: f32 = 1.1;
+
 pub const CRITICAL_RADIUS: f32 = 14.0;
 pub const CRITICAL_DAMAGE: f32 = 140.0;
 

@@ -131,7 +131,10 @@ impl Sim {
     /// through to the hull, so armour never makes a ship immune, only
     /// expensive.
     #[allow(clippy::too_many_arguments)]
-    fn apply_damage(
+    /// The one damage pipeline: hit volume, then the mount it landed on, then
+    /// the hull. Public because it is the ONLY way damage is applied and the
+    /// tests are the acceptance criteria for what it does (GUIDELINES 5.1).
+    pub fn apply_damage(
         &mut self,
         si: usize,
         sub_idx: Option<usize>,
@@ -139,9 +142,36 @@ impl Sim {
         attacker: Option<ShipId>,
         events: &mut Vec<Event>,
         tick: i32,
+        at: Option<V3>,
     ) {
         if self.ships[si].destroyed {
             return;
+        }
+        // A mount is bolted to the structure around it, so fire landing on
+        // that structure takes the mount with it. Permanent: a gun knocked off
+        // a hull is gone for the match, which is why this is separate from the
+        // weapons bay. The bay is the FEED, and losing it silences every mount
+        // at once until nothing; losing a mount is losing that gun for good.
+        //
+        // Position is passed rather than looked up because only the caller
+        // knows where the shot met the ship: a blast at the ship's centre and a
+        // beam on its flank are the same call otherwise.
+        if let Some(p) = at {
+            let inv = self.ships[si].quat.inv();
+            let local = inv.rot(p.sub(self.ships[si].pos));
+            let r2 = data::MOUNT_RADIUS * data::MOUNT_RADIUS;
+            for w in self.ships[si].weapons.iter_mut() {
+                if w.hp <= 0.0 {
+                    continue;
+                }
+                let d = local.sub(w.mount);
+                if d.x * d.x + d.y * d.y + d.z * d.z <= r2 {
+                    w.hp -= dmg;
+                    if w.hp <= 0.0 {
+                        w.hp = 0.0;
+                    }
+                }
+            }
         }
         let mut hull_share = dmg;
         let mut engines_just_died = false;
@@ -282,7 +312,7 @@ impl Sim {
             hits.push((ti, data::CRITICAL_DAMAGE * (1.0 - d / data::CRITICAL_RADIUS)));
         }
         for (ti, dmg) in hits {
-            self.apply_damage(ti, None, dmg, Some(self.ships[si].id), events, tick);
+            self.apply_damage(ti, None, dmg, Some(self.ships[si].id), events, tick, None);
         }
     }
 
@@ -379,7 +409,7 @@ impl Sim {
             // Exactly enough to finish it, so the damage event carries a real
             // number rather than an infinity the console would have to print.
             let left = self.ships[si].hull.max(0.0) + 1.0;
-            self.apply_damage(si, None, left, None, events, tick);
+            self.apply_damage(si, None, left, None, events, tick, None);
         }
     }
 
@@ -442,6 +472,12 @@ impl Sim {
         // them at once. Asked here rather than at the mount because this is
         // the one gate both the planner and the resolver go through.
         if !ship.has_live_weapon_bay() {
+            return false;
+        }
+        // And a mount that has been knocked off the hull is not there to fire.
+        // Asked here with the bay, because this is the ONE gate the planner
+        // offers slots from and the resolver checks at the moment of firing.
+        if w.destroyed() {
             return false;
         }
         if w.last_fired_tick < 0 {
@@ -626,7 +662,7 @@ impl Sim {
                         e.aux = hit.sub.map(|b| b as i32).unwrap_or(-1);
                         e.pos = hit.pos;
                         events.push(e);
-                        self.apply_damage(hit.ship, hit.sub, dmg, Some(owner), events, tick);
+                        self.apply_damage(hit.ship, hit.sub, dmg, Some(owner), events, tick, Some(hit.pos));
                     }
                     None => {
                         let mut e = Event::new(EventKind::ShotMiss, tick);
@@ -774,7 +810,7 @@ impl Sim {
             e.aux = sub.map(|b| b as i32).unwrap_or(-1);
             e.pos = pos;
             events.push(e);
-            self.apply_damage(ship, sub, dmg, owner, events, tick);
+            self.apply_damage(ship, sub, dmg, owner, events, tick, Some(pos));
             expired.push(pid);
         }
         if !expired.is_empty() {
@@ -848,8 +884,8 @@ impl Sim {
                     events.push(e);
 
                     let (ida, idb) = (self.ships[i].id, self.ships[j].id);
-                    self.apply_damage(i, None, dmg, Some(idb), events, tick);
-                    self.apply_damage(j, None, dmg, Some(ida), events, tick);
+                    self.apply_damage(i, None, dmg, Some(idb), events, tick, None);
+                    self.apply_damage(j, None, dmg, Some(ida), events, tick, None);
                 }
 
                 // Deflect, then re-fly what is left of the turn from the
@@ -1232,6 +1268,11 @@ impl Sim {
             }
             for w in &s.weapons {
                 int(w.last_fired_tick, &mut byte);
+                // Whether this mount is still ON the ship decides whether it
+                // can fire, and it is permanent, so a seat that thought a gun
+                // was gone and one that thought it was there would part on
+                // every shot from it. Hashed for the same reason the arc is.
+                num(w.hp, &mut byte);
                 // Where a mount sits and where its own hull stops it both
                 // decide whether a shot happens, and a design sets both. Two
                 // seats that scanned different arcs would agree for as long as
