@@ -1045,7 +1045,7 @@ export class View {
     this.#scene.add(this.#planLine);
 
     this.#planPip = new THREE.Mesh(
-      new THREE.SphereGeometry(1.1, 12, 10),
+      new THREE.SphereGeometry(0.55, 12, 10),
       new THREE.MeshBasicMaterial({ color: CYAN }),
     );
     this.#planPip.visible = false;
@@ -1265,6 +1265,10 @@ export class View {
    * inside a six unit frigate: once the hulls became real models it covered
    * the ship it was marking. Scaled by the camera distance it stays the same
    * blob at every zoom, which is what a marker is for.
+   *
+   * Halved again to 0.55 units across once stars were showing through it: a
+   * dot that size still reads as "here" but no longer eclipses the hull
+   * behind it.
    */
   #sizeMarkers(): void {
     const k = Math.max(0.22, Math.min(1.6, this.#dist / 70));
