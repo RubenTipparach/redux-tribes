@@ -26,8 +26,10 @@ import {
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
-  arcMasks, rasterSig, DEFAULT_FINISH,
+  arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
+  FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
+  type FrameDef,
 } from './design.js';
 
 /** What the plate is doing: solid, see through, or off. */
@@ -246,6 +248,13 @@ export class Designer {
       armour: d.armour === 'skin' ? 'skin' : 'wrapped',
       faction: typeof d.faction === 'string' ? d.faction : 'terran',
       paint: typeof d.paint === 'number' ? d.paint : 0x0095E9,
+      // The SURFACE comes across too. Rebuilding a design field by field and
+      // forgetting one is how a hull's finish goes missing between the library
+      // and the editor, and since Save writes this record back, the loss was
+      // permanent the first time anybody opened a saved ship and saved it.
+      finish: typeof d.finish === 'string' ? d.finish : DEFAULT_FINISH,
+      metal: typeof d.metal === 'number' ? d.metal : DEFAULT_METAL,
+      rough: typeof d.rough === 'number' ? d.rough : DEFAULT_ROUGH,
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
     };
@@ -1155,35 +1164,79 @@ export class Designer {
     v.className = `dzv ${d.legal ? 'ok' : 'bad'}`;
   }
 
+  /**
+   * The class picker: the navy, then that navy's ladder.
+   *
+   * One flat row worked at five hulls and does not at seventeen. The names
+   * would not fit a phone either, so the chip says the TIER and the row above
+   * says whose it is, which is the same two facts a class name carries.
+   *
+   * Grouped on the frame's own `faction` and `tier` rather than by splitting
+   * its display name: a screen that read `name.replace(' Frigate', '')` was
+   * already wrong the moment a class was called something else, and it was.
+   */
   #renderClasses(): void {
     const host = $('dzClasses');
     host.innerHTML = '';
-    for (const f of FRAMES) {
+    const here = frameFor(this.#design.classKey);
+
+    const chip = (row: HTMLElement, label: string, on: boolean, fn: () => void) => {
       const b = document.createElement('button');
-      b.textContent = f.name.replace(' Frigate', '');
-      b.className = f.classKey === this.#design.classKey ? 'on' : '';
-      // A class change re-seeds the frame, the sockets and the ship. Anything
-      // less would leave a Terran's gun rings on a hull that has none.
-      b.onclick = () => {
-        if (f.classKey === this.#design.classKey) return;
-        // On an unsaved hull, picking a class is picking a DIFFERENT stock
-        // ship, and that ship has an address. Say so, and let the route do the
-        // seeding: one path in, so the class on screen and the class in the
-        // URL cannot drift apart. On a SAVED design it is a change to that
-        // design instead, so the address stays where it is.
-        if (!this.#slot.designId && this.#onPickClass) {
-          this.#onPickClass(f.classKey);
-          return;
-        }
-        this.#design = stockFor(f.classKey);
-        this.#socket = null;
-        this.#note = null;
-        this.#syncDrawSets();
-        this.#refresh();
-      };
-      host.appendChild(b);
+      b.textContent = label;
+      b.className = on ? 'on' : '';
+      b.onclick = fn;
+      row.appendChild(b);
+    };
+
+    const navies = document.createElement('div');
+    navies.className = 'dzrow';
+    host.appendChild(navies);
+    const tiers = document.createElement('div');
+    tiers.className = 'dzrow tier';
+    host.appendChild(tiers);
+
+    for (const fac of FACTION_ORDER) {
+      const ladder = FRAMES.filter(f => f.faction === fac);
+      if (!ladder.length) continue;
+      const name = FACTION_PAINT.find(f => f.key === fac)?.name ?? fac;
+      // Picking a navy lands on the rung you were already on where it exists,
+      // and on its frigate where it does not. Anything else would send a
+      // player looking at a cruiser to somebody's corvette.
+      chip(navies, name, fac === here.faction, () => {
+        if (fac === here.faction) return;
+        const want = ladder.find(f => f.tier === here.tier) ?? ladder[0] as FrameDef;
+        this.#pickClass(want.classKey);
+      });
     }
-    $('dzFrameNote').textContent = frameFor(this.#design.classKey).note;
+
+    for (const tier of TIER_ORDER) {
+      const f = FRAMES.find(x => x.faction === here.faction && x.tier === tier);
+      if (!f) continue;
+      chip(tiers, TIER_NAMES[tier], f.classKey === this.#design.classKey,
+        () => this.#pickClass(f.classKey));
+    }
+
+    $('dzFrameNote').textContent = here.note;
+  }
+
+  /** A class change re-seeds the frame, the sockets and the ship. Anything
+   *  less would leave a Terran's gun rings on a hull that has none. */
+  #pickClass(classKey: string): void {
+    if (classKey === this.#design.classKey) return;
+    // On an unsaved hull, picking a class is picking a DIFFERENT stock ship,
+    // and that ship has an address. Say so, and let the route do the seeding:
+    // one path in, so the class on screen and the class in the URL cannot
+    // drift apart. On a SAVED design it is a change to that design instead, so
+    // the address stays where it is.
+    if (!this.#slot.designId && this.#onPickClass) {
+      this.#onPickClass(classKey);
+      return;
+    }
+    this.#design = stockFor(classKey);
+    this.#socket = null;
+    this.#note = null;
+    this.#syncDrawSets();
+    this.#refresh();
   }
 
   #renderSockets(): void {

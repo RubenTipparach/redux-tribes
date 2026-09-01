@@ -159,7 +159,8 @@ impl Sim {
         if let Some(p) = at {
             let inv = self.ships[si].quat.inv();
             let local = inv.rot(p.sub(self.ships[si].pos));
-            let r2 = data::MOUNT_RADIUS * data::MOUNT_RADIUS;
+            let r = data::mount_radius(self.ships[si].class);
+            let r2 = r * r;
             for w in self.ships[si].weapons.iter_mut() {
                 if w.hp <= 0.0 {
                     continue;
@@ -998,7 +999,13 @@ impl Sim {
                         // reading dead by `Sub::offline` and alive by the
                         // flag, and which of the two a caller saw would depend
                         // on which it asked.
-                        thr.hp = thr.max_hp * data::SUB_FAIL_FRAC + 50.0;
+                        // Clamped at BOTH ends. The archive's flat 50 is
+                        // under the offline line on a big enough bay, which is
+                        // why the fraction is added; it is over the whole bay
+                        // on a small one, and a corvette coming out of a
+                        // capture with 109 percent of its drive is a repair
+                        // that invented hit points.
+                        thr.hp = (thr.max_hp * data::SUB_FAIL_FRAC + 50.0).min(thr.max_hp);
                         thr.dead = false;
                         ship.drift_active = false;
                     }

@@ -27,7 +27,10 @@ const DERIVE_PARTS = OUT + 32;
  *  editor has three guns; the core also knows plasma, which is a cannon with
  *  different effects and nothing fits. */
 const WEAPON_KEY: Record<string, number> = { beam: 0, projectile: 1, missile: 3 };
-const SHIP_STRIDE = 34;
+const SHIP_STRIDE = 39;
+/** How many mounts a ship record carries a cooldown for. Mirrors
+ *  `ffi::SHIP_COOLDOWNS`; positional, like everything else in the record. */
+const SHIP_COOLDOWNS = 8;
 const SUB_STRIDE = 13;
 const EVENT_STRIDE = 14;
 const POSE_STRIDE = 9;
@@ -82,8 +85,10 @@ export interface MatchExports {
   ft_read_poses(tick: number): number;
   ft_read_track_projectiles(tick: number): number;
   ft_ship_preview(ship: number, mode: number, samples: number): number;
+  ft_class_count(): number;
   ft_read_class(index: number): number;
   ft_read_mount(classIdx: number, mount: number): number;
+  ft_ship_mount(ship: number, mount: number): number;
   ft_nominal_reach(ship: number): number;
   ft_can_fire(ship: number, weapon: number): number;
   ft_can_bear(ship: number, weapon: number, target: number, sub: number): number;
@@ -312,11 +317,11 @@ export class Match {
       const subCount = s[b + 20] ?? 0;
       const wCount = s[b + 21] ?? 0;
       const weaponLastFired = [];
-      for (let k = 0; k < wCount && k < 3; k++) weaponLastFired.push(s[b + 22 + k] ?? -99);
-      const pCount = s[b + 25] ?? 0;
+      for (let k = 0; k < wCount && k < SHIP_COOLDOWNS; k++) weaponLastFired.push(s[b + 22 + k] ?? -99);
+      const pCount = s[b + 30] ?? 0;
       const parties = [];
       for (let k = 0; k < pCount && k < 2; k++) {
-        parties.push({ faction: s[b + 26 + k * 2] ?? -1, count: s[b + 27 + k * 2] ?? 0 });
+        parties.push({ faction: s[b + 31 + k * 2] ?? -1, count: s[b + 32 + k * 2] ?? 0 });
       }
       out.push({
         id: s[b] ?? i,
@@ -335,12 +340,13 @@ export class Match {
         mode: (s[b + 18] ?? 0) as Mode,
         drifting: (s[b + 19] ?? 0) !== 0,
         subCount,
+        mountCount: wCount,
         weaponLastFired,
         parties,
-        radius: s[b + 30] ?? 3.5,
-        maxSpeed: s[b + 31] ?? 8,
-        aiTarget: s[b + 32] ?? -1,
-        boardingRange: s[b + 33] ?? 20,
+        radius: s[b + 35] ?? 3.5,
+        maxSpeed: s[b + 36] ?? 8,
+        aiTarget: s[b + 37] ?? -1,
+        boardingRange: s[b + 38] ?? 20,
       });
     }
     return out;
@@ -375,6 +381,11 @@ export class Match {
     return out;
   }
 
+  /** How many classes the CORE has. The client's own key list must be this
+   *  long, and the check that says so is the only thing standing between a
+   *  renumbered class and a lockstep desync nobody can read. */
+  classCount(): number { return this.#ex.ft_class_count(); }
+
   classInfo(cls: number): ClassInfo {
     this.#ex.ft_read_class(cls);
     const s = this.#s;
@@ -399,7 +410,22 @@ export class Match {
   }
 
   mount(cls: number, index: number): MountInfo | null {
-    if (this.#ex.ft_read_mount(cls, index) === 0) return null;
+    return this.#mountAt(this.#ex.ft_read_mount(cls, index));
+  }
+
+  /**
+   * One mount on one SHIP, which is not always one mount on its class.
+   *
+   * A hull flying a design carries the design's guns and the resolver fires
+   * those, so anything that draws a fire panel has to ask the ship rather than
+   * the class or it offers rows for guns that are not aboard.
+   */
+  shipMount(ship: number, index: number): MountInfo | null {
+    return this.#mountAt(this.#ex.ft_ship_mount(ship, index));
+  }
+
+  #mountAt(ok: number): MountInfo | null {
+    if (ok === 0) return null;
     const s = this.#s;
     return {
       key: s[OUT] ?? 0,

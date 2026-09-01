@@ -154,6 +154,15 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
+**Wait on PROGRESS, never on a deadline.** "Playback finished in under forty
+five seconds" is two claims welded together, and only one of them is about the
+app. One turn plays in about thirty seconds on a workstation and sixty nine in
+the software rasterised container these run in, against seventy two on the
+parent commit, so a fixed limit reported a freeze that was a slow machine and
+would have gone on reporting it whatever anybody changed. Both harnesses watch
+the TICK now: still moving is fine however slow, and stopped without handing
+control back is the freeze the check exists for.
+
 A check has to ask about the thing it names, and LENGTH was never the question
 about a beam. Two cuts of that check measured one, and each was wrong about
 something different. Measuring every beam against the weapon's range went red
@@ -313,13 +322,116 @@ loaded twice: `route.go` runs the route handler synchronously, which fetches
 and loads it, and then the caller loaded its own copy over the top. Navigate
 and let the route do the work.
 
-**A default is a resource too.** The five stock hulls have addresses:
-`/ship/terran_frigate` and friends. The class keys are a closed authored set,
+**A default is a resource too.** Every stock hull has an address:
+`/ship/terran_frigate`, `/ship/rogue_cruiser` and the rest. The class keys are a
+closed authored set,
 so an id that names one is that hull and no design id can collide with it, and
 `route.ts` needs to know nothing about it: it parses `/ship/<id>` and what an
 id MEANS stays with the app, the same division that keeps it from knowing the
 screen list. Picking a class in the editor pushes that address, so browsing the
 classes is a trail you can walk back.
+
+## Four navies, four rungs each, and one list that says so
+
+The fleet is a LADDER: corvette, frigate, destroyer, heavy cruiser for Terran,
+Karisen, Rogue and Benefactor, plus the civil freighter. Seventeen classes.
+
+**A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
+every hull; what changes is what one cell is worth in the world, and `RUNG`
+authors four of those. A corvette is a SHORT profile at the frigate's cell; a
+destroyer is the escort cell and a heavy cruiser the cruiser cell, and since
+`design.rs` scales plate by the CUBE of the cell, the same cells cost a cruiser
+eight times a frigate's mass and give it eight times the hull. The ladder is
+therefore mostly a consequence of one number rather than of seventeen tables.
+
+**Each navy is distinct in its SECTION, and it holds at every rung.** Terran is
+wide and flat, Karisen long and near round with a keel rail that overruns the
+body, Rogue short and very broad on a cross beam, Benefactor deeper than it is
+wide. Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
+missile cells and keeps two beams forever, Rogue adds berths and clamps and
+almost no guns, Benefactor adds belt and calibre and gets slower at every step.
+
+**The stock spawn and the stock design are the same ship.** A class's `hull`,
+`radius`, `mass`, flight envelope, marines, capacity and boarding range in
+`data.rs` are what `derive(stockFor(key))` actually produces, measured rather
+than guessed, so a hull fielded from the briefing flies like the one a scenario
+seats. `radius` and `mass` are also the SPHERE and MASS gates, and
+`web/tests/sim.test.mjs` pins them against the frame's own copies: if those two
+disagree the editor's budget bar and the gate disagree, and a hull reads legal
+and is refused.
+
+**Sockets are seated by the PROFILE, not by counted cells.** `seatAt` takes a
+fraction of the half beam and half depth at a station, so a socket is inside
+the skin whatever section the class has, and `suite` lays the plumbing every
+warship has in the same places: drives, retros, attitude blocks, the bridge
+bay, berths and clamps. What a class is FOR stays hand authored, which is its
+profile and its guns. The four frigates keep their original cell coordinates,
+read off the archived silhouettes.
+
+**Nothing may be buried and nothing may foul.** Cells are first come first
+served, so a socket seated inside another part is not an error anywhere: the
+part simply never appears while paying full mass. `sim.test.mjs` walks every
+stock hull and fails on a placement that owns no cells, on an enclosed part
+outside the hull, and on anything standing in a turret's sweep.
+
+### What twelve more classes broke, which was all slack rather than code
+
+Every one of these was a FALLBACK or a CLAMP doing its job. None of them threw.
+The five class world had enough slack in every one of them that nothing showed;
+seventeen spent the slack without a line of the code around them changing.
+
+- **A clamp on the way in is a monster on the way out.** `classIndexOf` answers
+  -1 for a class this build does not know, which crossed as `0xFFFFFFFF` and
+  `class_from_index` CLAMPED it to the last class. With five that was the
+  Freighter and the sphere gate threw it out loudly; with seventeen it is a
+  heavy cruiser whose berth is big enough to ACCEPT the same hull, so a frigate
+  came back wearing a cruiser's mass, hull and radius, all of them hashed, with
+  no message anywhere. `ft_derive` refuses an out of range index now. Clamping
+  is right for an index that came out of the core's own tables and wrong for
+  one that came off the wire.
+- **Three fixed cooldown slots.** A ship record carried `last_fired` for three
+  mounts. Seven of the seventeen carry more, and the Terran heavy cruiser
+  carries eight, so its last five mounts read as never fired for ever. Eight
+  slots now (`ffi::SHIP_COOLDOWNS`), which moved every slot after them: the
+  stride is 39 and both sides of the boundary say so.
+- **The fire panel asked the CLASS.** `ship.weapons` is what the resolver
+  fires and a design's mounts are not its class's, so a hull flying a design
+  got rows for guns that are not aboard. `ft_ship_mount` answers for the ship,
+  in `ft_read_mount`'s own layout.
+- **A repair that invented hit points.** The prize crew's emergency repair is
+  `max_hp * SUB_FAIL_FRAC + 50`, reasoned about at the LOWER bound only. A
+  Rogue corvette's drive bay maxes at 56.25, so a captured one came out at
+  61.25. Clamped at both ends, and `tests/subsystems.rs` drives a real capture
+  rather than restating the arithmetic.
+- **A catch radius authored at one cell size.** `MOUNT_RADIUS` is 0.45 because
+  a turret is a handful of cells and a cell is 7/64 of a unit, which is the
+  FRIGATE's cell. A cruiser's cell is twice that and its turret is twice the
+  size, so a fixed 0.45 is a catch radius smaller than the gun it catches and a
+  shot down a cruiser's barrel misses it. `data::mount_radius` scales it by the
+  rung; the ratio is one at the frigate rung, so nothing that existed moved.
+  `MOUNT_HP` deliberately does NOT scale: a turret is the same machine at every
+  rung and costs the same mass, so it is the same 110 points.
+- **Eight draft slots.** `drafts.ts` kept eight, which was one per class and is
+  now half of them: merely BROWSING the picker evicted the saved hull somebody
+  was building. Twenty eight.
+- **A rounding heuristic with no room left.** `routes.mjs` told a designed hull
+  from a class hull by "the number is not round", with forty points of margin
+  at five classes and 0.022 at seventeen. It asks the core for the class's hull
+  now and compares.
+- **A picker that covered the model.** Seventeen chips wrapped to three rows
+  over a 222px canvas at 390x560, so the centre of the view returned a button
+  and the ship could not be turned by thumb. Each row is one line that scrolls
+  sideways, and `shipyard.mjs` checks the CENTRE OF THE VIEW hits the canvas,
+  which nothing did before: every other probe there is a button, so anything
+  drawn over the model could grow without bound and the suite would keep saying
+  every control was reachable.
+
+**A class and its stock hull are the same ship, and now that is checked.** The
+Karisen frigate has always armed its port sponson in the yard while its class
+table carried two mounts, so the hull a scenario spawned and the hull the
+briefing fielded had different batteries under one name. The class carries the
+sponson beam now, APPENDED rather than inserted, because a mount index is what
+a fire order names and what a snapshot stores.
 
 **Unsaved work belongs to the address as well.** The shipyard drafts to
 `localStorage` under a key that IS the route id: a design id for a saved hull,
@@ -554,6 +666,11 @@ quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
+
+The fleet cost **4999 bytes**: 158044 against 163043 on the SAME compiler
+either side of the commit, for twelve classes with their subsystem and mount
+tables, `ft_class_count`, `ft_ship_mount`, the wider ship record and the class
+index refusal. CI shipped that source at 161302, which is the figure to quote.
 
 Attribute growth to the change that caused it, not to the branch it landed on.
 Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler

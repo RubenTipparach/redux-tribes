@@ -1185,10 +1185,27 @@ async function playMatch() {
 
   // Playback must run out and hand control back. A turn that never returns to
   // planning is the freeze this harness exists to catch.
-  try {
-    await page.waitForFunction(() => window.ftDebug.playing() === null, null, { timeout: 45000 });
-  } catch {
-    outcome = `playback never finished on turn ${s.turn}`;
+  //
+  // Watched by PROGRESS rather than by a deadline. Forty five seconds was
+  // generous where a turn plays in thirty and impossible in a software
+  // rasterised container where the same turn takes seventy, on this build and
+  // on its parent alike, so the check reported a freeze that was a slow
+  // machine. A tick that is still moving is fine however slow it is; a tick
+  // that has stopped without handing back is the freeze.
+  let frozen = false;
+  {
+    let last = -1, stuck = 0;
+    for (;;) {
+      const t = await page.evaluate(() => window.ftDebug.playing());
+      if (t === null) break;
+      if (t === last) {
+        if (++stuck > 30) { frozen = true; break; }
+      } else { stuck = 0; last = t; }
+      await page.waitForTimeout(1000);
+    }
+  }
+  if (frozen) {
+    outcome = `playback stopped on turn ${s.turn}`;
     break;
   }
   const after = await state();

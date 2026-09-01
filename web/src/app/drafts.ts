@@ -38,7 +38,10 @@ const PREF_KEY = 'ft.shipyard.prefs.v1';
  * record: past about this many, the oldest is something you abandoned rather
  * than something you meant to come back to.
  */
-const KEEP = 8;
+// One per class plus room for saved hulls in progress. Eight was one slot per
+// class when there were five; with seventeen, merely BROWSING the class picker
+// wrote seventeen drafts and evicted the saved hull somebody was building.
+const KEEP = 28;
 /** Total budget. localStorage is a handful of megabytes shared with the game
  *  shelf and the identity, and a plate array is the big thing in here. */
 const MAX_BYTES = 600_000;

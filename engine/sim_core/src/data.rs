@@ -202,6 +202,23 @@ pub enum SubKind {
 pub const MOUNT_HP: f32 = 110.0;
 pub const MOUNT_RADIUS: f32 = 0.45;
 
+/// One lattice cell at the frigate rung, which is the size everything above is
+/// authored against.
+pub const FRIGATE_CELL: f32 = 7.0 / 64.0;
+
+/// The catch radius for THIS class's mounts.
+///
+/// `MOUNT_RADIUS` is authored at the frigate's cell, and the comment above says
+/// exactly why: a turret is a handful of cells, so 0.45 is "on the mount" where
+/// 1.1 was "on the ship". A cruiser's cell is twice a frigate's and its turret
+/// is twice the size in world units, so a fixed 0.45 becomes a catch radius
+/// smaller than the thing it is supposed to catch and a shot straight down a
+/// cruiser's barrel misses the gun. The four frigates and everything else at
+/// that rung come out unchanged, because the ratio is one.
+pub fn mount_radius(id: ShipClassId) -> f32 {
+    MOUNT_RADIUS * (ship_class(id).rung_cell / FRIGATE_CELL)
+}
+
 /// How much of a volume's MASS has to be gone before it stops working.
 ///
 /// A hit volume is not a barrel with a hit point on it: it is a box full of
@@ -249,6 +266,22 @@ pub enum ShipClassId {
     RogueFrigate,
     BenefactorFrigate,
     Freighter,
+    // The four fleets, corvette to heavy cruiser. APPENDED, never interleaved
+    // with the frigates above: the position in `ALL_CLASSES` is the class index
+    // and that index is hashed, so an entry slid into the middle renumbers every
+    // class after it on one side of a lockstep pair and not the other.
+    TerranCorvette,
+    TerranDestroyer,
+    TerranCruiser,
+    KarisenCorvette,
+    KarisenDestroyer,
+    KarisenCruiser,
+    RogueCorvette,
+    RogueDestroyer,
+    RogueCruiser,
+    BenefactorCorvette,
+    BenefactorDestroyer,
+    BenefactorCruiser,
 }
 
 pub struct ShipClass {
@@ -285,7 +318,20 @@ pub struct ShipClass {
 /// in the way, and a shot down the throat of a hull whose belts are gone does
 /// not. Geometry rather than a rule is what makes closing on a damaged flank
 /// worth doing.
-const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
+/// The frigate's radius, which every other hull's volumes are scaled against.
+/// One number rather than a magic 3.5 in the middle of the arithmetic below.
+const FRIGATE_RADIUS: f32 = 3.5;
+
+const fn hull_subs(radius: f32, armor_block: f32, hp: f32) -> [SubDef; 6] {
+    // One layout, sized to the hull it is inside. The offsets and half extents
+    // below were authored against a frigate, and every relation that matters is
+    // a RATIO: the belts' floor sits above the reactor's ceiling, and they stop
+    // short of the bay and the drives. Scaling the whole set by one factor keeps
+    // every one of those relations, which a second hand authored table for each
+    // rung would not: the day somebody moved a belt on the cruiser and not on
+    // the destroyer, a volume would be reachable on one and sealed on the other
+    // and nothing would say so.
+    let s = radius / FRIGATE_RADIUS;
     [
         // The belts are SLABS around the WAIST, meeting over the keel line
         // and reaching neither the bow nor the belly. What they cover is the
@@ -301,63 +347,66 @@ const fn frigate_subs(armor_block: f32) -> [SubDef; 6] {
         SubDef {
             id: "armor_l",
             kind: SubKind::Armor,
-            hp: 100.0,
+            hp: 100.0 * hp,
             block_pct: armor_block,
-            offset: V3::new(-0.5, 0.15, -0.3),
-            half: V3::new(0.85, 0.45, 1.2),
+            offset: V3::new(-0.5 * s, 0.15 * s, -0.3 * s),
+            half: V3::new(0.85 * s, 0.45 * s, 1.2 * s),
         },
         SubDef {
             id: "armor_r",
             kind: SubKind::Armor,
-            hp: 100.0,
+            hp: 100.0 * hp,
             block_pct: armor_block,
-            offset: V3::new(0.5, 0.15, -0.3),
-            half: V3::new(0.85, 0.45, 1.2),
+            offset: V3::new(0.5 * s, 0.15 * s, -0.3 * s),
+            half: V3::new(0.85 * s, 0.45 * s, 1.2 * s),
         },
         // Right aft, and aft of the belts, so a stern chase meets the drives.
         SubDef {
             id: "engines",
             kind: SubKind::Thruster,
-            hp: 100.0,
+            hp: 100.0 * hp,
             block_pct: 60.0,
-            offset: V3::new(0.0, 0.0, -2.4),
-            half: V3::new(0.65, 0.45, 0.65),
+            offset: V3::new(0.0, 0.0, -2.4 * s),
+            half: V3::new(0.65 * s, 0.45 * s, 0.65 * s),
         },
         // Forward and ventral, where the attitude quads are drawn on the hull,
         // and below the belts so a shot from underneath reaches them.
         SubDef {
             id: "rcs",
             kind: SubKind::Rcs,
-            hp: 60.0,
+            hp: 60.0 * hp,
             block_pct: 40.0,
-            offset: V3::new(0.0, -0.55, 1.5),
-            half: V3::new(0.6, 0.25, 0.7),
+            offset: V3::new(0.0, -0.55 * s, 1.5 * s),
+            half: V3::new(0.6 * s, 0.25 * s, 0.7 * s),
         },
         // The battery, dorsal and forward, where the turrets are, and above
         // the belts for the same reason.
         SubDef {
             id: "weapons",
             kind: SubKind::Weapon,
-            hp: 80.0,
+            hp: 80.0 * hp,
             block_pct: 50.0,
-            offset: V3::new(0.0, 0.5, 1.1),
-            half: V3::new(0.55, 0.3, 0.8),
+            offset: V3::new(0.0, 0.5 * s, 1.1 * s),
+            half: V3::new(0.55 * s, 0.3 * s, 0.8 * s),
         },
         SubDef {
             id: "reactor",
             kind: SubKind::Reactor,
-            hp: 90.0,
+            hp: 90.0 * hp,
             block_pct: 45.0,
-            offset: V3::new(0.0, 0.0, -0.6),
-            half: V3::new(0.45, 0.4, 0.6),
+            offset: V3::new(0.0, 0.0, -0.6 * s),
+            half: V3::new(0.45 * s, 0.4 * s, 0.6 * s),
         },
     ]
 }
 
-static TERRAN_SUBS: [SubDef; 6] = frigate_subs(80.0);
-static KARISEN_SUBS: [SubDef; 6] = frigate_subs(75.0);
-static ROGUE_SUBS: [SubDef; 6] = frigate_subs(90.0);
-static BENEFACTOR_SUBS: [SubDef; 6] = frigate_subs(80.0);
+// A frigate is the unit: radius 3.5 and hp 1.0 are both exact in f32, so these
+// four come out of the scaled layout bit for bit as they came out of the
+// unscaled one.
+static TERRAN_SUBS: [SubDef; 6] = hull_subs(3.5, 80.0, 1.0);
+static KARISEN_SUBS: [SubDef; 6] = hull_subs(3.5, 75.0, 1.0);
+static ROGUE_SUBS: [SubDef; 6] = hull_subs(3.5, 90.0, 1.0);
+static BENEFACTOR_SUBS: [SubDef; 6] = hull_subs(3.5, 80.0, 1.0);
 /// No weapon bay, because the hull has no mounts to lose. A subsystem whose
 /// loss changes nothing is a hit box that teaches a player the wrong lesson.
 static FREIGHTER_SUBS: [SubDef; 3] = [
@@ -392,9 +441,18 @@ static TERRAN_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(-1.2, 0.2, 0.8) },
     MountDef { key: WeaponKey::Beam, mount: V3::new(1.2, 0.2, 0.8) },
 ];
-static KARISEN_MOUNTS: [MountDef; 2] = [
+/// Three, not two. The stock Karisen has always ARMED its port sponson (the
+/// `s0` ring on its frame), so a Karisen fielded from the briefing carried
+/// three mounts while one spawned by a scenario carried two: the same named
+/// ship with a different battery depending on which code path seated it. The
+/// mount is at the sponson's own cell, `(s0 - centre) * rung_cell`.
+static KARISEN_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.0, 0.4, 2.0) },
     MountDef { key: WeaponKey::Missile, mount: V3::new(0.0, -0.3, 0.0) },
+    // APPENDED, not inserted. A mount index is what a fire order names and
+    // what a snapshot stores, so putting the sponson second would have moved
+    // the launcher from 1 to 2 and quietly re-aimed every order that had one.
+    MountDef { key: WeaponKey::Beam, mount: V3::new(-0.98, -0.33, -1.09) },
 ];
 static ROGUE_MOUNTS: [MountDef; 2] = [
     MountDef { key: WeaponKey::Plasma, mount: V3::new(-0.8, 0.2, 1.5) },
@@ -406,6 +464,102 @@ static BENEFACTOR_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Missile, mount: V3::new(0.0, -0.3, 0.0) },
 ];
 static FREIGHTER_MOUNTS: [MountDef; 0] = [];
+
+static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.5, 80.0, 0.65);
+static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 80.0, 1.9);
+static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 80.0, 3.2);
+static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.8, 75.0, 0.6);
+static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.7, 75.0, 1.75);
+static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(8.0, 75.0, 2.9);
+static ROGUE_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.3, 90.0, 0.45);
+static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(4.5, 90.0, 1.3);
+static ROGUE_CRUISER_SUBS: [SubDef; 6] = hull_subs(6.7, 90.0, 2.2);
+static BENEFACTOR_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 80.0, 0.7);
+static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.7, 80.0, 2.05);
+static BENEFACTOR_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.9, 80.0, 3.5);
+
+static TERRAN_CORVETTE_MOUNTS: [MountDef; 2] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.26, 1.49) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.33, 0.15) },
+];
+
+static TERRAN_DESTROYER_MOUNTS: [MountDef; 5] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.57, 3.43) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(-1.86, 0.29, 1.43) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(1.86, 0.29, 1.43) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.79, -1.14) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -0.57, 1.86) },
+];
+
+static TERRAN_CRUISER_MOUNTS: [MountDef; 8] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.78, 5.05) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(-2.62, 0.43, 2.72) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(2.62, 0.43, 2.72) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(-2.62, 0.43, -0.78) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(2.62, 0.43, -0.78) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 1.17, -2.53) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -0.82, 3.11) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -0.82, -1.75) },
+];
+
+static KARISEN_CORVETTE_MOUNTS: [MountDef; 2] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.28, 1.52) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(0.00, -0.22, 0.22) },
+];
+
+static KARISEN_DESTROYER_MOUNTS: [MountDef; 4] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.58, 3.35) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.66, -0.87) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(-1.24, -0.41, -0.29) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(1.24, -0.41, -0.29) },
+];
+
+static KARISEN_CRUISER_MOUNTS: [MountDef; 6] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.84, 5.10) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.96, -1.80) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(-1.90, -0.60, 1.60) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(1.90, -0.60, 1.60) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(-1.90, -0.60, -1.20) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(1.90, -0.60, -1.20) },
+];
+
+static ROGUE_CORVETTE_MOUNTS: [MountDef; 1] = [
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(0.00, 0.15, 1.06) },
+];
+
+static ROGUE_DESTROYER_MOUNTS: [MountDef; 3] = [
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(-1.14, 0.30, 2.08) },
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(1.14, 0.30, 2.08) },
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(0.00, 0.60, -0.54) },
+];
+
+static ROGUE_CRUISER_MOUNTS: [MountDef; 4] = [
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(-1.92, 0.44, 3.29) },
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(1.92, 0.44, 3.29) },
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(-1.92, 0.44, -0.91) },
+    MountDef { key: WeaponKey::Plasma, mount: V3::new(1.92, 0.44, -0.91) },
+];
+
+static BENEFACTOR_CORVETTE_MOUNTS: [MountDef; 2] = [
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, 0.15, 1.00) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(0.00, -0.22, 0.15) },
+];
+
+static BENEFACTOR_DESTROYER_MOUNTS: [MountDef; 4] = [
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(-1.50, 0.31, 1.93) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(1.50, 0.31, 1.93) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, 0.79, -1.00) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(0.00, -0.46, 0.14) },
+];
+
+static BENEFACTOR_CRUISER_MOUNTS: [MountDef; 6] = [
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(-2.23, 0.47, 3.11) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(2.23, 0.47, 3.11) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(-2.23, 0.47, -1.17) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(2.23, 0.47, -1.17) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(0.00, -0.68, 1.36) },
+    MountDef { key: WeaponKey::Missile, mount: V3::new(0.00, -0.68, -2.14) },
+];
 
 static C_TERRAN_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::TerranFrigate,
@@ -539,6 +693,330 @@ static C_FREIGHTER: ShipClass = ShipClass {
     weapons: &FREIGHTER_MOUNTS,
 };
 
+/// The line navy's ladder: a slab hull, honest belts and beams, one more
+/// battery at every rung. Nothing on a Terran surprises anybody, which is the
+/// point of a fleet built to be replaced.
+static C_TERRAN_CORVETTE: ShipClass = ShipClass {
+    id: ShipClassId::TerranCorvette,
+    key: "terran_corvette",
+    name: "Terran Corvette",
+    hull: 125.0,
+    radius: 2.5,
+    mass: 0.55,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 9.57,
+        pitch_rate: 6.41,
+        accel_fwd: 1.04,
+        accel_retro: 0.69,
+        accel_lat: 0.23,
+        max_speed: 8.5,
+    },
+    boarding_range: 20.0,
+    marines: 5,
+    boarding_capacity: 2,
+    subsystems: &TERRAN_CORVETTE_SUBS,
+    weapons: &TERRAN_CORVETTE_MOUNTS,
+};
+
+static C_TERRAN_DESTROYER: ShipClass = ShipClass {
+    id: ShipClassId::TerranDestroyer,
+    key: "terran_destroyer",
+    name: "Terran Destroyer",
+    hull: 705.0,
+    radius: 5.8,
+    mass: 2.4,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 5.45,
+        pitch_rate: 3.65,
+        accel_fwd: 0.96,
+        accel_retro: 0.3,
+        accel_lat: 0.2,
+        max_speed: 7.0,
+    },
+    boarding_range: 20.0,
+    marines: 25,
+    boarding_capacity: 10,
+    subsystems: &TERRAN_DESTROYER_SUBS,
+    weapons: &TERRAN_DESTROYER_MOUNTS,
+};
+
+static C_TERRAN_CRUISER: ShipClass = ShipClass {
+    id: ShipClassId::TerranCruiser,
+    key: "terran_cruiser",
+    name: "Terran Heavy Cruiser",
+    hull: 1755.0,
+    radius: 7.8,
+    mass: 5.45,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 2.32,
+        pitch_rate: 1.55,
+        accel_fwd: 0.56,
+        accel_retro: 0.13,
+        accel_lat: 0.09,
+        max_speed: 7.0,
+    },
+    boarding_range: 30.0,
+    marines: 40,
+    boarding_capacity: 12,
+    subsystems: &TERRAN_CRUISER_SUBS,
+    weapons: &TERRAN_CRUISER_MOUNTS,
+};
+
+/// Long, thin and standing off. Every rung is the longest hull at that rung and
+/// has the smallest cross section, and every rung adds missile cells; the beams
+/// never go past two however big it gets.
+static C_KARISEN_CORVETTE: ShipClass = ShipClass {
+    id: ShipClassId::KarisenCorvette,
+    key: "karisen_corvette",
+    name: "Karisen Corvette",
+    hull: 110.0,
+    radius: 2.8,
+    mass: 0.5,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 9.43,
+        pitch_rate: 6.32,
+        accel_fwd: 2.48,
+        accel_retro: 0.25,
+        accel_lat: 0.25,
+        max_speed: 9.5,
+    },
+    boarding_range: 20.0,
+    marines: 5,
+    boarding_capacity: 2,
+    subsystems: &KARISEN_CORVETTE_SUBS,
+    weapons: &KARISEN_CORVETTE_MOUNTS,
+};
+
+static C_KARISEN_DESTROYER: ShipClass = ShipClass {
+    id: ShipClassId::KarisenDestroyer,
+    key: "karisen_destroyer",
+    name: "Karisen Destroyer",
+    hull: 570.0,
+    radius: 5.7,
+    mass: 1.9,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 6.64,
+        pitch_rate: 4.45,
+        accel_fwd: 0.6,
+        accel_retro: 0.38,
+        accel_lat: 0.25,
+        max_speed: 8.5,
+    },
+    boarding_range: 20.0,
+    marines: 20,
+    boarding_capacity: 6,
+    subsystems: &KARISEN_DESTROYER_SUBS,
+    weapons: &KARISEN_DESTROYER_MOUNTS,
+};
+
+static C_KARISEN_CRUISER: ShipClass = ShipClass {
+    id: ShipClassId::KarisenCruiser,
+    key: "karisen_cruiser",
+    name: "Karisen Heavy Cruiser",
+    hull: 1550.0,
+    radius: 8.0,
+    mass: 4.65,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 2.63,
+        pitch_rate: 1.76,
+        accel_fwd: 0.47,
+        accel_retro: 0.15,
+        accel_lat: 0.1,
+        max_speed: 8.5,
+    },
+    boarding_range: 20.0,
+    marines: 25,
+    boarding_capacity: 6,
+    subsystems: &KARISEN_CRUISER_SUBS,
+    weapons: &KARISEN_CRUISER_MOUNTS,
+};
+
+/// Boarding gear first and a ship built around it: the least hull at every
+/// rung, the most marines by a wide margin, and still the sharpest turn on the
+/// board. The guns are an afterthought and always were.
+static C_ROGUE_CORVETTE: ShipClass = ShipClass {
+    id: ShipClassId::RogueCorvette,
+    key: "rogue_corvette",
+    name: "Rogue Corvette",
+    hull: 100.0,
+    radius: 2.3,
+    mass: 0.5,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 11.7,
+        pitch_rate: 7.84,
+        accel_fwd: 1.85,
+        accel_retro: 0.26,
+        accel_lat: 0.26,
+        max_speed: 9.5,
+    },
+    boarding_range: 20.0,
+    marines: 15,
+    boarding_capacity: 4,
+    subsystems: &ROGUE_CORVETTE_SUBS,
+    weapons: &ROGUE_CORVETTE_MOUNTS,
+};
+
+static C_ROGUE_DESTROYER: ShipClass = ShipClass {
+    id: ShipClassId::RogueDestroyer,
+    key: "rogue_destroyer",
+    name: "Rogue Destroyer",
+    hull: 350.0,
+    radius: 4.5,
+    mass: 1.45,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 8.22,
+        pitch_rate: 5.51,
+        accel_fwd: 0.82,
+        accel_retro: 0.5,
+        accel_lat: 0.23,
+        max_speed: 9.5,
+    },
+    boarding_range: 40.0,
+    marines: 45,
+    boarding_capacity: 14,
+    subsystems: &ROGUE_DESTROYER_SUBS,
+    weapons: &ROGUE_DESTROYER_MOUNTS,
+};
+
+static C_ROGUE_CRUISER: ShipClass = ShipClass {
+    id: ShipClassId::RogueCruiser,
+    key: "rogue_cruiser",
+    name: "Rogue Heavy Cruiser",
+    hull: 910.0,
+    radius: 6.7,
+    mass: 3.1,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 4.95,
+        pitch_rate: 3.32,
+        accel_fwd: 0.5,
+        accel_retro: 0.23,
+        accel_lat: 0.15,
+        max_speed: 9.5,
+    },
+    boarding_range: 50.0,
+    marines: 70,
+    boarding_capacity: 16,
+    subsystems: &ROGUE_CRUISER_SUBS,
+    weapons: &ROGUE_CRUISER_MOUNTS,
+};
+
+/// Deep sectioned monitors. They grow by CALIBRE and belt rather than by
+/// count, and each rung is slower than anything else at that rung: the trade is
+/// that cannon go through a belt and beams do not.
+static C_BENEFACTOR_CORVETTE: ShipClass = ShipClass {
+    id: ShipClassId::BenefactorCorvette,
+    key: "benefactor_corvette",
+    name: "Benefactor Corvette",
+    hull: 110.0,
+    radius: 2.4,
+    mass: 0.45,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 7.75,
+        pitch_rate: 5.2,
+        accel_fwd: 0.67,
+        accel_retro: 0.8,
+        accel_lat: 0.19,
+        max_speed: 8.0,
+    },
+    boarding_range: 20.0,
+    marines: 5,
+    boarding_capacity: 2,
+    subsystems: &BENEFACTOR_CORVETTE_SUBS,
+    weapons: &BENEFACTOR_CORVETTE_MOUNTS,
+};
+
+static C_BENEFACTOR_DESTROYER: ShipClass = ShipClass {
+    id: ShipClassId::BenefactorDestroyer,
+    key: "benefactor_destroyer",
+    name: "Benefactor Destroyer",
+    hull: 770.0,
+    radius: 5.7,
+    mass: 2.5,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 5.16,
+        pitch_rate: 3.46,
+        accel_fwd: 0.62,
+        accel_retro: 0.28,
+        accel_lat: 0.19,
+        max_speed: 7.0,
+    },
+    boarding_range: 20.0,
+    marines: 25,
+    boarding_capacity: 10,
+    subsystems: &BENEFACTOR_DESTROYER_SUBS,
+    weapons: &BENEFACTOR_DESTROYER_MOUNTS,
+};
+
+static C_BENEFACTOR_CRUISER: ShipClass = ShipClass {
+    id: ShipClassId::BenefactorCruiser,
+    key: "benefactor_cruiser",
+    name: "Benefactor Heavy Cruiser",
+    hull: 2180.0,
+    radius: 7.9,
+    mass: 6.5,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 1.92,
+        pitch_rate: 1.29,
+        accel_fwd: 0.35,
+        accel_retro: 0.11,
+        accel_lat: 0.07,
+        max_speed: 7.0,
+    },
+    boarding_range: 30.0,
+    marines: 35,
+    boarding_capacity: 12,
+    subsystems: &BENEFACTOR_CRUISER_SUBS,
+    weapons: &BENEFACTOR_CRUISER_MOUNTS,
+};
+
 pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
     match id {
         ShipClassId::TerranFrigate => &C_TERRAN_FRIGATE,
@@ -546,15 +1024,39 @@ pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
         ShipClassId::RogueFrigate => &C_ROGUE_FRIGATE,
         ShipClassId::BenefactorFrigate => &C_BENEFACTOR_FRIGATE,
         ShipClassId::Freighter => &C_FREIGHTER,
+        ShipClassId::TerranCorvette => &C_TERRAN_CORVETTE,
+        ShipClassId::TerranDestroyer => &C_TERRAN_DESTROYER,
+        ShipClassId::TerranCruiser => &C_TERRAN_CRUISER,
+        ShipClassId::KarisenCorvette => &C_KARISEN_CORVETTE,
+        ShipClassId::KarisenDestroyer => &C_KARISEN_DESTROYER,
+        ShipClassId::KarisenCruiser => &C_KARISEN_CRUISER,
+        ShipClassId::RogueCorvette => &C_ROGUE_CORVETTE,
+        ShipClassId::RogueDestroyer => &C_ROGUE_DESTROYER,
+        ShipClassId::RogueCruiser => &C_ROGUE_CRUISER,
+        ShipClassId::BenefactorCorvette => &C_BENEFACTOR_CORVETTE,
+        ShipClassId::BenefactorDestroyer => &C_BENEFACTOR_DESTROYER,
+        ShipClassId::BenefactorCruiser => &C_BENEFACTOR_CRUISER,
     }
 }
 
-pub const ALL_CLASSES: [ShipClassId; 5] = [
+pub const ALL_CLASSES: [ShipClassId; 17] = [
     ShipClassId::TerranFrigate,
     ShipClassId::KarisenFrigate,
     ShipClassId::RogueFrigate,
     ShipClassId::BenefactorFrigate,
     ShipClassId::Freighter,
+    ShipClassId::TerranCorvette,
+    ShipClassId::TerranDestroyer,
+    ShipClassId::TerranCruiser,
+    ShipClassId::KarisenCorvette,
+    ShipClassId::KarisenDestroyer,
+    ShipClassId::KarisenCruiser,
+    ShipClassId::RogueCorvette,
+    ShipClassId::RogueDestroyer,
+    ShipClassId::RogueCruiser,
+    ShipClassId::BenefactorCorvette,
+    ShipClassId::BenefactorDestroyer,
+    ShipClassId::BenefactorCruiser,
 ];
 
 pub fn class_from_index(i: u32) -> ShipClassId {

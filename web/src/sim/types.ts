@@ -88,6 +88,18 @@ export const ShipClass = {
   RogueFrigate: 2,
   BenefactorFrigate: 3,
   Freighter: 4,
+  TerranCorvette: 5,
+  TerranDestroyer: 6,
+  TerranCruiser: 7,
+  KarisenCorvette: 8,
+  KarisenDestroyer: 9,
+  KarisenCruiser: 10,
+  RogueCorvette: 11,
+  RogueDestroyer: 12,
+  RogueCruiser: 13,
+  BenefactorCorvette: 14,
+  BenefactorDestroyer: 15,
+  BenefactorCruiser: 16,
 } as const;
 export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
 
@@ -101,6 +113,10 @@ export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
  */
 export const CLASS_KEYS: readonly string[] = [
   'terran_frigate', 'karisen_frigate', 'rogue_frigate', 'benefactor_frigate', 'freighter',
+  'terran_corvette', 'terran_destroyer', 'terran_cruiser',
+  'karisen_corvette', 'karisen_destroyer', 'karisen_cruiser',
+  'rogue_corvette', 'rogue_destroyer', 'rogue_cruiser',
+  'benefactor_corvette', 'benefactor_destroyer', 'benefactor_cruiser',
 ];
 export const classIndexOf = (key: string): number => CLASS_KEYS.indexOf(key);
 
@@ -110,6 +126,18 @@ export const CLASS_NAMES: Record<number, string> = {
   2: 'Rogue Frigate',
   3: 'Benefactor Frigate',
   4: 'Freighter',
+  5: 'Terran Corvette',
+  6: 'Terran Destroyer',
+  7: 'Terran Heavy Cruiser',
+  8: 'Karisen Corvette',
+  9: 'Karisen Destroyer',
+  10: 'Karisen Heavy Cruiser',
+  11: 'Rogue Corvette',
+  12: 'Rogue Destroyer',
+  13: 'Rogue Heavy Cruiser',
+  14: 'Benefactor Corvette',
+  15: 'Benefactor Destroyer',
+  16: 'Benefactor Heavy Cruiser',
 };
 
 export const FACTION_NAMES: Record<number, string> = {
@@ -282,6 +310,11 @@ export interface ShipState {
   readonly drifting: boolean;
   /** How many volumes it has. What they ARE comes from `Match.subs()`. */
   readonly subCount: number;
+  /** How many mounts THIS SHIP has, which is not always how many its class
+   *  has: a hull flying a design carries the design's guns. */
+  readonly mountCount: number;
+  /** When each mount last fired, for as many as the record can carry
+   *  (`ffi::SHIP_COOLDOWNS`). `mountCount` is the honest total. */
   readonly weaponLastFired: readonly number[];
   readonly parties: readonly PartyState[];
   readonly radius: number;

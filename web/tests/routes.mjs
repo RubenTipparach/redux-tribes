@@ -36,8 +36,31 @@ async function boot(p) {
   await page.waitForTimeout(1200);
 }
 
-const settle = () => page.waitForFunction(
-  () => document.getElementById('hPhase').textContent === 'PLANNING', null, { timeout: 60000 });
+/**
+ * Wait for the turn to finish PLAYING, not for a clock.
+ *
+ * A fixed deadline here was measuring the machine. One turn's playback is
+ * about thirty seconds on a workstation and sixty nine on the container this
+ * runs in, against seventy two on the parent commit, so a sixty second limit
+ * failed both builds equally and said nothing about either. What the check is
+ * actually about is that playback ENDS, so it watches the tick: still going is
+ * fine however slow, and stopped without reaching PLANNING is the failure.
+ */
+async function settle() {
+  let last = -1, stuck = 0;
+  for (;;) {
+    const st = await page.evaluate(() => ({
+      phase: document.getElementById('hPhase').textContent,
+      tick: window.ftDebug.playing(),
+    }));
+    if (st.phase === 'PLANNING') return;
+    if (st.tick === last) {
+      // Thirty seconds without a single tick is stopped, not slow.
+      if (++stuck > 30) throw new Error(`playback stopped at tick ${st.tick}`);
+    } else { stuck = 0; last = st.tick; }
+    await page.waitForTimeout(1000);
+  }
+}
 
 /** Everything about the match that a resume has to reproduce. Ships by their
  *  own numbers, because "same turn" alone would pass on a match restarted. */
@@ -238,6 +261,23 @@ if (!slot.designId) {
       fail('another stock hull inherited the draft');
     } else ok(`a draft belongs to its own address: terran keeps ${other.parts} parts`);
   }
+
+  // A NON FRIGATE key, because twelve of the seventeen are not frigates and
+  // `frameFor` and `stockFor` both fall back to entry zero for a key they do
+  // not know: a class missing from either table opens as a Terran frigate
+  // under its own address rather than failing.
+  await boot('/ship/terran_cruiser');
+  const ca = await page.evaluate(() => window.ftDebug.designer());
+  if (path() !== '/ship/terran_cruiser') {
+    fail(`a heavy cruiser address became ${path()}`);
+  } else if (ca.classKey !== 'terran_cruiser') {
+    fail(`/ship/terran_cruiser opened a ${ca.classKey}`);
+  } else if (!ca.derived.legal) {
+    fail(`the stock Terran Heavy Cruiser is illegal out of the box`);
+  } else {
+    ok(`every rung has an address: /ship/terran_cruiser, ${ca.parts} parts, `
+      + `hull ${ca.derived.hull.toFixed(0)}`);
+  }
 }
 
 // ------------------------------------------------------- swapping a ship --
@@ -313,8 +353,8 @@ await boot('/');
  * The core's registry was always two sided; it was the screen that only
  * offered your own fleet. What this checks is the half that could silently
  * regress: a pick on a HOSTILE row reaching that hostile, and reaching only
- * it. A class hull is a round number (300, 250, 230, 195, 180) and a derived
- * design almost never is, so a fraction on exactly one hostile is the proof.
+ * it. A ship is flying a design when its hull is not the hull its CLASS has,
+ * which the core answers for, so exactly one hostile differing is the proof.
  */
 await boot('/');
 {
@@ -342,23 +382,30 @@ await boot('/');
     const flown = await page.evaluate(() => {
       const side = window.ftDebug.side();
       const all = window.ftDebug.ships();
+      const seen = (s) => ({ hull: s.hull, cls: s.classHull });
       return {
-        ours: all.filter(s => s.side === side).map(s => s.hull),
-        foes: all.filter(s => s.side !== side).map(s => s.hull),
+        ours: all.filter(s => s.side === side).map(seen),
+        foes: all.filter(s => s.side !== side).map(seen),
       };
     });
-    const derived = (h) => Math.abs(h - Math.round(h)) > 0.001;
+    // Flying a design means the ship's hull is not its CLASS's hull, asked of
+    // the core. This used to be "the number is not round", which worked while
+    // class hulls were 300 and 250 and had 40 points of margin; with seventeen
+    // classes the tightest gap is 0.022, and a heuristic with that much room
+    // left is a test waiting to be wrong for a reason nobody will see.
+    const derived = (s) => Math.abs(s.hull - s.cls) > 0.01;
+    const say = (v) => v.map(s => s.hull.toFixed(2)).join(', ');
     if (!flown.foes.some(derived)) {
       fail(`a design was put on a hostile and every hostile is still a class `
-        + `hull: ${flown.foes.join(', ')}`);
+        + `hull: ${say(flown.foes)}`);
     } else if (flown.foes.every(derived)) {
       fail(`the hostile pick reached every hostile, which is a uniform rather `
-        + `than a swap: ${flown.foes.join(', ')}`);
+        + `than a swap: ${say(flown.foes)}`);
     } else if (flown.ours.some(derived)) {
-      fail(`a pick on a hostile changed OUR fleet too: ${flown.ours.join(', ')}`);
+      fail(`a pick on a hostile changed OUR fleet too: ${say(flown.ours)}`);
     } else {
-      ok(`a hull fields on the other side: ours ${flown.ours.join(', ')}, `
-        + `foes ${flown.foes.map(h => h.toFixed(2)).join(', ')}`);
+      ok(`a hull fields on the other side: ours ${say(flown.ours)}, `
+        + `foes ${say(flown.foes)}`);
     }
   }
 }
