@@ -28,11 +28,11 @@
  */
 
 import * as THREE from 'three';
-import { WINDOW_VARIANTS } from './textures.js';
+import { finishMap, WINDOW_VARIANTS } from './textures.js';
 import {
-  CELLS, NX, NY, NZ, RUNG, Mat,
-  armourColour, bareGrid, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
-  type Design,
+  CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
+  armourColour, bareGrid, cellColour, finishesOf, frameFor, moduleById, rasterise, rasterSig,
+  socketsOf, type Design,
 } from './design.js';
 
 /**
@@ -43,6 +43,21 @@ import {
  * mount the resolver calls `n` and the arc mask `arcMasks(d)[n]` describes.
  * Three lists in the same order rather than three lookups.
  */
+/**
+ * The three surfaces a hull is drawn with, and the order a material array for
+ * one must be in.
+ *
+ * Armour, frame and machinery are three materials because they are three
+ * things: an armour panel, the structure under it and a drive bell do not
+ * wear the same finish, and drawing all three in the plating's was a ship
+ * that looked like one material with parts painted on it. The geometry is
+ * grouped in this order, so `mesh.material[SURF_FRAME]` is the frame's.
+ */
+export const SURF_ARMOUR = 0;
+export const SURF_FRAME = 1;
+export const SURF_PART = 2;
+export const SURF_COUNT = 3;
+
 export interface HullRig {
   /** The weapon key, for naming it. */
   readonly key: string;
@@ -196,6 +211,42 @@ export interface Tintable {
   color: THREE.Color;
   emissive: THREE.Color;
   needsUpdate: boolean;
+}
+
+/**
+ * The three materials a hull mesh is drawn with, in `SURF_*` order.
+ *
+ * ONE builder, because four pictures draw these hulls and a second copy is a
+ * second answer to "what is a drive bell made of". Metalness and roughness
+ * are the design's own for the armour, since they are what separate painted
+ * steel from bare alloy and belong to the hull rather than to any one screen;
+ * the frame and the machinery are duller and rougher than plating whatever
+ * the plating is, because they are structure and guts rather than a finish
+ * anybody chose to present.
+ */
+export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
+  const f = finishesOf(d);
+  const common = {
+    vertexColors: true,
+    // A dark hull under one key light is a slow gradient in a narrow range,
+    // and it contours on an eight bit canvas for the same reason the sky
+    // does. One property, and the plating grades instead of stepping.
+    dithering: true,
+  } as const;
+  const mats: THREE.MeshStandardMaterial[] = [];
+  mats[SURF_ARMOUR] = new THREE.MeshStandardMaterial({
+    ...common,
+    metalness: d.metal ?? DEFAULT_METAL,
+    roughness: d.rough ?? DEFAULT_ROUGH,
+    normalMap: finishMap(f.armour),
+  });
+  mats[SURF_FRAME] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.45, roughness: 0.70, normalMap: finishMap(f.frame),
+  });
+  mats[SURF_PART] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.part),
+  });
+  return mats;
 }
 
 export function tintHull(
@@ -487,8 +538,52 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     }
   }
 
+  // ---- the three surfaces, sorted into runs -----------------------------
+  //
+  // Armour, frame and machinery are three different materials, because they
+  // are three different things: a drive bell and an armour panel do not wear
+  // the same finish, and a frame member wears neither. three.js draws that as
+  // groups over one geometry, and a group is a CONTIGUOUS range, so the quads
+  // are sorted into surface order here rather than being emitted in it.
+  //
+  // A sort rather than three emit buffers because every parallel array has to
+  // move with the quad it belongs to: the four vertices, the cell it is named
+  // for, and its whole footprint. One permutation applied to all of them
+  // cannot leave two of them disagreeing, which three buffers filled in three
+  // places eventually would.
+  const surfaceOf = (q: number): number => {
+    const mat = grid[cellOf[q] as number] as number;
+    if (mat === Mat.Plate || mat === Mat.Skinned) return SURF_ARMOUR;
+    return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
+  };
+  const order = cellOf.map((_, q) => q);
+  // Stable, so a run of plate stays in the order the greedy pass laid it down
+  // and the same design meshes to the same buffer every time.
+  order.sort((a, b) => surfaceOf(a) - surfaceOf(b) || a - b);
+  const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [], sUv: number[] = [];
+  const sCellOf: number[] = [], sQuadCells: number[] = [], sQuadAt: number[] = [0];
+  const groups: Array<{ start: number; count: number; surface: number }> = [];
+  for (let n = 0; n < order.length; n++) {
+    const q = order[n] as number;
+    for (let v = 0; v < 4; v++) {
+      const p = q * 12 + v * 3, t = q * 8 + v * 2;
+      sPos.push(pos[p] as number, pos[p + 1] as number, pos[p + 2] as number);
+      sNrm.push(nrm[p] as number, nrm[p + 1] as number, nrm[p + 2] as number);
+      sCol.push(col[p] as number, col[p + 1] as number, col[p + 2] as number);
+      sUv.push(uv[t] as number, uv[t + 1] as number);
+    }
+    sCellOf.push(cellOf[q] as number);
+    for (let i = quadAt[q] as number; i < (quadAt[q + 1] as number); i++) {
+      sQuadCells.push(quadCells[i] as number);
+    }
+    sQuadAt.push(sQuadCells.length);
+    const surf = surfaceOf(q);
+    const last = groups[groups.length - 1];
+    if (last && last.surface === surf) last.count += 6;
+    else groups.push({ start: n * 6, count: 6, surface: surf });
+  }
   // Two triangles a quad, indexed, so the four corners are shared.
-  const quads = cellOf.length;
+  const quads = sCellOf.length;
   const index = new Uint32Array(quads * 6);
   for (let q = 0; q < quads; q++) {
     const b = q * 4;
@@ -496,16 +591,19 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     index[q * 6 + 3] = b; index[q * 6 + 4] = b + 2; index[q * 6 + 5] = b + 3;
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sPos), 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(sNrm), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(sCol), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(sUv), 2));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
+  // One draw per surface that is actually on this hull, in SURF order, which
+  // is the order a caller must build its material array in.
+  for (const g of groups) geo.addGroup(g.start, g.count, g.surface);
   geo.computeBoundingSphere();
 
   const centre = new Float32Array(quads * 3);
   for (let q = 0; q < quads; q++) {
-    const n = cellOf[q] as number;
+    const n = sCellOf[q] as number;
     const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
     centre[q * 3] = (i - NX / 2 + 0.5) * cell;
     centre[q * 3 + 1] = (j - NY / 2 + 0.5) * cell;
@@ -514,7 +612,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
 
   const rigOf = new Int32Array(quads);
   for (let q = 0; q < quads; q++) {
-    const owner = own[cellOf[q] as number] as number;
+    const owner = own[sCellOf[q] as number] as number;
     rigOf[q] = owner > 0 ? (rigOfPart.get(owner - 1) ?? -1) : -1;
   }
 
@@ -607,11 +705,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     rigs,
     rigOfCell,
     rigCells: rigCells.map(v => new Int32Array(v)),
-    cellOf: new Int32Array(cellOf),
+    cellOf: new Int32Array(sCellOf),
     centre,
     quads,
-    quadCells: new Int32Array(quadCells),
-    quadAt: new Uint32Array(quadAt),
+    quadCells: new Int32Array(sQuadCells),
+    quadAt: new Uint32Array(sQuadAt),
     lo: [loX, loY, loZ],
     hi: [hiX, hiY, hiZ],
     half: [

@@ -14,7 +14,7 @@ import { bakeSky, skyDome, skyFor, starfield, type SkyPreset } from './sky.js';
 import { reachMaterial } from './reach.js';
 // One loader for every texture the client wants, and one spelling of the path.
 // `textures.ts` says why that matters.
-import { ember, finishMap, partMap, windowMaterial } from './textures.js';
+import { ember, finishMap, windowMaterial } from './textures.js';
 import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
 import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
@@ -29,11 +29,12 @@ import {
   CLASS_KEYS, isCommitted, Mode, PROBE_STEPS, TICKS_PER_SECOND,
 } from '../sim/types.js';
 import {
-  DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
+  DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
 import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
-import { hullMesh, hullTone, tintFar, tintHull, tintMix, type HullMesh } from './hull.js';
+import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, tintFar, tintHull, tintMix,
+  type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
 
 /**
@@ -90,6 +91,19 @@ const IDENTITY = new THREE.Quaternion();
 const EMPTY_CELLS: ReadonlyMap<number, number> = new Map();
 
 /** What a hull is made of until a design says otherwise. */
+/**
+ * Every material on a mesh, whether it carries one or an array of them.
+ *
+ * A hull is three materials since armour, frame and machinery stopped sharing
+ * a finish, and every caller that tinted or disposed "the material" would
+ * otherwise have to know which shape it got and would quietly touch only the
+ * first of three.
+ */
+function materialsOf(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
+  const m = mesh.material;
+  return (Array.isArray(m) ? m : [m]) as THREE.MeshStandardMaterial[];
+}
+
 const HULL_METAL = DEFAULT_METAL;
 const HULL_ROUGH = DEFAULT_ROUGH;
 
@@ -702,9 +716,14 @@ export class View {
         // finish REMOVED by damage looks like. The design's own finish, so a
         // battered Rogue is battered where it is torn too.
         const design = c.design;
+        // `finishesOf` rather than the design's fields directly, so a torn
+        // plate wears whatever the PICKED palette slot wears. Reading
+        // `design.finish` here was already one place too many, and it would
+        // now be a wound in a different surface from the plate beside it.
+        const surf = finishesOf(design);
         const skin = new THREE.Mesh(w.skin, new THREE.MeshStandardMaterial({
           vertexColors: true,
-          normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
+          normalMap: finishMap(surf.armour),
           metalness: design.metal ?? HULL_METAL,
           roughness: design.rough ?? HULL_ROUGH,
           dithering: true,
@@ -713,7 +732,8 @@ export class View {
         // and frame rather than plating, so it wears what machinery wears: the
         // same material the schematic gives the same faces.
         const inner = new THREE.Mesh(w.inner, new THREE.MeshStandardMaterial({
-          vertexColors: true, normalMap: partMap(), metalness: 0.55, roughness: 0.62,
+          vertexColors: true, normalMap: finishMap(surf.part),
+          metalness: 0.55, roughness: 0.62,
           side: THREE.DoubleSide, dithering: true,
         }));
         // Unlit, so the colour IS the light coming off it. A lit material
@@ -1702,9 +1722,9 @@ export class View {
     this.#designs = new Map(designs);
     for (const [, mesh] of this.#hulls) {
       this.#scene.remove(mesh);
-      // The geometry belongs to the design cache and is shared; the material
-      // is this ship's own.
-      (mesh.material as THREE.Material).dispose();
+      // The geometry belongs to the design cache and is shared; the materials
+      // are this ship's own, one per surface.
+      for (const m of materialsOf(mesh)) m.dispose();
     }
     this.#arcShell.removeFromParent();
     this.#arcShellKey = '';
@@ -1858,21 +1878,7 @@ export class View {
     // the two numbers that separate painted steel from bare alloy, and Lambert
     // has neither. The environment below is what a metal reflects; without one
     // metalness renders black.
-    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      // The DESIGN's, falling back to the default. These are the two numbers
-      // that separate painted steel from bare alloy, and they belong to the
-      // hull rather than to the map: a Benefactor is glossy and a Rogue is
-      // not, and reading a constant here would have made them the same ship
-      // in two colours.
-      metalness: design.metal ?? HULL_METAL,
-      roughness: design.rough ?? HULL_ROUGH,
-      normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
-      // A dark hull under one key light is another slow gradient in a narrow
-      // range, and it contours on an eight bit canvas for the same reason the
-      // sky does. One property, and the plating grades instead of stepping.
-      dithering: true,
-    }));
+    const mesh = new THREE.Mesh(hull.geo, hullMaterials(design));
     this.#tintHull(mesh, s);
     // The windows, as children of the hull so they carry its pose for free. A
     // mesh of their own rather than part of the plate because glass takes
@@ -1904,7 +1910,10 @@ export class View {
     const key = tone * 100 + Math.round(tintMix(s.destroyed, far) * 40);
     if (this.#tint.get(s.id) === key) return;
     this.#tint.set(s.id, key);
-    tintHull(mesh.material as THREE.MeshStandardMaterial, tone, s.destroyed, far);
+    // Every surface, not just the plating: a hull is three materials now, and
+    // washing one of them leaves the frame and the machinery in a different
+    // side colour from the armour over them, which reads as two ships.
+    for (const m of materialsOf(mesh)) tintHull(m, tone, s.destroyed, far);
   }
 
   /**
@@ -2043,6 +2052,13 @@ export class View {
   surfaces(): Array<{
     ship: number; kind: string; metal: number; rough: number;
     finish: string; loaded: boolean; repeat: number; uv: boolean; env: boolean;
+    /**
+     * Every surface the hull is drawn with, in `SURF_*` order: armour, frame
+     * and machinery. The fields above describe the ARMOUR, which is what they
+     * always described, so a check written against them still asks the same
+     * question; this is what says the other two arrived and loaded.
+     */
+    skins: Array<{ what: string; finish: string; loaded: boolean }>;
     /** The torn surfaces, when this hull has any: whether each has UVs and a
      *  finish with pixels. A wound that lost either draws as flat paint, which
      *  looks exactly like a normal map REMOVED by damage. */
@@ -2050,8 +2066,18 @@ export class View {
   }> {
     const out = [];
     for (const [id, mesh] of this.#hulls) {
-      const m = mesh.material as THREE.MeshStandardMaterial;
+      const mats = materialsOf(mesh);
+      const m = mats[SURF_ARMOUR] as THREE.MeshStandardMaterial;
       const n = m.normalMap;
+      const skins = ['armour', 'frame', 'part'].map((what, i) => {
+        const sm = mats[i];
+        const si = sm?.normalMap?.image as { src?: string; width?: number } | undefined;
+        return {
+          what,
+          finish: sm?.normalMap ? (si?.src ?? 'bound').split('/').slice(-1)[0] as string : 'none',
+          loaded: !!si?.width,
+        };
+      });
       const img = n?.image as { src?: string; width?: number } | undefined;
       const c = this.#carved.get(id);
       const wounds: Array<{ what: string; uv: boolean; loaded: boolean }> = [];
@@ -2067,6 +2093,7 @@ export class View {
       }
       out.push({
         ship: id,
+        skins,
         wounds,
         kind: m.type,
         metal: +(m.metalness ?? -1).toFixed(3),

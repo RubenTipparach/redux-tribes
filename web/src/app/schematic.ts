@@ -16,11 +16,11 @@
  */
 
 import * as THREE from 'three';
-import { PURPOSE, arcMasks, gunByKey, partAtCell, type Design } from './design.js';
-import { hullMesh, tintHull, type HullMesh } from './hull.js';
+import { PURPOSE, arcMasks, finishesOf, gunByKey, partAtCell, type Design } from './design.js';
+import { hullMaterials, hullMesh, tintHull, type HullMesh } from './hull.js';
 import { buildWound } from './wound.js';
 import { blockedPct } from './turret.js';
-import { finishMap, partMap, studioEnv, windowMaterial } from './textures.js';
+import { finishMap, studioEnv, windowMaterial } from './textures.js';
 import { bindOrbit, frameBox, orbitStart } from './orbitcam.js';
 import { SUB_BLURB, SUB_LABEL, type Vec3 } from '../sim/types.js';
 
@@ -285,18 +285,15 @@ export class Schematic {
     // here as it is out there, so it wears the design's finish and the two
     // numbers that say what it is made of. Lambert had neither, which made
     // this the third picture of one ship that did not match the other two.
-    const mat = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      normalMap: finishMap(s.design.finish ?? 'plate'),
-      metalness: s.design.metal ?? 0.25,
-      roughness: s.design.rough ?? 0.55,
-      dithering: true,
-    });
+    // Three materials, the same three the map draws with and in the same
+    // order: this is the picture whose whole job is what a hull is made of, so
+    // it is the last place that should be showing one surface for all of it.
+    const mats = hullMaterials(s.design);
     // The other end of the range: a schematic exists to show what a hull is
     // made of, so the side wash gets out of the way of the design's own paint.
-    tintHull(mat, s.tone, s.lost, 0);
-    this.#owned.push(mat);
-    const body = new THREE.Mesh(this.#carve(hull, s, bare), mat);
+    for (const m of mats) tintHull(m, s.tone, s.lost, 0);
+    this.#owned.push(...mats);
+    const body = new THREE.Mesh(this.#carve(hull, s, bare), mats);
     this.#hull.add(body);
     this.#body = body;
     this.#picks.push(body);
@@ -314,7 +311,7 @@ export class Schematic {
       const plated = hullMesh(s.design);
       const ghost = new THREE.MeshStandardMaterial({
         vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false,
-        normalMap: finishMap(s.design.finish ?? 'plate'),
+        normalMap: finishMap(finishesOf(s.design).armour),
         metalness: s.design.metal ?? 0.25,
         roughness: s.design.rough ?? 0.55,
       });
@@ -429,12 +426,12 @@ export class Schematic {
     // is the inside of the ship and wears what machinery wears.
     const survivor = new THREE.MeshStandardMaterial({
       vertexColors: true, side: THREE.DoubleSide,
-      normalMap: finishMap(s.design.finish ?? 'plate'),
+      normalMap: finishMap(finishesOf(s.design).armour),
       metalness: s.design.metal ?? 0.25, roughness: s.design.rough ?? 0.55,
     });
     const torn = new THREE.MeshStandardMaterial({
       vertexColors: true, side: THREE.DoubleSide,
-      normalMap: partMap(), metalness: 0.55, roughness: 0.62,
+      normalMap: finishMap(finishesOf(s.design).part), metalness: 0.55, roughness: 0.62,
     });
     tintHull(survivor, s.tone, s.lost, 0);
     tintHull(torn, s.tone, s.lost, 0);

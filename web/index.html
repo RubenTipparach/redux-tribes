@@ -834,6 +834,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+/* What a surface is made of: a labelled row with one full width picker, which
+   is a thumb sized target at 390px where a select under each swatch was eight
+   boxes too narrow to read their own contents. */
+.dzrow { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+.dzrow .k { flex:0 0 92px; font-size:11px; color:var(--muted); }
+.dzfin { flex:1 1 auto; min-width:0; font-size:11px; padding:6px 4px; }
 .dzslice { margin-top:2px; }
 .dzslice .row { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
 .dzslice .row .gap { flex:1; }
@@ -1162,6 +1168,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       read as a desync.</p>
       <div id="dzFactions" class="dzchips"></div>
       <div id="dzPaint" class="dzpaint"></div>
+      <div class="dzgrp">Surfaces</div>
+      <p class="dznote">A slot is a colour AND what it is made of, because the
+      two are one decision: the same pale grey is a composite panel or bare
+      rolled steel depending on the surface under it. Each swatch above carries
+      its own, and "as hull" leaves it on whatever the hull wide finish is. The
+      frame and the fitted parts are the inside of the ship, which a hole in the
+      plating now shows, so they are choosable too. Cosmetic like the paint:
+      never hashed, never sent to the core.</p>
+      <div id="dzInner"></div>
       <div class="dzgrp">Colour key</div>
       <div id="dzKey" class="dzkeys"></div>
 
