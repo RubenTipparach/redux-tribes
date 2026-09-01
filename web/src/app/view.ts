@@ -10,6 +10,9 @@
  */
 
 import * as THREE from 'three';
+import { bakeSky, skyFor, type SkyPreset } from './sky.js';
+import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
+import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
 import type { Sim } from '../sim/wasm.js';
 import {
@@ -925,6 +928,20 @@ export class View {
   #movedAt = 0;
   #liveBuiltAt = 0;
 
+  /** The three point rig, kept so a scenario can re-aim the key at its own
+   *  sun. Held rather than added and forgotten: where the light comes from is
+   *  a per level fact now. */
+  #key!: THREE.DirectionalLight;
+  #fill!: THREE.DirectionalLight;
+  #rim!: THREE.DirectionalLight;
+  #ambient!: THREE.AmbientLight;
+  /** The baked sky, and the scenery in front of it. Both belong to a match:
+   *  the next launch gets its own and these are disposed. */
+  #sky: THREE.CubeTexture | null = null;
+  #backdrop: THREE.Group | null = null;
+  /** Bloom, and the ladder that can take it away. */
+  #post: Post | null = null;
+
   constructor(canvas: HTMLCanvasElement, match: Match, sim: Sim) {
     this.#canvas = canvas;
     this.#match = match;
@@ -932,13 +949,48 @@ export class View {
 
     this.#renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.#renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    // The archive graded with a Neutral tonemap, and this is the same choice.
+    // It matters more than it sounds: with no tone mapping at all, everything
+    // brighter than white simply clips to white, so a blast and the sun and a
+    // lit hull all arrive at the same flat value and bloom has nothing to
+    // pick out. Neutral keeps highlights rolling off instead of clipping,
+    // which is what gives the thresholded bloom something to threshold.
+    this.#renderer.toneMapping = THREE.NeutralToneMapping;
+    this.#renderer.toneMappingExposure = 1.15;
     this.#camera = new THREE.PerspectiveCamera(50, 1, 0.5, 6000);
+    // A flat clear colour until a scenario says otherwise. `setSky` replaces
+    // it with the baked nebula, and this is what a match with no sky (or a
+    // context that lost its sky) falls back to rather than rendering nothing.
     this.#scene.background = new THREE.Color(0x0a0e14);
 
-    this.#scene.add(new THREE.HemisphereLight(0x5f7fa0, 0x0a0e14, 1.6));
-    const key = new THREE.DirectionalLight(0xdfefff, 1.1);
-    key.position.set(0.4, 1, 0.25);
-    this.#scene.add(key);
+    // A three point rig, the same grammar the shipyard already used, now on
+    // the map. It replaces one near vertical key and a hemisphere, which lit
+    // every hull identically from above and left nothing to tell the top of a
+    // ship from its side.
+    //
+    // KEY comes from wherever the scenario's sun is, so the bright side of a
+    // hull and the bright dot in the sky are the same fact. FILL is cool and
+    // opposite, standing in for the nebula until the baked sky takes that job
+    // over as an environment map. RIM is behind and low: it is what separates
+    // a dark hull from a dark sky, and without it a ship silhouetted against
+    // empty space has no edge at all.
+    this.#key = new THREE.DirectionalLight(0xfff0d2, 2.1);
+    this.#key.position.set(0.42, 0.66, -0.62);
+    this.#scene.add(this.#key);
+
+    this.#fill = new THREE.DirectionalLight(0x5f7fa0, 0.55);
+    this.#fill.position.set(-0.6, -0.2, 0.7);
+    this.#scene.add(this.#fill);
+
+    this.#rim = new THREE.DirectionalLight(0xbcd8ff, 1.25);
+    this.#rim.position.set(-0.35, -0.55, -0.75);
+    this.#scene.add(this.#rim);
+
+    // A floor under everything, so the unlit side of a hull is dark rather
+    // than absent. Low, because the environment map does most of this job
+    // once a sky is baked.
+    this.#ambient = new THREE.AmbientLight(0x223044, 0.35);
+    this.#scene.add(this.#ambient);
 
     // What a metal reflects. Metalness with no environment is BLACK, so a
     // palette colour that says it is bare alloy needs this to say anything at
@@ -1076,6 +1128,10 @@ export class View {
     const w = this.#canvas.clientWidth || 1;
     const h = this.#canvas.clientHeight || 1;
     this.#renderer.setSize(w, h, false);
+    // The composer's render targets are sized in pixels, not CSS units, so
+    // they follow the same resize the canvas does. A composer left at the old
+    // size draws the scene into a corner of the screen.
+    this.#post?.resize(w, h);
     this.#camera.aspect = w / h;
     this.#camera.updateProjectionMatrix();
   }
@@ -2495,6 +2551,11 @@ export class View {
       ship: number; kill: boolean; off: number; hullR: number; resolved: boolean;
     }>;
     beamLen: Array<{ len: number; hit: boolean; off: number; hullR: number }>;
+    /** Pool lights actually lit, and what they add up to. A blast that threw
+     *  no light would leave these at zero while the fireball still drew, and
+     *  by eye the two are almost the same picture. */
+    blastLights: number;
+    blastLightPower: number;
   } {
     let widest = 0;
     for (const c of this.#fxGroup.children) {
@@ -2547,9 +2608,16 @@ export class View {
         hullR: +hullR.toFixed(3),
       };
     });
+    let blastLights = 0;
+    let blastLightPower = 0;
+    for (const l of this.#blastLights) {
+      if (l.intensity > 0) { blastLights++; blastLightPower += l.intensity; }
+    }
     return {
       onHull,
       beamLen,
+      blastLights,
+      blastLightPower: +blastLightPower.toFixed(2),
       blasts: this.#fxGroup.children.length,
       beams: this.#beamGroup.children.length,
       trails: this.#trailGroup.children.length,
@@ -2945,6 +3013,129 @@ export class View {
     this.#wireKey = '';
   }
 
+  // ---------------------------------------------------------- the sky --
+
+  /**
+   * Dress the field for one scenario: bake its sky, hang its scenery, and
+   * point the key light at its sun.
+   *
+   * Called once per launch. Everything it makes belongs to that match and is
+   * disposed here on the next one, because a second sky would sit inside the
+   * first and a second sun would light the fleet from two directions.
+   *
+   * The baked cubemap does double duty. As `background` it is what you see;
+   * as `environment` it is what the hulls REFLECT, which is where the cool
+   * bounce on a shadowed flank comes from. Fill is a light standing in for a
+   * sky it cannot see; this is the sky itself doing the job.
+   */
+  setSky(scenario: string): void {
+    const sky: SkyPreset = skyFor(scenario);
+    const dressing: Backdrop = backdropFor(scenario);
+
+    if (this.#backdrop) {
+      this.#scene.remove(this.#backdrop);
+      disposeBackdrop(this.#backdrop);
+      this.#backdrop = null;
+    }
+    this.#sky?.dispose();
+    this.#sky = null;
+
+    // A lost context, a headless run with no float targets, or any other
+    // reason the bake cannot happen must leave a playable game rather than a
+    // black screen, so the flat colour stays as the fallback.
+    try {
+      const baked = bakeSky(this.#renderer, sky);
+      this.#sky = baked;
+      this.#scene.background = baked;
+      this.#scene.environment = baked;
+      // Low. The environment is there to fill shadow, not to flatten the key
+      // light that gives a hull its shape.
+      this.#scene.environmentIntensity = 0.35;
+    } catch {
+      this.#scene.background = new THREE.Color(sky.b);
+      this.#scene.environment = null;
+    }
+
+    this.#backdrop = buildBackdrop(dressing);
+    this.#scene.add(this.#backdrop);
+
+    // One sun, one key. The lit side of a ship and the bright dot behind it
+    // agree because they are the same number read twice.
+    const dir = sunDirection(dressing);
+    this.#key.position.copy(dir);
+    this.#key.color.setHex(dressing.sunColor);
+    // Rim opposes the key and sits low, so it catches the edge the key misses.
+    this.#rim.position.set(-dir.x * 0.8, -Math.abs(dir.y) * 0.8, -dir.z * 0.9);
+  }
+
+  /**
+   * Where the far scenery actually ended up on screen.
+   *
+   * Hunting for a sun in screenshots is not a test: it is somewhere behind
+   * the camera most of the time, and "I could not see it" and "it was never
+   * drawn" look identical. This projects each piece into normalised device
+   * coordinates, so a harness can say the sun EXISTS, is in front of the
+   * camera, and is the size it should be, from any angle.
+   */
+  backdropState(): {
+    pieces: number;
+    sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null;
+    planets: number;
+  } {
+    if (!this.#backdrop) return { pieces: 0, sun: null, planets: 0 };
+    let sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null = null;
+    let planets = 0;
+    let pieces = 0;
+    const v = new THREE.Vector3();
+    for (const o of this.#backdrop.children) {
+      pieces++;
+      if ((o as THREE.Sprite).isSprite) {
+        // The first sprite is the sun proper; the second is its halo.
+        if (sun) continue;
+        v.setFromMatrixPosition(o.matrixWorld);
+        // Behind the camera projects to the same place as in front of it, so
+        // the sign of the view space z is what tells them apart.
+        const view = v.clone().applyMatrix4(this.#camera.matrixWorldInverse);
+        v.project(this.#camera);
+        sun = {
+          onScreen: view.z < 0 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1,
+          ndc: [+v.x.toFixed(3), +v.y.toFixed(3)],
+          behind: view.z >= 0,
+        };
+      } else if ((o as THREE.Mesh).isMesh) {
+        planets++;
+      }
+    }
+    return { pieces, sun, planets };
+  }
+
+  /** Which post path is running, and why, for the harness to read. */
+  postState(): { quality: Quality; stoodDown: string; frameMs: number; sky: boolean } {
+    return {
+      quality: this.#post?.quality ?? 'plain',
+      stoodDown: this.#post?.stoodDown ?? 'no composer',
+      frameMs: +(this.#post?.frameMs ?? 0).toFixed(2),
+      sky: this.#sky !== null,
+    };
+  }
+
+  /** Choose the post path by hand, which also stops the ladder measuring. */
+  forceQuality(q: Quality): void { this.#post?.force(q); }
+
+  /** What the rig is, so a harness can check three lights actually reach a
+   *  hull rather than trusting that three were constructed. */
+  lightState(): Array<{ kind: string; color: number; intensity: number }> {
+    const out: Array<{ kind: string; color: number; intensity: number }> = [];
+    this.#scene.traverse(o => {
+      const l = o as THREE.Light;
+      if (!l.isLight) return;
+      // The blast pool is dynamic and mostly dark; it is reported by `fx`.
+      if ((l as THREE.PointLight).isPointLight) return;
+      out.push({ kind: l.type, color: l.color.getHex(), intensity: +l.intensity.toFixed(3) });
+    });
+    return out;
+  }
+
   render(): void {
     // The turrets swing here rather than on a turn boundary: they EASE, so
     // they need a frame's worth of time and the frame is what has it. Clamped,
@@ -2955,7 +3146,11 @@ export class View {
     this.#posedAt = now;
     this.#poseTurrets(dt);
     this.#applyCamera();
-    this.#renderer.render(this.#scene, this.#camera);
+    // Built on the first frame rather than in the constructor: the composer
+    // sizes its render targets from the canvas, and the canvas has no size
+    // until it is laid out.
+    if (!this.#post) this.#post = new Post(this.#renderer, this.#scene, this.#camera);
+    this.#post.render();
   }
 }
 
