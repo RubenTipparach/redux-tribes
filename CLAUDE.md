@@ -313,6 +313,28 @@ loaded twice: `route.go` runs the route handler synchronously, which fetches
 and loads it, and then the caller loaded its own copy over the top. Navigate
 and let the route do the work.
 
+**A default is a resource too.** The five stock hulls have addresses:
+`/ship/terran_frigate` and friends. The class keys are a closed authored set,
+so an id that names one is that hull and no design id can collide with it, and
+`route.ts` needs to know nothing about it: it parses `/ship/<id>` and what an
+id MEANS stays with the app, the same division that keeps it from knowing the
+screen list. Picking a class in the editor pushes that address, so browsing the
+classes is a trail you can walk back.
+
+**Unsaved work belongs to the address as well.** The shipyard drafts to
+`localStorage` under a key that IS the route id: a design id for a saved hull,
+a class key for one that has never been saved. That is what makes the URL name
+the work in progress and not merely the starting point, and it is why two hulls
+on the go do not tread on each other. The draft is written from `#refresh`,
+which is the one choke point every mutation already goes through, debounced,
+because a plate stroke fires per cell; it is flushed on the way out, since the
+debounce is a timer on a page that is about to stop running. It WINS over the
+stored version on load, because it is the newer work and the stored version is
+one click away, and it says so on screen rather than swapping a hull silently.
+A draft is not a save: it is never listed, never fielded, and is thrown away
+the moment the real thing exists, because a draft that outlived its save would
+come back over the top of it.
+
 **Add the route to `route.ts` and the check to `routes.mjs` in the same
 commit.** `route.ts` parses and formats and knows nothing about screens; what a
 route MEANS stays in the app. And remember the trap the deep paths already

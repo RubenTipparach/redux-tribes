@@ -185,6 +185,61 @@ if (!slot.designId) {
   } else ok('/ship is a new design even after one has been loaded');
 }
 
+// ------------------------------------------ the stock hulls, and drafts --
+
+/**
+ * A default ship is a resource too, and unsaved work is part of it.
+ *
+ * The class keys are a closed authored set, so `/ship/terran_frigate` is the
+ * stock Terran and cannot collide with a design id. That same string is the
+ * DRAFT slot, which is what makes the address name the work in progress and
+ * not just the starting point: reloading any shipyard URL comes back to what
+ * you had, and two hulls on the go do not tread on each other because they are
+ * at two different addresses.
+ */
+{
+  await boot('/ship/karisen_frigate');
+  const k = await page.evaluate(() => window.ftDebug.designer());
+  if (path() !== '/ship/karisen_frigate') {
+    fail(`a stock hull address became ${path()}`);
+  } else if (k.classKey !== 'karisen_frigate') {
+    fail(`/ship/karisen_frigate opened a ${k.classKey}`);
+  } else ok(`a stock hull has an address: /ship/karisen_frigate, ${k.parts} parts`);
+
+  // What the stock Rogue is, before anybody touches it.
+  await boot('/ship/rogue_frigate');
+  const stock = await page.evaluate(() => window.ftDebug.designer());
+
+  // Strip it, wait out the draft debounce, and reload the same address.
+  await page.click('#dzStrip');
+  await page.waitForTimeout(1400);
+  const edited = await page.evaluate(() => window.ftDebug.designer());
+  if (edited.parts === stock.parts) {
+    fail('stripping the hull changed nothing, so the draft check would prove nothing');
+  } else {
+    await boot('/ship/rogue_frigate');
+    const after = await page.evaluate(() => window.ftDebug.designer());
+    if (after.parts !== edited.parts) {
+      fail(`a reload lost the unsaved work: ${after.parts} parts, not ${edited.parts}`);
+    } else if (after.parts === stock.parts) {
+      fail('a reload came back with the stock hull rather than the edit');
+    } else {
+      ok(`unsaved work survives a reload: ${stock.parts} parts stock, `
+        + `${edited.parts} after stripping, ${after.parts} after reloading`);
+    }
+
+    // And it belongs to THAT hull. A draft that leaked across addresses would
+    // hand somebody a stripped Terran they never touched.
+    await boot('/ship/terran_frigate');
+    const other = await page.evaluate(() => window.ftDebug.designer());
+    if (other.draftKey !== 'terran_frigate') {
+      fail(`/ship/terran_frigate drafts under ${other.draftKey}`);
+    } else if (other.parts === edited.parts) {
+      fail('another stock hull inherited the draft');
+    } else ok(`a draft belongs to its own address: terran keeps ${other.parts} parts`);
+  }
+}
+
 // ------------------------------------------------------- swapping a ship --
 
 /**

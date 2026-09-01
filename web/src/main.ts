@@ -3377,6 +3377,13 @@ designer.onSave(async req => {
       mass: req.mass, hull: req.hull, legal: req.legal,
     });
   void lobby.refreshLibrary();
+  // The hull now exists for real, so its draft is finished. Left behind, it
+  // would come back OVER the saved version on the next reload, which is the
+  // one thing worse than losing it. The class key slot is cleared too: a new
+  // hull drafts under its class until it has an id of its own.
+  designer.clearDraft(req.designId ?? undefined);
+  designer.clearDraft();
+  designer.setDraftKey(saved.designId);
   // The design now EXISTS, so the address has to say which one you are on.
   // Saving left you at `/ship` before this: a refresh threw the hull you had
   // just made back to an empty editor, and the link in the address bar was for
@@ -3410,6 +3417,10 @@ lobby.onRoster(scenario => {
   // one of them.
   return match.roster(id);
 });
+
+// A stock hull picked in the editor is a stock hull with a URL. Push rather
+// than replace: browsing the five classes is a trail worth walking back.
+designer.onPickClass(classKey => { route.go({ kind: 'ship', designId: classKey }); });
 
 // A design that is gone cannot keep its address. Same rule as a game that is
 // gone falling back to the lobby, applied one level down.
@@ -3483,6 +3494,22 @@ async function showRoute(r: route.Route): Promise<void> {
         // the address said otherwise, and Save then updated that row instead
         // of making the ship the player thought they were starting.
         designer.newDesign();
+        designer.show();
+        lobby.show();
+        return;
+      }
+      // A STOCK HULL HAS AN ADDRESS TOO. The class keys are a closed authored
+      // set, so an id that names one is that hull rather than a saved design,
+      // and no design id can collide with it. `/ship/terran_frigate` is a
+      // link to the stock Terran, and it is also the draft slot an unsaved
+      // Terran lives in, so the URL names the work in progress as well as the
+      // starting point.
+      //
+      // The router stays ignorant of this: it parses `/ship/<id>` and what an
+      // id MEANS is the app's business, which is the same division that keeps
+      // it from knowing the screen list.
+      if (classIndexOf(r.designId) >= 0) {
+        designer.newDesign(r.designId);
         designer.show();
         lobby.show();
         return;
