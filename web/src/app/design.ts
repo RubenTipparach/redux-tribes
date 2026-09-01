@@ -153,6 +153,20 @@ export interface ModuleDef {
    * player can read an unfamiliar hull without a legend.
    */
   readonly purpose: Purpose;
+  /**
+   * What the armour over this part is cut away for.
+   *
+   * A window is a hole in the PLATING where a room is behind it, so it is
+   * authored on the module and derived onto the skin: the plate cell whose
+   * inner neighbour belongs to a bridge wears the bridge viewport, and one
+   * over a barracks wears cabin panes. That survives any change to the
+   * rasteriser, which a list of cell indices would not, and it means a stock
+   * hull gets its windows for free because it already carries those rooms.
+   *
+   * Presentation only. A window cannot change an outcome and none of it
+   * crosses the boundary.
+   */
+  readonly window?: 'porthole' | 'panes' | 'strip' | 'bridge' | 'beacons' | 'hangar';
   /** How it is drawn. The client owns this and the core never sees it. */
   readonly art: 'bell' | 'nozzle' | 'block' | 'barbette' | 'beamgun' | 'cannon'
     | 'missilecell' | 'bridge' | 'pod' | 'strut'
@@ -225,15 +239,26 @@ export const MODULES: readonly ModuleDef[] = [
 
   // ----------------------------------------------------------- utility --
   { id: 'UTL-BRG', name: 'Bridge', cat: 'utility', fits: 'bay',
-    size: [6, 5, 6], mass: 34200, hull: 7200, purpose: 'command', art: 'bridge', colour: 0x3FD97C },
+    size: [6, 5, 6], mass: 34200, hull: 7200, purpose: 'command', art: 'bridge',
+    window: 'bridge', colour: 0x3FD97C },
+  // Cabins, which is the one window with variants: seven of them, picked per
+  // cell, so a run of quarters down a flank is lit differently along its
+  // length instead of reading as one panel repeated.
   { id: 'UTL-BAR', name: 'Marine barracks', cat: 'utility', fits: 'bay',
-    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, purpose: 'crew', art: 'barracks', colour: 0xFFC93C },
+    size: [5, 4, 7], mass: 26600, hull: 5600, marines: 5, purpose: 'crew', art: 'barracks',
+    window: 'panes', colour: 0xFFC93C },
   { id: 'UTL-AIR', name: 'Boarding airlock', cat: 'utility', fits: 'bay',
-    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, purpose: 'boarding', art: 'airlock', colour: 0xFF5FA8 },
+    size: [3, 3, 3], mass: 5130, hull: 1080, capacity: 2, purpose: 'boarding', art: 'airlock',
+    window: 'porthole', colour: 0xFF5FA8 },
+  // Running lights on the clamps, which sit at the extremities of a hull:
+  // the one decal that reads at MAP range, where a normal map does not, and
+  // the thing that makes a hull look crewed from across the field.
   { id: 'UTL-CLM', name: 'Boarding clamp', cat: 'utility', fits: 'clamp',
-    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, purpose: 'boarding', art: 'clamp', colour: 0xFF5FA8 },
+    size: [5, 4, 6], mass: 22800, hull: 4800, reach: 5, purpose: 'boarding', art: 'clamp',
+    window: 'beacons', colour: 0xFF5FA8 },
   { id: 'UTL-CGO', name: 'Cargo bay', cat: 'utility', fits: 'bay',
-    size: [10, 8, 13], mass: 197600, hull: 41600, purpose: 'structure', art: 'cargo', colour: 0x8494A8 },
+    size: [10, 8, 13], mass: 197600, hull: 41600, purpose: 'structure', art: 'cargo',
+    window: 'hangar', colour: 0x8494A8 },
 
   // --------------------------------------------------------- structure --
   // A strut carries nothing in v1. An autorouted, freely meshed power grid is

@@ -116,8 +116,17 @@ export interface Vent {
 }
 
 export interface Wound {
-  /** The surviving cells of plates a hit only partly covered. Lit, hull paint. */
+  /**
+   * The surviving cells of plates a hit only partly covered.
+   *
+   * Still PLATE, so it wears the hull's own finish and its UVs are the
+   * mesher's: a plate that has been shot round the edges is not a different
+   * material from the plate beside it.
+   */
   readonly skin: THREE.BufferGeometry;
+  /** The faces the hit OPENED, which are the inside of the ship: machinery
+   *  and frame, and drawn as such. */
+  readonly inner: THREE.BufferGeometry;
   /** The inside the hit opened. Unlit, and repainted as it cools. */
   readonly glow: THREE.BufferGeometry;
   /** Which dead cell each glow VERTEX belongs to, so cooling is a repaint
@@ -196,6 +205,26 @@ function faceCorners(
 }
 
 /**
+ * The four UVs of one cell face, in the mesher's own convention.
+ *
+ * One repeat per CELL, and the texture's V along the HULL's up axis rather
+ * than the face's own second axis: on the x faces the layer's u IS y, so
+ * without the swap a decal comes out a quarter turn round and a corrugation
+ * runs vertically down one flank and horizontally down the next. `hull.ts`
+ * makes the same swap for the same reason, and the two have to agree or a
+ * plate that survived a hit would wear its finish at a different angle from
+ * the plate beside it that was never touched.
+ */
+const FACE_UV: ReadonlyArray<readonly [number, number]> = [[0, 0], [1, 0], [1, 1], [0, 1]];
+function faceUV(d: readonly [number, number, number], out: number[]): void {
+  const swap = d[0] !== 0;
+  for (const c of FACE_UV) {
+    if (swap) out.push(c[1] as number, c[0] as number);
+    else out.push(c[0] as number, c[1] as number);
+  }
+}
+
+/**
  * Build the torn edges of one hull.
  *
  * Proportional to the DAMAGE, not to the ship: the interior walk visits the
@@ -229,7 +258,15 @@ export function buildWound(
     i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ && !!grid[idx(i, j, k)];
 
   const whole = new Uint8Array(hull.quads);
-  const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [];
+  // TWO surfaces, not one. A plate cell that survived a hit is still PLATE and
+  // must keep wearing the hull's finish; the face a hit opened is the inside
+  // of the ship and wears what machinery wears. Drawn as one mesh with one
+  // material they could only be one of those, and both lost their normal map
+  // entirely because neither carried UVs: a shot took the plating off a region
+  // and what grew back was flat paint, which is exactly what a finish that had
+  // been REMOVED by damage would look like.
+  const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [], sUv: number[] = [];
+  const iPos: number[] = [], iNrm: number[] = [], iCol: number[] = [], iUv: number[] = [];
   const gPos: number[] = [], gNrm: number[] = [], gCol: number[] = [], gUv: number[] = [];
   const glowCell: number[] = [];
   const vents: Vent[] = [];
@@ -271,6 +308,7 @@ export function buildWound(
         sNrm.push(nx, ny, nz);
         sCol.push(r, g, b);
       }
+      faceUV([nx, ny, nz] as const, sUv);
     }
   }
 
@@ -310,10 +348,11 @@ export function buildWound(
       const heat = heatOf(diedAt, tick);
       let corner = 0;
       let cx = 0, cy = 0, cz = 0;
+      faceUV(back, iUv);
       for (const [ax, ay, az] of faceCorners(ni, nj, nk, back)) {
-        world(ax, ay, az, sPos);
-        sNrm.push(back[0], back[1], back[2]);
-        sCol.push(or_, og, ob);
+        world(ax, ay, az, iPos);
+        iNrm.push(back[0], back[1], back[2]);
+        iCol.push(or_, og, ob);
         world(ax, ay, az, gPos);
         gNrm.push(back[0], back[1], back[2]);
         // Alpha is the heat, so the ember layer takes itself off as it cools
@@ -338,7 +377,8 @@ export function buildWound(
   }
 
   return {
-    skin: quadGeometry(sPos, sNrm, sCol),
+    skin: quadGeometry(sPos, sNrm, sCol, sUv),
+    inner: quadGeometry(iPos, iNrm, iCol, iUv),
     glow: quadGeometry(gPos, gNrm, gCol, gUv, 4),
     glowCell: new Int32Array(glowCell),
     vents,

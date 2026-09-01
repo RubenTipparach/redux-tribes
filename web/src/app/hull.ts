@@ -25,6 +25,7 @@
  */
 
 import * as THREE from 'three';
+import { WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat,
   armourColour, bareGrid, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
@@ -102,6 +103,23 @@ export interface HullMesh {
   readonly rigOfCell: ReadonlyMap<number, number>;
   /** Every cell of each rig, so a mount can be taken off in one piece. */
   readonly rigCells: ReadonlyArray<Int32Array>;
+  /**
+   * The windows cut into the plating, one geometry per decal kind.
+   *
+   * A separate mesh rather than part of the hull, because a window needs three
+   * maps of its own and the hull has one material. There are a few dozen of
+   * them against a thousand plate quads, so it is one small extra draw per
+   * kind per ship and the plate pass is untouched.
+   *
+   * `cellOf` runs parallel to the quads, so a carve can collapse the window
+   * over a cell it just shot away: a viewport still glowing on plating that is
+   * no longer there would be the one thing on a wreck that had not noticed.
+   */
+  readonly windows: ReadonlyArray<{
+    readonly key: string;
+    readonly geo: THREE.BufferGeometry;
+    readonly cellOf: Int32Array;
+  }>;
 }
 
 /**
@@ -166,8 +184,19 @@ export const tintMix = (destroyed: boolean, far: number): number =>
  * chip thumbnail passes 1 because a 44 pixel picture IS map range, and the
  * schematic passes 0 because it exists to show what a hull is made of.
  */
+/**
+ * Anything with a colour and an emissive, which is the whole of what this
+ * touches. Lambert and Standard both qualify, and naming one of them here made
+ * every caller drawing the other cast a lie to get in.
+ */
+export interface Tintable {
+  color: THREE.Color;
+  emissive: THREE.Color;
+  needsUpdate: boolean;
+}
+
 export function tintHull(
-  mat: THREE.MeshLambertMaterial, tone: number, destroyed: boolean, far: number,
+  mat: Tintable, tone: number, destroyed: boolean, far: number,
 ): void {
   mat.color.setHex(0xffffff).lerp(new THREE.Color(tone), tintMix(destroyed, far));
   mat.emissive.setHex(destroyed ? 0x000000 : tone).multiplyScalar(GLOW_FAR * far);
@@ -303,8 +332,39 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     else { a[0] = u; a[1] = v; a[2] = w; }
   };
 
+  /**
+   * Which window a PLATE cell wears, if any.
+   *
+   * A window is a hole in the armour where a room is behind it, so it is not a
+   * property of a cell at all: it is a property of the cell one step INWARD.
+   * The plate over a bridge wears the bridge viewport; the plate over a
+   * barracks wears cabin panes. Authored on the module (`ModuleDef.window`)
+   * and derived here, which survives any change to the rasteriser and means a
+   * stock hull gets its windows for free from the rooms it already carries.
+   *
+   * Plate only. A window in the middle of a drive bell would be a window on a
+   * part that is standing outside the hull, which is a hole in an engine.
+   */
+  const windowAt = (
+    i: number, j: number, k: number, dx: number, dy: number, dz: number,
+  ): string | null => {
+    const n = idx(i, j, k);
+    const mat = grid[n] as number;
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
+    // One step in, against the face's own normal.
+    const bi = i - dx, bj = j - dy, bk = k - dz;
+    if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
+    const owner = own[idx(bi, bj, bk)] as number;
+    if (owner <= 0) return null;
+    const part = d.parts[owner - 1];
+    return (part ? moduleById(part.module)?.window : undefined) ?? null;
+  };
+  /** Every window face found, by decal kind: cell, and which way it looks. */
+  const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
+
   const at = [0, 0, 0];
-  for (const dir of DIRS) {
+  for (let di = 0; di < DIRS.length; di++) {
+    const dir = DIRS[di] as (typeof DIRS)[number];
     const axis = dir.axis;
     const uAxis = axis === 0 ? 1 : 0;
     const vAxis = axis === 2 ? 1 : 2;
@@ -319,6 +379,20 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         if (!grid[idx(i, j, k)]) continue;
         put(at, axis, u, v, w + dir.step);
         if (!open(at[0] as number, at[1] as number, at[2] as number)) continue;
+        // A window face leaves the plate pass entirely rather than merging
+        // into it. Each one needs its own slice of a variant strip, so it
+        // cannot share a quad with its neighbour, and the hole it leaves in
+        // the plating is exactly where the window mesh goes.
+        const win = windowAt(i, j, k, dir.n[0] as number, dir.n[1] as number, dir.n[2] as number);
+        if (win) {
+          let list = winFaces.get(win);
+          if (!list) { list = []; winFaces.set(win, list); }
+          list.push({ cell: idx(i, j, k), dir: di });
+          if (i < loX) loX = i; if (i > hiX) hiX = i;
+          if (j < loY) loY = j; if (j > hiY) hiY = j;
+          if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
+          continue;
+        }
         mask[u + v * uN] = colourAt(i, j, k);
         owner[u + v * uN] = idx(i, j, k);
         if (i < loX) loX = i; if (i > hiX) hiX = i;
@@ -438,8 +512,74 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     (rigCells[r] as number[]).push(n);
   }
 
+  // ---- the windows ----
+  //
+  // One quad per cell, unmerged on purpose: each picks its own slice of its
+  // decal's variant strip, so a run of cabins down a flank is lit differently
+  // along its length instead of reading as one panel repeated. Which slice is
+  // a hash of the CELL, so the same hull is lit the same way on both seats and
+  // on a re-watch; nothing here is random and nothing is hashed into the
+  // state, because a lit window cannot change an outcome.
+  const windows: Array<{ key: string; geo: THREE.BufferGeometry; cellOf: Int32Array }> = [];
+  for (const [key, faces] of [...winFaces].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const variants = WINDOW_VARIANTS[key] ?? 1;
+    const wPos: number[] = [], wNrm: number[] = [], wUv: number[] = [], wCol: number[] = [];
+    const wCell: number[] = [];
+    const plate = new THREE.Color(armourColour(d.paint));
+    for (const f of faces) {
+      const dir = DIRS[f.dir] as (typeof DIRS)[number];
+      const axis = dir.axis;
+      const uAxis = axis === 0 ? 1 : 0;
+      const vAxis = axis === 2 ? 1 : 2;
+      const i = f.cell % NX, j = ((f.cell / NX) | 0) % NY, k = (f.cell / (NX * NY)) | 0;
+      const lat = [i, j, k] as const;
+      const u0 = lat[uAxis] as number, v0 = lat[vAxis] as number, w0 = lat[axis] as number;
+      const face = dir.step > 0 ? 1 : 0;
+      const ccw = (dir.step > 0) !== (axis === 1);
+      const corners: ReadonlyArray<readonly [number, number]> = ccw
+        ? [[0, 0], [1, 0], [1, 1], [0, 1]]
+        : [[0, 0], [0, 1], [1, 1], [1, 0]];
+      // Which variant this cell shows. A hash rather than a counter, so
+      // adding a cabin somewhere else on the ship does not relight this one.
+      const slice = variants > 1
+        ? (Math.imul(f.cell ^ 0x9e3779b9, 2246822519) >>> 0) % variants : 0;
+      const span = 1 / variants;
+      for (const [du, dv] of corners) {
+        put(at, axis, u0 + du, v0 + dv, w0 + face);
+        wPos.push(
+          ((at[0] as number) - NX / 2) * cell,
+          ((at[1] as number) - NY / 2) * cell,
+          ((at[2] as number) - NZ / 2) * cell);
+        wNrm.push(dir.n[0] as number, dir.n[1] as number, dir.n[2] as number);
+        wCol.push(plate.r, plate.g, plate.b);
+        // The decal's own up is the HULL's up, the same swap the finish makes
+        // on the x faces, or a viewport lies on its side down one flank.
+        const s0 = axis === 0 ? dv : du;
+        const t0 = axis === 0 ? du : dv;
+        wUv.push((slice + s0) * span, t0);
+      }
+      wCell.push(f.cell);
+    }
+    if (!wCell.length) continue;
+    const wGeo = new THREE.BufferGeometry();
+    wGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wPos), 3));
+    wGeo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(wNrm), 3));
+    wGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(wCol), 3));
+    wGeo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(wUv), 2));
+    const wIndex = new Uint32Array(wCell.length * 6);
+    for (let q = 0; q < wCell.length; q++) {
+      const b = q * 4;
+      wIndex[q * 6] = b; wIndex[q * 6 + 1] = b + 1; wIndex[q * 6 + 2] = b + 2;
+      wIndex[q * 6 + 3] = b; wIndex[q * 6 + 4] = b + 2; wIndex[q * 6 + 5] = b + 3;
+    }
+    wGeo.setIndex(new THREE.BufferAttribute(wIndex, 1));
+    wGeo.computeBoundingSphere();
+    windows.push({ key, geo: wGeo, cellOf: new Int32Array(wCell) });
+  }
+
   const out: HullMesh = {
     geo,
+    windows,
     cell,
     rigOf,
     rigs,
@@ -465,7 +605,9 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   };
   if (cache.size >= CACHE_MAX) {
     const oldest = cache.keys().next().value as string;
-    cache.get(oldest)?.geo.dispose();
+    const gone = cache.get(oldest);
+    gone?.geo.dispose();
+    for (const w of gone?.windows ?? []) w.geo.dispose();
     cache.delete(oldest);
   }
   cache.set(key, out);

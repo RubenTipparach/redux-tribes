@@ -29,6 +29,31 @@ const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTrack', 'dzTabParts',
 /** Phone only: the desk layout has the panel beside the view and hides it. */
 const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
+/**
+ * Wait for FRAMES, not for milliseconds.
+ *
+ * A turret eases per frame with a clamped delta, which is right: a tab that
+ * was in the background comes back with seconds in the gap and a turret should
+ * not teleport across it. So a wall clock wait measures the machine rather
+ * than the easing. This suite runs headless on a software rasteriser where the
+ * yard draws single digit frames a second, and 2.6 seconds of waiting was four
+ * frames of movement: the check was reading the renderer's speed and calling
+ * it a turret that would not turn.
+ *
+ * A page that stops drawing entirely hangs here rather than failing fast, and
+ * that is the right trade: the whole suite runs under a timeout, and a yard
+ * that has stopped rendering is a failure worth seeing as one.
+ */
+async function frames(page, n) {
+  await page.evaluate(async (want) => {
+    await new Promise(res => {
+      let seen = 0;
+      const tick = () => { if (++seen >= want) res(); else requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    });
+  }, n);
+}
+
 async function openShipyard(page) {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForTimeout(700);
@@ -237,10 +262,10 @@ async function checkTurrets(page) {
   else if (!(both.arcs && both.target)) fail('the two gunnery switches do not combine');
   else ok('Arcs and Target are independent switches');
 
-  await page.waitForTimeout(700);
+  await frames(page, 12);
   const a = await page.evaluate(() => window.ftDebug.designer());
   if (!a.rigs.length) { fail('no turret rigs at all'); return; }
-  await page.waitForTimeout(2600);
+  await frames(page, 48);
   const b = await page.evaluate(() => window.ftDebug.designer());
 
   const moved = a.rigs.some((r, n) => Math.abs(r.yaw - b.rigs[n].yaw) > 3);
