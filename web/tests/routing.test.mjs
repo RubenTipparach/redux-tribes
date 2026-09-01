@@ -128,6 +128,44 @@ test('a game saved when a hull was per side comes back as a hull per ship', () =
   saves.remove('old1');
 });
 
+test('a game saved when only your own side was pickable still resumes', () => {
+  // The shape changed twice under saves that were already on somebody's shelf.
+  // A resume REPLAYS its orders, so a fleet that came back different from the
+  // one those orders were given to plays a different match while looking like
+  // the same one.
+  localStorage.setItem('ft.games.v1', JSON.stringify({
+    // Slot indexed, your side only, with a null for a ship left as authored.
+    mid: {
+      id: 'mid', name: 'Skirmish', seed: 'd', scenario: 'skirmish',
+      humanSides: 1, side: 0, turns: [], startedMs: 1, updatedMs: 1, seq: 5,
+      hulls: [null, { design: { classKey: 'karisen_frigate' }, name: 'Bulwark' }],
+    },
+    // Older again: one design meant the whole side.
+    old: {
+      id: 'old', name: 'Duel', seed: 'e', scenario: 'duel',
+      humanSides: 1, side: 0, turns: [], startedMs: 1, updatedMs: 1, seq: 4,
+      hull: { classKey: 'terran_frigate' }, hullName: 'Anvil',
+    },
+  }));
+
+  const mid = saves.load('mid');
+  assert.equal(mid.hulls.length, 1, 'a null slot is simply not carried over');
+  assert.deepEqual(mid.hulls[0], {
+    side: 0, slot: 1, design: { classKey: 'karisen_frigate' }, name: 'Bulwark',
+  }, 'the surviving pick keeps its slot and gains the side it was always on');
+
+  const old = saves.load('old');
+  assert.equal(old.hulls.length, 4, 'one design meant every ship that side fields');
+  for (const h of old.hulls) {
+    assert.equal(h.side, 0);
+    assert.equal(h.name, 'Anvil');
+  }
+  assert.deepEqual(old.hulls.map(h => h.slot), [0, 1, 2, 3]);
+
+  saves.remove('mid');
+  saves.remove('old');
+});
+
 test('an outcome sticks, and a forgotten game is gone', () => {
   saves.create({ id: 'g3', name: 'X', seed: 'b', scenario: 'skirmish', humanSides: 1, side: 0 });
   saves.finish('g3', 'won');

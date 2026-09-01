@@ -971,6 +971,23 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    fixed rows either side of it. */
 #briefScroll { overflow:auto; min-height:0; display:grid; gap:8px; align-content:start; }
 #briefShips { display:grid; gap:8px; }
+/* The maker filter: a wrapping row of chips rather than a select, because a
+   dropdown hides its options behind a gesture nobody makes on a phone, which
+   is the same reason the level list is buttons. */
+#briefOwners { display:flex; flex-wrap:wrap; gap:6px; grid-template-columns:none;
+  /* Pinned to the top of the scroller. The roster below it can be long, and a
+     filter that scrolls out of reach is a filter you stop using. */
+  position:sticky; top:0; z-index:2; background:var(--panel);
+  padding:2px 0 6px; margin-bottom:-2px; }
+#briefOwners button { padding:4px 9px; font-size:11px; border-radius:99px;
+  display:flex; align-items:center; gap:5px; }
+#briefOwners button.on { border-color:var(--cyan); background:#0d2231; color:var(--cyan); }
+#briefOwners .cnt { font-size:9px; opacity:.65; }
+/* Which fleet a row belongs to. Hostiles are warm so the two groups are
+   different at a glance and not only by their heading. */
+.briefSide { margin-top:2px; }
+.briefRow[data-side="1"] { border-color:#3a2420; }
+.briefRow[data-side="1"] .t { color:var(--orange, #fa6a0a); }
 .briefRow { display:grid; gap:6px; }
 #briefGo { padding:8px; font-size:14px; }
 .roomRow { cursor:pointer; }
@@ -1315,6 +1332,11 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       <button id="briefClose" title="Back to the levels">Close</button>
     </div>
     <div id="briefScroll">
+      <!-- Whose hulls to show. The library is public to read, so this is about
+           FINDING one among many rather than about who may use one. Hidden
+           while you are the only maker, because a filter with one meaningful
+           setting is furniture. -->
+      <div id="briefOwners" class="picks owners"></div>
       <div id="briefShips"></div>
       <div id="briefNote" class="s"></div>
     </div>

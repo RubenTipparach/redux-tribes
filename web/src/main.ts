@@ -331,30 +331,35 @@ function start(): void {
   // what it can take and how it flies, and hashes the result. The client's
   // only contribution is measuring its own picture.
   match.clearHulls();
-  // One hull per SHIP, by slot: slot n is the nth ship this side seats, which
-  // is the order the roster reports and the order the core fills. A player
-  // swapping one hull out of a pair is not asking for two of it.
+  // One hull per SHIP, by (side, slot): slot n is the nth ship THAT side seats,
+  // which is the order the roster reports and the order the core fills. Both
+  // sides, because what you are fighting is as much a setup choice as what you
+  // fly, and the core's registry was always two sided.
   const picks = launch.hulls ?? [];
-  const took: Array<Design | null> = [];
+  const took: Array<Array<Design | null>> = [[], []];
   const refused: string[] = [];
-  picks.forEach((pick, slot) => {
-    took[slot] = null;
-    if (!pick) return;
+  for (const pick of picks) {
+    const side = pick.side === 1 ? 1 : 0;
     const d = pick.design as Design;
     const r = rasterise(d);
-    const ok = match.setHull(launch.side, classIndexOf(d.classKey), {
+    const ok = match.setHull(side, classIndexOf(d.classKey), {
       plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
-    }, partsOf(d), mountsOf(d), arcMasks(d), slot);
+    }, partsOf(d), mountsOf(d), arcMasks(d), pick.slot);
     // The core refuses an illegal hull, and saying so beats spawning the class
     // hull and letting a player wonder why their ship is somebody else's.
-    if (ok) took[slot] = d;
+    if (ok) (took[side] as Array<Design | null>)[pick.slot] = d;
     else refused.push(pick.name);
-  });
-  const flownNames = picks.map((p, n) => (took[n] ? p?.name : null)).filter(Boolean);
+  }
+  const named = (side: number) => picks
+    .filter(p => (p.side === 1 ? 1 : 0) === side && (took[side] as Array<Design | null>)[p.slot])
+    .map(p => p.name);
+  const flownOurs = named(launch.side);
+  const flownTheirs = named(launch.side === 0 ? 1 : 0);
   const flying = refused.length
     ? `${refused.join(', ')} not legal, flying the class hull`
-    : flownNames.length ? `in ${flownNames.join(', ')}`
-    : '';
+    : [flownOurs.length ? `in ${flownOurs.join(', ')}` : '',
+       flownTheirs.length ? `against ${flownTheirs.join(', ')}` : '']
+      .filter(Boolean).join(' \u00b7 ');
   match.start(seed, scenario, launch.humanSides);
   // Dress the field before the first frame. A level is somewhere: its own
   // nebula, its own sun, its own planets, and the key light aimed at that sun
@@ -368,10 +373,13 @@ function start(): void {
   // because the chips and the schematic draw the same hulls and would
   // otherwise each work out their own answer to "what is this ship".
   hulls.clear();
-  let slot = 0;
+  // A counter per side, because slot is an index WITHIN a side and the ship
+  // list interleaves them.
+  const seen: [number, number] = [0, 0];
   for (const s of match.ships()) {
-    const own = s.side === launch.side ? took[slot++] : null;
-    hulls.set(s.id, own ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
+    const side = s.side === 1 ? 1 : 0;
+    const picked = (took[side] as Array<Design | null>)[seen[side]++] ?? null;
+    hulls.set(s.id, picked ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
   }
   view.setDesigns(hulls);
   // Say what was taken out, on the panel that lists it. A design picked in the
@@ -3372,7 +3380,10 @@ designer.onSave(async req => {
 // control that does nothing.
 lobby.onRoster(scenario => {
   const id = SCENARIO_BY_NAME[scenario] ?? Scenario.Skirmish;
-  return match.roster(id).filter(r => r.side === 0).map(r => r.cls);
+  // BOTH sides. Picking what you fight is half of setting up a fight, and the
+  // core's registry was always per side; it was the screen that only offered
+  // one of them.
+  return match.roster(id);
 });
 
 lobby.onOpenDesign(d => {

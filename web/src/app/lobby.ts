@@ -53,7 +53,15 @@ export interface Launch {
    * pair is not asking for two of it. Slot n is the nth ship this side seats,
    * which is the order the roster reports and the order the core fills.
    */
-  readonly hulls?: ReadonlyArray<{ readonly design: unknown; readonly name: string } | null>;
+  readonly hulls?: ReadonlyArray<{
+    /** Which side fields it. Both are pickable: a level is an engagement to
+     *  set up, not just a seat to sit in. */
+    readonly side: number;
+    /** Which of that side's ships, in spawn order. */
+    readonly slot: number;
+    readonly design: unknown;
+    readonly name: string;
+  }>;
   readonly ticket?: Ticket;
   readonly roomName?: string;
 }
@@ -106,13 +114,27 @@ export class Lobby {
    * core, and `#picks` is the same length: slot n is the nth ship you field.
    */
   #brief: string | null = null;
-  #roster: number[] = [];
+  /** Every ship the level seats, BOTH sides, in spawn order, straight from the
+   *  core. Both because you are setting up an engagement rather than picking a
+   *  seat: choosing what you fight is half of choosing a fight. */
+  #roster: Array<{ side: number; cls: number }> = [];
+  /** One entry per roster row, same length and same order. */
   #picks: Array<SavedDesign | null> = [];
+  /**
+   * Which maker's hulls the briefing is showing.
+   *
+   * `null` is everyone. The library is public to read and a clone is a copy
+   * (see the server suite), so this is about FINDING a hull among many rather
+   * than about who may use one.
+   */
+  #briefOwner: string | null = null;
   /** How to ask the core what a level seats. Wired by main.ts, because the
    *  lobby does not own a match and should not learn to. */
-  #rosterOf: (scenario: string) => number[] = () => [];
+  #rosterOf: (scenario: string) => Array<{ side: number; cls: number }> = () => [];
 
-  onRoster(fn: (scenario: string) => number[]): void { this.#rosterOf = fn; }
+  onRoster(fn: (scenario: string) => Array<{ side: number; cls: number }>): void {
+    this.#rosterOf = fn;
+  }
 
   onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
@@ -380,49 +402,110 @@ export class Lobby {
     $('briefName').textContent = level?.name ?? scenario;
     $('briefBlurb').textContent = level?.blurb ?? '';
 
-    this.#roster.forEach((cls, slot) => {
-      const row = document.createElement('div');
-      row.className = 'card briefRow';
-      const chosen = this.#picks[slot] ?? null;
-      const authored = CLASS_NAMES[cls] ?? 'hull';
-      row.innerHTML =
-        `<div class="row"><div class="grow">`
-        + `<div class="t">Ship ${slot + 1}</div>`
-        + `<div class="s">${escape(chosen ? chosen.name : authored)}`
-        + `${chosen ? '' : ' &middot; as the level authored'}</div>`
-        + `</div></div>`;
-      const picks = document.createElement('div');
-      picks.className = 'picks hulls';
-      const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
-        const b = document.createElement('button');
-        b.className = on ? 'on' : '';
-        b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
-        b.onclick = fn;
-        picks.appendChild(b);
-      };
-      pick(authored, 'as authored', !chosen, () => {
-        this.#picks[slot] = null;
-        this.#renderBriefing();
+    this.#renderOwners();
+
+    // The hulls on offer, after the maker filter. Sorted so a person's own
+    // work comes first: it is the most likely pick and the one they can name.
+    const offered = this.#library
+      .filter(d => classIndexOf(d.classKey) >= 0)
+      .filter(d => this.#briefOwner === null
+        || (this.#briefOwner === '' ? d.mine : d.owner.name === this.#briefOwner))
+      .sort((a, b) => (a.mine === b.mine ? 0 : a.mine ? -1 : 1));
+
+    // Grouped by side, because "which of my ships" and "what am I fighting"
+    // are different questions and a flat list of four makes them one.
+    for (const side of [0, 1]) {
+      const rows = this.#roster
+        .map((r, i) => ({ ...r, i }))
+        .filter(r => r.side === side);
+      if (!rows.length) continue;
+
+      const head = document.createElement('div');
+      head.className = 'dzgrp briefSide';
+      head.textContent = side === 0 ? 'Your fleet' : 'Hostiles';
+      host.appendChild(head);
+
+      rows.forEach((r, n) => {
+        const chosen = this.#picks[r.i] ?? null;
+        const authored = CLASS_NAMES[r.cls] ?? 'hull';
+        const row = document.createElement('div');
+        row.className = 'card briefRow';
+        row.dataset.side = String(side);
+        row.innerHTML =
+          `<div class="row"><div class="grow">`
+          + `<div class="t">${side === 0 ? 'Ship' : 'Hostile'} ${n + 1}</div>`
+          + `<div class="s">${escape(chosen ? chosen.name : authored)}`
+          + `${chosen ? '' : ' &middot; as the level authored'}</div>`
+          + `</div></div>`;
+
+        const picks = document.createElement('div');
+        picks.className = 'picks hulls';
+        const pick = (label: string, sub: string, on: boolean, fn: () => void) => {
+          const b = document.createElement('button');
+          b.className = on ? 'on' : '';
+          b.innerHTML = `<span class="n">${escape(label)}</span><span class="d">${sub}</span>`;
+          b.onclick = fn;
+          picks.appendChild(b);
+        };
+        pick(authored, 'as authored', !chosen, () => {
+          this.#picks[r.i] = null;
+          this.#renderBriefing();
+        });
+        for (const d of offered) {
+          pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
+            + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
+            chosen?.designId === d.designId, () => {
+              this.#picks[r.i] = d;
+              this.#renderBriefing();
+            });
+        }
+        row.appendChild(picks);
+        host.appendChild(row);
       });
-      for (const d of this.#library) {
-        if (classIndexOf(d.classKey) < 0) continue;
-        pick(d.name, escape(CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey)
-          + (d.mine ? '' : ` &middot; ${escape(d.owner.name)}`),
-          chosen?.designId === d.designId, () => {
-            this.#picks[slot] = d;
-            this.#renderBriefing();
-          });
-      }
-      row.appendChild(picks);
-      host.appendChild(row);
-    });
+    }
 
     $('briefNote').innerHTML = this.#library.length
-      ? 'A swapped hull brings its own mass, hull points, flight envelope and '
-        + 'guns, derived by the core from the parts and the plate you fitted. '
-        + 'The level still decides where they stand and how many.'
-      : 'Nothing in the library yet. Build a hull in the shipyard and it will '
-        + 'be offered here.';
+      ? 'Any hull, on either side. A swapped one brings its own mass, hull '
+        + 'points, flight envelope and guns, derived by the core from the parts '
+        + 'and the plate it was fitted with. The level still decides where they '
+        + 'stand and how many.'
+      : 'Nothing in the library yet. Build a hull in the shipyard, or wait for '
+        + 'somebody else to, and it will be offered here.';
+  }
+
+  /**
+   * The maker filter: everyone, mine, or one person at a time.
+   *
+   * Built from the owners actually present rather than from a list of accounts,
+   * so it never offers a name with nothing behind it and never needs a second
+   * request to draw.
+   */
+  #renderOwners(): void {
+    const host = $('briefOwners');
+    host.innerHTML = '';
+    const names: string[] = [];
+    for (const d of this.#library) {
+      if (classIndexOf(d.classKey) < 0) continue;
+      if (!d.mine && !names.includes(d.owner.name)) names.push(d.owner.name);
+    }
+    names.sort((a, b) => a.localeCompare(b));
+
+    const chip = (label: string, key: string | null, count: number) => {
+      const b = document.createElement('button');
+      b.className = this.#briefOwner === key ? 'on' : '';
+      b.innerHTML = `${escape(label)}<span class="cnt">${count}</span>`;
+      b.onclick = () => { this.#briefOwner = key; this.#renderBriefing(); };
+      host.appendChild(b);
+    };
+    const usable = this.#library.filter(d => classIndexOf(d.classKey) >= 0);
+    chip('Everyone', null, usable.length);
+    chip('Mine', '', usable.filter(d => d.mine).length);
+    for (const n of names) {
+      chip(n, n, usable.filter(d => !d.mine && d.owner.name === n).length);
+    }
+    // One maker and it is you: a filter with a single meaningful setting is
+    // furniture, so it stays out of the way until there is a choice to make.
+    host.style.display = names.length ? '' : 'none';
   }
 
   /**
@@ -438,6 +521,13 @@ export class Lobby {
     this.#picks = this.#roster.map(() => null);
     $('briefing').classList.remove('hidden');
     this.#renderBriefing();
+    // Everyone's hulls, not just the tab the library happened to be left on.
+    // A briefing that offered only your own designs because you last pressed
+    // Mine would look like your friends' ships had vanished.
+    if (this.#libMine) {
+      this.#libMine = false;
+      void this.refreshLibrary();
+    }
   }
 
   #closeBrief(): void {
@@ -457,11 +547,23 @@ export class Lobby {
     this.#closeBrief();
     this.hide();
     const name = PRACTICE.find(p => p.key === scenario)?.name ?? scenario;
-    const hulls = this.#picks.map(d => (d ? { design: d.design, name: d.name } : null));
-    const flown = hulls.filter(Boolean).map(h => h?.name);
+    // Slot is the index WITHIN a side, which is the order the core fills, so
+    // it is counted per side rather than taken from the roster index.
+    const nextSlot: [number, number] = [0, 0];
+    const hulls: Array<{ side: number; slot: number; design: unknown; name: string }> = [];
+    this.#picks.forEach((d, i) => {
+      const side = this.#roster[i]?.side === 1 ? 1 : 0;
+      const slot = nextSlot[side]++;
+      if (d) hulls.push({ side, slot, design: d.design, name: d.name });
+    });
+    const flown = hulls.filter(h => h.side === 0).map(h => h.name);
+    const against = hulls.filter(h => h.side === 1).map(h => h.name);
     const game = saves.create({
       id: newId(),
-      name: flown.length ? `${name}, in ${flown.join(', ')}` : name,
+      name: flown.length || against.length
+        ? `${name}${flown.length ? `, in ${flown.join(', ')}` : ''}`
+          + `${against.length ? ` against ${against.join(', ')}` : ''}`
+        : name,
       seed: randomSeed(),
       scenario,
       humanSides: 0b01,
