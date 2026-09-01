@@ -154,6 +154,15 @@ run it by hand after touching the client. It reads `window.ftDebug` to OBSERVE
 and never to make progress, because a harness that can write state stops
 testing the app and starts testing itself.
 
+**Wait on PROGRESS, never on a deadline.** "Playback finished in under forty
+five seconds" is two claims welded together, and only one of them is about the
+app. One turn plays in about thirty seconds on a workstation and sixty nine in
+the software rasterised container these run in, against seventy two on the
+parent commit, so a fixed limit reported a freeze that was a slow machine and
+would have gone on reporting it whatever anybody changed. Both harnesses watch
+the TICK now: still moving is fine however slow, and stopped without handing
+control back is the freeze the check exists for.
+
 A check has to ask about the thing it names, and LENGTH was never the question
 about a beam. Two cuts of that check measured one, and each was wrong about
 something different. Measuring every beam against the weapon's range went red
@@ -313,13 +322,116 @@ loaded twice: `route.go` runs the route handler synchronously, which fetches
 and loads it, and then the caller loaded its own copy over the top. Navigate
 and let the route do the work.
 
-**A default is a resource too.** The five stock hulls have addresses:
-`/ship/terran_frigate` and friends. The class keys are a closed authored set,
+**A default is a resource too.** Every stock hull has an address:
+`/ship/terran_frigate`, `/ship/rogue_cruiser` and the rest. The class keys are a
+closed authored set,
 so an id that names one is that hull and no design id can collide with it, and
 `route.ts` needs to know nothing about it: it parses `/ship/<id>` and what an
 id MEANS stays with the app, the same division that keeps it from knowing the
 screen list. Picking a class in the editor pushes that address, so browsing the
 classes is a trail you can walk back.
+
+## Four navies, four rungs each, and one list that says so
+
+The fleet is a LADDER: corvette, frigate, destroyer, heavy cruiser for Terran,
+Karisen, Rogue and Benefactor, plus the civil freighter. Seventeen classes.
+
+**A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
+every hull; what changes is what one cell is worth in the world, and `RUNG`
+authors four of those. A corvette is a SHORT profile at the frigate's cell; a
+destroyer is the escort cell and a heavy cruiser the cruiser cell, and since
+`design.rs` scales plate by the CUBE of the cell, the same cells cost a cruiser
+eight times a frigate's mass and give it eight times the hull. The ladder is
+therefore mostly a consequence of one number rather than of seventeen tables.
+
+**Each navy is distinct in its SECTION, and it holds at every rung.** Terran is
+wide and flat, Karisen long and near round with a keel rail that overruns the
+body, Rogue short and very broad on a cross beam, Benefactor deeper than it is
+wide. Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
+missile cells and keeps two beams forever, Rogue adds berths and clamps and
+almost no guns, Benefactor adds belt and calibre and gets slower at every step.
+
+**The stock spawn and the stock design are the same ship.** A class's `hull`,
+`radius`, `mass`, flight envelope, marines, capacity and boarding range in
+`data.rs` are what `derive(stockFor(key))` actually produces, measured rather
+than guessed, so a hull fielded from the briefing flies like the one a scenario
+seats. `radius` and `mass` are also the SPHERE and MASS gates, and
+`web/tests/sim.test.mjs` pins them against the frame's own copies: if those two
+disagree the editor's budget bar and the gate disagree, and a hull reads legal
+and is refused.
+
+**Sockets are seated by the PROFILE, not by counted cells.** `seatAt` takes a
+fraction of the half beam and half depth at a station, so a socket is inside
+the skin whatever section the class has, and `suite` lays the plumbing every
+warship has in the same places: drives, retros, attitude blocks, the bridge
+bay, berths and clamps. What a class is FOR stays hand authored, which is its
+profile and its guns. The four frigates keep their original cell coordinates,
+read off the archived silhouettes.
+
+**Nothing may be buried and nothing may foul.** Cells are first come first
+served, so a socket seated inside another part is not an error anywhere: the
+part simply never appears while paying full mass. `sim.test.mjs` walks every
+stock hull and fails on a placement that owns no cells, on an enclosed part
+outside the hull, and on anything standing in a turret's sweep.
+
+### What twelve more classes broke, which was all slack rather than code
+
+Every one of these was a FALLBACK or a CLAMP doing its job. None of them threw.
+The five class world had enough slack in every one of them that nothing showed;
+seventeen spent the slack without a line of the code around them changing.
+
+- **A clamp on the way in is a monster on the way out.** `classIndexOf` answers
+  -1 for a class this build does not know, which crossed as `0xFFFFFFFF` and
+  `class_from_index` CLAMPED it to the last class. With five that was the
+  Freighter and the sphere gate threw it out loudly; with seventeen it is a
+  heavy cruiser whose berth is big enough to ACCEPT the same hull, so a frigate
+  came back wearing a cruiser's mass, hull and radius, all of them hashed, with
+  no message anywhere. `ft_derive` refuses an out of range index now. Clamping
+  is right for an index that came out of the core's own tables and wrong for
+  one that came off the wire.
+- **Three fixed cooldown slots.** A ship record carried `last_fired` for three
+  mounts. Seven of the seventeen carry more, and the Terran heavy cruiser
+  carries eight, so its last five mounts read as never fired for ever. Eight
+  slots now (`ffi::SHIP_COOLDOWNS`), which moved every slot after them: the
+  stride is 39 and both sides of the boundary say so.
+- **The fire panel asked the CLASS.** `ship.weapons` is what the resolver
+  fires and a design's mounts are not its class's, so a hull flying a design
+  got rows for guns that are not aboard. `ft_ship_mount` answers for the ship,
+  in `ft_read_mount`'s own layout.
+- **A repair that invented hit points.** The prize crew's emergency repair is
+  `max_hp * SUB_FAIL_FRAC + 50`, reasoned about at the LOWER bound only. A
+  Rogue corvette's drive bay maxes at 56.25, so a captured one came out at
+  61.25. Clamped at both ends, and `tests/subsystems.rs` drives a real capture
+  rather than restating the arithmetic.
+- **A catch radius authored at one cell size.** `MOUNT_RADIUS` is 0.45 because
+  a turret is a handful of cells and a cell is 7/64 of a unit, which is the
+  FRIGATE's cell. A cruiser's cell is twice that and its turret is twice the
+  size, so a fixed 0.45 is a catch radius smaller than the gun it catches and a
+  shot down a cruiser's barrel misses it. `data::mount_radius` scales it by the
+  rung; the ratio is one at the frigate rung, so nothing that existed moved.
+  `MOUNT_HP` deliberately does NOT scale: a turret is the same machine at every
+  rung and costs the same mass, so it is the same 110 points.
+- **Eight draft slots.** `drafts.ts` kept eight, which was one per class and is
+  now half of them: merely BROWSING the picker evicted the saved hull somebody
+  was building. Twenty eight.
+- **A rounding heuristic with no room left.** `routes.mjs` told a designed hull
+  from a class hull by "the number is not round", with forty points of margin
+  at five classes and 0.022 at seventeen. It asks the core for the class's hull
+  now and compares.
+- **A picker that covered the model.** Seventeen chips wrapped to three rows
+  over a 222px canvas at 390x560, so the centre of the view returned a button
+  and the ship could not be turned by thumb. Each row is one line that scrolls
+  sideways, and `shipyard.mjs` checks the CENTRE OF THE VIEW hits the canvas,
+  which nothing did before: every other probe there is a button, so anything
+  drawn over the model could grow without bound and the suite would keep saying
+  every control was reachable.
+
+**A class and its stock hull are the same ship, and now that is checked.** The
+Karisen frigate has always armed its port sponson in the yard while its class
+table carried two mounts, so the hull a scenario spawned and the hull the
+briefing fielded had different batteries under one name. The class carries the
+sponson beam now, APPENDED rather than inserted, because a mount index is what
+a fire order names and what a snapshot stores.
 
 **Unsaved work belongs to the address as well.** The shipyard drafts to
 `localStorage` under a key that IS the route id: a design id for a saved hull,
@@ -554,6 +666,11 @@ quote what CI ships rather than a local build when it matters, since the same
 source on a different rustc differs by a couple of kilobytes. Quote the shipped size rather than a local
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
+
+The fleet cost **4999 bytes**: 158044 against 163043 on the SAME compiler
+either side of the commit, for twelve classes with their subsystem and mount
+tables, `ft_class_count`, `ft_ship_mount`, the wider ship record and the class
+index refusal. CI shipped that source at 161302, which is the figure to quote.
 
 Attribute growth to the change that caused it, not to the branch it landed on.
 Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
@@ -878,6 +995,122 @@ must have a sky and a backdrop of its own, and no table may carry a key the
 menu never asks for. The second half is what catches a rename that only
 happened on one side.
 
+## A wound is TWO surfaces, and both keep their UVs
+
+A hit does two different things to a hull, and drawing them as one material
+gets one of them wrong. The surviving cells of a partly hit plate are still
+PLATE: they keep the hull's own finish, because a panel shot round the edges is
+not made of something else. The faces the hit OPENED are the inside of the
+ship, and they wear what machinery wears.
+
+Both need UVs, and neither had any. `quadGeometry` takes them as an optional
+argument and the wound passed none, so the normal map had nothing to sample and
+a shot took the plating detail off a whole region: what grew back was flat
+paint, which is exactly what a finish DELETED by damage would look like. The
+material was bound and the texture was loaded and only a geometry channel was
+missing, which is why nothing caught it.
+
+`ftDebug.surfaces()` reports each torn surface's UVs and whether its map has
+pixels, and the playthrough fails on either. Dropping the `sUv` argument flips
+`uv` to false on the plate wound, which is how the guard was checked.
+
+## The camera has a goal and a position
+
+Two of everything: a GOAL that input writes and a value the camera is drawn
+from, eased toward it with `1 - exp(-k * dt)` so the ease takes the same wall
+time at 20 frames a second as at 120. Distance eases in LOG space, because zoom
+is multiplicative: a step from 900 to 800 and one from 20 to 18 are the same
+gesture, and a linear lerp makes the first crawl and the second snap.
+
+**A follow is the exception, and that is the whole point.** Easing toward a
+target that moves every tick is a camera that never arrives and always lags,
+which reads as jitter rather than as smoothness. So a follow eases IN once and
+then locks: `#locked` goes true when the gap closes, and from there the focus
+is copied exactly. The ORBIT keeps easing either way, because turning round a
+ship you are following is still a camera move.
+
+Readiness tests read the GOAL rather than the eased value. A camera on its way
+in has been sent, and testing where it happens to be this frame flashes the
+ship data overlay off for the fifth of a second the move takes.
+
+## Anything drawn ON a hull asks the MESH where it is
+
+`ShipState.pos` is the pose a turn STARTED from. `setPoses` moves the meshes
+every tick of a playback without touching it, so anything that reads the state
+tracks a ship to where it used to be. This has now been the same bug three
+times: the camera lock, the volume labels, and `pickShip`, where the sphere a
+player clicks to focus on a hull stayed behind while the hull flew off, so
+clicking the ship they could SEE did nothing.
+
+`poseOf` and `#livePos` are the answer, and everything drawn on or pointed at a
+hull goes through them. Expect a fourth.
+
+## Three pictures of one hull, one surface
+
+The map, the shipyard and the schematic all draw the same cells, and until
+recently only the map drew them as a PBR surface. A player designed on flat
+Lambert and flew plated Standard, which is the same ship shown two ways and
+the exact divergence GUIDELINES 5.1 is about.
+
+All three draw `MeshStandardMaterial` now, with the DESIGN's own finish,
+metalness and roughness. Two surfaces rather than one, and the distinction is
+plate against machinery: an armour panel and a drive bell are not the same
+thing, and painting the plate's rivets onto a reactor made a ship one material
+with parts drawn on it. `PART_FINISH` is greebled, more metallic and rougher,
+and every cell that belongs to a placement wears it: the yard's parts, the
+schematic's torn edge, and the inside of a wound on the map.
+
+One finish for all machinery rather than one per module kind. A player can
+already tell a drive from a gun by its COLOUR, which is the shipyard's whole
+legend; what they could not tell was machinery from plate, and that is one
+distinction, not nine.
+
+The yard and the modal are indoor views with no sky, and metalness with no
+environment renders BLACK, so both take `studioEnv` from `textures.ts`: the
+same PMREM'd strip, cached, whose two ends are the colours their own hemisphere
+light already uses.
+
+The YARD is the one that cannot afford the whole material, and that is a
+measurement rather than a taste. It draws a BOX PER CELL, about 6500 of them on
+a Terran, where the map draws 1083 greedy quads: it is fill bound, and a PMREM
+environment lookup per fragment is most of its frame. Measured headless at
+1400x900: standard with a normal map and an environment 1.0 fps, the same
+without the environment 1.4, and the Lambert it replaced 1.8. So the yard keeps
+the finish and drops the reflection, which means its metalness is zero, and the
+battlefield keeps the full material because it is not paying a box per cell.
+
+That cost a test, and the fix was to make the test measure the right thing. The
+turret tracking check waited 2.6 SECONDS for a turret to swing; at 1.4 fps
+against the delta clamp that is four frames of movement, so it was reading the
+renderer's speed and calling it a turret that would not turn. It waits for
+FRAMES now.
+
+`thumb.ts` stays Lambert on purpose. A 44 pixel chip has no room for a normal
+map and no environment to reflect, so it would be two texture fetches for a
+picture nobody can see them in.
+
+## A window is a hole in the PLATING, not a part
+
+Authored on the module (`ModuleDef.window`) and derived onto the skin: the
+plate cell whose inner neighbour belongs to a bridge wears the bridge viewport,
+one over a barracks wears cabin panes, one over a clamp wears running lights.
+That survives any change to the rasteriser, which a list of cell indices would
+not, and it means a stock hull gets its windows for free from the rooms it
+already carries.
+
+Three maps, and emission alone cannot do it. Emission only ADDS, so an unlit
+pane over hull paint is hull paint, which is how a cabin came out the same
+shade as the plating and one window looked missing altogether. The COLOUR map
+is what makes glass dark; emission lights the panes that are on; the normal
+seats the whole thing into the plate.
+
+Window faces leave the greedy pass entirely rather than merging into it, and
+they are unmerged on purpose: each picks its own slice of its decal's variant
+strip by a hash of its CELL, so a run of quarters down a flank is lit
+differently along its length instead of reading as one panel repeated. A hash
+rather than a counter, so adding a cabin elsewhere on the ship does not relight
+this one, and so both seats and a re-watch light it the same way.
+
 ## Load every asset from the SITE ROOT
 
 The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
@@ -890,7 +1123,10 @@ like. The ember atlas and all nine armour finishes shipped dead that way, on a
 branch whose commit message said they were live.
 
 `main.ts` already loaded the wasm absolutely and said why on the line above it.
-Three later loads did not copy the lesson. Expect the fourth to try.
+Three later loads did not copy the lesson. So there is ONE loader now:
+`textures.ts` owns every path, and the map, the shipyard and the schematic all
+ask it. A fourth caller cannot spell the path its own way because it has
+nowhere to spell it.
 
 So: a leading slash, and PROVE it rather than asserting it.
 `ftDebug.surfaces()` reports, per hull, the material, its two PBR numbers, the

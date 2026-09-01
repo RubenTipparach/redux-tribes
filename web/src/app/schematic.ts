@@ -20,6 +20,7 @@ import { PURPOSE, arcMasks, gunByKey, partAtCell, type Design } from './design.j
 import { hullMesh, tintHull, type HullMesh } from './hull.js';
 import { buildWound } from './wound.js';
 import { blockedPct } from './turret.js';
+import { finishMap, partMap, studioEnv, windowMaterial } from './textures.js';
 import { bindOrbit, frameBox, orbitStart } from './orbitcam.js';
 import { SUB_BLURB, SUB_LABEL, type Vec3 } from '../sim/types.js';
 
@@ -185,6 +186,13 @@ export class Schematic {
     const fill = new THREE.DirectionalLight(0x35c7ff, 0.32);
     fill.position.set(-6, -3, -5);
     this.#scene.add(fill);
+    // Metalness with no environment renders black, and this view has no sky.
+    // The same strip the shipyard uses, so a hull looked at here and a hull
+    // looked at there are the same material under the same reflection.
+    studioEnv(this.#renderer, tex => {
+      this.#scene.environment = tex;
+      this.#scene.environmentIntensity = 0.35;
+    });
     this.#scene.add(this.#hull, this.#marks);
 
     // The same gestures as the shipyard, from the same place: one finger
@@ -273,9 +281,17 @@ export class Schematic {
     const hull = hullMesh(s.design, bare);
     this.#drawn = hull;
     this.#picks = [];
-    // Opaque. The volumes over it are the transparent things, and a hull that
-    // is transparent too leaves nothing solid for them to be volumes OF.
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    // Opaque, and the SAME surface the map draws: the hull is one merged mesh
+    // here as it is out there, so it wears the design's finish and the two
+    // numbers that say what it is made of. Lambert had neither, which made
+    // this the third picture of one ship that did not match the other two.
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      normalMap: finishMap(s.design.finish ?? 'plate'),
+      metalness: s.design.metal ?? 0.25,
+      roughness: s.design.rough ?? 0.55,
+      dithering: true,
+    });
     // The other end of the range: a schematic exists to show what a hull is
     // made of, so the side wash gets out of the way of the design's own paint.
     tintHull(mat, s.tone, s.lost, 0);
@@ -284,14 +300,23 @@ export class Schematic {
     this.#hull.add(body);
     this.#body = body;
     this.#picks.push(body);
+    // The windows, the same ones the map draws. A schematic of a hull whose
+    // bridge viewport was missing would be a schematic of a different ship.
+    for (const w of hull.windows) {
+      const wm = windowMaterial(w.key);
+      if (wm) this.#hull.add(new THREE.Mesh(w.geo, wm));
+    }
 
     // The armour, when it is being shown THROUGH rather than shown or hidden.
     // Drawn after the body and with no depth write, so the parts inside read
     // through it instead of being z fought over by it.
     if (this.#plate === 'ghost') {
       const plated = hullMesh(s.design);
-      const ghost = new THREE.MeshLambertMaterial({
+      const ghost = new THREE.MeshStandardMaterial({
         vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false,
+        normalMap: finishMap(s.design.finish ?? 'plate'),
+        metalness: s.design.metal ?? 0.25,
+        roughness: s.design.rough ?? 0.55,
       });
       tintHull(ghost, s.tone, s.lost, 0);
       this.#owned.push(ghost);
@@ -397,13 +422,28 @@ export class Schematic {
     pos.needsUpdate = true;
     // And the torn edge: the survivors of a partly hit plate, and the inside
     // the hit opened, in the parts' own colours.
-    const torn = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    // The torn edge is the INSIDE of the hull, which is machinery and frame
+    // rather than plate, so it wears what machinery wears.
+    // Two surfaces, the same two the map draws. A plate cell that survived a
+    // hit is still plate and keeps the hull's finish; the face the hit OPENED
+    // is the inside of the ship and wears what machinery wears.
+    const survivor = new THREE.MeshStandardMaterial({
+      vertexColors: true, side: THREE.DoubleSide,
+      normalMap: finishMap(s.design.finish ?? 'plate'),
+      metalness: s.design.metal ?? 0.25, roughness: s.design.rough ?? 0.55,
+    });
+    const torn = new THREE.MeshStandardMaterial({
+      vertexColors: true, side: THREE.DoubleSide,
+      normalMap: partMap(), metalness: 0.55, roughness: 0.62,
+    });
+    tintHull(survivor, s.tone, s.lost, 0);
     tintHull(torn, s.tone, s.lost, 0);
-    this.#owned.push(torn);
-    this.#geoms.push(wound.skin);
-    const skin = new THREE.Mesh(wound.skin, torn);
-    this.#hull.add(skin);
-    this.#picks.push(skin);
+    this.#owned.push(survivor, torn);
+    this.#geoms.push(wound.skin, wound.inner);
+    const skin = new THREE.Mesh(wound.skin, survivor);
+    const inner = new THREE.Mesh(wound.inner, torn);
+    this.#hull.add(skin, inner);
+    this.#picks.push(skin, inner);
     return geo;
   }
 

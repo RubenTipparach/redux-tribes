@@ -341,8 +341,14 @@ function start(): void {
   for (const pick of picks) {
     const side = pick.side === 1 ? 1 : 0;
     const d = pick.design as Design;
+    // A class this build has never heard of. It used to go across as -1, which
+    // the core read as an enormous unsigned index and CLAMPED to the last class
+    // in its list; the core refuses it now, and saying so here is cheaper than
+    // deriving a hull nobody asked for and then throwing it away.
+    const cls = classIndexOf(d.classKey);
+    if (cls < 0) { refused.push(pick.name); continue; }
     const r = rasterise(d);
-    const ok = match.setHull(side, classIndexOf(d.classKey), {
+    const ok = match.setHull(side, cls, {
       plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
     }, partsOf(d), mountsOf(d), arcMasks(d), pick.slot);
     // The core refuses an illegal hull, and saying so beats spawning the class
@@ -1177,10 +1183,15 @@ function renderWeapons(): void {
   host.innerHTML = '';
   const s = selectedShip();
   if (!s) return;
-  const info = match.classInfo(s.cls);
+  // The SHIP's mounts, not its class's. A hull flying a design carries the
+  // design's guns and the resolver fires those, so a panel built from the class
+  // table offers rows for guns that are not aboard and the wrong arcs for the
+  // ones that are. `weaponLastFired` is already per ship; this makes the rest
+  // of the row agree with it.
+  const mountCount = s.mountCount;
   const order = match.order(s.id);
-  for (let i = 0; i < info.mountCount; i++) {
-    const m = match.mount(s.cls, i);
+  for (let i = 0; i < mountCount; i++) {
+    const m = match.shipMount(s.id, i);
     if (!m) continue;
     const shots = order.weapons.filter(w => w.weaponIndex === i)
       .sort((a, b) => a.second - b.second);
@@ -1225,7 +1236,7 @@ function renderWeapons(): void {
     }
     host.appendChild(div);
   }
-  if (!info.mountCount) host.innerHTML = '<div class="hint">no mounts</div>';
+  if (!mountCount) host.innerHTML = '<div class="hint">no mounts</div>';
   const aimed = targetShip();
   const note = document.createElement('div');
   note.className = 'hint';
@@ -1423,7 +1434,7 @@ function renderSlotMenu(): void {
   }
   const sec = openSlot;
   const o = match.order(s.id);
-  const info = match.classInfo(s.cls);
+  const mountCount = s.mountCount;
   const aimed = targetShip();
   const rows: string[] = [
     `<div class="smhead">t+${sec}s &middot; ${aimed ? shipName(aimed) : 'no target'}`
@@ -1450,8 +1461,8 @@ function renderSlotMenu(): void {
     ].join('');
     rows.push(`<div class="smaim"><span class="k">aim</span>${chips}</div>`);
   }
-  for (let i = 0; i < info.mountCount; i++) {
-    const m = match.mount(s.cls, i);
+  for (let i = 0; i < mountCount; i++) {
+    const m = match.shipMount(s.id, i);
     if (!m) continue;
     const here = o.weapons.filter(w => w.weaponIndex === i && w.second === sec);
     const name = `${WEAPON_NAMES[m.key] ?? '?'}${m.batch > 1 ? ` x${m.batch}` : ''}`;
@@ -1481,7 +1492,7 @@ function renderSlotMenu(): void {
       + `<span class="k">${name}</span>`
       + `<span>${why || `queue &middot; ${(+m.damage.toFixed(1))} dmg`}</span></div>`);
   }
-  if (!info.mountCount) rows.push('<div class="hint">no mounts</div>');
+  if (!mountCount) rows.push('<div class="hint">no mounts</div>');
   menu.innerHTML = rows.join('');
   menu.classList.remove('hidden');
   $('smClose').onclick = () => { openSlot = null; refreshAll(); };
@@ -3256,6 +3267,13 @@ Object.defineProperty(window, 'ftDebug', {
     // Observation only, like everything else here. A harness that could WRITE
     // state would stop testing the app and start testing itself.
     scenario: () => launch.scenario,
+    /** The class keys in the CORE's own order, which is the index a ship's
+     *  `cls` is. A harness that kept its own copy of this list was a third
+     *  copy of an order two files already have to agree about. */
+    classes: () => CLASS_KEYS.slice(),
+    /** How many classes the core has, asked of the core. The client's list
+     *  must be exactly this long or an index means two things. */
+    coreClassCount: () => match.classCount(),
     shipCount: () => match.shipCount,
     wells: () => match.wells(),
     paths: () => view.pathStats(),
@@ -3288,7 +3306,11 @@ Object.defineProperty(window, 'ftDebug', {
     hullQuads: () => view.hullQuads(),
     hullsVisible: (on: boolean) => view.hullsVisible(on),
     /** Who is in the match and what they are flying. */
-    ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull })),
+    ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull,
+      /** What this ship's CLASS has, so a harness can say whether a hull is
+       *  flying a design by comparing the two rather than by guessing from
+       *  whether the number looks round. */
+      classHull: match.classInfo(s.cls).hull })),
     /** What the effects layer is drawing right now, and how far the biggest
      * blast has grown, so "bigger and more visible" is a measurement. */
     fx: () => view.fxStats(),

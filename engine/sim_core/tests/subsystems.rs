@@ -195,3 +195,71 @@ fn the_threshold_survives_a_snapshot() {
     assert_eq!(back.ships[0].subs[bi].hp, hp, "and it keeps the mass it had left");
     assert!(!back.ships[0].has_live_rcs(), "the hull still cannot turn");
 }
+
+/// A prize crew repairs a drive bay. It does not invent one.
+///
+/// The archive's emergency repair is a flat 50 HP, and `turn.rs` adds the
+/// offline fraction to it so a captured hull cannot come out of the boarding
+/// reading dead by `Sub::offline` and alive by the drifting flag. That reasons
+/// about the LOWER bound only. A Rogue corvette's drive bay is a fifth of a
+/// frigate's, and 50 is more than the whole of it: the same line handed it
+/// 61.25 hp out of a maximum of 56.25, which is a repair that made hit points
+/// out of nothing and an `hp` above `max_hp` for everything downstream.
+///
+/// Driven through a real capture rather than by restating the arithmetic, so
+/// taking the clamp back out turns this red.
+#[test]
+fn an_emergency_repair_lands_inside_the_bay_it_repairs() {
+    use sim_core::flight::Mode;
+    use sim_core::turn::Order;
+    use sim_core::turn::EventKind;
+    let mut sim = Sim::new_skirmish(
+        "seed-prize",
+        &[SpawnSpec {
+            class: ShipClassId::RogueCorvette,
+            pos: V3::ZERO,
+            facing: V3::new(0.0, 0.0, 1.0),
+        }],
+        &[SpawnSpec {
+            class: ShipClassId::RogueCorvette,
+            pos: V3::new(0.0, 0.0, 6.0),
+            facing: V3::new(0.0, 0.0, 1.0),
+        }],
+        Faction::Karisen,
+        SOLO,
+    );
+    for s in sim.ships.iter_mut() {
+        s.ai_enabled = false;
+    }
+    sim.ships[1].hull = sim.ships[1].hull_max * 0.15;
+    sim.ships[1].marines = 2;
+    // The bay has to be DEAD for the repair to fire at all.
+    let defs = sim.ships[1].class_def().subsystems;
+    let thr = sim.ships[1]
+        .subs
+        .iter()
+        .position(|s| defs[s.def].kind == SubKind::Thruster)
+        .expect("a corvette has a drive bay");
+    sim.ships[1].subs[thr].hp = 0.0;
+    sim.ships[1].subs[thr].dead = true;
+    sim.ships[1].drift_active = true;
+
+    let mut captured = false;
+    for _ in 0..10 {
+        let mut orders: Vec<Option<Order>> = vec![
+            Some(Order { mode: Some(Mode::FullStop), board: Some(1), ..Default::default() }),
+            Some(Order { mode: Some(Mode::FullStop), ..Default::default() }),
+        ];
+        let res = sim.resolve_turn(&mut orders);
+        if res.events.iter().any(|e| e.kind == EventKind::ShipCaptured) {
+            captured = true;
+            break;
+        }
+    }
+    assert!(captured, "a corvette at 15 percent with two defenders cannot hold its decks");
+    let sub = &sim.ships[1].subs[thr];
+    assert!(!sub.dead, "the prize crew got the drive turning again");
+    assert!(sub.hp <= sub.max_hp + 1.0e-4,
+        "a repaired drive came out at {} of {}", sub.hp, sub.max_hp);
+    assert!(!sub.offline(), "and it is above the line it would read offline at");
+}

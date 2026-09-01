@@ -60,7 +60,11 @@ const SCRATCH_LEN: usize = 16384;
 static mut SCRATCH: [f32; SCRATCH_LEN] = [0.0; SCRATCH_LEN];
 
 const OUT: usize = 64;
-pub const SHIP_STRIDE: usize = 34;
+pub const SHIP_STRIDE: usize = 39;
+/// How many mounts a ship record carries a cooldown for. Not a limit on how
+/// many a hull may have: `s[b + 21]` says how many there are, and this says how
+/// many of them the record can describe the state of.
+pub const SHIP_COOLDOWNS: usize = 8;
 pub const SUB_STRIDE: usize = 13;
 pub const EVENT_STRIDE: usize = 14;
 pub const POSE_STRIDE: usize = 9;
@@ -1270,25 +1274,29 @@ pub extern "C" fn ft_read_ships() -> u32 {
         // while still looking right for a three volume one.
         s[b + 20] = ship.subs.len() as f32;
         s[b + 21] = ship.weapons.len() as f32;
-        for k in 0..3 {
+        // Eight, because a Terran heavy cruiser carries eight mounts and a
+        // fixed three said the last five had never fired. The count above is
+        // the truth about how many there are; this is how many the record can
+        // describe the state of.
+        for k in 0..SHIP_COOLDOWNS {
             s[b + 22 + k] = ship.weapons.get(k).map(|w| w.last_fired_tick as f32).unwrap_or(-99.0);
         }
-        s[b + 25] = ship.boarding_parties.len() as f32;
+        s[b + 30] = ship.boarding_parties.len() as f32;
         for k in 0..2 {
             let (f, c) = match ship.boarding_parties.get(k) {
                 Some(p) => (p.faction.index() as f32, p.count as f32),
                 None => (-1.0, 0.0),
             };
-            s[b + 26 + k * 2] = f;
-            s[b + 27 + k * 2] = c;
+            s[b + 31 + k * 2] = f;
+            s[b + 32 + k * 2] = c;
         }
         // The SHIP's, not the class's: a designed hull carries its own radius
         // and its own reach, and reporting the class here would draw a ring
         // round a ship that is not the ring the resolver uses.
-        s[b + 30] = ship.radius;
-        s[b + 31] = ship.flight.max_speed;
-        s[b + 32] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
-        s[b + 33] = ship.boarding_range;
+        s[b + 35] = ship.radius;
+        s[b + 36] = ship.flight.max_speed;
+        s[b + 37] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
+        s[b + 38] = ship.boarding_range;
     }
     n as u32
 }
@@ -1703,6 +1711,17 @@ pub extern "C" fn ft_derive(
         radius_cells,
         fouled,
     };
+    // REFUSED rather than clamped. `class_from_index` clamps, which is right
+    // where an index came out of the core's own tables and lethal where it came
+    // off the wire: a client that does not know a class sends -1, which arrives
+    // here as 0xFFFFFFFF and used to derive as whatever the LAST class happens
+    // to be. With five classes that was the Freighter and the sphere gate threw
+    // it out loudly; with seventeen it is a heavy cruiser whose berth is big
+    // enough to accept the same input, so a frigate came back wearing a
+    // cruiser's mass, hull and radius, all of them hashed, and nothing said so.
+    if class_idx as usize >= crate::data::ALL_CLASSES.len() {
+        return 0;
+    }
     let d = crate::design::derive(class_from_index(class_idx), &list, geo);
     let s = scratch();
     s[OUT] = d.mass;
@@ -1724,6 +1743,17 @@ pub extern "C" fn ft_derive(
     s[OUT + 16] = d.trunnions as f32;
     s[OUT + 17] = d.gates as f32;
     1
+}
+
+/// How many classes there are, which is the one thing the client cannot get by
+/// probing: `class_from_index` CLAMPS, so asking for index 999 answers with the
+/// last class rather than with nothing. A client that has to know where the
+/// list ends would otherwise have to keep its own copy of the length, and a
+/// second copy of a length is how a client comes to offer a hull the core has
+/// never heard of.
+#[no_mangle]
+pub extern "C" fn ft_class_count() -> u32 {
+    crate::data::ALL_CLASSES.len() as u32
 }
 
 /// Class metadata the client draws from: hull, radius, mass, boarding range,
@@ -1754,6 +1784,37 @@ pub extern "C" fn ft_read_class(index: u32) -> u32 {
 pub extern "C" fn ft_read_mount(class_idx: u32, mount: u32) -> u32 {
     let cls = ship_class(class_from_index(class_idx));
     let Some(m) = cls.weapons.get(mount as usize) else { return 0 };
+    let wd = crate::data::weapon(m.key);
+    let s = scratch();
+    s[OUT] = m.key as u32 as f32;
+    s[OUT + 1] = wd.kind as u32 as f32;
+    s[OUT + 2] = wd.damage();
+    s[OUT + 3] = wd.range;
+    s[OUT + 4] = wd.cooldown_secs;
+    s[OUT + 5] = wd.arc_h.0;
+    s[OUT + 6] = wd.arc_h.1;
+    s[OUT + 7] = wd.arc_v.0;
+    s[OUT + 8] = wd.arc_v.1;
+    s[OUT + 9] = wd.batch as f32;
+    s[OUT + 10] = m.mount.x;
+    s[OUT + 11] = m.mount.y;
+    s[OUT + 12] = m.mount.z;
+    1
+}
+
+/// One mount on one SHIP, which is not always one mount on its class.
+///
+/// A hull flying a design carries the design's mounts, and the resolver fires
+/// `ship.weapons[i]`. The console was drawing its fire panel off the CLASS
+/// table instead, so a design with fewer mounts than its class showed rows for
+/// guns that are not aboard, and one with different mounts showed the wrong
+/// arcs and ranges for the guns that are. Same layout as `ft_read_mount`, so
+/// the client reads one shape either way.
+#[no_mangle]
+pub extern "C" fn ft_ship_mount(ship: u32, mount: u32) -> u32 {
+    let Some(sim) = sim_opt() else { return 0 };
+    let Some(sh) = sim.ships.get(ship as usize) else { return 0 };
+    let Some(m) = sh.weapons.get(mount as usize) else { return 0 };
     let wd = crate::data::weapon(m.key);
     let s = scratch();
     s[OUT] = m.key as u32 as f32;

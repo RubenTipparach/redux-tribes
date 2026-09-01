@@ -13,7 +13,8 @@
  */
 
 import { Api, ApiError, type Room, type SavedDesign, type Ticket } from '../net/api.js';
-import { CLASS_NAMES, classIndexOf } from '../sim/types.js';
+import { CLASS_KEYS, CLASS_NAMES, classIndexOf } from '../sim/types.js';
+import { stockFor } from './design.js';
 import { newId } from './route.js';
 import * as saves from './saves.js';
 
@@ -120,6 +121,28 @@ export class Lobby {
   #roster: Array<{ side: number; cls: number }> = [];
   /** One entry per roster row, same length and same order. */
   #picks: Array<SavedDesign | null> = [];
+  /**
+   * Every class's stock hull, offered beside the library.
+   *
+   * A class nobody has saved a design of was reachable only by opening the
+   * shipyard, picking it and pressing Save, which is a detour to fly a ship
+   * the game already ships. Shaped as a `SavedDesign` because that is what a
+   * pick is, and its `designId` is the CLASS KEY, which is already that
+   * hull's address: `/ship/terran_cruiser` is the stock Terran Heavy Cruiser
+   * and no design id can collide with it.
+   */
+  readonly #stock: SavedDesign[] = CLASS_KEYS.map(key => ({
+    designId: key,
+    name: CLASS_NAMES[classIndexOf(key)] ?? key,
+    classKey: key,
+    owner: { accountId: '', name: 'stock' },
+    mine: false,
+    reported: { mass: 0, hull: 0, legal: true },
+    clonedFrom: null,
+    createdMs: 0,
+    updatedMs: 0,
+    design: stockFor(key),
+  }));
   /**
    * Which maker's hulls the briefing is showing.
    *
@@ -464,18 +487,28 @@ export class Lobby {
               this.#renderBriefing();
             });
         }
+        // Then every class as it ships, minus the one this row already offers
+        // as authored, which would be the same chip twice.
+        for (const d of this.#stock) {
+          if (classIndexOf(d.classKey) === r.cls) continue;
+          pick(d.name, 'stock hull', chosen?.designId === d.designId, () => {
+            this.#picks[r.i] = d;
+            this.#renderBriefing();
+          });
+        }
         row.appendChild(picks);
         host.appendChild(row);
       });
     }
 
     $('briefNote').innerHTML = this.#library.length
-      ? 'Any hull, on either side. A swapped one brings its own mass, hull '
+      ? 'Any hull, on either side, saved or stock. A swapped one brings its own mass, hull '
         + 'points, flight envelope and guns, derived by the core from the parts '
         + 'and the plate it was fitted with. The level still decides where they '
         + 'stand and how many.'
-      : 'Nothing in the library yet. Build a hull in the shipyard, or wait for '
-        + 'somebody else to, and it will be offered here.';
+      : 'Nothing in the library yet, so these are the stock hulls: every class '
+        + 'the game ships, on either side. Build one in the shipyard and it will '
+        + 'be offered here beside them.';
   }
 
   /**
@@ -668,7 +701,12 @@ export class Lobby {
     for (const d of this.#library) {
       const row = document.createElement('div');
       row.className = 'libRow';
-      const cls = d.classKey.replace(/_/g, ' ');
+      // One answer to "what is this hull called", which is the one the briefing
+    // and the fleet strip already give. Spelling the key out with the
+    // underscores taken out was a second answer, and with seventeen classes it
+    // reads 'terran heavy cruiser' beside the briefing's 'Terran Heavy
+    // Cruiser' for the same ship.
+    const cls = CLASS_NAMES[classIndexOf(d.classKey)] ?? d.classKey;
       row.innerHTML = `<div class="bd"><div class="n">${escape(d.name)}`
         + (d.mine ? '<span class="me">yours</span>' : '') + '</div>'
         + `<div class="s">${escape(cls)} &middot; by ${escape(d.owner.name)} &middot; `

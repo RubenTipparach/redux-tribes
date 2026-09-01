@@ -745,6 +745,22 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   background:#111823dd; border-radius:6px;
   -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
 .dzclasses button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231ee; }
+/* Seventeen hulls do not fit in one row of chips, least of all on a phone. Two
+   rows: the navy, then that navy's ladder. Full basis so they stack inside the
+   wrapping flex row above rather than needing a second layout mode, which
+   #dzTools shares and would have inherited. */
+/* Each row stays ONE line and scrolls sideways inside itself. Wrapping put
+   three lines of chips over a 222px canvas at 390x560, so the centre of the
+   model returned a class button and the map could not be rotated by thumb at
+   all. The row keeps pointer-events:none, because a touch drag hit tests to
+   the BUTTON and then scrolls its nearest scrollable ancestor, which is the
+   row: the chips scroll and the gaps between them still fall through to the
+   canvas. */
+.dzclasses .dzrow { flex:0 0 100%; display:flex; flex-wrap:nowrap; gap:5px;
+  overflow-x:auto; scrollbar-width:none; }
+.dzclasses .dzrow::-webkit-scrollbar { display:none; }
+.dzclasses .dzrow button { flex:0 0 auto; }
+.dzclasses .dzrow.tier button { min-width:62px; }
 /* The same chips, in the flow of a panel rather than floating over the canvas.
    Reusing .dzclasses here put an absolutely positioned row on top of the one
    above it, and the buried row still swallowed every tap. */

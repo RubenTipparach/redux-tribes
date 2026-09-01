@@ -697,6 +697,39 @@ async function checkSchematic() {
  * not point at, because the only pickable objects in here were the volume
  * boxes and a mount is not one of those.
  */
+/**
+ * A hull that has been shot still wears its finish.
+ *
+ * The wound rebuilds the surviving cells of a partly hit plate, and it built
+ * them with no `uv` attribute at all: the normal map had nothing to sample, so
+ * a shot took the plating detail off a whole REGION and what grew back was
+ * flat paint. Indistinguishable from a finish that damage had deliberately
+ * removed, and invisible to every suite, because the material was bound and
+ * the texture was loaded and only the geometry was missing a channel.
+ *
+ * Run after a fought match, because a wound is the only state it exists in.
+ */
+async function checkWoundsKeepTheirFinish() {
+  const surf = await page.evaluate(() => window.ftDebug.surfaces());
+  const torn = surf.flatMap(s => s.wounds.map(w => ({ ship: s.ship, ...w })));
+  if (!torn.length) {
+    console.log('note: no hull was torn, so the wound surfaces could not be read');
+    return;
+  }
+  for (const w of torn) {
+    if (!w.uv) {
+      console.log(`\nFAIL: ship ${w.ship}'s ${w.what} wound has no UVs,`
+        + ' so its normal map has nothing to sample and it draws flat');
+      process.exit(1);
+    }
+    if (!w.loaded) {
+      console.log(`\nFAIL: ship ${w.ship}'s ${w.what} wound has a finish with no pixels in it`);
+      process.exit(1);
+    }
+  }
+  log(`torn plating keeps its finish: ${torn.length} wound surface(s), all with UVs and a loaded map`);
+}
+
 async function checkSchematicOnAWreck() {
   const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
   const worst = await page.evaluate(() => {
@@ -1122,7 +1155,19 @@ async function playMatch() {
   // a question at one instant about something that is only true at some
   // instants. Sampling it the same way the other two are sampled fixes it, and
   // one loop is the right number of loops over one playback.
-  for (let s = 0; s < 16; s++) {
+  // Bounded by the PLAYBACK, not by a count. It breaks the moment the turn
+  // hands control back, so on a quick machine this costs exactly what sixteen
+  // iterations did; the cap is only there so a frozen playback fails as a
+  // check rather than as a hang.
+  //
+  // Sixteen was a number that happened to cover a turn at the frame rate of
+  // the day. Under a software rasteriser a ten second turn plays for nearly
+  // thirty seconds of wall clock, so sixteen samples covered its first
+  // quarter: shots that land late in a turn were never sampled at all, and the
+  // check reported "a whole match of hits and no blast was ever drawn" about a
+  // match that drew fifty eight of them. Measuring the renderer's speed again,
+  // in a third place.
+  for (let s = 0; s < 400; s++) {
     const snap = await page.evaluate(() => ({
       chunks: window.ftDebug.damage().chunks,
       fx: window.ftDebug.fx(),
@@ -1148,10 +1193,27 @@ async function playMatch() {
 
   // Playback must run out and hand control back. A turn that never returns to
   // planning is the freeze this harness exists to catch.
-  try {
-    await page.waitForFunction(() => window.ftDebug.playing() === null, null, { timeout: 45000 });
-  } catch {
-    outcome = `playback never finished on turn ${s.turn}`;
+  //
+  // Watched by PROGRESS rather than by a deadline. Forty five seconds was
+  // generous where a turn plays in thirty and impossible in a software
+  // rasterised container where the same turn takes seventy, on this build and
+  // on its parent alike, so the check reported a freeze that was a slow
+  // machine. A tick that is still moving is fine however slow it is; a tick
+  // that has stopped without handing back is the freeze.
+  let frozen = false;
+  {
+    let last = -1, stuck = 0;
+    for (;;) {
+      const t = await page.evaluate(() => window.ftDebug.playing());
+      if (t === null) break;
+      if (t === last) {
+        if (++stuck > 30) { frozen = true; break; }
+      } else { stuck = 0; last = t; }
+      await page.waitForTimeout(1000);
+    }
+  }
+  if (frozen) {
+    outcome = `playback stopped on turn ${s.turn}`;
     break;
   }
   const after = await state();
@@ -1173,6 +1235,7 @@ log('shots queued   :', shotsQueued);
 log('my ships       :', final.mine.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 log('hostiles       :', final.foes.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 await checkReview();
+await checkWoundsKeepTheirFinish();
 await checkSchematicOnAWreck();
 // Again at the end, where a fought match has actually put systems out: the
 // interesting half of the chip is the one that only exists after damage.

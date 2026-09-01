@@ -29,6 +29,31 @@ const REACHABLE = ['dzClose', 'dzPlate', 'dzArcs', 'dzTrack', 'dzTabParts',
 /** Phone only: the desk layout has the panel beside the view and hides it. */
 const REACHABLE_PHONE = [...REACHABLE, 'dzGrow'];
 
+/**
+ * Wait for FRAMES, not for milliseconds.
+ *
+ * A turret eases per frame with a clamped delta, which is right: a tab that
+ * was in the background comes back with seconds in the gap and a turret should
+ * not teleport across it. So a wall clock wait measures the machine rather
+ * than the easing. This suite runs headless on a software rasteriser where the
+ * yard draws single digit frames a second, and 2.6 seconds of waiting was four
+ * frames of movement: the check was reading the renderer's speed and calling
+ * it a turret that would not turn.
+ *
+ * A page that stops drawing entirely hangs here rather than failing fast, and
+ * that is the right trade: the whole suite runs under a timeout, and a yard
+ * that has stopped rendering is a failure worth seeing as one.
+ */
+async function frames(page, n) {
+  await page.evaluate(async (want) => {
+    await new Promise(res => {
+      let seen = 0;
+      const tick = () => { if (++seen >= want) res(); else requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    });
+  }, n);
+}
+
 async function openShipyard(page) {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForTimeout(700);
@@ -53,12 +78,45 @@ async function checkViewport(page, label, floor) {
   return m;
 }
 
+/**
+ * Back to a known hull.
+ *
+ * These used to be `#dzClasses button` index 0, which WAS the Terran frigate
+ * when the picker was one flat row of five. It is now the Terran NAVY chip,
+ * and picking the navy you are already on returns immediately, so every reset
+ * became a silent no op that left whatever hull the last check had built.
+ */
+async function toClass(page, navy, tier) {
+  await page.locator('#dzClasses .dzrow').first().locator('button')
+    .filter({ hasText: navy }).first().click();
+  await page.waitForTimeout(300);
+  await page.locator('#dzClasses .dzrow.tier button')
+    .filter({ hasText: new RegExp(`^${tier}$`) }).first().click();
+  await page.waitForTimeout(300);
+}
+const toTerranFrigate = (page) => toClass(page, 'Terran', 'Frigate');
+
 async function checkLayout(page, label) {
   const innerWidthIsPhone = await page.evaluate(() => innerWidth <= 900);
   const over = await page.evaluate(() =>
     document.documentElement.scrollWidth - document.documentElement.clientWidth);
   if (over > 0) fail(`${label}: ${over}px of horizontal scroll`);
   else ok(`${label}: no horizontal scroll`);
+
+  // THE MODEL IS A CONTROL TOO. Everything below probes buttons, so anything
+  // drawn over the canvas could grow without bound and this would keep saying
+  // every control is reachable while the ship could not be turned by thumb.
+  // The class picker did exactly that: three wrapped rows of chips over a
+  // 222px canvas at 390x560, and the centre of the view returned a button.
+  const centre = await page.evaluate(() => {
+    const v = document.getElementById('dzView').getBoundingClientRect();
+    const hit = document.elementFromPoint(v.left + v.width / 2, v.top + v.height / 2);
+    const cv = document.getElementById('dzCanvas');
+    return hit === cv || cv.contains(hit) ? null
+      : (hit ? `${hit.tagName}${hit.id ? '#' + hit.id : ''} "${(hit.textContent || '').trim().slice(0, 24)}"` : 'nothing');
+  });
+  if (centre) fail(`${label}: the centre of the view hits ${centre}, not the model`);
+  else ok(`${label}: the centre of the view is the model, so it can be turned`);
 
   for (const tab of ['dzTabParts', 'dzTabArmour', 'dzTabStats']) {
     await page.click('#' + tab);
@@ -111,13 +169,30 @@ async function checkLayout(page, label) {
   if (!pane.length) ok(`${label} [armour]: mode, faction, swatches and sliders all reachable`);
 }
 
+/**
+ * Every class the game ships, opened from the picker and checked.
+ *
+ * Walks the picker the way a player does, navy then rung, rather than by
+ * index: the tier row is rebuilt when a navy is picked, so a flat index walk
+ * ran off the end of a list that had changed under it. It also closes the
+ * thing the index walk could not say at all, which is that every class is
+ * REACHABLE: a hull with no way to it is a hull nobody can fly.
+ */
 async function checkShips(page) {
-  const buttons = await page.$$('#dzClasses button');
-  for (let n = 0; n < buttons.length; n++) {
-    await (await page.$$('#dzClasses button'))[n].click();
+  const navyRow = () => page.locator('#dzClasses .dzrow').first().locator('button');
+  const tierRow = () => page.locator('#dzClasses .dzrow.tier').locator('button');
+  const navies = await navyRow().count();
+  const seen = new Set();
+  for (let f = 0; f < navies; f++) {
+    await navyRow().nth(f).click();
+    await page.waitForTimeout(450);
+    const tiers = await tierRow().count();
+    for (let t = 0; t < tiers; t++) {
+    await tierRow().nth(t).click();
     await page.waitForTimeout(450);
     const d = await page.evaluate(() => window.ftDebug.designer());
     const name = d.classKey;
+    seen.add(name);
     if (!d.derived.legal) {
       fail(`${name}: illegal out of the box (${d.derived.checks.filter(c => !c.ok).map(c => c.id).join(', ')})`);
     } else if (d.derived.mass < d.derived.massMax * 0.7) {
@@ -145,12 +220,17 @@ async function checkShips(page) {
     if (d.flushProud > 1.5)
       fail(`${name}: an attitude block stands ${d.flushProud.toFixed(1)} cells off the hull`);
     else ok(`${name}: attitude blocks sit flush, worst corner ${d.flushProud.toFixed(2)} cells proud`);
+    }
   }
+  const all = await page.evaluate(() => window.ftDebug.classes());
+  const missed = all.filter(k => !seen.has(k));
+  if (missed.length) fail(`the picker never reaches ${missed.join(', ')}`);
+  else ok(`all ${all.length} classes reachable from the picker, and legal out of the box`);
 }
 
 /** Ghost armour, and a tap that names what it landed on. */
 async function checkGhostAndPicking(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(450);
 
   const states = [];
@@ -218,7 +298,7 @@ async function checkGhostAndPicking(page) {
  * preview obeys them: a turret swings, and it never swings past its limit.
  */
 async function checkTurrets(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(450);
   // Two independent switches, and each has to work without the other.
   const read = () => page.evaluate(() => {
@@ -237,10 +317,10 @@ async function checkTurrets(page) {
   else if (!(both.arcs && both.target)) fail('the two gunnery switches do not combine');
   else ok('Arcs and Target are independent switches');
 
-  await page.waitForTimeout(700);
+  await frames(page, 12);
   const a = await page.evaluate(() => window.ftDebug.designer());
   if (!a.rigs.length) { fail('no turret rigs at all'); return; }
-  await page.waitForTimeout(2600);
+  await frames(page, 48);
   const b = await page.evaluate(() => window.ftDebug.designer());
 
   const moved = a.rigs.some((r, n) => Math.abs(r.yaw - b.rigs[n].yaw) > 3);
@@ -317,7 +397,7 @@ async function checkTurrets(page) {
  * past everything, and watch it stop at the plating rather than going inside.
  */
 async function checkOrbitIsSteady(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(500);
   const cam = () => page.evaluate(() => window.ftDebug.designer().cam);
   const box = await (await page.$('#dzCanvas')).boundingBox();
@@ -370,7 +450,7 @@ async function checkOrbitIsSteady(page) {
  * drew rather than a lattice somebody described.
  */
 async function checkArcScan(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(500);
   const settled = async () => {
     for (let n = 0; n < 60; n++) {
@@ -480,7 +560,7 @@ async function checkArcScan(page) {
  * dares use.
  */
 async function checkDrawing(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(450);
   await page.click('#dzTabArmour');
   await page.waitForTimeout(300);
@@ -787,7 +867,10 @@ async function checkDrawing(page) {
 }
 
 async function checkLibrary(page) {
-  await (await page.$$('#dzClasses button'))[1].click();   // Karisen, not the default
+  // Karisen, deliberately NOT class index 0: checkHullPick's "a design is a
+  // ship, not a uniform" half is skipped when the picked class is the one the
+  // scenario already seats, so saving a Terran here would quietly disable it.
+  await toClass(page, 'Karisen', 'Frigate');
   await page.waitForTimeout(500);
   const before = await page.evaluate(() => {
     const d = window.ftDebug.designer();
@@ -883,8 +966,10 @@ async function checkHullPick(page, name, classKey, hull) {
       foes: d.ships().filter(s => s.side !== side).map(s => s.cls),
       note: document.getElementById('hullNote').textContent };
   });
-  const want = ['terran_frigate', 'karisen_frigate', 'rogue_frigate',
-    'benefactor_frigate', 'freighter'].indexOf(classKey);
+  // Asked of the app rather than listed again here. This was a third copy of
+  // `ALL_CLASSES` order, in a test, and a class added anywhere else made it
+  // silently compare against -1.
+  const want = (await page.evaluate(() => window.ftDebug.classes())).indexOf(classKey);
   // The picked SHIP, and only it. A design is a ship rather than a uniform:
   // swapping the first hull must leave the one beside it as authored.
   if (!flown.mine.length) fail('the match spawned nothing for the player');
@@ -910,7 +995,7 @@ async function checkHullPick(page, name, classKey, hull) {
 }
 
 async function checkModesAndRotation(page) {
-  await (await page.$$('#dzClasses button'))[0].click();
+  await toTerranFrigate(page);
   await page.waitForTimeout(400);
   await page.click('#dzTabArmour');
   await page.waitForTimeout(200);

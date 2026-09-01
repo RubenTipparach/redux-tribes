@@ -91,13 +91,10 @@ fn a_volume_fits_inside_the_hull_it_belongs_to() {
     // stuck out through the plating on all six sides, and the schematic drew
     // a ship lost inside its own hit boxes. A box that leaves the hull is a
     // box a shot can meet before the ship.
-    for class in [
-        ShipClassId::TerranFrigate,
-        ShipClassId::KarisenFrigate,
-        ShipClassId::RogueFrigate,
-        ShipClassId::BenefactorFrigate,
-        ShipClassId::Freighter,
-    ] {
+    // Every class there is, rather than a list of them. A hand written list is
+    // a list a new class is simply absent from, and the check then passes by
+    // never looking at the hull that was just added.
+    for class in sim_core::data::ALL_CLASSES {
         let sim = lone(class);
         let ship = &sim.ships[0];
         for sub in &ship.subs {
@@ -149,4 +146,47 @@ fn the_slab_test_answers_the_awkward_segments() {
     assert!(Sim::seg_box(V3::new(-5.0, 2.5, 0.5), V3::new(5.0, 2.5, 0.5), c, h).is_none());
     // A segment that stops short never arrives.
     assert!(Sim::seg_box(V3::new(-5.0, 0.0, 0.0), V3::new(-2.0, 0.0, 0.0), c, h).is_none());
+}
+
+/// A warship's boarding gear has to reach a hull it is TOUCHING.
+///
+/// Boarding is measured centre to centre (`turn.rs`) while contact separation
+/// holds two hulls `ra + rb` apart, so a class whose `boarding_range` is under
+/// the sum of the two radii can never board that hull at any legal separation:
+/// the window is empty and the button does nothing. `docs/SHIP_DESIGNER.md`
+/// raised this as the thing to check before authoring hulls bigger than the
+/// Freighter, and this is that check, run over every ordered pair.
+///
+/// The Freighter is the one exemption and it is deliberate. It is a civilian
+/// hull with a ten unit reach, whose window against a FRIGATE is already only
+/// two units wide, and against anything at the destroyer rung or above it is
+/// empty. Making it reach would mean either giving a cargo hauler a warship's
+/// boarding gear or making `boarding_range` surface relative in the core,
+/// which changes every existing match outcome and is the owner's call rather
+/// than a side effect of adding hulls. What this test pins is that no WARSHIP
+/// is in that position, and that the exemption stays exactly one class wide.
+#[test]
+fn every_warship_can_board_a_hull_it_is_touching() {
+    use sim_core::data::{ship_class, ALL_CLASSES};
+    let mut unreachable = Vec::new();
+    for a in ALL_CLASSES {
+        let ca = ship_class(a);
+        for b in ALL_CLASSES {
+            if a == b {
+                continue;
+            }
+            let cb = ship_class(b);
+            if ca.boarding_range < ca.radius + cb.radius {
+                unreachable.push((ca.key, cb.key));
+            }
+        }
+    }
+    let offenders: Vec<&str> = {
+        let mut v: Vec<&str> = unreachable.iter().map(|(a, _)| *a).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    assert_eq!(offenders, vec!["freighter"],
+        "a class other than the Freighter cannot board a hull it is touching: {unreachable:?}");
 }

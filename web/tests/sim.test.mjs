@@ -686,3 +686,95 @@ test('every face of a drawn hull points outward', async () => {
     assert.equal(wrong, 0, `${f.classKey}: ${wrong} of ${h.quads} faces wound inward`);
   }
 });
+
+// The class index is hashed, snapshotted and passed across the boundary by
+// POSITION. Four lists have to agree about it: `ALL_CLASSES` in the core, and
+// `CLASS_KEYS`, `CLASS_NAMES` and `FRAMES` in the client. Nothing in either
+// language can catch a disagreement, because every one of them is just a list,
+// so this is the only thing standing between a renumbered class and a desync
+// that reads as two clients disagreeing about physics.
+test('the client and the core name the same classes in the same order', async () => {
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const typ = await build({
+    entryPoints: [resolve(root, 'src/sim/types.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const types = await import('data:text/javascript;base64,'
+    + Buffer.from(typ.outputFiles[0].text).toString('base64'));
+  const { FRAMES, STOCK, stockFor, mountsOf, useCore } = design;
+  const { CLASS_KEYS, CLASS_NAMES, ShipClass } = types;
+  useCore(() => null);
+
+  const m = sim.match();
+  const n = m.classCount();
+  assert.equal(CLASS_KEYS.length, n, 'CLASS_KEYS is not as long as the core class list');
+  assert.equal(FRAMES.length, n, 'FRAMES is not as long as the core class list');
+  assert.equal(STOCK.length, n, 'STOCK is not as long as the core class list');
+  assert.equal(Object.keys(ShipClass).length, n, 'ShipClass is not as long as the core class list');
+
+  for (let i = 0; i < n; i++) {
+    const key = CLASS_KEYS[i];
+    assert.equal(FRAMES[i].classKey, key, `FRAMES[${i}] is not ${key}`);
+    assert.ok(CLASS_NAMES[i], `class ${i} (${key}) has no display name`);
+    // A stock hull that fell back to STOCK[0] would spawn somebody else's ship
+    // under this class's name, silently.
+    assert.equal(stockFor(key).classKey, key, `${key} has no stock fit of its own`);
+    // The two numbers the LEGALITY gates are measured against. Authored in the
+    // core and again in the frame, because the editor draws its budget bar
+    // before it has asked anything: if they disagree, the bar and the gate
+    // disagree, and a hull reads legal and is refused.
+    const info = m.classInfo(i);
+    assert.ok(Math.abs(info.radius - FRAMES[i].radius) < 1e-4,
+      `${key}: frame radius ${FRAMES[i].radius} against core ${info.radius}`);
+    assert.ok(Math.abs(info.mass - FRAMES[i].massMax) < 1e-4,
+      `${key}: frame berth ${FRAMES[i].massMax} against core ${info.mass}`);
+    // The class's guns and the stock hull's guns are the SAME ship's guns. The
+    // Karisen destroyer and cruiser carried three and six missile cells in the
+    // core against two and four seated on their frames, so the stock ship
+    // spawned by a scenario fired from mounts the picture does not have.
+    assert.equal(info.mountCount, mountsOf(stockFor(key)).length,
+      `${key}: the class carries ${info.mountCount} mounts and its stock hull ${mountsOf(stockFor(key)).length}`);
+    // A ship record carries a cooldown per mount up to `ffi::SHIP_COOLDOWNS`,
+    // which is 8. A hull past that would draw a fire row with no cooldown
+    // behind it, and it would be the biggest ships that got it.
+    assert.ok(info.mountCount <= 8,
+      `${key}: ${info.mountCount} mounts, past what a ship record can describe`);
+  }
+});
+
+// Cells are claimed first come first served, so a socket seated inside another
+// part is not an error anywhere: the rasteriser simply writes nothing and the
+// part never appears. On a stock hull that is a drive nobody can see paying
+// full mass for nothing, and it is invisible in every other check here because
+// the arithmetic reads the PART LIST rather than the picture.
+test('every part of every stock hull actually gets cells', async () => {
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, rasterise, useCore } = design;
+  useCore(() => null);
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const r = rasterise(d);
+    const owned = new Set();
+    for (const n of r.own) if (n > 0) owned.add(n - 1);
+    const buried = d.parts.map((p, n) => (owned.has(n) ? null : `${p.socket}:${p.module}`))
+      .filter(Boolean);
+    assert.deepEqual(buried, [], `${f.classKey}: parts with no cells at all`);
+    // A mount is a volume, not a fitting: only drives, retros, attitude
+    // thrusters, gun rings and trunnions may stand proud of the hull.
+    assert.equal(r.enclosedOutside, 0,
+      `${f.classKey}: ${r.enclosedOutside} cells of enclosed parts outside the hull`);
+    // Nothing may stand in a turret's sweep. The gate refuses the whole hull
+    // for it, so a stock ship that fouls is a stock ship nobody can field.
+    assert.equal(r.fouled, 0, `${f.classKey}: ${r.fouled} cells inside a turret box`);
+  }
+});

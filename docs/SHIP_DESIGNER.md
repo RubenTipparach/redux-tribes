@@ -541,3 +541,88 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 - **Make `boarding_range` surface-relative now, or accept that the biggest ships in the game are the ones nothing can board?** `turn.rs:421` measures centre to centre while contact is at `ra + rb`. The stock Freighter's legal window is already only 2.0 u wide TODAY, and against a 28 u capital a Terran gets 2.5 u and a Freighter gets none at all - the condition is unsatisfiable at every legal separation. The fix is `radius + constant` in the core and it is small. The decision is whether it goes in before the capital rung is authored (my recommendation) or we ship capitals that boarding cannot reach.
 
 - **What consumes designs?** DESIGN.md:211 has the Fleet panel doing repair only, DESIGN.md:216 has `ShipUpgradeType` as an enum with seven zero-byte placeholder files, Starport and Inventory are header stubs (DESIGN.md:247), and 'shipyard' appears only as a Hit-and-Run target. Without something that consumes a design - fleet points, a hull-class unlock ladder, salvage that yields parts - a player spends forty minutes producing a sidegrade to a ship they already own, and the mass budget is a puzzle constraint with no stakes rather than a currency. This decides whether the designer is a feature or a toy, and it wants deciding before slice 4, not after.
+
+
+## The fleet filled in: four navies, four rungs
+
+Shipped after the first cut. Corvette, frigate, destroyer and heavy cruiser for
+Terran, Karisen, Rogue and Benefactor, plus the civil Freighter. **Seventeen
+classes.** The `cruiser` rung is now flown; `capital` is still authored and
+still unused.
+
+**A rung is a cell size.** Every hull is the same 32x32x64 lattice and what
+changes is what one cell is worth: `frigate` 7/64, `escort` 10.5/64, `cruiser`
+14/64. A corvette is a SHORT profile at the frigate's cell, so it costs less
+plate for fewer cells; a destroyer and a heavy cruiser are full length profiles
+at bigger cells, and since `design.rs` scales plate by the CUBE of the cell,
+the same cell count costs a cruiser eight times a frigate's mass and gives it
+eight times the hull. Almost the whole ladder falls out of that one number
+rather than out of seventeen hand tuned tables.
+
+**Each navy's section is its signature and it holds at every rung.** Terran
+wide and flat on a raised dorsal spine, Karisen long and near round with a keel
+rail that overruns the body at both ends and the smallest cross section at
+every rung, Rogue short and very broad on a cross beam, Benefactor deeper than
+it is wide on a drop keel. The ladders differ in
+KIND, which is what makes the four fleets different rather than four palette
+swaps: Terran adds beam batteries (2, 3, 5, 8 rings), Karisen adds missile
+cells (1, 1, 2, 4) and never carries more than two beams, Rogue adds berths and clamps and
+almost no guns (1, 2, 3, 4), Benefactor adds belt layers and calibre and is the
+slowest thing at every rung.
+
+**The class table is MEASURED, not authored twice.** `hull`, `radius`, `mass`,
+the six flight numbers, marines, capacity and boarding range in `data.rs` are
+what `derive(stockFor(key))` actually produces, read off the real core and
+written back. So a hull the briefing fields flies exactly like the one a
+scenario seats, which the original five do not quite manage (Terran class hull
+300 against a stock design's 259.57). `radius` and `mass` are ALSO the SPHERE
+and MASS gates, so the frame's copies have to match the core's: `sim.test.mjs`
+pins them, because if they disagree the budget bar and the gate disagree and a
+hull reads legal and is refused.
+
+**Sockets are seated by the profile.** `seatAt(prof, kind, id, label, z, u, v)`
+takes u and v as FRACTIONS of the half beam and half depth at that station, so
+a socket is inside the skin whatever section the class has; `suite` lays what
+every warship has in the same places (drives on the transom, retros and
+attitude blocks, the bridge bay, berths in pairs, clamps on the quarter) and
+each frame then authors its own guns and profile, which is the part that says
+what the class is FOR. The four frigates keep their original hand counted cells,
+read off the archived silhouettes: those are provenance, not boilerplate.
+
+Two things the profile seating had to learn, both found by measuring rather
+than by reading:
+
+- **A ventral missile rail and a waist berth cannot share a station on a
+  shallow hull.** The Karisen cruiser is six cells deep and a missile cell is
+  five tall, so a berth beside a pad is a berth inside the pad's sweep and the
+  TURRETS gate refuses the whole ship. `suite` takes an explicit `bayZ` for
+  that case, and the Karisen keeps its berths up top.
+- **Nothing may be silently buried.** Cells are first come first served, so a
+  socket seated inside another part writes nothing and the part never appears
+  while paying full mass. It is invisible to every arithmetic check, because
+  the arithmetic reads the part list rather than the picture.
+  `sim.test.mjs` walks the `own` map of every stock hull and fails on a
+  placement that owns no cells.
+
+**Boarding reach was checked before authoring, as this document asked.** The
+open question above says to make `boarding_range` surface relative before any
+hull bigger than the Freighter exists. Measured over all 272 ordered pairs, the
+only class that cannot board a hull it is touching is the **Freighter**, whose
+ten unit reach was already only two units clear of a frigate. Every one of the
+twelve new warships can board everything and be boarded by everything.
+`tests/volumes.rs` pins that, and pins the exemption at exactly one class wide,
+so the surface relative change stays the owner's call rather than arriving as a
+side effect of adding hulls.
+
+**The picker is two rows now.** Seventeen chips in one wrapping row covered the
+canvas and did not fit a phone at all. Navy, then that navy's ladder, grouped
+on the frame's own `faction` and `tier` fields rather than by splitting a
+display name: `name.replace(' Frigate', '')` was already wrong the moment a
+class was called something else. `shipyard.mjs` walks the picker the way a
+player does and fails if any class is unreachable from it.
+
+**And they can be flown without a detour.** The briefing offers every class's
+stock hull beside the library, shaped as a `SavedDesign` whose `designId` is
+the class key, which is already that hull's address. A class you could only
+reach by opening the shipyard, picking it and pressing Save is a class that is
+in the game and not in the fleet.
