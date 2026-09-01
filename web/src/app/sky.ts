@@ -13,18 +13,15 @@
  * (ADR-13). Baked, the sky costs one render at launch and a cubemap fetch
  * thereafter, which is what a static background should cost.
  *
- * The same texture is also handed to `scene.environment`, but be careful what
- * that buys. Three applies the scene environment to `MeshStandardMaterial`
- * ONLY (`materialProperties.environment = material.isMeshStandardMaterial ?
- * scene.environment : null`), and the hulls are `MeshLambertMaterial`, so the
- * nebula does not light a ship. What it does light is the gravity well bodies,
- * which are the one standard material on the map. The cool bounce on a
- * shadowed flank is the FILL light doing that job, not the sky.
- *
- * Setting `envMap` on the hulls by hand would reach Lambert, but Lambert
- * treats an envMap as a mirror reflection rather than as irradiance, so
- * plating would come out shiny instead of softly filled. That is a worse
- * picture, not a better one.
+ * The same texture is handed to `scene.environment`, and it is worth being
+ * precise about what that reaches. Three applies the scene environment to
+ * `MeshStandardMaterial` ONLY (`materialProperties.environment =
+ * material.isMeshStandardMaterial ? scene.environment : null`). The map hull
+ * is a standard material, so the nebula genuinely lights the ships: a hull's
+ * shadowed flank picks up the colour of the sky it is flying in. It did NOT
+ * when this was written, because the hull was Lambert then and the fill light
+ * was doing all of that work alone. Worth remembering that the answer moves
+ * whenever somebody changes a material.
  *
  * What the bake gives up is the shimmer, which in the original rotated the
  * star layer slowly over time. A moving sky means re-baking the cubemap every

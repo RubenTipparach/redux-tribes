@@ -111,7 +111,7 @@ All four must pass before a push:
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
 cd engine/sim_core && cargo test            # 82, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 55, the wasm boundary and the addresses
+npm --prefix web test                       # 56, the wasm boundary and the addresses
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -471,16 +471,21 @@ per fragment of a full sky, sixty times a second, is not a thing a Raspberry Pi
 that. What the bake gives up is the shimmer, which would mean re-baking every
 frame, and that is the one part of 3.4 deliberately not ported.
 
-The cubemap is also handed to `scene.environment`, and it is worth knowing
-exactly what that does and does not do. Three applies the scene environment to
-`MeshStandardMaterial` ONLY: `materialProperties.environment =
-material.isMeshStandardMaterial ? scene.environment : null`. The hulls are
-`MeshLambertMaterial`, so **the nebula does not light the ships**; it lights
-the gravity well bodies, which are the one standard material out there. The
-cool bounce on a shadowed flank is the FILL light. Setting `envMap` by hand
-would reach Lambert, but Lambert treats it as a mirror reflection rather than
-irradiance, so the plating would come out shiny. Check which materials a
-renderer feature actually applies to before writing down what it does.
+The cubemap is also handed to `scene.environment`, and which materials that
+reaches is worth knowing exactly, because it changed under this branch. Three
+applies the scene environment to `MeshStandardMaterial` ONLY:
+`materialProperties.environment = material.isMeshStandardMaterial ?
+scene.environment : null`. When the sky landed the map hull was
+`MeshLambertMaterial`, so the nebula lit only the gravity well bodies and the
+cool bounce on a flank was entirely the FILL light. The PBR hull work then
+made the map hull a `MeshStandardMaterial`, so on main today **the nebula does
+light the ships** and the sky is a real part of the lighting rather than only
+the picture.
+
+Both halves of that are worth keeping. The rule is that a renderer feature
+reaches the materials it reaches and no others, so check rather than assume;
+the sequel is that the answer moves when somebody changes a material, and a
+note like this one goes stale silently.
 
 **Turbulence is folded per octave, and the reason is worth keeping.** The first
 cut folded the finished fBm sum with `1 - |2n - 1|`. Eight octaves of value
@@ -740,12 +745,35 @@ still clears every slot, because a launch starts from nothing.
 
 Which needs a screen. Picking a level opens a **briefing** naming what the
 level seats, one row per ship, each row offering that ship's stock hull and
-every saved design; Duel lists 1 row and Skirmish 2. The roster comes from
-`ft_scenario_roster(scenario)`, which builds the scenario and reports the side
-and class of every ship in it: what a level fields is the core's own answer,
-not a table beside it in the client that a new scenario would leave stale. It
-saves, clears and restores `HULL_CHOICE` around the probe, since asking must
-not disturb a launch being assembled.
+every saved design. The roster comes from `ft_scenario_roster(scenario)`, which
+builds the scenario and reports the side and class of every ship in it: what a
+level fields is the core's own answer, not a table beside it in the client that
+a new scenario would leave stale. It saves, clears and restores `HULL_CHOICE`
+around the probe, since asking must not disturb a launch being assembled.
+
+**BOTH sides, and from anyone's library.** The briefing first offered only your
+own fleet, which made half the registry unreachable from the screen: the core
+was always two sided. A duel now seats 1v1 and a skirmish 2v2, grouped under
+Your fleet and Hostiles, and a pick carries `{ side, slot }` rather than an
+index into your side alone. Choosing what you fight is as much a setup choice
+as choosing what you fly, and it is the only way to try a hull against a
+specific opponent.
+
+The hulls on offer are everyone's. The library was always public to read and a
+clone was always a COPY with a `from` stamp, so this is about finding one among
+many rather than about who may use one: a chip row filters by maker, built from
+the owners actually present so it never offers a name with nothing behind it,
+and it hides itself while you are the only maker. Opening a briefing also
+clears the library's Mine filter, because a briefing that offered only your own
+designs (because you last pressed Mine on another screen) looks exactly like
+your friends' ships having vanished.
+
+Two save migrations sit behind that, and both exist for one reason: a resume
+REPLAYS its orders, so a fleet that comes back different from the one those
+orders were given to plays a different match while looking like the same one.
+`hull` (one design for a whole side) fills four slots on side `g.side`; the
+slot indexed array that replaced it gains that same side and keeps its index,
+and its nulls are simply not carried over.
 
 The design's own numbers cross too, and the core is what turns them into a
 ship. `design.rs` holds the parts table and the arithmetic; `ft_derive` answers

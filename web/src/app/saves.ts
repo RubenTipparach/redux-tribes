@@ -40,7 +40,12 @@ export interface SavedGame {
    * save that pointed at a design would replay a different match the day
    * somebody tightened its armour.
    */
-  readonly hulls?: ReadonlyArray<{ readonly design: unknown; readonly name: string } | null>;
+  readonly hulls?: ReadonlyArray<{
+    readonly side: number;
+    readonly slot: number;
+    readonly design: unknown;
+    readonly name: string;
+  }>;
   /** One entry per resolved turn, in order. Index IS the turn number. */
   readonly turns: SavedTurn[];
   /**
@@ -97,14 +102,41 @@ function read(): Shelf {
  * play a different match while looking like the same one. Four is the core's
  * slot count; slots past the ships a level seats are ignored there.
  */
-interface OldSave { hull?: unknown; hullName?: string }
+type NewHull = { side: number; slot: number; design: unknown; name: string };
+interface OldSave {
+  /** Older still: one design for a whole side. */
+  hull?: unknown;
+  hullName?: string;
+}
 function migrate(shelf: Shelf): Shelf {
   for (const g of Object.values(shelf)) {
     const old = g as unknown as OldSave;
-    if (g.hulls || old.hull === undefined) continue;
-    const one = { design: old.hull, name: old.hullName ?? 'your design' };
-    (g as { hulls?: ReadonlyArray<{ design: unknown; name: string } | null> }).hulls =
-      [one, one, one, one];
+    const set = (h: NewHull[]) => {
+      (g as unknown as { hulls?: ReadonlyArray<NewHull> }).hulls = h;
+    };
+
+    // A slot indexed list, which was YOUR side only, from before either side
+    // could be picked. Entries were null for a ship left as authored, so the
+    // index is the slot and a null is simply not carried over.
+    if (Array.isArray(g.hulls) && g.hulls.length
+        && g.hulls.some(h => h && (h as { side?: number }).side === undefined)) {
+      const list = g.hulls as ReadonlyArray<{ design: unknown; name: string } | null>;
+      const out: NewHull[] = [];
+      list.forEach((h, slot) => {
+        if (h) out.push({ side: g.side, slot, design: h.design, name: h.name });
+      });
+      set(out);
+      continue;
+    }
+
+    // Older again: `hull` meant every ship on that side, so it comes back
+    // filling the slots. A resume REPLAYS its orders, and a fleet one ship
+    // short of what those orders were given to plays a different match while
+    // looking like the same one. Four is the core's slot count.
+    if (!g.hulls && old.hull !== undefined) {
+      const name = old.hullName ?? 'your design';
+      set([0, 1, 2, 3].map(slot => ({ side: g.side, slot, design: old.hull, name })));
+    }
   }
   return shelf;
 }

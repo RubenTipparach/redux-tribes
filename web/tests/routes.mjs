@@ -155,19 +155,32 @@ await boot('/');
     await page.locator('#practiceList button', { hasText: level }).first().click();
     await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
     await page.waitForTimeout(400);
-    return page.evaluate(() =>
-      [...document.querySelectorAll('#briefShips .briefRow .t')].map(e => e.textContent));
+    // Counted PER SIDE, because the briefing seats both now: a duel is one
+    // each and a skirmish two each, and a total alone could not tell a duel
+    // showing both sides from a skirmish showing only yours.
+    return page.evaluate(() => {
+      const rows = [...document.querySelectorAll('#briefShips .briefRow')];
+      return {
+        mine: rows.filter(r => r.dataset.side === '0').length,
+        foes: rows.filter(r => r.dataset.side === '1').length,
+      };
+    });
   };
   const duel = await roster('Duel');
   await page.click('#briefClose');
   await page.waitForTimeout(250);
   const skirmish = await roster('Skirmish');
-  if (duel.length !== 1) fail(`the duel briefing lists ${duel.length} ships`);
-  else if (skirmish.length !== 2) fail(`the skirmish briefing lists ${skirmish.length} ships`);
-  else ok(`a level says what it seats: duel ${duel.length}, skirmish ${skirmish.length}`);
+  if (duel.mine !== 1 || duel.foes !== 1) {
+    fail(`the duel briefing seats ${duel.mine} of yours and ${duel.foes} hostile(s), not 1 each`);
+  } else if (skirmish.mine !== 2 || skirmish.foes !== 2) {
+    fail(`the skirmish briefing seats ${skirmish.mine} and ${skirmish.foes}, not 2 each`);
+  } else {
+    ok(`a level says what it seats, both sides: duel ${duel.mine}v${duel.foes}, `
+      + `skirmish ${skirmish.mine}v${skirmish.foes}`);
+  }
 
-  // Swap the SECOND ship only, if there is a design to swap in.
-  const rows = page.locator('#briefShips .briefRow');
+  // Swap the SECOND ship of YOUR fleet only, if there is a design to swap in.
+  const rows = page.locator('#briefShips .briefRow[data-side="0"]');
   const opts = await rows.nth(1).locator('.picks button .n').allTextContents();
   const swapTo = opts.find(t => t.startsWith('Route '));
   if (!swapTo) {
@@ -187,6 +200,64 @@ await boot('/');
     else if (flown[0] === flown[1]) {
       fail(`swapped one ship and both came out at ${flown[0]} hull points`);
     } else ok(`swapping one ship changes that ship only: ${flown[0]} and ${flown[1]} hull points`);
+  }
+}
+
+// ------------------------------------------- a hull on the OTHER side too --
+
+/**
+ * Either side is pickable, and from anyone's library.
+ *
+ * The core's registry was always two sided; it was the screen that only
+ * offered your own fleet. What this checks is the half that could silently
+ * regress: a pick on a HOSTILE row reaching that hostile, and reaching only
+ * it. A class hull is a round number (300, 250, 230, 195, 180) and a derived
+ * design almost never is, so a fraction on exactly one hostile is the proof.
+ */
+await boot('/');
+{
+  await page.locator('#practiceList button', { hasText: 'Skirmish' }).first().click();
+  await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+  await page.waitForTimeout(600);
+
+  const sides = await page.evaluate(() =>
+    [...document.querySelectorAll('#briefShips .briefRow')].map(r => r.dataset.side));
+  if (!sides.includes('0') || !sides.includes('1')) {
+    fail(`the briefing lists sides ${JSON.stringify(sides)}, not both`);
+  } else ok(`the briefing seats both sides: ${sides.join(', ')}`);
+
+  const foe = page.locator('#briefShips .briefRow[data-side="1"]').first();
+  const opt = foe.locator('.picks button').nth(1);
+  if (!(await opt.count())) {
+    fail('no saved design offered on a hostile row');
+  } else {
+    await opt.click();
+    await page.waitForTimeout(300);
+    await page.click('#briefGo');
+    await page.waitForFunction(
+      () => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
+    await page.waitForTimeout(2500);
+    const flown = await page.evaluate(() => {
+      const side = window.ftDebug.side();
+      const all = window.ftDebug.ships();
+      return {
+        ours: all.filter(s => s.side === side).map(s => s.hull),
+        foes: all.filter(s => s.side !== side).map(s => s.hull),
+      };
+    });
+    const derived = (h) => Math.abs(h - Math.round(h)) > 0.001;
+    if (!flown.foes.some(derived)) {
+      fail(`a design was put on a hostile and every hostile is still a class `
+        + `hull: ${flown.foes.join(', ')}`);
+    } else if (flown.foes.every(derived)) {
+      fail(`the hostile pick reached every hostile, which is a uniform rather `
+        + `than a swap: ${flown.foes.join(', ')}`);
+    } else if (flown.ours.some(derived)) {
+      fail(`a pick on a hostile changed OUR fleet too: ${flown.ours.join(', ')}`);
+    } else {
+      ok(`a hull fields on the other side: ours ${flown.ours.join(', ')}, `
+        + `foes ${flown.foes.map(h => h.toFixed(2)).join(', ')}`);
+    }
   }
 }
 
