@@ -109,9 +109,46 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
 ];
 
 export const DEFAULT_FINISH = 'plate';
+/**
+ * What the two surfaces that are not armour wear until asked otherwise.
+ *
+ * `greeble` for the parts is where the machinery finish has always been; the
+ * frame used to have no answer of its own and simply wore the plating's,
+ * which read as a hull with no structure in it the moment a shot opened one
+ * up. Bare metal weave under the plate is what a frame member looks like.
+ */
+export const DEFAULT_FRAME_FINISH = 'weave';
+export const DEFAULT_PART_FINISH = 'greeble';
 /** What a hull is made of until a player says otherwise. */
 export const DEFAULT_METAL = 0.25;
 export const DEFAULT_ROUGH = 0.55;
+
+/**
+ * The three surfaces a hull is drawn with, resolved.
+ *
+ * ONE place decides what a design's armour, frame and machinery are made of,
+ * because four pictures ask it: the map, the shipyard, the schematic and the
+ * chip thumbnail. Each spelling out its own `?? DEFAULT` chain is four places
+ * to change and three of them to forget, which is the divergence GUIDELINES
+ * 5.1 is about, and it is exactly how the wound came to draw its plate in a
+ * finish the hull beside it was not wearing.
+ *
+ * The armour answer is the PICKED SLOT's, falling back to the hull wide
+ * finish for a design that has never set one.
+ */
+export function finishesOf(d: {
+  faction: string; paint: number;
+  finish?: string; slotFinish?: (string | null)[];
+  frameFinish?: string; partFinish?: string;
+}): { armour: string; frame: string; part: string } {
+  const slot = paintFor(d.faction).swatches.indexOf(d.paint);
+  const picked = slot >= 0 ? d.slotFinish?.[slot] : null;
+  return {
+    armour: picked || d.finish || DEFAULT_FINISH,
+    frame: d.frameFinish || DEFAULT_FRAME_FINISH,
+    part: d.partFinish || DEFAULT_PART_FINISH,
+  };
+}
 
 export const paintFor = (key: string) =>
   FACTION_PAINT.find(f => f.key === key) ?? (FACTION_PAINT[0] as typeof FACTION_PAINT[number]);
@@ -1331,6 +1368,29 @@ export interface Design {
    * means the default.
    */
   finish?: string;
+  /**
+   * A finish per PALETTE SLOT, by index into the faction's eight swatches.
+   *
+   * The colour a player picks and the surface it wears are one decision, not
+   * two: a pale grey that is meant to be a composite panel and a pale grey
+   * that is meant to be bare rolled steel are different ships. So a slot
+   * carries both, and picking the swatch picks the finish with it.
+   *
+   * Sparse and optional on purpose. An entry that is absent falls back to
+   * `finish`, which is the hull wide choice and what every design that
+   * predates this already has, so nothing has to be migrated.
+   */
+  slotFinish?: (string | null)[];
+  /**
+   * What the FRAME and the fitted PARTS are made of.
+   *
+   * The two surfaces that are not armour and were never choosable: the frame
+   * was drawn in the plating's own finish, and every part in one hard coded
+   * greeble. They are the inside of the ship, which is exactly what a hole in
+   * the plating now shows, so they are worth being able to author.
+   */
+  frameFinish?: string;
+  partFinish?: string;
   /** How metallic and how rough that armour is, 0 to 1. Presentation. */
   metal?: number;
   rough?: number;
@@ -2578,6 +2638,13 @@ export const stockFor = (classKey: string): Design => {
   return { classKey: s.classKey, parts: s.parts.map(p => ({ ...p })),
     sections: { ...s.sections }, armour: s.armour, faction: s.faction, paint: s.paint,
     finish: s.finish ?? DEFAULT_FINISH,
+    // The per slot finishes and the two interior surfaces come across for the
+    // same reason the hull wide one does: this rebuilds the record field by
+    // field, so a field left out here goes missing between the table and the
+    // map exactly as if it had never been set.
+    ...(s.slotFinish ? { slotFinish: s.slotFinish.slice() } : {}),
+    frameFinish: s.frameFinish ?? DEFAULT_FRAME_FINISH,
+    partFinish: s.partFinish ?? DEFAULT_PART_FINISH,
     metal: s.metal ?? DEFAULT_METAL,
     rough: s.rough ?? DEFAULT_ROUGH,
     plate: [], cut: [] };

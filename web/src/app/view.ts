@@ -14,7 +14,7 @@ import { bakeSky, skyDome, skyFor, starfield, type SkyPreset } from './sky.js';
 import { reachMaterial } from './reach.js';
 // One loader for every texture the client wants, and one spelling of the path.
 // `textures.ts` says why that matters.
-import { ember, finishMap, partMap, windowMaterial } from './textures.js';
+import { ember, finishMap, windowMaterial } from './textures.js';
 import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
 import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
@@ -29,11 +29,12 @@ import {
   CLASS_KEYS, isCommitted, Mode, PROBE_STEPS, TICKS_PER_SECOND,
 } from '../sim/types.js';
 import {
-  DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
+  DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
 import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
-import { hullMesh, hullTone, tintFar, tintHull, tintMix, type HullMesh } from './hull.js';
+import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, tintFar, tintHull, tintMix,
+  type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
 
 /**
@@ -45,9 +46,24 @@ import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
  * span floor allows, so a fully zoomed in ship is always inside it.
  */
 /** How fast the camera closes on its goal, per second. See `#ease`. */
-const CAMERA_EASE = 14;
+const CAMERA_EASE = 28;
 /** Close enough to stop easing and lock on. About a fiftieth of a cell. */
 const LOCK_EPS = 0.002;
+/** How fast the working plane closes on its goal, per second. Snappier than
+ *  the camera: this is a control the player is actively driving, not a view
+ *  settling after them, so it should feel attached to the finger rather than
+ *  trailing it. */
+const ELEV_EASE = 22;
+/** Units a second the elevation goal moves at the moment a hold begins. */
+const ELEV_RATE = 6;
+/** How many times ELEV_RATE a hold reaches once fully ramped up. */
+const ELEV_MAX_MULT = 3;
+/** Seconds of holding to go from ELEV_RATE to ELEV_RATE * ELEV_MAX_MULT. */
+const ELEV_RAMP = 1.1;
+/** What a synthetic activation with no pointer behind it (keyboard Enter or
+ *  Space on the button, assistive tech) nudges the goal by, since it has no
+ *  hold duration to measure. */
+const ELEV_TAP = 1;
 /** An angle brought into (-pi, pi], so a turn takes the short way round. */
 const wrapPi = (a: number): number => {
   let x = a;
@@ -75,6 +91,19 @@ const IDENTITY = new THREE.Quaternion();
 const EMPTY_CELLS: ReadonlyMap<number, number> = new Map();
 
 /** What a hull is made of until a design says otherwise. */
+/**
+ * Every material on a mesh, whether it carries one or an array of them.
+ *
+ * A hull is three materials since armour, frame and machinery stopped sharing
+ * a finish, and every caller that tinted or disposed "the material" would
+ * otherwise have to know which shape it got and would quietly touch only the
+ * first of three.
+ */
+function materialsOf(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
+  const m = mesh.material;
+  return (Array.isArray(m) ? m : [m]) as THREE.MeshStandardMaterial[];
+}
+
 const HULL_METAL = DEFAULT_METAL;
 const HULL_ROUGH = DEFAULT_ROUGH;
 
@@ -341,6 +370,15 @@ export class View {
 
   /** The horizontal plane a click is projected onto, as an offset in y. */
   workAlt = 0;
+  /** Where the elevation control is driving the plane toward. `workAlt` eases
+   *  after it the same way the camera eases after its own goal, so a tap or a
+   *  hold both read as motion rather than a jump. */
+  #workAltGoal = 0;
+  /** -1, 0 or 1: which way the elevation control is currently held. */
+  #elevHold: -1 | 0 | 1 = 0;
+  /** How long the current hold has run, so it can ramp up rather than snap to
+   *  full speed the instant a finger lands. */
+  #elevHeldFor = 0;
 
   #hulls = new Map<number, THREE.Mesh>();
   /**
@@ -678,9 +716,14 @@ export class View {
         // finish REMOVED by damage looks like. The design's own finish, so a
         // battered Rogue is battered where it is torn too.
         const design = c.design;
+        // `finishesOf` rather than the design's fields directly, so a torn
+        // plate wears whatever the PICKED palette slot wears. Reading
+        // `design.finish` here was already one place too many, and it would
+        // now be a wound in a different surface from the plate beside it.
+        const surf = finishesOf(design);
         const skin = new THREE.Mesh(w.skin, new THREE.MeshStandardMaterial({
           vertexColors: true,
-          normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
+          normalMap: finishMap(surf.armour),
           metalness: design.metal ?? HULL_METAL,
           roughness: design.rough ?? HULL_ROUGH,
           dithering: true,
@@ -689,7 +732,8 @@ export class View {
         // and frame rather than plating, so it wears what machinery wears: the
         // same material the schematic gives the same faces.
         const inner = new THREE.Mesh(w.inner, new THREE.MeshStandardMaterial({
-          vertexColors: true, normalMap: partMap(), metalness: 0.55, roughness: 0.62,
+          vertexColors: true, normalMap: finishMap(surf.part),
+          metalness: 0.55, roughness: 0.62,
           side: THREE.DoubleSide, dithering: true,
         }));
         // Unlit, so the colour IS the light coming off it. A lit material
@@ -1045,7 +1089,7 @@ export class View {
     this.#scene.add(this.#planLine);
 
     this.#planPip = new THREE.Mesh(
-      new THREE.SphereGeometry(1.1, 12, 10),
+      new THREE.SphereGeometry(0.55, 12, 10),
       new THREE.MeshBasicMaterial({ color: CYAN }),
     );
     this.#planPip.visible = false;
@@ -1265,6 +1309,10 @@ export class View {
    * inside a six unit frigate: once the hulls became real models it covered
    * the ship it was marking. Scaled by the camera distance it stays the same
    * blob at every zoom, which is what a marker is for.
+   *
+   * Halved again to 0.55 units across once stars were showing through it: a
+   * dot that size still reads as "here" but no longer eclipses the hull
+   * behind it.
    */
   #sizeMarkers(): void {
     const k = Math.max(0.22, Math.min(1.6, this.#dist / 70));
@@ -1301,9 +1349,10 @@ export class View {
    * drawing 120. A fixed fraction is a different curve at every frame rate,
    * which is how a move that feels right on a desk feels sluggish on a phone.
    *
-   * 14 puts about 95 percent of a move in a fifth of a second: fast enough
-   * that a drag still feels attached to the finger, slow enough that a jump
-   * across the map reads as a move.
+   * 28 puts about 95 percent of a move in a tenth of a second, twice the rate
+   * a first pass at this landed on: that read as attached to the finger but
+   * lagged a snappy feel, still slow enough that a jump across the map reads
+   * as a move rather than a cut.
    */
   #ease(dt: number): number { return 1 - Math.exp(-CAMERA_EASE * dt); }
 
@@ -1385,15 +1434,64 @@ export class View {
    * Held a hair inside the extreme, because exactly at it the plane is tangent
    * and meets the surface in a point rather than a curve.
    */
-  clampWorkAlt(): void {
+  /** The shape's own bounds on the plane, in the same offset `workAlt` is, or
+   *  null while there is nothing to bound it against. Shared by the clamp and
+   *  by the goal a hold or a tap is driving toward, so the two can never
+   *  disagree about where the plane is allowed to be. */
+  #workAltBounds(): { lo: number; hi: number } | null {
     const sel = this.#ships.find(s => s.id === this.#selected);
     const built = sel ? this.#shells.get(sel.id)?.built : null;
-    if (!sel || !built) return;
+    if (!sel || !built) return null;
     const inset = (built.yhi - built.ylo) * 0.02;
     const lo = built.ylo + inset - sel.pos.y;
     const hi = built.yhi - inset - sel.pos.y;
-    if (hi < lo) return;
-    this.workAlt = Math.min(hi, Math.max(lo, this.workAlt));
+    return hi < lo ? null : { lo, hi };
+  }
+
+  clampWorkAlt(): void {
+    const b = this.#workAltBounds();
+    if (!b) return;
+    this.workAlt = Math.min(b.hi, Math.max(b.lo, this.workAlt));
+    this.#workAltGoal = Math.min(b.hi, Math.max(b.lo, this.#workAltGoal));
+  }
+
+  /**
+   * Start or stop driving the elevation goal in a direction, -1, 1 or 0 to
+   * release. Called once per press and once per release, not per frame: the
+   * ramp itself lives in `#updateWorkAlt`, which is what actually moves the
+   * goal every frame the hold is still down.
+   */
+  setElevHold(dir: -1 | 0 | 1): void {
+    if (dir !== this.#elevHold) this.#elevHeldFor = 0;
+    this.#elevHold = dir;
+  }
+
+  /** A synthetic activation with no hold behind it: a fixed small nudge. */
+  bumpWorkAlt(dir: -1 | 1): void {
+    this.#workAltGoal += dir * ELEV_TAP;
+    this.clampWorkAlt();
+  }
+
+  /**
+   * Move the goal while a hold is down, ramping its speed up the longer it
+   * runs, then ease the visible plane after it.
+   *
+   * Two separate motions, on purpose. The goal can jump the full distance a
+   * frame's worth of holding covers, because nothing is watching it directly;
+   * what the player sees is `workAlt` chasing it, and THAT has to be smooth
+   * however far the goal just moved, or a dropped frame would show up as a
+   * stutter in the plane rather than in the number driving it.
+   */
+  #updateWorkAlt(dt: number): void {
+    if (this.#elevHold) {
+      this.#elevHeldFor += dt;
+      const ramp = Math.min(1, this.#elevHeldFor / ELEV_RAMP);
+      const rate = ELEV_RATE * (1 + (ELEV_MAX_MULT - 1) * ramp);
+      this.#workAltGoal += this.#elevHold * rate * dt;
+      this.clampWorkAlt();
+    }
+    const t = 1 - Math.exp(-ELEV_EASE * dt);
+    this.workAlt += (this.#workAltGoal - this.workAlt) * t;
   }
 
   planeY(): number {
@@ -1624,9 +1722,9 @@ export class View {
     this.#designs = new Map(designs);
     for (const [, mesh] of this.#hulls) {
       this.#scene.remove(mesh);
-      // The geometry belongs to the design cache and is shared; the material
-      // is this ship's own.
-      (mesh.material as THREE.Material).dispose();
+      // The geometry belongs to the design cache and is shared; the materials
+      // are this ship's own, one per surface.
+      for (const m of materialsOf(mesh)) m.dispose();
     }
     this.#arcShell.removeFromParent();
     this.#arcShellKey = '';
@@ -1780,21 +1878,7 @@ export class View {
     // the two numbers that separate painted steel from bare alloy, and Lambert
     // has neither. The environment below is what a metal reflects; without one
     // metalness renders black.
-    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      // The DESIGN's, falling back to the default. These are the two numbers
-      // that separate painted steel from bare alloy, and they belong to the
-      // hull rather than to the map: a Benefactor is glossy and a Rogue is
-      // not, and reading a constant here would have made them the same ship
-      // in two colours.
-      metalness: design.metal ?? HULL_METAL,
-      roughness: design.rough ?? HULL_ROUGH,
-      normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
-      // A dark hull under one key light is another slow gradient in a narrow
-      // range, and it contours on an eight bit canvas for the same reason the
-      // sky does. One property, and the plating grades instead of stepping.
-      dithering: true,
-    }));
+    const mesh = new THREE.Mesh(hull.geo, hullMaterials(design));
     this.#tintHull(mesh, s);
     // The windows, as children of the hull so they carry its pose for free. A
     // mesh of their own rather than part of the plate because glass takes
@@ -1826,7 +1910,10 @@ export class View {
     const key = tone * 100 + Math.round(tintMix(s.destroyed, far) * 40);
     if (this.#tint.get(s.id) === key) return;
     this.#tint.set(s.id, key);
-    tintHull(mesh.material as THREE.MeshStandardMaterial, tone, s.destroyed, far);
+    // Every surface, not just the plating: a hull is three materials now, and
+    // washing one of them leaves the frame and the machinery in a different
+    // side colour from the armour over them, which reads as two ships.
+    for (const m of materialsOf(mesh)) tintHull(m, tone, s.destroyed, far);
   }
 
   /**
@@ -1965,6 +2052,13 @@ export class View {
   surfaces(): Array<{
     ship: number; kind: string; metal: number; rough: number;
     finish: string; loaded: boolean; repeat: number; uv: boolean; env: boolean;
+    /**
+     * Every surface the hull is drawn with, in `SURF_*` order: armour, frame
+     * and machinery. The fields above describe the ARMOUR, which is what they
+     * always described, so a check written against them still asks the same
+     * question; this is what says the other two arrived and loaded.
+     */
+    skins: Array<{ what: string; finish: string; loaded: boolean }>;
     /** The torn surfaces, when this hull has any: whether each has UVs and a
      *  finish with pixels. A wound that lost either draws as flat paint, which
      *  looks exactly like a normal map REMOVED by damage. */
@@ -1972,8 +2066,18 @@ export class View {
   }> {
     const out = [];
     for (const [id, mesh] of this.#hulls) {
-      const m = mesh.material as THREE.MeshStandardMaterial;
+      const mats = materialsOf(mesh);
+      const m = mats[SURF_ARMOUR] as THREE.MeshStandardMaterial;
       const n = m.normalMap;
+      const skins = ['armour', 'frame', 'part'].map((what, i) => {
+        const sm = mats[i];
+        const si = sm?.normalMap?.image as { src?: string; width?: number } | undefined;
+        return {
+          what,
+          finish: sm?.normalMap ? (si?.src ?? 'bound').split('/').slice(-1)[0] as string : 'none',
+          loaded: !!si?.width,
+        };
+      });
       const img = n?.image as { src?: string; width?: number } | undefined;
       const c = this.#carved.get(id);
       const wounds: Array<{ what: string; uv: boolean; loaded: boolean }> = [];
@@ -1989,6 +2093,7 @@ export class View {
       }
       out.push({
         ship: id,
+        skins,
         wounds,
         kind: m.type,
         metal: +(m.metalness ?? -1).toFixed(3),
@@ -3302,6 +3407,7 @@ export class View {
     const dt = this.#posedAt ? Math.min(0.1, (now - this.#posedAt) / 1000) : 0.016;
     this.#posedAt = now;
     this.#poseTurrets(dt);
+    this.#updateWorkAlt(dt);
     // The shimmer the bake had to give up. A uniform, not a re-bake.
     if (this.#stars) {
       const u = (this.#stars.material as THREE.ShaderMaterial).uniforms;

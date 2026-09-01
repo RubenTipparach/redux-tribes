@@ -687,6 +687,68 @@ test('every face of a drawn hull points outward', async () => {
   }
 });
 
+test('a hull is meshed by the voxel rule, so it has an inside', async () => {
+  // The defect this pins: faces used to be built only where the OUTSIDE could
+  // reach, found by a flood fill from the edge of the lattice. A frigate is
+  // mostly hollow, so the enclosed gaps between its frame and its parts were
+  // never meshed at all, and the first shot through the plating looked into a
+  // ship with nothing behind the hole. Stars came through the wound.
+  //
+  // The rule is now the plain voxel one: a face wherever a solid cell meets a
+  // cell that is not solid, whether or not anything outside could ever have
+  // seen it. Stated as a count per cell rather than as a quad total, because
+  // the greedy pass is free to merge those faces into any rectangles it likes
+  // and the property is about which faces EXIST, not how they are packed.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const hull = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  design.useCore(() => null);
+  const { NX, NY, NZ, rasterise } = design;
+  const NB = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+  for (const f of design.FRAMES) {
+    const d = design.stockFor(f.classKey);
+    const h = hull.hullMesh(d);
+    const grid = rasterise(d).grid;
+    const idx = (i, j, k) => i + j * NX + k * NX * NY;
+    const solid = (i, j, k) =>
+      i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ && !!grid[idx(i, j, k)];
+
+    // Faces actually built, per cell: the merged pass names every cell under
+    // every quad, and the windows are one quad a cell in their own geometry.
+    const drawn = new Map();
+    const bump = (cell) => drawn.set(cell, (drawn.get(cell) ?? 0) + 1);
+    for (let q = 0; q < h.quads; q++) {
+      for (let n = h.quadAt[q]; n < h.quadAt[q + 1]; n++) bump(h.quadCells[n]);
+    }
+    for (const w of h.windows) for (const c of w.cellOf) bump(c);
+
+    let short = 0, firstShort = -1;
+    for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      if (!solid(i, j, k)) continue;
+      const cell = idx(i, j, k);
+      let want = 0;
+      for (const [dx, dy, dz] of NB) if (!solid(i + dx, j + dy, k + dz)) want++;
+      const got = drawn.get(cell) ?? 0;
+      // A TURRET is the one thing that gets more than the rule asks for: it
+      // swivels, so every face it does not share with its own rig is built
+      // whatever sits on the other side of it. Never fewer, though.
+      if (got < want) { short++; if (firstShort < 0) firstShort = cell; }
+    }
+    assert.equal(short, 0,
+      `${f.classKey}: ${short} cell(s) missing a face they should have, first at ${firstShort}`);
+  }
+});
+
 // The class index is hashed, snapshotted and passed across the boundary by
 // POSITION. Four lists have to agree about it: `ALL_CLASSES` in the core, and
 // `CLASS_KEYS`, `CLASS_NAMES` and `FRAMES` in the client. Nothing in either

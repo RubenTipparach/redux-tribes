@@ -9,14 +9,17 @@
  *
  * FACES, not cubes. A box per cell is twelve triangles whichever way it is
  * turned, and on a Terran that is 4644 cells and 55728 triangles for one ship:
- * four of those took a headless frame from 22 fps to 2.2. What can actually be
- * seen is the faces between a solid cell and the space outside, which is 2536
- * quads and 5072 triangles for the same hull, eleven times less. The interior
- * is not drawn at all, because on a battlefield nothing looks inside a hull.
+ * four of those took a headless frame from 22 fps to 2.2. A face wherever a
+ * solid cell meets one that is not is 1606 quads for the same hull, an order
+ * of magnitude less, and the greedy pass merges those into rectangles.
  *
- * Outside is a flood fill from the edge of the lattice rather than "any empty
- * neighbour": a frigate is full of gaps between its frame and its parts, and
- * counting those as visible drew most of the ship twice over.
+ * The plain VOXEL rule, deliberately, including the faces nothing outside can
+ * see. It used to be a flood fill from the edge of the lattice, so only the
+ * outward skin existed: a frigate is mostly hollow, and the first shot through
+ * its plating looked into a ship with no inside at all, stars showing through
+ * the hole. Meshing the interior costs 18% more quads over a four frigate
+ * skirmish (6183 to 7289) and is what makes a wound read as a hull with a hole
+ * in it rather than as an empty shell.
  *
  * The editor draws the same cells its own way, through an instanced mesh it
  * can pick single cells out of and ghost the plate on. Two renderers, two sets
@@ -25,11 +28,11 @@
  */
 
 import * as THREE from 'three';
-import { WINDOW_VARIANTS } from './textures.js';
+import { finishMap, WINDOW_VARIANTS } from './textures.js';
 import {
-  CELLS, NX, NY, NZ, RUNG, Mat,
-  armourColour, bareGrid, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
-  type Design,
+  CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
+  armourColour, bareGrid, cellColour, finishesOf, frameFor, moduleById, rasterise, rasterSig,
+  socketsOf, type Design,
 } from './design.js';
 
 /**
@@ -40,6 +43,21 @@ import {
  * mount the resolver calls `n` and the arc mask `arcMasks(d)[n]` describes.
  * Three lists in the same order rather than three lookups.
  */
+/**
+ * The three surfaces a hull is drawn with, and the order a material array for
+ * one must be in.
+ *
+ * Armour, frame and machinery are three materials because they are three
+ * things: an armour panel, the structure under it and a drive bell do not
+ * wear the same finish, and drawing all three in the plating's was a ship
+ * that looked like one material with parts painted on it. The geometry is
+ * grouped in this order, so `mesh.material[SURF_FRAME]` is the frame's.
+ */
+export const SURF_ARMOUR = 0;
+export const SURF_FRAME = 1;
+export const SURF_PART = 2;
+export const SURF_COUNT = 3;
+
 export interface HullRig {
   /** The weapon key, for naming it. */
   readonly key: string;
@@ -195,6 +213,42 @@ export interface Tintable {
   needsUpdate: boolean;
 }
 
+/**
+ * The three materials a hull mesh is drawn with, in `SURF_*` order.
+ *
+ * ONE builder, because four pictures draw these hulls and a second copy is a
+ * second answer to "what is a drive bell made of". Metalness and roughness
+ * are the design's own for the armour, since they are what separate painted
+ * steel from bare alloy and belong to the hull rather than to any one screen;
+ * the frame and the machinery are duller and rougher than plating whatever
+ * the plating is, because they are structure and guts rather than a finish
+ * anybody chose to present.
+ */
+export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
+  const f = finishesOf(d);
+  const common = {
+    vertexColors: true,
+    // A dark hull under one key light is a slow gradient in a narrow range,
+    // and it contours on an eight bit canvas for the same reason the sky
+    // does. One property, and the plating grades instead of stepping.
+    dithering: true,
+  } as const;
+  const mats: THREE.MeshStandardMaterial[] = [];
+  mats[SURF_ARMOUR] = new THREE.MeshStandardMaterial({
+    ...common,
+    metalness: d.metal ?? DEFAULT_METAL,
+    roughness: d.rough ?? DEFAULT_ROUGH,
+    normalMap: finishMap(f.armour),
+  });
+  mats[SURF_FRAME] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.45, roughness: 0.70, normalMap: finishMap(f.frame),
+  });
+  mats[SURF_PART] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.part),
+  });
+  return mats;
+}
+
 export function tintHull(
   mat: Tintable, tone: number, destroyed: boolean, far: number,
 ): void {
@@ -261,30 +315,24 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     });
   });
 
-  // What the outside can reach: a flood fill through empty cells from the
-  // boundary of the lattice. "Any empty neighbour" is not the same question: a
-  // frigate is full of gaps between its frame and its parts, and counting
-  // those as visible drew most of the ship twice over.
-  const outside = new Uint8Array(NX * NY * NZ);
-  const queue: number[] = [];
-  const reach = (i: number, j: number, k: number) => {
-    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return;
-    const n = idx(i, j, k);
-    if (outside[n] || grid[n]) return;
-    outside[n] = 1;
-    queue.push(i, j, k);
-  };
-  for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) { reach(0, j, k); reach(NX - 1, j, k); }
-  for (let k = 0; k < NZ; k++) for (let i = 0; i < NX; i++) { reach(i, 0, k); reach(i, NY - 1, k); }
-  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) { reach(i, j, 0); reach(i, j, NZ - 1); }
-  for (let h = 0; h < queue.length; h += 3) {
-    const i = queue[h] as number, j = queue[h + 1] as number, k = queue[h + 2] as number;
-    reach(i - 1, j, k); reach(i + 1, j, k);
-    reach(i, j - 1, k); reach(i, j + 1, k);
-    reach(i, j, k - 1); reach(i, j, k + 1);
-  }
+  // A face is drawn wherever a solid cell meets one that is not: the plain
+  // voxel rule, and nothing cleverer.
+  //
+  // This used to be a flood fill from the edge of the lattice, so only the
+  // faces the OUTSIDE could reach were built. That is a smaller mesh and it is
+  // wrong the moment anything opens the hull: a frigate is mostly hollow, the
+  // enclosed gaps between its frame and its parts were never meshed, and a
+  // shot through the plating therefore looked into a ship with no inside at
+  // all. Stars came through the hole, because behind the hole there was
+  // literally nothing drawn.
+  //
+  // The greedy pass absorbs most of what that saved, which is why the flood
+  // fill was never worth what it cost in correctness: measured over the stock
+  // fleet, 6183 quads to 7289 for a four frigate skirmish and 26932 to 30402
+  // over all seventeen hulls, 18% and 13%. A hull you can see through is not
+  // a saving.
   const open = (i: number, j: number, k: number) =>
-    (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) ? 1 : outside[idx(i, j, k)];
+    (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) ? 1 : (grid[idx(i, j, k)] ? 0 : 1);
 
   /** A cell's colour, which is what decides whether two faces may merge. */
   const colourAt = (i: number, j: number, k: number): number => {
@@ -362,6 +410,26 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   /** Every window face found, by decal kind: cell, and which way it looks. */
   const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
 
+  /**
+   * Which rig owns a cell, or -1.
+   *
+   * A turret is bolted to the hull, not part of it: at rest most of its cells
+   * sit flush against the plating, and the outside flood fill treats that
+   * seam as interior forever, because it is computed once for a hull that
+   * never moves. But the mount DOES move, so the seam is exactly the face
+   * left staring at empty space the instant the barrel swings off rest. A rig
+   * cell therefore needs every face not shared with another cell of its own
+   * rig, whatever sits on the other side of it, rather than the "outside"
+   * test the rest of the hull uses.
+   */
+  const rigCellAt = (i: number, j: number, k: number): number => {
+    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return -1;
+    const n = idx(i, j, k);
+    if (!grid[n]) return -1;
+    const owner = own[n] as number;
+    return owner > 0 ? rigOfPart.get(owner - 1) ?? -1 : -1;
+  };
+
   const at = [0, 0, 0];
   for (let di = 0; di < DIRS.length; di++) {
     const dir = DIRS[di] as (typeof DIRS)[number];
@@ -377,8 +445,10 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         put(at, axis, u, v, w);
         const i = at[0] as number, j = at[1] as number, k = at[2] as number;
         if (!grid[idx(i, j, k)]) continue;
+        const rig = rigCellAt(i, j, k);
         put(at, axis, u, v, w + dir.step);
-        if (!open(at[0] as number, at[1] as number, at[2] as number)) continue;
+        const ni = at[0] as number, nj = at[1] as number, nk = at[2] as number;
+        if (rig >= 0 ? rigCellAt(ni, nj, nk) === rig : !open(ni, nj, nk)) continue;
         // A window face leaves the plate pass entirely rather than merging
         // into it. Each one needs its own slice of a variant strip, so it
         // cannot share a quad with its neighbour, and the hole it leaves in
@@ -393,7 +463,10 @@ export function hullMesh(d: Design, bare = false): HullMesh {
           if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
           continue;
         }
-        mask[u + v * uN] = colourAt(i, j, k);
+        // Tagged with the rig so a turret's own faces never merge into a
+        // neighbour's or the hull's: two cells drawing the same colour would
+        // otherwise share a quad that only half of them should turn with.
+        mask[u + v * uN] = colourAt(i, j, k) | ((rig + 1) << 24);
         owner[u + v * uN] = idx(i, j, k);
         if (i < loX) loX = i; if (i > hiX) hiX = i;
         if (j < loY) loY = j; if (j > hiY) hiY = j;
@@ -436,7 +509,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
           const corners: ReadonlyArray<readonly [number, number]> = ccw
             ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
             : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
-          c.setHex(hex);
+          c.setHex(hex & 0xffffff);
           for (const [du, dv] of corners) {
             put(at, axis, u + du, v + dv, w + face);
             pos.push(
@@ -465,8 +538,52 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     }
   }
 
+  // ---- the three surfaces, sorted into runs -----------------------------
+  //
+  // Armour, frame and machinery are three different materials, because they
+  // are three different things: a drive bell and an armour panel do not wear
+  // the same finish, and a frame member wears neither. three.js draws that as
+  // groups over one geometry, and a group is a CONTIGUOUS range, so the quads
+  // are sorted into surface order here rather than being emitted in it.
+  //
+  // A sort rather than three emit buffers because every parallel array has to
+  // move with the quad it belongs to: the four vertices, the cell it is named
+  // for, and its whole footprint. One permutation applied to all of them
+  // cannot leave two of them disagreeing, which three buffers filled in three
+  // places eventually would.
+  const surfaceOf = (q: number): number => {
+    const mat = grid[cellOf[q] as number] as number;
+    if (mat === Mat.Plate || mat === Mat.Skinned) return SURF_ARMOUR;
+    return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
+  };
+  const order = cellOf.map((_, q) => q);
+  // Stable, so a run of plate stays in the order the greedy pass laid it down
+  // and the same design meshes to the same buffer every time.
+  order.sort((a, b) => surfaceOf(a) - surfaceOf(b) || a - b);
+  const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [], sUv: number[] = [];
+  const sCellOf: number[] = [], sQuadCells: number[] = [], sQuadAt: number[] = [0];
+  const groups: Array<{ start: number; count: number; surface: number }> = [];
+  for (let n = 0; n < order.length; n++) {
+    const q = order[n] as number;
+    for (let v = 0; v < 4; v++) {
+      const p = q * 12 + v * 3, t = q * 8 + v * 2;
+      sPos.push(pos[p] as number, pos[p + 1] as number, pos[p + 2] as number);
+      sNrm.push(nrm[p] as number, nrm[p + 1] as number, nrm[p + 2] as number);
+      sCol.push(col[p] as number, col[p + 1] as number, col[p + 2] as number);
+      sUv.push(uv[t] as number, uv[t + 1] as number);
+    }
+    sCellOf.push(cellOf[q] as number);
+    for (let i = quadAt[q] as number; i < (quadAt[q + 1] as number); i++) {
+      sQuadCells.push(quadCells[i] as number);
+    }
+    sQuadAt.push(sQuadCells.length);
+    const surf = surfaceOf(q);
+    const last = groups[groups.length - 1];
+    if (last && last.surface === surf) last.count += 6;
+    else groups.push({ start: n * 6, count: 6, surface: surf });
+  }
   // Two triangles a quad, indexed, so the four corners are shared.
-  const quads = cellOf.length;
+  const quads = sCellOf.length;
   const index = new Uint32Array(quads * 6);
   for (let q = 0; q < quads; q++) {
     const b = q * 4;
@@ -474,16 +591,19 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     index[q * 6 + 3] = b; index[q * 6 + 4] = b + 2; index[q * 6 + 5] = b + 3;
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(sPos), 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(sNrm), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(sCol), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(sUv), 2));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
+  // One draw per surface that is actually on this hull, in SURF order, which
+  // is the order a caller must build its material array in.
+  for (const g of groups) geo.addGroup(g.start, g.count, g.surface);
   geo.computeBoundingSphere();
 
   const centre = new Float32Array(quads * 3);
   for (let q = 0; q < quads; q++) {
-    const n = cellOf[q] as number;
+    const n = sCellOf[q] as number;
     const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
     centre[q * 3] = (i - NX / 2 + 0.5) * cell;
     centre[q * 3 + 1] = (j - NY / 2 + 0.5) * cell;
@@ -492,7 +612,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
 
   const rigOf = new Int32Array(quads);
   for (let q = 0; q < quads; q++) {
-    const owner = own[cellOf[q] as number] as number;
+    const owner = own[sCellOf[q] as number] as number;
     rigOf[q] = owner > 0 ? (rigOfPart.get(owner - 1) ?? -1) : -1;
   }
 
@@ -585,11 +705,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     rigs,
     rigOfCell,
     rigCells: rigCells.map(v => new Int32Array(v)),
-    cellOf: new Int32Array(cellOf),
+    cellOf: new Int32Array(sCellOf),
     centre,
     quads,
-    quadCells: new Int32Array(quadCells),
-    quadAt: new Uint32Array(quadAt),
+    quadCells: new Int32Array(sQuadCells),
+    quadAt: new Uint32Array(sQuadAt),
     lo: [loX, loY, loZ],
     hi: [hiX, hiY, hiZ],
     half: [

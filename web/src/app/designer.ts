@@ -27,6 +27,7 @@ import {
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
+  DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
   type FrameDef,
@@ -253,6 +254,13 @@ export class Designer {
       // and the editor, and since Save writes this record back, the loss was
       // permanent the first time anybody opened a saved ship and saved it.
       finish: typeof d.finish === 'string' ? d.finish : DEFAULT_FINISH,
+      // Same reason, one field further on: the per slot surfaces and the two
+      // interior ones are part of the record, and Save writes this back.
+      ...(Array.isArray(d.slotFinish)
+        ? { slotFinish: d.slotFinish.map(k => (typeof k === 'string' ? k : null)) }
+        : {}),
+      frameFinish: typeof d.frameFinish === 'string' ? d.frameFinish : DEFAULT_FRAME_FINISH,
+      partFinish: typeof d.partFinish === 'string' ? d.partFinish : DEFAULT_PART_FINISH,
       metal: typeof d.metal === 'number' ? d.metal : DEFAULT_METAL,
       rough: typeof d.rough === 'number' ? d.rough : DEFAULT_ROUGH,
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
@@ -442,9 +450,17 @@ export class Designer {
       this.#surfaces = { part, plate, ghost };
     }
     const s = this.#surfaces;
-    const finish = finishMap(design.finish ?? DEFAULT_FINISH);
+    // The picked SLOT's surface, through the same resolver the map uses, so
+    // the hull a player is looking at in here is the hull that gets fielded.
+    const surf = finishesOf(design);
+    const finish = finishMap(surf.armour);
     for (const m of [s.plate, s.ghost]) {
       if (m.normalMap !== finish) { m.normalMap = finish; m.needsUpdate = true; }
+    }
+    const partFinish = finishMap(surf.part);
+    if (s.part.normalMap !== partFinish) {
+      s.part.normalMap = partFinish;
+      s.part.needsUpdate = true;
     }
     return s;
   }
@@ -1434,14 +1450,102 @@ export class Designer {
     const paint = $('dzPaint');
     paint.innerHTML = '';
     const scheme = paintFor(this.#design.faction);
-    for (const col of scheme.swatches) {
+    let picked = -1;
+    scheme.swatches.forEach((col, slot) => {
       const b = document.createElement('button');
       b.className = 'dzsw' + (col === this.#design.paint ? ' on' : '');
       b.style.background = `#${col.toString(16).padStart(6, '0')}`;
-      b.title = `#${col.toString(16).padStart(6, '0')}`;
+      const wears = this.#design.slotFinish?.[slot];
+      b.title = `#${col.toString(16).padStart(6, '0')}`
+        + (wears ? ` · ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
       b.onclick = () => { this.#design.paint = col; this.#refresh(); };
+      if (col === this.#design.paint) picked = slot;
       paint.appendChild(b);
+    });
+
+    // The surfaces, one row each.
+    //
+    // A select PER swatch was the first cut and it was the wrong control: nine
+    // finishes under each of eight 34px swatches is eight boxes too narrow to
+    // read their own contents, and on a 390px phone they truncated to "As
+    // hu...". The slot is already selected by the swatch above, so the surface
+    // it wears is one full width row that edits the selected one, which is how
+    // the rest of this panel works and is one thumb sized target instead of
+    // eight cramped ones.
+    //
+    // The frame and the parts follow it because they are the same question
+    // asked about the two surfaces nobody could choose before: the frame wore
+    // the plating's finish and every part wore one hard coded greeble, which
+    // did not matter while a hull was a sealed skin and does now, because a
+    // hole in the plating is a look at both of them.
+    const inner = $('dzInner');
+    inner.innerHTML = '';
+    const rows: Array<[string, string, string | null, (k: string | null) => void, string?]> = [
+      ['Selected slot',
+        picked >= 0 ? `Surface of the swatch in use` : 'Pick a swatch first',
+        picked >= 0 ? (this.#design.slotFinish?.[picked] ?? null) : null,
+        key => {
+          if (picked < 0) return;
+          // Sparse until something is actually chosen, so a design that never
+          // touched this still falls back to the hull wide finish rather than
+          // freezing today's default into eight slots.
+          const list = (this.#design.slotFinish ?? []).slice();
+          while (list.length < scheme.swatches.length) list.push(null);
+          list[picked] = key;
+          this.#design.slotFinish = list;
+        },
+        'As hull'],
+      ['Hull frame', 'Surface of the frame under the plating',
+        this.#design.frameFinish ?? DEFAULT_FRAME_FINISH,
+        key => { this.#design.frameFinish = key ?? DEFAULT_FRAME_FINISH; }],
+      ['Subsystems', 'Surface of the fitted parts',
+        this.#design.partFinish ?? DEFAULT_PART_FINISH,
+        key => { this.#design.partFinish = key ?? DEFAULT_PART_FINISH; }],
+    ];
+    for (const [label, title, cur, set, blank] of rows) {
+      const row = document.createElement('div');
+      row.className = 'dzrow';
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = label;
+      row.appendChild(k);
+      const sel = this.#finishPick(cur, title, key => { set(key); this.#refresh(); }, blank);
+      if (label === 'Selected slot' && picked < 0) sel.disabled = true;
+      row.appendChild(sel);
+      inner.appendChild(row);
     }
+  }
+
+  /**
+   * One finish picker: every surface in `FINISHES`, and what it is called.
+   *
+   * A select rather than a row of chips. There are nine finishes and this is
+   * drawn ten times over on a 390px phone, and ninety chips is a panel nobody
+   * can hit; a select is one tap target whatever the list length, and the
+   * platform's own list is already thumb sized.
+   */
+  #finishPick(
+    cur: string | null, title: string, onPick: (key: string | null) => void,
+    blank?: string,
+  ): HTMLSelectElement {
+    const sel = document.createElement('select');
+    sel.className = 'dzfin';
+    sel.title = title;
+    if (blank) {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = blank;
+      sel.appendChild(o);
+    }
+    for (const f of FINISHES) {
+      const o = document.createElement('option');
+      o.value = f.key;
+      o.textContent = f.name;
+      sel.appendChild(o);
+    }
+    sel.value = cur ?? '';
+    sel.onchange = () => onPick(sel.value || null);
+    return sel;
   }
 
   // ------------------------------------------------------- drawing armour --
@@ -2198,6 +2302,24 @@ export class Designer {
       derived: this.#derived,
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
+      /**
+       * What the preview is actually drawing the two surfaces WITH.
+       *
+       * Read off the live materials rather than off the record, because that
+       * is the whole question: a finish that was chosen and never reached the
+       * material draws exactly like one that was never chosen, and so does one
+       * whose file failed to load. The map answers the same question about the
+       * same design through `ftDebug.surfaces()`.
+       */
+      surfaces: (['plate', 'part'] as const).map(what => {
+        const m = this.#surfaces?.[what];
+        const img = m?.normalMap?.image as { src?: string; width?: number } | undefined;
+        return {
+          what,
+          finish: m?.normalMap ? (img?.src ?? 'bound').split('/').slice(-1)[0] as string : 'none',
+          loaded: !!img?.width,
+        };
+      }),
       plate: this.#plate,
       arcs: this.#showArcs,
       target: this.#showTarget,

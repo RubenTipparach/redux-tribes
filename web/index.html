@@ -64,6 +64,9 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
 .sect { font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:11px;
   letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:12px 0 6px; }
 .sect:first-child { margin-top:0; }
+/* One press for every mount that can fire, above the rows it fires from
+   rather than a strip of its own: it acts on the whole list right below it. */
+#bFireAll { display:block; width:100%; margin-bottom:6px; }
 
 #cv { grid-column:2; grid-row:2; display:block; background:var(--ground); cursor:crosshair;
   width:100%; height:100%; min-width:0; min-height:0; touch-action:none;
@@ -168,9 +171,18 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
 
 /* The review panel. Same anchor and same z as the slot menu, for the same
    reason: it has to sit over the canvas and above a bottom sheet, or its
-   controls are visible, enabled and swallowed. */
-#reviewPanel { position:absolute; bottom:calc(100% + 6px); left:8px; right:8px;
-  max-width:390px; margin:0 auto;
+   controls are visible, enabled and swallowed.
+
+   `--lift` here is the gap between the footer and whichever canvas control
+   (the toolbar, usually) currently sits lowest, measured when the panel
+   opens. It used to run the other way: opening this panel pushed the
+   toolbar, the dials and the altitude readout up by the panel's own height,
+   which read as the whole control row jumping the moment review was
+   entered. Those controls are static now, so the panel clears them by
+   rising above where they already are instead of waiting for them to move
+   out of its way. */
+#reviewPanel { position:absolute; bottom:calc(100% + 6px + var(--lift, 0px));
+  left:8px; right:8px; max-width:390px; margin:0 auto;
   max-height:min(46vh, 340px); overflow-y:auto; z-index:12; padding:8px;
   background:var(--panel); border:1px solid var(--cyan); border-radius:8px;
   box-shadow:0 -12px 34px #000c; }
@@ -327,7 +339,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    construction rather than by arithmetic. */
 #toolbar { display:flex; align-items:center; gap:6px;
   grid-column:2; grid-row:2; align-self:end; justify-self:center;
-  z-index:6; margin-bottom:calc(12px + var(--lift)); pointer-events:none; }
+  z-index:6; margin-bottom:12px; pointer-events:none; }
 #toolbar button { pointer-events:auto; flex:0 0 auto;
   width:44px; height:44px; padding:0; font-size:15px; border-radius:50%;
   background:#111823ee; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
@@ -349,7 +361,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    row past the viewport. Hidden at zero, so it appears only once it means
    something. */
 #pAlt { grid-column:2; grid-row:2; align-self:end; justify-self:center;
-  z-index:6; margin-bottom:calc(62px + var(--lift)); pointer-events:none;
+  z-index:6; margin-bottom:62px; pointer-events:none;
   font-family:Rajdhani,system-ui,sans-serif; font-weight:700; font-size:12px;
   letter-spacing:.1em; color:var(--green); background:#111823cc; border-radius:9px;
   padding:2px 9px; -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
@@ -417,7 +429,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 /* The heading dials, over the canvas. Bottom left, which is the one corner no
    rail, sheet, toolbar or readout uses at any size. */
 #attitude { grid-column:2; grid-row:2; align-self:end; justify-self:start;
-  z-index:6; margin:0 0 calc(12px + var(--lift)) 12px; display:flex; gap:8px;
+  z-index:6; margin:0 0 12px 12px; display:flex; gap:8px;
   pointer-events:none; }
 #attitude.off { display:none; }
 .dial { position:relative; width:92px; height:92px; pointer-events:auto;
@@ -511,12 +523,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   /* The toolbar owns the bottom of the canvas on a phone and is centred, so
      the dials cannot share that line at any width: they sit above it. 44px of
      button plus its 12px margin plus a gap. */
-  #attitude { margin-bottom:calc(66px + var(--lift)); }
+  #attitude { margin-bottom:66px; }
   .dial { width:72px; height:72px; }
   .glabel b { font-size:12px; }
   /* Above the gauges, which are a readout tall now that the numbers sit under
      the faces rather than across them. */
-  #pAlt { margin-bottom:calc(84px + var(--lift)); }
+  #pAlt { margin-bottom:84px; }
   button { padding:10px 13px; }
   #timeline { --slotw:22px; }
   #slots, .slot { height:26px; }
@@ -577,13 +589,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      stepping over one is not possible the way it is in portrait: the canvas
      controls move to the right strip instead, which is the part of the map a
      sheet never covers. */
-  #toolbar { grid-column:2; grid-row:2; margin:0 10px calc(8px + var(--lift)) 0;
+  #toolbar { grid-column:2; grid-row:2; margin:0 10px 8px 0;
     gap:5px; justify-self:end; }
-  #attitude { grid-column:2; grid-row:2; margin:0 10px calc(54px + var(--lift)) 0;
+  #attitude { grid-column:2; grid-row:2; margin:0 10px 54px 0;
     justify-self:end; }
   /* Above the gauges, not across them: both are right aligned here, and a
      gauge is its dial plus the readout under it. */
-  #pAlt { grid-column:2; grid-row:2; margin:0 10px calc(146px + var(--lift)) 0;
+  #pAlt { grid-column:2; grid-row:2; margin:0 10px 146px 0;
     justify-self:end; }
   /* Wraps into the strip the sheet leaves rather than running under it. */
   #modes { grid-column:2; grid-row:2; margin:8px 10px 0 0; justify-self:end;
@@ -822,6 +834,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
+/* What a surface is made of: a labelled row with one full width picker, which
+   is a thumb sized target at 390px where a select under each swatch was eight
+   boxes too narrow to read their own contents. */
+.dzrow { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+.dzrow .k { flex:0 0 92px; font-size:11px; color:var(--muted); }
+.dzfin { flex:1 1 auto; min-width:0; font-size:11px; padding:6px 4px; }
 .dzslice { margin-top:2px; }
 .dzslice .row { display:flex; align-items:center; gap:6px; margin-bottom:7px; }
 .dzslice .row .gap { flex:1; }
@@ -1150,6 +1168,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       read as a desync.</p>
       <div id="dzFactions" class="dzchips"></div>
       <div id="dzPaint" class="dzpaint"></div>
+      <div class="dzgrp">Surfaces</div>
+      <p class="dznote">A slot is a colour AND what it is made of, because the
+      two are one decision: the same pale grey is a composite panel or bare
+      rolled steel depending on the surface under it. Each swatch above carries
+      its own, and "as hull" leaves it on whatever the hull wide finish is. The
+      frame and the fitted parts are the inside of the ship, which a hole in the
+      plating now shows, so they are choosable too. Cosmetic like the paint:
+      never hashed, never sent to the core.</p>
+      <div id="dzInner"></div>
       <div class="dzgrp">Colour key</div>
       <div id="dzKey" class="dzkeys"></div>
 
@@ -1409,6 +1436,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <div class="sect">Flight Envelope</div>
     <div id="envTune"></div>
     <div class="sect">Weapons <span class="hint">(pick a weapon, then a slot)</span></div>
+    <button id="bFireAll" title="Queue every mount that can fire this second">Fire all</button>
     <div id="weps"></div>
     <div class="sect">Boarding</div>
     <button id="bBoard" disabled>Board Target</button>
