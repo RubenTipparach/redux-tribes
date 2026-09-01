@@ -22,6 +22,7 @@ import {
   CLASS_KEYS, isCommitted, Mode, PROBE_STEPS, TICKS_PER_SECOND,
 } from '../sim/types.js';
 import {
+  DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
 import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
@@ -71,6 +72,35 @@ function ember(): THREE.Texture {
   }
   return emberMap;
 }
+/**
+ * The armour finishes, loaded on demand and kept.
+ *
+ * A design wears one, so a skirmish loads one or two of these and never the
+ * whole set. `smooth` is no texture at all rather than a flat one: it is the
+ * same picture for no bytes and no sample.
+ *
+ * Unlike the ember these DO get mipmaps and linear filtering, because a finish
+ * is seen at every range from a hull filling the screen to four pixels of it,
+ * and an unmipped normal map at map range is a field of noise that never
+ * settles.
+ */
+const finishMaps = new Map<string, THREE.Texture>();
+function finishMap(key: string): THREE.Texture | null {
+  if (key === 'smooth') return null;
+  const had = finishMaps.get(key);
+  if (had) return had;
+  const t = new THREE.TextureLoader().load(`./surf/armour_${key}_n.png`);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.NoColorSpace;
+  t.anisotropy = 4;
+  finishMaps.set(key, t);
+  return t;
+}
+
+/** What a hull is made of until a design says otherwise. */
+const HULL_METAL = DEFAULT_METAL;
+const HULL_ROUGH = DEFAULT_ROUGH;
+
 /** Chunks one hit may throw, and how many may be in the air at once. A hull
  *  coming apart is a few dozen cells, not a snowstorm. */
 const DEBRIS_PER_HIT = 14;
@@ -895,6 +925,24 @@ export class View {
     key.position.set(0.4, 1, 0.25);
     this.#scene.add(key);
 
+    // What a metal reflects. Metalness with no environment is BLACK, so a
+    // palette colour that says it is bare alloy needs this to say anything at
+    // all. `env.png` is an equirectangular strip whose two ends are the sky and
+    // ground colours the hemisphere light above already uses, so a reflection
+    // agrees with the lighting rather than arguing with it, and PMREM turns it
+    // into the roughness levels the shader samples. Loaded async and applied
+    // when it lands: a frame drawn before it arrives is lit, just not
+    // reflective, which is the right way round to fail.
+    new THREE.TextureLoader().load('./surf/env.png', tex => {
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const pmrem = new THREE.PMREMGenerator(this.#renderer);
+      this.#scene.environment = pmrem.fromEquirectangular(tex).texture;
+      this.#scene.environmentIntensity = 0.55;
+      pmrem.dispose();
+      tex.dispose();
+    });
+
     // The working plane. A click has to land somewhere, and in a 3D game with
     // no ground the somewhere has to be chosen: this is it, drawn so the
     // choice is visible rather than implied.
@@ -1517,8 +1565,16 @@ export class View {
   #buildHull(s: ShipState): THREE.Mesh {
     const design = this.#designs.get(s.id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
     const hull: HullMesh = hullMesh(design);
-    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshLambertMaterial({
+    // Standard rather than Lambert, because a finish is a normal map and a
+    // palette colour now says what it is MADE of: metalness and roughness are
+    // the two numbers that separate painted steel from bare alloy, and Lambert
+    // has neither. The environment below is what a metal reflects; without one
+    // metalness renders black.
+    const mesh = new THREE.Mesh(hull.geo, new THREE.MeshStandardMaterial({
       vertexColors: true,
+      metalness: HULL_METAL,
+      roughness: HULL_ROUGH,
+      normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
     }));
     this.#tintHull(mesh, s);
     this.#buildRigs(s.id, design, hull);

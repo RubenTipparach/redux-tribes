@@ -249,6 +249,14 @@ export function hullMesh(d: Design): HullMesh {
   };
 
   const pos: number[] = [], nrm: number[] = [], col: number[] = [], cellOf: number[] = [];
+  // One repeat of a finish per CELL, however many cells the greedy rectangle
+  // turned out to cover, and the texture's V along the HULL's up axis.
+  //
+  // Not the layer's own V: on the x faces the layer's u IS y, so a decal came
+  // out a quarter turn round and a corrugation ran vertically on one flank and
+  // horizontally on the next. The y faces have no up to agree about and keep
+  // theirs.
+  const uv: number[] = [];
   // Every cell under every quad, and where each quad's run begins.
   const quadCells: number[] = [], quadAt: number[] = [0];
   const c = new THREE.Color();
@@ -345,6 +353,8 @@ export function hullMesh(d: Design): HullMesh {
               ((at[2] as number) - NZ / 2) * cell);
             nrm.push(dir.n[0] as number, dir.n[1] as number, dir.n[2] as number);
             col.push(c.r, c.g, c.b);
+            if (axis === 0) uv.push(dv, du);
+            else uv.push(du, dv);
           }
           cellOf.push(owner[u + v * uN] as number);
           // The rectangle's whole footprint, not just the corner it is named
@@ -375,6 +385,7 @@ export function hullMesh(d: Design): HullMesh {
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(col), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uv), 2));
   geo.setIndex(new THREE.BufferAttribute(index, 1));
   geo.computeBoundingSphere();
 
