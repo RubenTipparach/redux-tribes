@@ -29,18 +29,15 @@ repeat wrapping repeats the whole image rather than one tile of it. Separate
 textures also cost nothing in draw calls here, because a design wears one finish
 per colour and realistically one or two colours.
 
-HOW THEY ARE DELIVERED FOR REVIEW. `tex/` holds the PNGs, which are what a
-person can open, and `textures.js` holds the same bytes as data URIs, which is
-what the mockup can load: GUIDELINES 2.1 gives a mockup no network at all, and
-that includes no `<img src>` to a file beside it. Both come out of one run from
-the same bytes, and `--check` fails if either has drifted.
+WHERE THEY LIVE. `web/public/surf/` holds the PNGs, because they ship: the
+client's build copies everything in `public/`. The mockup gets the same bytes
+as data URIs in `textures.js`, because GUIDELINES 2.1 gives it no network at
+all and that includes an `<img src>` to a file beside it. One home for the
+pixels and one generator for both, so there is nothing to keep in step.
 
-NOT SHIPPED YET, AND STOPGAP EITHER WAY. Nothing here is written into
-`web/public/`; this is the mockup GUIDELINES 2 asks for before a feature is
-built. And per GUIDELINES 4 the tool for a texture is Material Maker, which
-still answers 403 on every download path from this sandbox, so whichever of
-these is approved should be re-authored as a `.ptex` graph rather than shipped
-from here.
+STOPGAP, STILL. Per GUIDELINES 4 the tool for a texture is Material Maker,
+which answers 403 on every download path from this sandbox, so these should be
+re-authored as `.ptex` graphs when a session can install it.
 
 NO `sin` ANYWHERE, for the reason `texkit.py` explains at length: `--check`
 compares bytes on a machine that is not this one.
@@ -58,7 +55,12 @@ from texkit import (   # noqa: E402
     tri, value_noise, wrap_delta,
 )
 
-OUT = ROOT / "mockups" / "surface-finishes"
+# The PNGs SHIP, so they live where the client's build copies from, and the
+# mockup gets the same bytes as data URIs because it takes no network. One home
+# for the pixels: two copies of a binary in a repo is two things to keep in
+# step and no way to notice when they part.
+OUT = ROOT / "web" / "public" / "surf"
+MOCKUP = ROOT / "mockups" / "surface-finishes"
 SIZE = 128
 
 
@@ -617,7 +619,7 @@ def main() -> int:
 
     for key, _label, _blurb, build, strength in ARMOUR:
         h = build()
-        files.append((f"tex/armour_{key}_n.png", normal_png(h, SIZE, SIZE, strength, True)))
+        files.append((f"armour_{key}_n.png", normal_png(h, SIZE, SIZE, strength, True)))
 
     for key, _label, _blurb, build, variants in WINDOWS:
         made = [build(v) for v in range(variants)]
@@ -637,12 +639,12 @@ def main() -> int:
                 g = glass(u, w)
                 t = 1.0 + (GLASS - 1.0) * g
                 c.append((t, t, t))
-        files.append((f"tex/window_{key}_n.png",
+        files.append((f"window_{key}_n.png",
                       normal_png(h, wide, SIZE, WINDOW_STRENGTH, True)))
-        files.append((f"tex/window_{key}_e.png", rgb_png(e, wide, SIZE)))
-        files.append((f"tex/window_{key}_c.png", rgb_png(c, wide, SIZE)))
+        files.append((f"window_{key}_e.png", rgb_png(e, wide, SIZE)))
+        files.append((f"window_{key}_c.png", rgb_png(c, wide, SIZE)))
 
-    files.append(("tex/env.png", env_png()))
+    files.append(("env.png", env_png()))
 
     # The same bytes again as data URIs, because GUIDELINES 2.1 gives a mockup
     # no network at all and that includes a file sitting next to it.
@@ -656,7 +658,6 @@ def main() -> int:
         lines.append(f"  {name}: 'data:image/png;base64,{b64encode(png).decode()}',")
     lines.append("};")
     js = ("\n".join(lines) + "\n").encode()
-    files.append(("textures.js", js))
 
     ok = True
     for path, data in files:
@@ -666,8 +667,14 @@ def main() -> int:
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+    bundle = MOCKUP / "textures.js"
+    if args.check:
+        ok = emit(bundle, js, True) and ok
+    else:
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        bundle.write_bytes(js)
 
-    total = sum(len(d) for p, d in files if p.startswith("tex/"))
+    total = sum(len(d) for _p, d in files)
     if args.check:
         if not ok:
             return 1
@@ -679,9 +686,8 @@ def main() -> int:
           f"{SIZE}x{SIZE} each")
     print(f"  {total} bytes of PNG, {len(js)} bytes of data URI bundle")
     for path, data in files:
-        if path.startswith("tex/"):
-            print(f"    {len(data):7d}  {path}  "
-                  f"{hashlib.sha256(data).hexdigest()[:8]}")
+        print(f"    {len(data):7d}  {path}  "
+              f"{hashlib.sha256(data).hexdigest()[:8]}")
     return 0
 
 

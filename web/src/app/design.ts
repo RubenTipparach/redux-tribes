@@ -87,6 +87,30 @@ export const FACTION_PAINT: ReadonlyArray<{ key: string; name: string; swatches:
     [0xD8E2EC, 0xB9C6D4, 0x8C949E, 0x4F4F4F, 0xF2F5F8, 0x2A2E33, 0x6E7680, 0xC0A24A] },
 ];
 
+/**
+ * The finishes a palette colour can wear, and what each is called.
+ *
+ * The key IS the file name in `web/public/surf/`, so adding one is adding a
+ * texture and a row here. `smooth` is deliberately not a texture: it means no
+ * normal map at all, which is cheaper than a flat one and says the same thing.
+ */
+export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
+  { key: 'smooth', name: 'Smooth' },
+  { key: 'plate', name: 'Riveted' },
+  { key: 'ribbed', name: 'Corrugated' },
+  { key: 'hex', name: 'Ablative' },
+  { key: 'cracked', name: 'Patched' },
+  { key: 'tread', name: 'Grip deck' },
+  { key: 'greeble', name: 'Greebled' },
+  { key: 'weave', name: 'Composite' },
+  { key: 'battered', name: 'Battered' },
+];
+
+export const DEFAULT_FINISH = 'plate';
+/** What a hull is made of until a player says otherwise. */
+export const DEFAULT_METAL = 0.25;
+export const DEFAULT_ROUGH = 0.55;
+
 export const paintFor = (key: string) =>
   FACTION_PAINT.find(f => f.key === key) ?? (FACTION_PAINT[0] as typeof FACTION_PAINT[number]);
 
@@ -843,6 +867,21 @@ export interface Design {
   faction: string;
   /** Armour tint. Cosmetic only: never hashed, never sent to the core. */
   paint: number;
+  /**
+   * What the armour is MADE of, as a finish key.
+   *
+   * Presentation, like `paint`, and for the same reason: it changes how a hull
+   * is lit and nothing about what happens. It is not passed to the core and
+   * not in the state hash, so two seats that disagreed about whether a hull is
+   * riveted or ablative still resolve the same turn to the same number.
+   *
+   * Optional so every design that predates it still loads, and an absent one
+   * means the default.
+   */
+  finish?: string;
+  /** How metallic and how rough that armour is, 0 to 1. Presentation. */
+  metal?: number;
+  rough?: number;
 }
 
 // ============================================================= THE SEAM ==

@@ -253,6 +253,48 @@ async function checkHullsAreShips(page) {
     process.exit(1);
   }
   log(`hulls are drawn from their own cells: ${quads.join(', ')} quads, ${total} in all`);
+  await checkHullsWearTheirFinish(page);
+}
+
+/**
+ * The hulls are drawn with the surface they were given.
+ *
+ * A texture handed the wrong URL does not throw. The server answers a path
+ * outside the site root with the index page, `TextureLoader` fails to decode
+ * it, and the material keeps a normal map with no pixels in it: three.js then
+ * samples an empty texture, every fragment gets a garbage normal, and the hull
+ * draws as flat paint. That is indistinguishable from a finish that was never
+ * applied, which is exactly how the ember and all nine armour finishes shipped
+ * dead while every suite passed. Nothing but the browser can answer it, so it
+ * is answered here.
+ */
+async function checkHullsWearTheirFinish(page) {
+  const surf = await page.evaluate(() => window.ftDebug.surfaces());
+  if (!surf.length) {
+    console.log('\nFAIL: no hulls to read a surface off');
+    process.exit(1);
+  }
+  const flat = surf.filter(s => s.kind !== 'MeshStandardMaterial');
+  if (flat.length) {
+    console.log(`\nFAIL: ship ${flat[0].ship} is drawn with ${flat[0].kind}, which has no metalness`);
+    process.exit(1);
+  }
+  const dead = surf.filter(s => s.finish !== 'none' && !s.loaded);
+  if (dead.length) {
+    console.log(`\nFAIL: ship ${dead[0].ship} has a finish bound with no pixels in it`
+      + ` (${dead[0].finish}): the texture did not load`);
+    process.exit(1);
+  }
+  if (surf.some(s => !s.uv)) {
+    console.log('\nFAIL: a hull has no UVs, so a normal map has nothing to sample along');
+    process.exit(1);
+  }
+  if (!surf[0].env) {
+    console.log('\nFAIL: no environment map, so every metal on the map renders black');
+    process.exit(1);
+  }
+  log(`hulls wear their finish: ${surf.length} on ${surf[0].kind},`
+    + ` ${surf[0].finish} loaded, metal ${surf[0].metal}, rough ${surf[0].rough}`);
 }
 
 async function checkNothingIsBuried() {
