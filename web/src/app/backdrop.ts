@@ -207,7 +207,13 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
     const dist = NEAR_BAND + (FAR_BAND - NEAR_BAND) * t;
 
     const body = new THREE.Mesh(
-      new THREE.SphereGeometry(p.radius, 48, 32),
+      // 24x16 rather than 48x32, which is 2300 fewer triangles each and made
+      // no measurable difference at all: 50 ms median either way. Kept because
+      // it is free and an eye cannot tell, but recorded as the evidence that
+      // this scene is FILL bound, not triangle bound. The cost of the backdrop
+      // is the pixels it covers, so the place to look, if it ever needs to be
+      // cheaper, is the sky and the light count and not the meshes.
+      new THREE.SphereGeometry(p.radius, 24, 16),
       // Lambert, like the hulls: the planet is lit by the SAME sun, so its
       // terminator runs the same way as the lit edge of a ship. That
       // agreement is most of what sells a backdrop as a place.

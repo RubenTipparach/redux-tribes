@@ -523,6 +523,15 @@ compile; permanent once fired, because a look that comes back whenever the
 camera stops moving is worse than either look. It reports WHY, and the
 playthrough prints it.
 
+The whole thing costs 16.7 ms a frame, measured as 50 ms median against 33.3 on
+the parent commit, same machine, bloom already stood down either side. Halving
+the planet geometry recovered NONE of it (50 ms either way), which is the
+evidence that this scene is fill bound rather than triangle bound: the cost is
+a sky that covers every pixel and four light terms on the hulls instead of two.
+If it ever has to get cheaper, that is where to look, and not at the meshes.
+Software rasterisation pays for every fragment on the CPU, so this is close to
+the worst case and a GPU will not care.
+
 Measured, headless, in software rasterisation, which is the wrong machine and
 overstates a blur chain badly: 1280x860 bloom 86.96 ms against plain 53.36 ms;
 390x844 bloom 48.85 ms against plain 30.68 ms. The ladder duly fired at 18
