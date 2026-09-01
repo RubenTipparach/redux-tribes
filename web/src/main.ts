@@ -922,7 +922,11 @@ function placeInspect(): void {
   for (const b of boxes) {
     const v = live.find(x => x.index === Number(b.dataset.sub));
     if (!v) { b.style.display = 'none'; continue; }
-    const at = view.screenOf(v.pos);
+    // Asked of the view rather than projected from `v.pos`: that point was
+    // read when the console last read the world, and through a playback the
+    // hull moves every tick without another read. The label followed the
+    // ship's start of turn pose and sat in empty space behind it.
+    const at = view.subScreen(v);
     const ax = at.x - rect.left, ay = at.y - rect.top;
     if (ax < -80 || ay < -80 || ax > rect.width + 80 || ay > rect.height + 80) {
       b.style.display = 'none';
@@ -3240,6 +3244,14 @@ Object.defineProperty(window, 'ftDebug', {
     /** Every hull's position right now, for checking a preview against what
      * the turn actually did. */
     poses: () => ships.map(s => ({ id: s.id, side: s.side, destroyed: s.destroyed, pos: s.pos })),
+    /** Where a hull actually IS on screen right now, taken from the mesh.
+     *  `poses` is the world the console last read and stands still through a
+     *  playback; this is what the player is looking at, which is the only
+     *  thing a camera lock can be checked against. */
+    drawn: (id: number) => {
+      const p = view.poseOf(id);
+      return p ? { x: p.pos.x, y: p.pos.y, z: p.pos.z } : null;
+    },
     /** Where a ship is on screen, so a harness can aim at one. */
     screenOf: (id: number) => {
       const s = ships.find(x => x.id === id);
@@ -3249,6 +3261,10 @@ Object.defineProperty(window, 'ftDebug', {
     camera: () => view.cameraState(),
     /** What has been shot off the hulls, and what is still in the air. */
     damage: () => view.damageState(),
+    /** What the hulls are drawn WITH: material, finish, and whether the
+     *  texture has pixels. A finish that never loaded draws exactly like one
+     *  that was never applied. */
+    surfaces: () => view.surfaces(),
     /** What the hulls cost to draw, and a switch to weigh it against. */
     hullQuads: () => view.hullQuads(),
     hullsVisible: (on: boolean) => view.hullsVisible(on),
