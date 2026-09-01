@@ -371,10 +371,18 @@ async function checkTheFieldIsDressed() {
     console.log('\nFAIL: no planets in the backdrop, so the field has no sense of scale');
     process.exit(1);
   }
+  // The stars are GEOMETRY, and a field that failed to build leaves a sky that
+  // still looks plausible in a screenshot: dark, with a nebula on it. Only the
+  // count can tell you they are gone.
+  if (!st.backdrop.stars) {
+    console.log('\nFAIL: no stars were built, so the sky is a nebula and nothing else');
+    process.exit(1);
+  }
 
   log(`the field is dressed: sky baked, ${dir.length} directional lights `
-    + `(key ${power[0]}, weakest ${power[power.length - 1]}), a sun and `
-    + `${st.backdrop.planets} planet(s), post is ${st.post.quality}`
+    + `(key ${power[0]}, weakest ${power[power.length - 1]}), a sun, `
+    + `${st.backdrop.planets} planet(s) and ${st.backdrop.stars} stars, `
+    + `post is ${st.post.quality}`
     + `${st.post.stoodDown ? ` (${st.post.stoodDown})` : ''}`);
 }
 

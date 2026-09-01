@@ -10,7 +10,8 @@
  */
 
 import * as THREE from 'three';
-import { bakeSky, skyDome, skyFor, type SkyPreset } from './sky.js';
+import { bakeSky, skyDome, skyFor, starfield, type SkyPreset } from './sky.js';
+import { reachMaterial } from './reach.js';
 import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
 import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
@@ -944,6 +945,9 @@ export class View {
   /** The mesh that DRAWS that sky, so it can be dithered on the way out. */
   #skyDome: THREE.Mesh | null = null;
   #backdrop: THREE.Group | null = null;
+  /** The stars, as points rather than as pixels in the sky texture. Held so
+   *  the shimmer has a uniform to drive and a launch can replace them. */
+  #stars: THREE.Points | null = null;
   /** Bloom, and the ladder that can take it away. */
   #post: Post | null = null;
 
@@ -1073,13 +1077,7 @@ export class View {
     // than as a shape, and the shape is the entire point. The skin is drawn
     // twice: a translucent additive hull for volume, and its edges over the
     // top so the silhouette still reads against a dark field.
-    this.#shell = new THREE.Mesh(
-      new THREE.BufferGeometry(),
-      new THREE.MeshBasicMaterial({
-        color: GREEN, transparent: true, opacity: 0.022, side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      }),
-    );
+    this.#shell = new THREE.Mesh(new THREE.BufferGeometry(), reachMaterial(GREEN));
     this.#scene.add(this.#shell);
     this.#scene.add(this.#wellGroup);
     this.#scene.add(this.#ghostGroup);
@@ -1273,8 +1271,10 @@ export class View {
     }
 
     const near = Math.max(0, Math.min(1, (this.#dist - 12) / 8));
-    const mat = this.#shell.material as THREE.MeshBasicMaterial;
-    mat.opacity = 0.022 * near;
+    const mat = this.#shell.material as THREE.ShaderMaterial;
+    // One number in, and the shader decides where it lands: the rim carries
+    // most of it and the face almost none.
+    if (mat.uniforms.strength) mat.uniforms.strength.value = near;
     (this.#shellLines.material as THREE.LineBasicMaterial).opacity = 0.5 * near;
     this.#shell.visible = this.#shellShown && near > 0;
     this.#shellLines.visible = this.#shellShown && near > 0;
@@ -1873,7 +1873,8 @@ export class View {
     return {
       dist: +this.#dist.toFixed(2),
       shell: this.#shell.visible,
-      shellOpacity: +(this.#shell.material as THREE.MeshBasicMaterial).opacity.toFixed(4),
+      shellOpacity: +(((this.#shell.material as THREE.ShaderMaterial)
+        .uniforms.strength?.value as number | undefined) ?? 0).toFixed(4),
       /** Which hull the camera is locked to, and where it is aimed, so a
        *  harness can watch a lock hold through a turn rather than infer it. */
       follow: this.#follow,
@@ -3105,6 +3106,18 @@ export class View {
       this.#scene.environment = null;
     }
 
+    // Stars are geometry, and always were the same Voronoi feature points the
+    // baked sky was testing rays against. Baked, a one texel star was smeared
+    // over 3.24 screen pixels; drawn, it is exactly as sharp as the display.
+    if (this.#stars) {
+      this.#scene.remove(this.#stars);
+      this.#stars.geometry.dispose();
+      (this.#stars.material as THREE.Material).dispose();
+      this.#stars = null;
+    }
+    this.#stars = starfield(sky);
+    this.#scene.add(this.#stars);
+
     this.#backdrop = buildBackdrop(dressing);
     this.#scene.add(this.#backdrop);
 
@@ -3126,12 +3139,19 @@ export class View {
    * coordinates, so a harness can say the sun EXISTS, is in front of the
    * camera, and is the size it should be, from any angle.
    */
+  /** How many stars are drawn. Zero would mean the field never built, which
+   *  a screenshot of a dark sky cannot tell you. */
+  #starCount(): number {
+    return (this.#stars?.userData.stars as number | undefined) ?? 0;
+  }
+
   backdropState(): {
     pieces: number;
     sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null;
     planets: number;
+    stars: number;
   } {
-    if (!this.#backdrop) return { pieces: 0, sun: null, planets: 0 };
+    if (!this.#backdrop) return { pieces: 0, sun: null, planets: 0, stars: this.#starCount() };
     let sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null = null;
     let planets = 0;
     let pieces = 0;
@@ -3155,7 +3175,7 @@ export class View {
         planets++;
       }
     }
-    return { pieces, sun, planets };
+    return { pieces, sun, planets, stars: this.#starCount() };
   }
 
   /** Which post path is running, and why, for the harness to read. */
@@ -3194,6 +3214,11 @@ export class View {
     const dt = this.#posedAt ? Math.min(0.1, (now - this.#posedAt) / 1000) : 0.016;
     this.#posedAt = now;
     this.#poseTurrets(dt);
+    // The shimmer the bake had to give up. A uniform, not a re-bake.
+    if (this.#stars) {
+      const u = (this.#stars.material as THREE.ShaderMaterial).uniforms;
+      if (u.time) u.time.value = now / 1000;
+    }
     this.#applyCamera();
     // Built on the first frame rather than in the constructor: the composer
     // sizes its render targets from the canvas, and the canvas has no size

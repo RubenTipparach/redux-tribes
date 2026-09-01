@@ -988,11 +988,19 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 /* The maker filter: a wrapping row of chips rather than a select, because a
    dropdown hides its options behind a gesture nobody makes on a phone, which
    is the same reason the level list is buttons. */
-#briefOwners { display:flex; flex-wrap:wrap; gap:6px; grid-template-columns:none;
-  /* Pinned to the top of the scroller. The roster below it can be long, and a
-     filter that scrolls out of reach is a filter you stop using. */
+/* Pinned to the top of the scroller, and ONE ROW deep whatever the library
+   holds. It wrapped at first, which was fine with four makers and a defect
+   with nineteen: on a 390x560 landscape phone the wrapped block grew taller
+   than the roster behind it and swallowed every tap on the picks below, which
+   is the same class of bug as a sheet covering the fire slots. A sticky
+   element has to have a bounded height or it stops being a header and starts
+   being a lid. It scrolls sideways inside itself instead, which is what the
+   guidance already asks of anything too wide. */
+#briefOwners { display:flex; flex-wrap:nowrap; gap:6px; grid-template-columns:none;
+  overflow-x:auto; overflow-y:hidden; scrollbar-width:thin;
   position:sticky; top:0; z-index:2; background:var(--panel);
   padding:2px 0 6px; margin-bottom:-2px; }
+#briefOwners button { flex:0 0 auto; }
 #briefOwners button { padding:4px 9px; font-size:11px; border-radius:99px;
   display:flex; align-items:center; gap:5px; }
 #briefOwners button.on { border-color:var(--cyan); background:#0d2231; color:var(--cyan); }

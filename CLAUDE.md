@@ -599,6 +599,49 @@ reaches the materials it reaches and no others, so check rather than assume;
 the sequel is that the answer moves when somebody changes a material, and a
 note like this one goes stale silently.
 
+**The stars are GEOMETRY, and baking them was a mistake worth remembering.**
+They started as a Voronoi lookup inside the baked shader, and they came out
+soft. The arithmetic says why: a cube face is 512 texels across 90 degrees, so
+at a 50 degree field of view on a 1280 wide canvas every texel is stretched
+over 3.24 screen pixels, and `LinearFilter` interpolates across that.
+`generateMipmaps` finished the job by averaging stars away in the lower mips.
+Measured, in a patch of empty sky, a star was 3.53 px wide with a median of 4
+and a worst of 6, which matches the predicted 3.24x almost exactly.
+
+Resolution does not rescue it. 1024 faces are still 1.62x and cost 25 MB;
+only 2048 is genuinely sharp, at 101 MB of VRAM, on a renderer whose floor is a
+Pi 5. The error was not the budget, it was baking two things with OPPOSITE
+frequency content into one texture: a nebula is smooth and survives resampling,
+a star is a point and no texture survives one under magnification.
+
+So the nebula stays baked and the stars are 7181 points in one draw call, about
+200 KB, at the same Voronoi FEATURE POINTS the shader used to measure rays
+against. Drawing the cell centres is what the distance test was approximating.
+Measured the same way afterwards: 1.47 px mean, median 1, worst 3. Being
+geometry also gives back the shimmer the bake had to give up (3.4's
+`ShimmerSpeed`), since moving a point costs a uniform rather than a re-bake.
+
+The general rule: **before baking anything, ask what its finest feature is
+against the texel size it will be sampled at.** A picture that is going to be
+magnified 3x cannot hold anything one pixel wide.
+
+**The reach shell is a fresnel, not a wash.** The movement envelope was a flat
+`MeshBasicMaterial` at 0.022 opacity, which has no view angle response at all:
+every part of it was equally faint however the surface lay, so it read as green
+fog rather than as a shape with an inside. `reach.ts` shades it by grazing
+angle instead, which is the archive's own Nebula prop trick (3.6: "inverted
+fresnel remapped into alpha times Color, a soft volumetric-looking gas blob on
+a mesh") on a different mesh. `abs(dot(n, v))` because the mesh is double sided
+and comes out of marching tetrahedra.
+
+The numbers were SOLVED rather than guessed, after two guesses that both hid
+the ships inside the volume. The rim term averages 0.2774 over a uniformly
+oriented surface, so `0.005 + 0.2774 * 0.0613 = 0.022` puts exactly the old
+flat alpha back, with three times as much of it at the silhouette and less than
+a quarter on the faces you are looking through. Redistribute the ink; do not
+add more. Additive blending on a CLOSED double sided surface lays it down twice
+per ray, which is why a rim that looks reasonable in isolation goes solid.
+
 **Turbulence is folded per octave, and the reason is worth keeping.** The first
 cut folded the finished fBm sum with `1 - |2n - 1|`. Eight octaves of value
 noise concentrate hard around 0.5 (measured: mean 0.535, p10 0.337, p90 0.694)
