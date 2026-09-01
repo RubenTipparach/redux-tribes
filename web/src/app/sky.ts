@@ -62,7 +62,13 @@ export const SKIES: Readonly<Record<string, SkyPreset>> = {
   skirmish: { a: 0x00714b, b: 0x0a0616, seed: [0, 0, 0] },
   duel: { a: 0x1d4d86, b: 0x05070f, seed: [11.3, 4.1, 27.7] },
   convoy: { a: 0x6b3a1f, b: 0x0d0806, seed: [3.7, 19.2, 8.4] },
-  low_orbit: { a: 0x2a5f7a, b: 0x040910, seed: [22.1, 6.6, 13.9] },
+  // Hyphen, because that is the SCENARIO's name: `types.ts` maps
+  // 'low-orbit' onto the core's `Scenario.LowOrbit`, and the practice list
+  // offers that string. Spelled with an underscore this entry matched
+  // nothing, `skyFor` fell back to the default, and the one level whose
+  // whole point is a heavy body below you got the skirmish sky instead.
+  // A lookup that falls back rather than throwing hides its own typos.
+  'low-orbit': { a: 0x2a5f7a, b: 0x040910, seed: [22.1, 6.6, 13.9] },
   binary: { a: 0x7a3560, b: 0x0b0512, seed: [17.5, 28.3, 2.2] },
   slingshot: { a: 0x3f2f7a, b: 0x06050f, seed: [9.8, 12.7, 31.4] },
   sandbox: { a: 0x2f4a5c, b: 0x07090d, seed: [5.2, 24.9, 18.1] },
@@ -269,6 +275,81 @@ void main() {
 `;
 
 /**
+ * The sky, drawn by us rather than by `scene.background`, so it can be
+ * DITHERED.
+ *
+ * Half float storage fixes the banding in the texture; it does not fix the
+ * banding on the way out. The canvas is eight bits, and a gradient this slow
+ * quantises against it exactly the same way whatever the texture holds: the
+ * value crawls, the byte holds, and the step lands as a contour forty pixels
+ * wide because the sky is magnified.
+ *
+ * A dither is the standard answer and it is nearly free: add noise smaller
+ * than one step before the value is rounded, and the rounding scatters instead
+ * of stepping. Triangular PDF (two uniform samples subtracted) rather than
+ * uniform, because uniform dither leaves the noise correlated with the signal
+ * and a flat area still looks like it is moving.
+ *
+ * Ours rather than three's background pass, for two reasons. Three's
+ * background does not dither, and there is no hook to make it. And the ladder
+ * in `post.ts` can take the composer away entirely, so a dither living in the
+ * post chain would be a sky that bands only on the machines least able to
+ * afford a second look at it.
+ *
+ * Depth test off and drawn first, so it is behind everything without being far
+ * away: a cube of half extent one, centred on the camera, covers every
+ * direction and sits clear of a near plane of 0.5.
+ */
+export function skyDome(cube: THREE.CubeTexture): THREE.Mesh {
+  const mat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthTest: false,
+    depthWrite: false,
+    uniforms: { sky: { value: cube } },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main() {
+        // The cube is carried on the camera, so its local position IS the
+        // view ray: no inverse projection, no per frame uniform to keep in
+        // step with a camera that moves every frame.
+        vDir = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */`
+      precision highp float;
+      uniform samplerCube sky;
+      varying vec3 vDir;
+
+      // A hash of the pixel, not of time: a still sky should be still. Noise
+      // that crawled would be worse than the bands it replaced.
+      float hash12(vec2 p) {
+        vec3 q = fract(vec3(p.xyx) * 0.1031);
+        q += dot(q, q.yzx + 33.33);
+        return fract((q.x + q.y) * q.z);
+      }
+
+      void main() {
+        vec3 col = textureCube(sky, normalize(vDir)).rgb;
+        // Triangular PDF across one output step, which is what the eye reads
+        // as smooth. Applied before three's tone mapping and colour space
+        // conversion take the value to the canvas.
+        float n = hash12(gl_FragCoord.xy) - hash12(gl_FragCoord.xy + 71.3);
+        gl_FragColor = vec4(col + n / 255.0, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), mat);
+  // Never culled and always first: a sky that popped out of the frustum, or
+  // that drew after the fleet, would be a black screen or a wiped one.
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -1000;
+  return mesh;
+}
+
+/**
  * Bake a preset into a cubemap.
  *
  * Rendered on the CPU's schedule rather than the frame loop's: this happens
@@ -283,10 +364,24 @@ export function bakeSky(
   preset: SkyPreset,
   size = 512,
 ): THREE.CubeTexture {
+  // HALF FLOAT, and this is the whole reason the sky stopped banding.
+  //
+  // A nebula is a very slow gradient across a very dark range: colorB is near
+  // black and the gas climbs over it by NEB_GAIN, so most of the sky lives in
+  // maybe thirty of the 256 values an 8 bit target can hold. Two neighbouring
+  // pixels that ought to differ by a hundredth of a step get the SAME byte
+  // until the gradient has crawled far enough to tip over, and where it tips
+  // there is a hard edge. Then the cubemap is magnified about four times to
+  // fill the viewport, which takes each of those steps and makes it forty
+  // pixels wide: the contour map the field looked like.
+  //
+  // Sixteen bits of float has enough resolution in that range that no step
+  // exists to magnify. It costs 12 MB a sky against 6, once, at launch.
   const target = new THREE.WebGLCubeRenderTarget(size, {
     generateMipmaps: true,
     minFilter: THREE.LinearMipmapLinearFilter,
     magFilter: THREE.LinearFilter,
+    type: THREE.HalfFloatType,
   });
 
   const mat = new THREE.ShaderMaterial({

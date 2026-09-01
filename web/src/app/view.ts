@@ -10,7 +10,7 @@
  */
 
 import * as THREE from 'three';
-import { bakeSky, skyFor, type SkyPreset } from './sky.js';
+import { bakeSky, skyDome, skyFor, type SkyPreset } from './sky.js';
 import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
 import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
@@ -941,6 +941,8 @@ export class View {
   /** The baked sky, and the scenery in front of it. Both belong to a match:
    *  the next launch gets its own and these are disposed. */
   #sky: THREE.CubeTexture | null = null;
+  /** The mesh that DRAWS that sky, so it can be dithered on the way out. */
+  #skyDome: THREE.Mesh | null = null;
   #backdrop: THREE.Group | null = null;
   /** Bloom, and the ladder that can take it away. */
   #post: Post | null = null;
@@ -1295,6 +1297,10 @@ export class View {
       this.#focus.z + this.#dist * cp * Math.cos(this.#yaw),
     );
     this.#camera.lookAt(this.#focus);
+    // The sky travels with the eye. A cube of half extent one centred on the
+    // camera covers every direction and stays clear of the near plane, so
+    // there is no far away sphere to keep the fleet inside of.
+    this.#skyDome?.position.copy(this.#camera.position);
   }
 
   // -------------------------------------------------------------- input --
@@ -1721,6 +1727,10 @@ export class View {
       metalness: HULL_METAL,
       roughness: HULL_ROUGH,
       normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
+      // A dark hull under one key light is another slow gradient in a narrow
+      // range, and it contours on an eight bit canvas for the same reason the
+      // sky does. One property, and the plating grades instead of stepping.
+      dithering: true,
     }));
     this.#tintHull(mesh, s);
     this.#buildRigs(s.id, design, hull);
@@ -3061,6 +3071,12 @@ export class View {
     }
     this.#sky?.dispose();
     this.#sky = null;
+    if (this.#skyDome) {
+      this.#scene.remove(this.#skyDome);
+      this.#skyDome.geometry.dispose();
+      (this.#skyDome.material as THREE.Material).dispose();
+      this.#skyDome = null;
+    }
 
     // A lost context, a headless run with no float targets, or any other
     // reason the bake cannot happen must leave a playable game rather than a
@@ -3068,7 +3084,13 @@ export class View {
     try {
       const baked = bakeSky(this.#renderer, sky);
       this.#sky = baked;
-      this.#scene.background = baked;
+      // Drawn by our own dome rather than by `scene.background`, because the
+      // canvas is eight bits and a nebula is a very slow gradient across a
+      // very dark range: without a dither on the way out it quantises into
+      // contours whatever the texture holds. `skyDome` says the rest.
+      this.#scene.background = null;
+      this.#skyDome = skyDome(baked);
+      this.#scene.add(this.#skyDome);
       this.#scene.environment = baked;
       // Low. The environment is there to fill shadow, not to flatten the key
       // light that gives a hull its shape.
