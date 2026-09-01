@@ -210,6 +210,33 @@ export class Designer {
     this.#socket = null;
     this.#note = null;
     this.#said('');
+    this.#syncSaveButton();
+    if (this.#renderer) this.#refresh();
+  }
+
+  /**
+   * A blank slate: a stock hull, owned by nobody yet.
+   *
+   * This is what `/ship` with no id MEANS, and until it existed the route
+   * could not say it. The designer simply showed whatever was already in it,
+   * so closing a saved design and pressing Shipyard again put you back in that
+   * design at an address claiming a new one, and Save then quietly updated the
+   * row you thought you had left. A route that cannot express "nothing loaded"
+   * is a route that lies the moment something has been loaded.
+   *
+   * Idempotent on purpose: `showRoute` re-enters `/ship` on Back and on close,
+   * and wiping a hull somebody is drawing because a route fired twice would be
+   * worse than the bug this fixes.
+   */
+  newDesign(classKey?: string): void {
+    if (!this.#slot.designId && !this.#slot.name) return;
+    this.#design = stockFor(classKey ?? this.#design.classKey);
+    this.#slot = { designId: null, name: '', mine: false };
+    this.#syncDrawSets();
+    this.#socket = null;
+    this.#note = null;
+    this.#said('');
+    this.#syncSaveButton();
     if (this.#renderer) this.#refresh();
   }
 

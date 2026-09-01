@@ -262,6 +262,64 @@ in the same millisecond tie, and a tie makes the sort fall back to enumeration
 order, which is insertion order and therefore OLDEST first: the shelf then kept
 the twelve oldest games and dropped the one just started.
 
+## A persisted resource gets a URL, always
+
+**This is the rule for every future feature, not a description of the current
+screens.** The moment something in this app becomes a thing that OUTLIVES the
+tab it was made in, it gets an id and that id gets a path. No exceptions
+waiting to be argued: decide the route in the same change that adds the
+resource, because a resource shipped without one is a resource somebody has to
+retrofit a URL onto later, against code that has already grown used to not
+having one.
+
+**What counts as a persisted resource.** Anything with an identity that
+survives a reload: a saved game, a room, a design, and whatever comes next.
+Campaigns, fleets, replays, tournaments, saved layouts, a shared scenario. The
+test is not "is it on a server" but "could a person reasonably expect to come
+back to this, or send it to somebody". `localStorage` counts. A practice match
+lives only in this browser and still has `/play/<gameId>`, because a reload is
+coming back to it.
+
+**What does NOT.** Transient view state: which tab is open, what is selected,
+where the camera is, a half typed name, a tool mode. Those are how you are
+looking at a resource rather than which resource you are looking at, and
+putting them in the address makes URLs that are noisy to read, awkward to
+share and impossible to keep consistent. If it would be strange in a link you
+sent a friend, it does not belong in the path.
+
+**What the URL has to actually do**, and all three are checked in
+`web/tests/routes.mjs` rather than assumed:
+
+1. **A reload lands back on the resource**, showing the same thing, not the
+   lobby and not an empty version of the screen.
+2. **The address updates when you get there**, including when the resource is
+   created. Saving a new design has to leave you on that design's URL: a page
+   whose address still says "new" after the thing exists is a page whose Back
+   button and refresh both lie.
+3. **A dead id falls back and REWRITES itself.** An address naming a resource
+   that is gone goes to the lobby and fixes the address bar, so a stale link
+   does not leave a URL that will fail the same way tomorrow.
+
+**A route that cannot say "nothing loaded" lies the moment something is.**
+`/ship` used to mean "show the designer with whatever is in it" rather than "a
+new design", so closing a saved hull and pressing Shipyard put you back in that
+hull at an address claiming a blank one, and Save then quietly updated the row
+you thought you had left. The no-id route needs to actively clear the resource,
+not merely fail to name one.
+
+**One path in, or the address and the screen will disagree.** Opening a design
+from the library used to navigate AND load the row itself, so the design
+loaded twice: `route.go` runs the route handler synchronously, which fetches
+and loads it, and then the caller loaded its own copy over the top. Navigate
+and let the route do the work.
+
+**Add the route to `route.ts` and the check to `routes.mjs` in the same
+commit.** `route.ts` parses and formats and knows nothing about screens; what a
+route MEANS stays in the app. And remember the trap the deep paths already
+sprang once: **asset URLs must be absolute**, because a relative `./main.js` on
+a two segment path asks for the wrong thing and the shell route answers it with
+HTML.
+
 ## The boundary: the core simulates, the client draws
 
 `engine/sim_core` is the whole game. `web/` draws it and collects input. That is

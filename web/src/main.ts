@@ -3377,6 +3377,24 @@ designer.onSave(async req => {
       mass: req.mass, hull: req.hull, legal: req.legal,
     });
   void lobby.refreshLibrary();
+  // The design now EXISTS, so the address has to say which one you are on.
+  // Saving left you at `/ship` before this: a refresh threw the hull you had
+  // just made back to an empty editor, and the link in the address bar was for
+  // a blank page. A resource that has an id has a path, in the same breath as
+  // getting the id.
+  //
+  // Replace rather than push, because the address being corrected is the one
+  // for the unsaved version of this very design. Pushing would put an empty
+  // editor behind you in the history, and Back from your own new ship would
+  // land on a blank shipyard.
+  //
+  // `shownRoute` is pre-set so `showRoute` treats this as already shown. The
+  // design on screen IS the one just written, so re-entering the route would
+  // fetch it back from the server and load it over itself, throwing away the
+  // selection and costing a round trip to arrive where it already was.
+  const at: route.Route = { kind: 'ship', designId: saved.designId };
+  shownRoute = route.href(at);
+  route.go(at, { replace: true });
   return { designId: saved.designId, name: saved.name, mine: true, owner: saved.owner.name };
 });
 
@@ -3393,14 +3411,23 @@ lobby.onRoster(scenario => {
   return match.roster(id);
 });
 
+// A design that is gone cannot keep its address. Same rule as a game that is
+// gone falling back to the lobby, applied one level down.
+lobby.onDesignDeleted(designId => {
+  const now = route.current();
+  if (now.kind === 'ship' && now.designId === designId) {
+    route.go({ kind: 'ship' }, { replace: true });
+  }
+});
+
 lobby.onOpenDesign(d => {
-  // Push the design's own address, so the editor a player is in is a place
-  // they can reload into and a link they can send.
+  // Push the design's own address and let the ROUTE do the opening. This used
+  // to navigate and then load the row itself, which loaded the same design
+  // twice: `route.go` runs `showRoute` synchronously, which fetches and loads
+  // it, and then these lines loaded the library's copy over the top. One path
+  // into the editor means the address and the editor cannot disagree, which is
+  // the whole point of the screen having an address.
   route.go({ kind: 'ship', designId: d.designId });
-  designer.show();
-  designer.loadDesign(d.design as Design, {
-    designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
-  });
 });
 
 // The lobby says where it went; this puts it in the address bar. One decision
@@ -3450,7 +3477,16 @@ async function showRoute(r: route.Route): Promise<void> {
       return;
     }
     case 'ship': {
-      if (!r.designId) { designer.show(); lobby.show(); return; }
+      if (!r.designId) {
+        // `/ship` is a NEW design, not "show the designer with whatever is in
+        // it". Without this the editor kept the last design it loaded while
+        // the address said otherwise, and Save then updated that row instead
+        // of making the ship the player thought they were starting.
+        designer.newDesign();
+        designer.show();
+        lobby.show();
+        return;
+      }
       // Straight to a design by id, which is what a reload on `/ship/<id>`
       // has to do: the library row it came from may not even be loaded yet.
       try {
@@ -3460,6 +3496,13 @@ async function showRoute(r: route.Route): Promise<void> {
           designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
         });
       } catch {
+        // The id names nothing: deleted, mistyped, or somebody else's link into
+        // a library this server does not have. Fall back to a fresh shipyard
+        // AND rewrite the address, the same way a dead game id falls back to
+        // the lobby. Leaving `/ship/<gone>` in the bar would hand the player a
+        // URL that fails again tomorrow, and would show an editor whose title
+        // disagrees with the address.
+        route.go({ kind: 'ship' }, { replace: true });
         designer.show();
       }
       lobby.show();

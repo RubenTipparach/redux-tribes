@@ -138,6 +138,11 @@ export class Lobby {
 
   onOpenDesign(fn: (d: SavedDesign) => void): void { this.#onOpenDesign = fn; }
 
+  /** Told when a design is deleted, so whoever owns the address can stop
+   *  pointing at it. The lobby does not own the router. */
+  #onDeleted: ((designId: string) => void) | null = null;
+  onDesignDeleted(fn: (designId: string) => void): void { this.#onDeleted = fn; }
+
   constructor(api: Api, onLaunch: (l: Launch) => void) {
     this.#api = api;
     this.#onLaunch = onLaunch;
@@ -679,7 +684,14 @@ export class Lobby {
         del.textContent = 'Delete';
         del.onclick = () => {
           void this.#api.deleteDesign(d.designId)
-            .then(() => this.refreshLibrary())
+            .then(() => {
+              // If that design was the one being edited, its address now names
+              // nothing. Say so rather than leaving a URL that 404s on the
+              // next reload, which is the same rule a game that is gone
+              // follows.
+              this.#onDeleted?.(d.designId);
+              return this.refreshLibrary();
+            })
             .catch(e => this.#err(e));
         };
         row.appendChild(del);
