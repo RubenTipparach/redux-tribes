@@ -46,7 +46,7 @@ fn near(a: f32, b: f32, what: &str) {
 }
 
 #[test]
-fn the_five_authored_classes_derive_exactly_as_the_editor_does() {
+fn every_authored_class_derives_exactly_as_the_editor_does() {
     let cases: &[(ShipClassId, &[usize], Geometry, Expect)] = &[
         (ShipClassId::TerranFrigate,
          &[1, 1, 1, 1, 1, 1, 12, 12, 12, 13, 13, 13, 7, 7, 10, 10, 11, 11, 16, 17, 17, 17, 18, 18, 18, 18, 19, 19],
@@ -68,8 +68,61 @@ fn the_five_authored_classes_derive_exactly_as_the_editor_does() {
          &[4, 4, 4, 7, 7, 9, 9, 9, 9, 16, 20, 20, 17, 17, 17, 18, 18, 18],
          Geometry { plate_cells: 3563, ext: [16, 14, 48], radius_cells: 25.37715508089904, fouled: 0 },
          Expect { mass: 1.57484, hull: 542.934, radius: 4.163439505459999, accel_fwd: 0.5714866272129232, accel_retro: 0.19049554240430774, accel_lat: 0.1269970282695385, max_speed: 5.0, yaw: 4.391980560988206, pitch: 2.9426269758620984, reach_u: 28.127222222222223, marines: 15, capacity: 6, boarding_range: 10.0, legal: true }),
+        (ShipClassId::TerranCorvette,
+         &[2, 1, 12, 13, 12, 13, 7, 7, 9, 9, 16, 17, 18, 19, 19],
+         Geometry { plate_cells: 1969, ext: [16, 12, 40], radius_cells: 20.83266665599966, fouled: 0 },
+         Expect { mass: 0.4336419999599457, hull: 125.90599822998047, radius: 2.2785727977752686, accel_fwd: 1.0377223491668701, accel_retro: 0.6918148994445801, accel_lat: 0.23060497641563416, max_speed: 8.5, yaw: 9.570106506347656, pitch: 6.411971569061279, reach_u: 50.18818283081055, marines: 5, capacity: 2, boarding_range: 20.0, legal: true }),
+        (ShipClassId::TerranDestroyer,
+         &[5, 5, 5, 0, 0, 0, 12, 13, 12, 13, 12, 13, 12, 13, 12, 14, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 19, 19],
+         Geometry { plate_cells: 4698, ext: [25, 16, 60], radius_cells: 32.56148031032987, fouled: 0 },
+         Expect { mass: 2.0294289588928223, hull: 705.9760131835938, radius: 5.342118263244629, accel_fwd: 0.9608613848686218, accel_retro: 0.2956496775150299, accel_lat: 0.19709977507591248, max_speed: 7.0, yaw: 5.453094005584717, pitch: 3.6535730361938477, reach_u: 44.502044677734375, marines: 25, capacity: 10, boarding_range: 20.0, legal: true }),
+        (ShipClassId::TerranCruiser,
+         &[5, 5, 5, 5, 0, 0, 0, 0, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 13, 12, 14, 12, 14, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19],
+         Geometry { plate_cells: 5565, ext: [25, 19, 62], radius_cells: 33.279122584587476, fouled: 0 },
+         Expect { mass: 4.619019985198975, hull: 1755.0400390625, radius: 7.279808044433594, accel_fwd: 0.5628899931907654, accel_retro: 0.12989768385887146, accel_lat: 0.0865984559059143, max_speed: 7.0, yaw: 2.318603754043579, pitch: 1.553464651107788, reach_u: 28.144500732421875, marines: 40, capacity: 12, boarding_range: 30.0, legal: true }),
+        (ShipClassId::KarisenCorvette,
+         &[3, 3, 3, 12, 13, 15, 6, 6, 9, 9, 16, 17, 18, 19, 19],
+         Geometry { plate_cells: 1351, ext: [17, 10, 44], radius_cells: 23.66960075708925, fouled: 0 },
+         Expect { mass: 0.39987799525260925, hull: 107.93399810791016, radius: 2.588862657546997, accel_fwd: 2.475755214691162, accel_retro: 0.2500762641429901, accel_lat: 0.2500762641429901, max_speed: 9.5, yaw: 9.434696197509766, pitch: 6.321247100830078, reach_u: 76.77323913574219, marines: 5, capacity: 2, boarding_range: 20.0, legal: true }),
+        (ShipClassId::KarisenDestroyer,
+         &[2, 2, 2, 0, 12, 13, 12, 13, 15, 15, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 18, 18, 18, 19, 19],
+         Geometry { plate_cells: 3980, ext: [18, 13, 63], radius_cells: 32.225766088644036, fouled: 0 },
+         Expect { mass: 1.5861949920654297, hull: 570.0650024414062, radius: 5.287039756774902, accel_fwd: 0.598917543888092, accel_retro: 0.3782637119293213, accel_lat: 0.25217580795288086, max_speed: 8.5, yaw: 6.644632339477539, pitch: 4.451904296875, reach_u: 29.945877075195312, marines: 20, capacity: 6, boarding_range: 20.0, legal: true }),
+        (ShipClassId::KarisenCruiser,
+         &[5, 5, 2, 2, 0, 12, 13, 12, 13, 15, 15, 15, 15, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 18, 18, 18, 19, 19],
+         Geometry { plate_cells: 5134, ext: [22, 17, 64], radius_cells: 33.8710791088799, fouled: 0 },
+         Expect { mass: 3.9417660236358643, hull: 1551.8480224609375, radius: 7.409298419952393, accel_fwd: 0.4693327844142914, accel_retro: 0.15221603214740753, accel_lat: 0.10147735476493835, max_speed: 8.5, yaw: 2.6320688724517822, pitch: 1.763486385345459, reach_u: 23.46664047241211, marines: 25, capacity: 6, boarding_range: 20.0, legal: true }),
+        (ShipClassId::RogueCorvette,
+         &[3, 3, 0, 12, 14, 6, 6, 9, 9, 16, 17, 17, 17, 18, 18, 19, 19],
+         Geometry { plate_cells: 1115, ext: [20, 11, 37], radius_cells: 19.50640920313116, fouled: 0 },
+         Expect { mass: 0.3833700120449066, hull: 100.30999755859375, radius: 2.1335134506225586, accel_fwd: 1.8519967794418335, accel_retro: 0.2608446180820465, accel_lat: 0.2608446180820465, max_speed: 9.5, yaw: 11.702757835388184, pitch: 7.840848445892334, reach_u: 70.63440704345703, marines: 15, capacity: 4, boarding_range: 20.0, legal: true }),
+        (ShipClassId::RogueDestroyer,
+         &[3, 3, 3, 12, 14, 12, 14, 12, 14, 7, 7, 7, 7, 10, 10, 8, 8, 11, 11, 8, 8, 16, 17, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19],
+         Geometry { plate_cells: 1641, ext: [25, 14, 47], radius_cells: 25.06990227344335, fouled: 0 },
+         Expect { mass: 1.20244300365448, hull: 350.5050048828125, radius: 4.113030910491943, accel_fwd: 0.8233238458633423, accel_retro: 0.498984158039093, accel_lat: 0.232859268784523, max_speed: 9.5, yaw: 8.22439193725586, pitch: 5.510342597961426, reach_u: 41.16619110107422, marines: 45, capacity: 14, boarding_range: 40.0, legal: true }),
+        (ShipClassId::RogueCruiser,
+         &[3, 3, 3, 3, 12, 14, 12, 14, 12, 14, 12, 14, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19],
+         Geometry { plate_cells: 2518, ext: [27, 15, 51], radius_cells: 28.508770580296865, fouled: 0 },
+         Expect { mass: 2.6299118995666504, hull: 907.7760009765625, radius: 6.236293315887451, accel_fwd: 0.5019179582595825, accel_retro: 0.22814451158046722, accel_lat: 0.15209634602069855, max_speed: 9.5, yaw: 4.950587272644043, pitch: 3.3168935775756836, reach_u: 25.095897674560547, marines: 70, capacity: 16, boarding_range: 50.0, legal: true }),
+        (ShipClassId::BenefactorCorvette,
+         &[1, 0, 0, 12, 14, 15, 7, 7, 9, 8, 16, 17, 18, 19, 19],
+         Geometry { plate_cells: 1702, ext: [14, 14, 40], radius_cells: 20.248456731316587, fouled: 0 },
+         Expect { mass: 0.3746260106563568, hull: 108.78800201416016, radius: 2.214674949645996, accel_fwd: 0.6673322319984436, accel_retro: 0.8007986545562744, accel_lat: 0.18685302138328552, max_speed: 8.0, yaw: 7.754400253295898, pitch: 5.195448398590088, reach_u: 33.36661148071289, marines: 5, capacity: 2, boarding_range: 20.0, legal: true }),
+        (ShipClassId::BenefactorDestroyer,
+         &[5, 5, 0, 0, 12, 14, 12, 14, 12, 14, 15, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 19, 19],
+         Geometry { plate_cells: 5490, ext: [18, 21, 61], radius_cells: 32.11697370550345, fouled: 0 },
+         Expect { mass: 2.110243082046509, hull: 769.97802734375, radius: 5.269190788269043, accel_fwd: 0.6160427927970886, accel_retro: 0.2843274474143982, accel_lat: 0.18955163657665253, max_speed: 7.0, yaw: 5.158290386199951, pitch: 3.4560546875, reach_u: 30.802139282226562, marines: 25, capacity: 10, boarding_range: 20.0, legal: true }),
+        (ShipClassId::BenefactorCruiser,
+         &[5, 5, 5, 0, 0, 12, 14, 12, 14, 12, 14, 12, 14, 15, 15, 7, 7, 7, 7, 10, 10, 10, 10, 11, 11, 11, 11, 16, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19],
+         Geometry { plate_cells: 7309, ext: [21, 25, 63], radius_cells: 33.507461855533016, fouled: 0 },
+         Expect { mass: 5.482885837554932, hull: 2182.16796875, radius: 7.329757213592529, accel_fwd: 0.34653282165527344, accel_retro: 0.1094314232468605, accel_lat: 0.07295428216457367, max_speed: 7.0, yaw: 1.9222873449325562, pitch: 1.2879326343536377, reach_u: 17.326641082763672, marines: 35, capacity: 12, boarding_range: 30.0, legal: true }),
     ];
 
+    // Every class, not a list of classes. The name says "every" and the loop
+    // reads a hand written table, so the eighteenth class would be absent
+    // exactly as the sixth was and this would pass without deriving it.
+    assert_eq!(cases.len(), sim_core::data::ALL_CLASSES.len(),
+        "a class was added without a derivation fixture");
     for (class, parts, geo, want) in cases {
         let got = derive(*class, parts, *geo);
         let key = sim_core::data::ship_class(*class).key;
@@ -155,7 +208,7 @@ fn a_designed_hull_flies_and_fights_as_itself() {
         (0..n)
             .map(|i| {
                 let b = OUT + i * SHIP_STRIDE;
-                (s[b + 3] as u32, s[b + 5], s[b + 7] as i32, s[b + 30], s[b + 21] as i32)
+                (s[b + 3] as u32, s[b + 5], s[b + 7] as i32, s[b + 35], s[b + 21] as i32)
             })
             .collect::<Vec<_>>()   // side, hull, marines, radius, mounts
     };

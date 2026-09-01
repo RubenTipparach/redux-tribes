@@ -20,6 +20,8 @@
  * function rather than an archaeology dig.
  */
 
+import { CLASS_KEYS } from '../sim/types.js';
+
 /** The hull lattice, every class. A frigate is 32 x 32 x 64 cells. */
 export const NX = 32, NY = 32, NZ = 64;
 export const CELLS = NX * NY * NZ;
@@ -377,9 +379,31 @@ export const isProud = (k: SocketKind): boolean => exposureOf(k) === 'proud';
  */
 const seatInset = (k: SocketKind): number => (exposureOf(k) === 'flush' ? 0 : 1);
 
+/** The four navies and the civil yards, which is what a hull is painted as and
+ *  what the shipyard groups its classes under. */
+export type FactionKey = 'terran' | 'karisen' | 'rogue' | 'benefactor' | 'civil';
+
+/** Where a class sits on its navy's ladder. Authored rather than read off the
+ *  name: a screen that grouped hulls by splitting their display names would
+ *  break the first time a class was called something else. */
+export type TierKey = 'corvette' | 'frigate' | 'destroyer' | 'cruiser' | 'freighter';
+
+export const TIER_NAMES: Record<TierKey, string> = {
+  corvette: 'Corvette', frigate: 'Frigate', destroyer: 'Destroyer',
+  cruiser: 'Heavy Cruiser', freighter: 'Freighter',
+};
+
+export const FACTION_ORDER: readonly FactionKey[] =
+  ['terran', 'karisen', 'rogue', 'benefactor', 'civil'];
+
+export const TIER_ORDER: readonly TierKey[] =
+  ['corvette', 'frigate', 'destroyer', 'cruiser', 'freighter'];
+
 export interface FrameDef {
   readonly classKey: string;
   readonly name: string;
+  readonly faction: FactionKey;
+  readonly tier: TierKey;
   readonly rung: RungKey;
   readonly radius: number;
   /** Mass ceiling, which is the authored class mass. */
@@ -487,6 +511,107 @@ const rib = (profile: readonly Station[], z: number, inset = 1): Box[] => {
 const ribs = (profile: readonly Station[], zs: readonly number[]) =>
   zs.flatMap(z => rib(profile, z));
 
+/**
+ * A socket seated BY THE PROFILE rather than at a counted cell.
+ *
+ * `u` and `v` are fractions of the half beam and half depth AT THAT STATION,
+ * so a socket authored at six tenths of the beam is inside the skin whatever
+ * section the class has. The four frigates were authored in raw cells against
+ * silhouettes read off the archive, which is exactly what raw cells are for;
+ * twelve more frames that way would mean re-deriving every socket by hand
+ * against its own profile, and a socket one cell outside the hull is a part
+ * hanging in space with a pylon reaching back to its own ship.
+ */
+const seatAt = (prof: readonly Station[], kind: SocketKind, id: string,
+  label: string, z: number, u = 0, v = 0): Socket => {
+  const [hw, hh] = hullAt(prof, z);
+  return {
+    id, kind, label,
+    at: [Math.round(CX + u * (hw as number)), Math.round(CY + v * (hh as number)), z],
+  };
+};
+
+/** Two sockets mirrored about the keel line, which is how nearly every fitting
+ *  on a ship actually comes. */
+const pairX = (prof: readonly Station[], kind: SocketKind, a: string, b: string,
+  label: string, z: number, u: number, v = 0): Socket[] => [
+  seatAt(prof, kind, a, `${label}, port`, z, -u, v),
+  seatAt(prof, kind, b, `${label}, starboard`, z, u, v),
+];
+
+/**
+ * Everything on a hull that is NOT a gun: drives, retros, attitude thrusters,
+ * the bridge, the berths and the clamps.
+ *
+ * These are the fittings every warship has in the same places for the same
+ * reasons, and authoring them per class is how two frames of one faction come
+ * to disagree about where a ship keeps its bridge. What a class is FOR lives
+ * in the guns and in the profile, and both of those stay hand authored: this
+ * lays the plumbing and gets out of the way.
+ *
+ * Bays march forward in PAIRS, a station at a time, because a barracks is
+ * seven cells deep and two of them eight cells apart do not reach each other.
+ * Cells are claimed first come first served, so a bay seated inside another
+ * one is not an error anywhere: it is simply a part that never appears.
+ */
+const suite = (prof: readonly Station[],
+  drives: ReadonlyArray<readonly [number, number]>,
+  bays: number, clamps: number, bayV = 0.05,
+  bayZ: readonly number[] | null = null): Socket[] => {
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const mid = Math.round((aft + nose) / 2);
+  const out: Socket[] = [];
+
+  drives.forEach(([u, v], n) => out.push(
+    seatAt(prof, 'drive', `d${n}`, `drive ${n + 1}`, aft + 1, u, v)));
+
+  out.push(...pairX(prof, 'retro', 'r0', 'r1', 'retro', nose - 8, 0.62));
+  // A second pair, for the hulls that need it. Retro thrust does not scale
+  // with the ship: two clusters brake a frigate and barely touch a cruiser,
+  // and a heavy that cannot stop turns Full stop into a button that lies.
+  out.push(...pairX(prof, 'retro', 'r2', 'r3', 'retro, quarter', nose - 20, 0.62));
+  out.push(...pairX(prof, 'rcs', 'y0', 'y1', 'rcs, bow', nose - 12, 0.86));
+  out.push(...pairX(prof, 'rcs', 'y2', 'y3', 'rcs, quarter', aft + 11, 0.86));
+  out.push(seatAt(prof, 'rcs', 'p0', 'rcs, dorsal', mid, 0, 0.86));
+  out.push(seatAt(prof, 'rcs', 'p1', 'rcs, ventral', mid, 0, -0.86));
+  out.push(seatAt(prof, 'rcs', 'p2', 'rcs, dorsal quarter', mid - 11, 0, 0.86));
+  out.push(seatAt(prof, 'rcs', 'p3', 'rcs, ventral quarter', mid - 11, 0, -0.86));
+
+  // b0 is the bridge bay on every frame: forward and dorsal, where a bridge
+  // goes and where its viewport is worth having. Everything else is berths,
+  // airlocks and holds, and the stock fit decides which.
+  out.push(seatAt(prof, 'bay', 'b0', 'bay, bridge', nose - 16, 0, 0.42));
+  //
+  // `bayZ` names the stations outright, for a hull whose midships volume is
+  // spoken for. A Karisen cruiser keeps six missile cells on the keel and is
+  // six cells deep: berths and cells cannot share a station, and the even
+  // march below has no way to know that.
+  const z0 = aft + 9, z1 = nose - 19;
+  const stations = Math.max(1, Math.ceil((bays - 1) / 2));
+  for (let n = 1; n < bays; n++) {
+    const k = Math.floor((n - 1) / 2);
+    const z = bayZ
+      ? (bayZ[Math.min(k, bayZ.length - 1)] as number)
+      : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
+    const port = (n - 1) % 2 === 0;
+    out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${port ? 'port' : 'starboard'} ${k + 1}`,
+      z, port ? -0.46 : 0.46, bayV));
+  }
+
+  // Clamps go on the QUARTER, aft of the bays and aft of anything a missile
+  // pad sweeps. A clamp is enclosed, so on a thin hull it is pulled inboard to
+  // fit, and amidships that walked it straight into a ventral pad's box.
+  for (let n = 0; n < clamps; n++) {
+    const k = Math.floor(n / 2);
+    const z = aft + 8 + k * 9;
+    const port = n % 2 === 0;
+    out.push(seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'port' : 'starboard'} ${k + 1}`,
+      z, port ? -0.80 : 0.80, -0.34));
+  }
+  return out;
+};
+
 // The five hull profiles. Half beam and half depth at a handful of stations,
 // read off the archived silhouettes: the Terran's slab waist, the Karisen's
 // long thin body, the Rogue's short wide one, the Benefactor's deep section,
@@ -502,9 +627,51 @@ const PROF_BENEFACTOR: readonly Station[] = [
 const PROF_FREIGHTER: readonly Station[] = [
   [8, 6, 5], [16, 8, 7], [30, 8, 7], [42, 7, 6], [50, 4, 3.5], [54, 2, 1.5]];
 
+// The twelve that fill the ladder in. A faction's SECTION is its signature and
+// it holds at every rung: Terran wide and flat, Karisen long and round, Rogue
+// short and very broad, Benefactor deeper than it is wide. A corvette is short
+// at the frigate's cell size; a destroyer and a heavy cruiser are the same
+// lattice at the escort and cruiser rungs, which is what makes a cruiser cost
+// eight times a frigate's plate for the same cells (design.rs scales it by the
+// cube of the cell).
+const PROF_TERRAN_CV: readonly Station[] = [
+  [12, 6, 4], [18, 8, 5], [28, 8.5, 5], [38, 7, 4], [46, 4, 2.5], [50, 2, 1.5]];
+const PROF_TERRAN_DD: readonly Station[] = [
+  [3, 8, 5], [10, 11, 6], [22, 12, 6.5], [36, 12, 6.5], [48, 9, 5], [56, 4, 2.5],
+  [60, 2, 1.5]];
+const PROF_TERRAN_CA: readonly Station[] = [
+  [2, 8.5, 5], [9, 11.5, 6], [20, 12.5, 6.5], [34, 12.5, 6.5], [46, 10.5, 5.5],
+  [55, 6, 3.5], [61, 2.5, 1.5]];
+
+const PROF_KARISEN_CV: readonly Station[] = [
+  [12, 5, 4], [18, 6.5, 4.5], [28, 7, 4.5], [38, 6, 4], [46, 3.5, 2.5], [52, 1.5, 1.5]];
+const PROF_KARISEN_DD: readonly Station[] = [
+  [2, 6, 4.5], [10, 8.5, 5.5], [24, 9.5, 6], [40, 9, 5.5], [52, 6.5, 4], [59, 3, 2],
+  [62, 1.5, 1]];
+const PROF_KARISEN_CA: readonly Station[] = [
+  [1, 6.5, 5], [9, 9, 6], [24, 10.5, 6.5], [42, 10, 6], [54, 7, 4.5], [60, 3.5, 2.5],
+  [63, 1.5, 1]];
+
+const PROF_ROGUE_CV: readonly Station[] = [
+  [14, 7, 4], [20, 10, 5], [30, 10.5, 5.5], [38, 8, 4.5], [44, 4.5, 3], [48, 2.5, 2]];
+const PROF_ROGUE_DD: readonly Station[] = [
+  [8, 8, 5], [16, 12, 6.5], [28, 12.5, 7], [38, 10.5, 6.5], [46, 6.5, 4.5], [52, 3, 2]];
+const PROF_ROGUE_CA: readonly Station[] = [
+  [6, 9, 5.5], [14, 13, 7], [26, 13.5, 7.5], [38, 12, 7], [47, 7, 5], [54, 3, 2]];
+
+const PROF_BENEFACTOR_CV: readonly Station[] = [
+  [12, 5, 5.5], [18, 6, 7], [28, 6, 6.5], [38, 5.5, 5.5], [46, 3.5, 3.5], [50, 2, 2]];
+const PROF_BENEFACTOR_DD: readonly Station[] = [
+  [3, 7, 7.5], [12, 8.5, 10.5], [26, 9, 10], [40, 8.5, 9], [50, 6, 6], [57, 3, 3],
+  [60, 1.5, 1.5]];
+const PROF_BENEFACTOR_CA: readonly Station[] = [
+  [2, 8, 8.5], [11, 9.5, 12], [24, 10, 12], [40, 9.5, 10.5], [51, 7, 7], [58, 3.5, 3.5],
+  [62, 1.5, 1.5]];
+
 export const FRAMES: readonly FrameDef[] = [
   {
-    classKey: 'terran_frigate', name: 'Terran Frigate', rung: 'frigate',
+    classKey: 'terran_frigate', name: 'Terran Frigate',
+    faction: 'terran', tier: 'frigate', rung: 'frigate',
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN,
     spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
@@ -544,7 +711,8 @@ export const FRAMES: readonly FrameDef[] = [
       + 'ship_1.fbx.',
   },
   {
-    classKey: 'karisen_frigate', name: 'Karisen Frigate', rung: 'frigate',
+    classKey: 'karisen_frigate', name: 'Karisen Frigate',
+    faction: 'karisen', tier: 'frigate', rung: 'frigate',
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
@@ -579,7 +747,8 @@ export const FRAMES: readonly FrameDef[] = [
       + 'ventral keel beam longer than the ship. Two sponsons ship empty.',
   },
   {
-    classKey: 'rogue_frigate', name: 'Rogue Frigate', rung: 'frigate',
+    classKey: 'rogue_frigate', name: 'Rogue Frigate',
+    faction: 'rogue', tier: 'frigate', rung: 'frigate',
     radius: 3.2, massMax: 0.9, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
@@ -630,7 +799,8 @@ export const FRAMES: readonly FrameDef[] = [
       + 'the least hull and the best turn rate.',
   },
   {
-    classKey: 'benefactor_frigate', name: 'Benefactor Frigate', rung: 'frigate',
+    classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
+    faction: 'benefactor', tier: 'frigate', rung: 'frigate',
     radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
@@ -668,7 +838,8 @@ export const FRAMES: readonly FrameDef[] = [
       + 'rings and a ventral missile rack. The aft stack ships empty.',
   },
   {
-    classKey: 'freighter', name: 'Freighter', rung: 'escort',
+    classKey: 'freighter', name: 'Freighter',
+    faction: 'civil', tier: 'freighter', rung: 'escort',
     radius: 4.5, massMax: 2.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
@@ -701,6 +872,262 @@ export const FRAMES: readonly FrameDef[] = [
     note: 'A long square brick with two holds under a dorsal door. No gun ring '
       + 'exists on this frame, which is what the empty mount table looks like as '
       + 'geometry.',
+  },
+
+  // ------------------------------------------------------------ Terran --
+  //
+  // One ladder, four rungs, and nothing on it is a surprise. Every step adds
+  // another beam battery and another belt to the same slab body, because the
+  // fleet is built to be replaced rather than to be clever.
+  {
+    classKey: 'terran_corvette', name: 'Terran Corvette',
+    faction: 'terran', tier: 'corvette', rung: 'frigate',
+    radius: 2.5, massMax: 0.55, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_TERRAN_CV,
+    spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
+    sockets: [
+      ...suite(PROF_TERRAN_CV, [[-0.5, -0.2], [0.5, -0.2]], 5, 2),
+      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', 43, 0, 0.45),
+      seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', 29, 0, 0.55),
+    ],
+    note: 'The frigate’s slab cut down to a bell, a nozzle and two rings. Short enough '
+      + 'that the whole hull turns inside a frigate’s circle, and thin enough on '
+      + 'the belt that the first cannon through it reaches the reactor.',
+  },
+  {
+    classKey: 'terran_destroyer', name: 'Terran Destroyer',
+    faction: 'terran', tier: 'destroyer', rung: 'escort',
+    radius: 5.8, massMax: 2.4, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_TERRAN_DD,
+    // The raised dorsal spine is what makes a Terran read as a Terran from
+    // above: a flat deck with a rail down the middle of it.
+    spine: [keel(CY, 4, 58), keel(CY + 5, 12, 48, 8, 2),
+      ...ribs(PROF_TERRAN_DD, [10, 18, 26, 34, 42, 50])],
+    sockets: [
+      ...suite(PROF_TERRAN_DD, [[-0.55, -0.28], [0, -0.28], [0.55, -0.28],
+        [-0.55, 0.35], [0, 0.35], [0.55, 0.35]], 11, 2),
+      seatAt(PROF_TERRAN_DD, 'gun', 'g0', 'gun ring, nose', 51, 0, 0.42),
+      seatAt(PROF_TERRAN_DD, 'gun', 'g1', 'gun ring, port waist', 36, -0.74, 0.26),
+      seatAt(PROF_TERRAN_DD, 'gun', 'g2', 'gun ring, starboard waist', 36, 0.74, 0.26),
+      seatAt(PROF_TERRAN_DD, 'gun', 'g3', 'gun ring, aft dorsal', 16, 0, 0.6),
+      seatAt(PROF_TERRAN_DD, 'gun', 'g4', 'gun ring, ventral', 30, 0, -0.6),
+    ],
+    note: 'Three heavy bells and three verniers on a parallel sided slab, and five '
+      + 'rings, four of them beams. '
+      + 'The ventral ring is the one exception to the doctrine: a projectile turret, '
+      + 'carried because a fleet of beams has nothing that goes through a belt.',
+  },
+  {
+    classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
+    faction: 'terran', tier: 'cruiser', rung: 'cruiser',
+    radius: 7.8, massMax: 5.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_TERRAN_CA,
+    spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
+      ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
+    sockets: [
+      ...suite(PROF_TERRAN_CA, [[-0.62, -0.3], [-0.21, -0.3], [0.21, -0.3], [0.62, -0.3],
+        [-0.62, 0.36], [-0.21, 0.36], [0.21, 0.36], [0.62, 0.36]], 15, 4),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g1', 'gun ring, port forward', 42, -0.76, 0.24),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g2', 'gun ring, starboard forward', 42, 0.76, 0.24),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g3', 'gun ring, port aft', 22, -0.76, 0.24),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g4', 'gun ring, starboard aft', 22, 0.76, 0.24),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g5', 'gun ring, aft dorsal', 12, 0, 0.6),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g6', 'gun ring, forward ventral', 34, 0, -0.62),
+      seatAt(PROF_TERRAN_CA, 'gun', 'g7', 'gun ring, aft ventral', 18, 0, -0.62),
+    ],
+    note: 'Eight rings on a broadside: two down each flank, one at the nose, one '
+      + 'over the quarterdeck and two under the keel. Four heavy bells and four '
+      + 'verniers push it and none of them make it quick. What it does is stand in a line and keep firing.',
+  },
+
+  // ----------------------------------------------------------- Karisen --
+  //
+  // Every rung is the longest hull at that rung and the thinnest, and every
+  // rung adds missile cells rather than beams. Two beams is what a Karisen
+  // carries however big it gets: the ordnance is the ship.
+  {
+    classKey: 'karisen_corvette', name: 'Karisen Corvette',
+    faction: 'karisen', tier: 'corvette', rung: 'frigate',
+    radius: 2.8, massMax: 0.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_KARISEN_CV,
+    // The ventral rail overruns the body at both ends, which is the one
+    // Karisen habit that survives at every rung.
+    spine: [keel(CY, 13, 51), keel(CY - 4, 10, 54, 4, 2),
+      ...ribs(PROF_KARISEN_CV, [18, 25, 32, 39, 46])],
+    sockets: [
+      ...suite(PROF_KARISEN_CV, [[-0.55, -0.1], [0, -0.1], [0.55, -0.1]], 4, 2),
+      seatAt(PROF_KARISEN_CV, 'gun', 'g0', 'gun ring, nose', 44, 0, 0.45),
+      seatAt(PROF_KARISEN_CV, 'missile', 'm0', 'missile pad, ventral', 30, 0, -0.6),
+    ],
+    note: 'A needle with two overclocked bells, a vernier and one cell. Fastest hull in the game and the '
+      + 'least able to take a hit: it is a ship for arriving with a missile already '
+      + 'in the air and leaving before the answer.',
+  },
+  {
+    classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
+    faction: 'karisen', tier: 'destroyer', rung: 'escort',
+    radius: 5.7, massMax: 1.9, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_KARISEN_DD,
+    spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
+      ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
+    sockets: [
+      ...suite(PROF_KARISEN_DD, [[-0.6, -0.12], [0, -0.12], [0.6, -0.12], [0, 0.5]], 8, 2, 0.5),
+      seatAt(PROF_KARISEN_DD, 'gun', 'g0', 'gun ring, nose', 51, 0, 0.42),
+      seatAt(PROF_KARISEN_DD, 'gun', 'g1', 'gun ring, aft dorsal', 16, 0, 0.58),
+      seatAt(PROF_KARISEN_DD, 'missile', 'm0', 'missile pad, port', 26, -0.42, -0.78),
+      seatAt(PROF_KARISEN_DD, 'missile', 'm1', 'missile pad, starboard', 26, 0.42, -0.78),
+    ],
+    note: 'Sixty cells of hull and nine of beam: the longest thin thing at its rung. '
+      + 'A pair of ventral cells under a rail that runs past both ends of the body, '
+      + 'and two beams that are there to finish rather than to open.',
+  },
+  {
+    classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
+    faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
+    radius: 8.0, massMax: 4.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_KARISEN_CA,
+    spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
+      ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
+    sockets: [
+      ...suite(PROF_KARISEN_CA, [[-0.62, -0.12], [-0.25, -0.12], [0.25, -0.12],
+        [0.62, -0.12], [0, 0.52]], 9, 2, 0.5, [6, 14, 32, 54]),
+      seatAt(PROF_KARISEN_CA, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
+      seatAt(PROF_KARISEN_CA, 'gun', 'g1', 'gun ring, aft dorsal', 14, 0, 0.58),
+      // Three pairs down the rail, evenly, because that is what the rail is.
+      seatAt(PROF_KARISEN_CA, 'missile', 'm0', 'missile pad, port forward', 40, -0.44, -0.78),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm1', 'missile pad, starboard forward', 40, 0.44, -0.78),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm2', 'missile pad, port aft', 24, -0.44, -0.78),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm3', 'missile pad, starboard aft', 24, 0.44, -0.78),
+    ],
+    note: 'The arsenal: four cells in two pairs along a keel rail longer than the '
+      + 'ship, and still only the two beams every Karisen carries. The berths are up '
+      + 'top because the keel is a magazine, and it is the one heavy that outruns a '
+      + 'frigate.',
+  },
+
+  // ------------------------------------------------------------- Rogue --
+  //
+  // The ladder that grows in MARINES. Every rung has the least hull at that
+  // rung, the fewest guns, the most clamps and by some way the sharpest turn:
+  // a Rogue heavy cruiser still comes about faster than a Terran destroyer.
+  {
+    classKey: 'rogue_corvette', name: 'Rogue Corvette',
+    faction: 'rogue', tier: 'corvette', rung: 'frigate',
+    radius: 2.3, massMax: 0.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_ROGUE_CV,
+    // A cross beam through the keel, carrying the clamps and the collars as
+    // one structure, exactly as the frigate does.
+    spine: [keel(CY, 15, 47), [CX - 8, CY - 2, 26, 16, 3, 4] as const,
+      ...ribs(PROF_ROGUE_CV, [20, 26, 32, 38, 44])],
+    sockets: [
+      ...suite(PROF_ROGUE_CV, [[-0.5, 0], [0, 0], [0.5, 0]], 6, 2),
+      seatAt(PROF_ROGUE_CV, 'gun', 'g0', 'gun ring, nose', 39, 0, 0.4),
+    ],
+    note: 'A boarding launch: one gun, two overclocked bells and a hull wide enough '
+      + 'to put '
+      + 'clamps on. It cannot fight anything and it does not have to, because '
+      + 'everything it wants is already inside somebody else’s ship.',
+  },
+  {
+    classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
+    faction: 'rogue', tier: 'destroyer', rung: 'escort',
+    radius: 4.5, massMax: 1.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_ROGUE_DD,
+    spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
+      ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
+    sockets: [
+      ...suite(PROF_ROGUE_DD, [[-0.55, 0], [0, 0], [0.55, 0]], 17, 6),
+      seatAt(PROF_ROGUE_DD, 'gun', 'g0', 'gun ring, port', 36, -0.7, 0.3),
+      seatAt(PROF_ROGUE_DD, 'gun', 'g1', 'gun ring, starboard', 36, 0.7, 0.3),
+      seatAt(PROF_ROGUE_DD, 'gun', 'g2', 'gun ring, aft dorsal', 12, 0, 0.58),
+    ],
+    note: 'Short, very wide and mostly barracks. Six clamps on a cross beam and '
+      + 'forty five marines behind them: the guns exist to stop a hull running, not '
+      + 'to sink it, because a sunk hull is a hull nobody took.',
+  },
+  {
+    classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
+    faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
+    radius: 6.7, massMax: 3.1, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_ROGUE_CA,
+    spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
+      [CX - 13, CY - 2, 34, 26, 4, 6] as const,
+      ...ribs(PROF_ROGUE_CA, [14, 20, 26, 32, 38, 44, 50])],
+    sockets: [
+      ...suite(PROF_ROGUE_CA, [[-0.6, 0], [-0.2, 0], [0.2, 0], [0.6, 0]], 23, 8),
+      seatAt(PROF_ROGUE_CA, 'gun', 'g0', 'gun ring, port forward', 40, -0.72, 0.3),
+      seatAt(PROF_ROGUE_CA, 'gun', 'g1', 'gun ring, starboard forward', 40, 0.72, 0.3),
+      seatAt(PROF_ROGUE_CA, 'gun', 'g2', 'gun ring, port aft', 20, -0.72, 0.3),
+      seatAt(PROF_ROGUE_CA, 'gun', 'g3', 'gun ring, starboard aft', 20, 0.72, 0.3),
+    ],
+    note: 'The widest hull on the board and the shortest of the big ones: two cross '
+      + 'beams, eight clamps and berths for seventy. Four plasma is the whole '
+      + 'battery, and it is still the fastest turning heavy in the game.',
+  },
+
+  // -------------------------------------------------------- Benefactor --
+  //
+  // Deep sectioned monitors, taller than they are wide at every rung. They
+  // grow by CALIBRE and by belt rather than by count, and each one is the
+  // slowest thing at its rung. The trade is that a cannon goes through a belt
+  // and a beam does not.
+  {
+    classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
+    faction: 'benefactor', tier: 'corvette', rung: 'frigate',
+    radius: 2.4, massMax: 0.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_BENEFACTOR_CV,
+    spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
+      ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
+    sockets: [
+      ...suite(PROF_BENEFACTOR_CV, [[0, -0.1], [-0.55, 0.3], [0.55, 0.3]], 5, 2),
+      seatAt(PROF_BENEFACTOR_CV, 'gun', 'g0', 'gun ring, nose', 42, 0, 0.4),
+      seatAt(PROF_BENEFACTOR_CV, 'missile', 'm0', 'missile pad, ventral', 28, 0, -0.55),
+    ],
+    note: 'Deeper than it is wide, on a hull four metres long. One cannon and one '
+      + 'cell, and belts thick enough that a corvette of anybody else’s cannot '
+      + 'get through them inside a turn.',
+  },
+  {
+    classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
+    faction: 'benefactor', tier: 'destroyer', rung: 'escort',
+    radius: 5.7, massMax: 2.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_BENEFACTOR_DD,
+    // A deep aft drop keel and a shallower dorsal one: the section is the
+    // whole Benefactor idea and the spine says so from the inside.
+    spine: [keel(CY, 4, 58), keel(CY - 8, 6, 26, 5, 5), keel(CY + 7, 6, 24, 5, 3),
+      ...ribs(PROF_BENEFACTOR_DD, [11, 19, 27, 35, 43, 51])],
+    sockets: [
+      ...suite(PROF_BENEFACTOR_DD, [[0, -0.05], [-0.55, 0.28], [0.55, 0.28], [0, 0.55]], 11, 2),
+      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g0', 'gun ring, port', 38, -0.7, 0.24),
+      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g1', 'gun ring, starboard', 38, 0.7, 0.24),
+      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g2', 'gun ring, aft dorsal', 16, 0, 0.58),
+      seatAt(PROF_BENEFACTOR_DD, 'missile', 'm0', 'missile pad, ventral', 28, 0, -0.6),
+    ],
+    note: 'Three cannon on a section deeper than it is wide, and two heavy bells '
+      + 'doing the pushing. Slowest hull at its rung, and the one that does not care '
+      + 'what is painted on the outside of a belt.',
+  },
+  {
+    classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
+    faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
+    radius: 7.9, massMax: 6.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_BENEFACTOR_CA,
+    spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
+      ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
+    sockets: [
+      ...suite(PROF_BENEFACTOR_CA, [[0, -0.05], [-0.6, 0.25], [0.6, 0.25],
+        [-0.35, 0.55], [0.35, 0.55]], 14, 4),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g0', 'gun ring, port forward', 42, -0.72, 0.22),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g1', 'gun ring, starboard forward', 42, 0.72, 0.22),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g2', 'gun ring, port aft', 22, -0.72, 0.22),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g3', 'gun ring, starboard aft', 22, 0.72, 0.22),
+      seatAt(PROF_BENEFACTOR_CA, 'missile', 'm0', 'missile pad, forward', 38, 0, -0.6),
+      seatAt(PROF_BENEFACTOR_CA, 'missile', 'm1', 'missile pad, aft', 27, 0, -0.6),
+    ],
+    note: 'Twelve cells to the keel and the heaviest berth in the game. Four cannon, '
+      + 'two cells and six layers of belt, on a hull that comes about at under two '
+      + 'degrees a second. Whatever it is pointed at, it stays pointed at.',
   },
 ];
 
@@ -1744,12 +2171,6 @@ export interface CoreStats {
 let coreDerive: CoreDerive | null = null;
 export function useCore(fn: CoreDerive): void { coreDerive = fn; }
 
-/** Class keys in `sim_core::data::ALL_CLASSES` order, which is the index the
- *  core answers to. The same order `FRAMES` is authored in. */
-const CLASS_ORDER: readonly string[] = [
-  'terran_frigate', 'karisen_frigate', 'rogue_frigate', 'benefactor_frigate', 'freighter',
-];
-
 /** One bit per gate, in the core's own order, with the words to say about it. */
 const GATES: ReadonlyArray<readonly [string, string, string]> = [
   ['parts', 'something is fitted', 'nothing is fitted at all'],
@@ -1771,7 +2192,7 @@ export function derive(d: Design): Derived {
     throw new Error('design.derive: the core has not been wired in, so nothing may be derived');
   }
   const parts = partsOf(d);
-  const stats = coreDerive(Math.max(0, CLASS_ORDER.indexOf(d.classKey)), {
+  const stats = coreDerive(Math.max(0, CLASS_KEYS.indexOf(d.classKey)), {
     plateCells: raster.plateCells, ext, radiusCells: raster.radiusCells, fouled: raster.fouled,
   }, parts);
   if (!stats) throw new Error('design.derive: the core refused the record');
@@ -1883,7 +2304,7 @@ export const STOCK: readonly Design[] = [
 
   // Three bells in a row and a ventral rack. Plate on all four long faces
   // rather than a belt, which is the stacked silhouette read from the inside.
-  // Both sponsons ship empty, so arming them is the first thing anyone does.
+  // The starboard sponson ships empty, so arming it is the first thing anyone does.
   stock('karisen_frigate', [
     P('d0', 'DRV-B'), P('d1', 'DRV-B'), P('d2', 'DRV-B'), P('d3', 'DRV-V'),
     P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('m0', 'WPN-ML1'),
@@ -1941,6 +2362,212 @@ export const STOCK: readonly Design[] = [
     P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 4, ventral: 4, bow: 1, stern: 1 },
     'civil', 0xD8E2EC, 'tread', 0.15, 0.70),
+
+  // ------------------------------------------------------------ Terran --
+  // Two bells, two beams, and a belt thin enough to be a decision. Only y0 and
+  // y1 are fitted: four attitude blocks on a hull this short would turn it
+  // faster than a Rogue, which is somebody else's job.
+  stock('terran_corvette', [
+    P('d0', 'DRV-B'), P('d1', 'DRV-N'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
+    'terran', 0x6FB6E8, 'plate', 0.30, 0.50),
+
+  // Six heavy bells in the frigate's three by two block, four beams and one
+  // projectile ring under the keel: the fleet's only answer to its own belts.
+  stock('terran_destroyer', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'),
+    P('d3', 'DRV-V'), P('d4', 'DRV-V'), P('d5', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-BM1'), P('g3', 'WPN-BB1'), P('g3/t', 'WPN-BM1'),
+    P('g4', 'WPN-BB1'), P('g4/t', 'WPN-CN1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-BAR'),
+    P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'), P('b8', 'UTL-AIR'), P('b9', 'UTL-AIR'),
+    P('b10', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
+    'terran', 0x0B7FC4, 'plate', 0.30, 0.50),
+
+  // Eight bells and eight rings. The belt is five layers all the way round,
+  // which is most of what the berth buys and all of what the ship is for.
+  stock('terran_cruiser', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-H'),
+    P('d4', 'DRV-V'), P('d5', 'DRV-V'), P('d6', 'DRV-V'), P('d7', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-BM1'), P('g3', 'WPN-BB1'), P('g3/t', 'WPN-BM1'),
+    P('g4', 'WPN-BB1'), P('g4/t', 'WPN-BM1'), P('g5', 'WPN-BB1'), P('g5/t', 'WPN-BM1'),
+    P('g6', 'WPN-BB1'), P('g6/t', 'WPN-CN1'), P('g7', 'WPN-BB1'), P('g7/t', 'WPN-CN1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'),
+    P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'),
+    P('b9', 'UTL-AIR'), P('b10', 'UTL-AIR'), P('b11', 'UTL-AIR'), P('b12', 'UTL-AIR'),
+    P('b13', 'UTL-AIR'), P('b14', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'), P('c3', 'UTL-CLM'),
+  ], { beltFwd: 5, beltMid: 5, beltAft: 5, dorsal: 3, ventral: 3, bow: 3, stern: 3 },
+    'terran', 0x124E89, 'plate', 0.30, 0.50),
+
+  // ----------------------------------------------------------- Karisen --
+  // Three overclocked bells and one cell. Two layers everywhere, because a
+  // Karisen plates all four long faces rather than carrying a belt, and two
+  // of everything is what that costs on a hull this thin.
+  stock('karisen_corvette', [
+    P('d0', 'DRV-BR'), P('d1', 'DRV-BR'), P('d2', 'DRV-BR'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('m0', 'WPN-ML1'),
+    P('r0', 'RET-S'), P('r1', 'RET-S'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 2, beltMid: 2, beltAft: 2, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
+    'karisen', 0xFFA35C, 'ribbed', 0.35, 0.45),
+
+  // Four bells, two beams and three cells on the ventral rail. The beams are
+  // the finisher; the rail is the ship.
+  stock('karisen_destroyer', [
+    P('d0', 'DRV-B'), P('d1', 'DRV-B'), P('d2', 'DRV-B'), P('d3', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('m0', 'WPN-ML1'), P('m1', 'WPN-ML1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'karisen', 0xD2560A, 'ribbed', 0.35, 0.45),
+
+  // Six cells and still two beams. Everything the extra berth bought went into
+  // ordnance and into the rail carrying it.
+  stock('karisen_cruiser', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-B'), P('d3', 'DRV-B'),
+    P('d4', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('m0', 'WPN-ML1'), P('m1', 'WPN-ML1'), P('m2', 'WPN-ML1'), P('m3', 'WPN-ML1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-BAR'),
+    P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'), P('b8', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'karisen', 0x73172D, 'ribbed', 0.35, 0.45),
+
+  // ------------------------------------------------------------- Rogue --
+  // One gun and one layer of plate. Everything else is berths and clamps, and
+  // that is the whole class.
+  stock('rogue_corvette', [
+    P('d0', 'DRV-BR'), P('d1', 'DRV-BR'), P('d2', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'),
+    P('r0', 'RET-S'), P('r1', 'RET-S'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 1, beltMid: 1, beltAft: 1, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
+    'rogue', 0x6B5FA8, 'battered', 0.18, 0.72),
+
+  // Six clamps, eight barracks and three guns. Seventy marines is more than
+  // anybody else's cruiser carries, on a hull that costs less than their
+  // destroyer.
+  stock('rogue_destroyer', [
+    P('d0', 'DRV-BR'), P('d1', 'DRV-BR'), P('d2', 'DRV-BR'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-CN1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-CN1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'RCS-Q'), P('y3', 'RCS-Q'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'RCS-Q'), P('p3', 'RCS-Q'),
+    P('b0', 'UTL-BRG'),
+    P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'), P('b4', 'UTL-BAR'),
+    P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'), P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'),
+    P('b9', 'UTL-BAR'),
+    P('b10', 'UTL-AIR'), P('b11', 'UTL-AIR'), P('b12', 'UTL-AIR'), P('b13', 'UTL-AIR'),
+    P('b14', 'UTL-AIR'), P('b15', 'UTL-AIR'), P('b16', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'),
+    P('c3', 'UTL-CLM'), P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'),
+  ], { beltFwd: 1, beltMid: 1, beltAft: 1, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
+    'rogue', 0x3A3466, 'battered', 0.18, 0.72),
+
+  // Eight clamps and berths for a hundred and ten. Four guns on a heavy hull
+  // is the lightest battery in the game at that rung, and deliberately so.
+  stock('rogue_cruiser', [
+    P('d0', 'DRV-BR'), P('d1', 'DRV-BR'), P('d2', 'DRV-BR'), P('d3', 'DRV-BR'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-CN1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-CN1'), P('g3', 'WPN-BB1'), P('g3/t', 'WPN-CN1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'),
+    P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'), P('b4', 'UTL-BAR'),
+    P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'), P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'),
+    P('b9', 'UTL-BAR'), P('b10', 'UTL-BAR'), P('b11', 'UTL-BAR'), P('b12', 'UTL-BAR'),
+    P('b13', 'UTL-BAR'), P('b14', 'UTL-BAR'),
+    P('b15', 'UTL-AIR'), P('b16', 'UTL-AIR'), P('b17', 'UTL-AIR'), P('b18', 'UTL-AIR'),
+    P('b19', 'UTL-AIR'), P('b20', 'UTL-AIR'), P('b21', 'UTL-AIR'), P('b22', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'), P('c3', 'UTL-CLM'),
+    P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'), P('c6', 'UTL-CLM'), P('c7', 'UTL-CLM'),
+  ], { beltFwd: 2, beltMid: 2, beltAft: 2, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
+    'rogue', 0x181425, 'battered', 0.18, 0.72),
+
+  // -------------------------------------------------------- Benefactor --
+  // Four layers of belt on a hull four metres long, one cannon and one cell.
+  // The corvette nobody else's corvette can open.
+  stock('benefactor_corvette', [
+    P('d0', 'DRV-N'), P('d1', 'DRV-V'), P('d2', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'), P('m0', 'WPN-ML1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'),
+    P('y0', 'MAN-B'), P('y1', 'RCS-Q'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
+    'benefactor', 0x2FA85B, 'hex', 0.45, 0.30),
+
+  // One heavy bell doing the pushing, three cannon and a cell, on a section
+  // ten cells deep. Five layers of belt is the most any destroyer carries.
+  stock('benefactor_destroyer', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-V'), P('d3', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-CN1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-CN1'), P('m0', 'WPN-ML1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-BAR'),
+    P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'), P('b8', 'UTL-AIR'), P('b9', 'UTL-AIR'),
+    P('b10', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+  ], { beltFwd: 5, beltMid: 5, beltAft: 5, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
+    'benefactor', 0x146032, 'hex', 0.45, 0.30),
+
+  // Six layers of belt, four cannon, two cells, and two and a half degrees a
+  // second of yaw. The heaviest berth in the game, spent almost entirely on
+  // not dying.
+  stock('benefactor_cruiser', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'),
+    P('d3', 'DRV-V'), P('d4', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-CN1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-CN1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-CN1'), P('g3', 'WPN-BB1'), P('g3/t', 'WPN-CN1'),
+    P('m0', 'WPN-ML1'), P('m1', 'WPN-ML1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
+    P('b4', 'UTL-BAR'), P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'), P('b7', 'UTL-BAR'),
+    P('b8', 'UTL-AIR'), P('b9', 'UTL-AIR'), P('b10', 'UTL-AIR'), P('b11', 'UTL-AIR'),
+    P('b12', 'UTL-AIR'), P('b13', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'), P('c3', 'UTL-CLM'),
+  ], { beltFwd: 6, beltMid: 6, beltAft: 6, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
+    'benefactor', 0x0E4423, 'hex', 0.45, 0.30),
 ];
 
 export const stockFor = (classKey: string): Design => {

@@ -86,7 +86,7 @@ pub fn module_index(id: &str) -> Option<usize> {
 const PLATE_UM: f32 = 78.0;
 const HULL_MILLI: f32 = 34.0;
 /// The frigate cell, in world units. Every other rung is a multiple of it.
-const FRIGATE_CELL: f32 = 7.0 / 64.0;
+use crate::data::FRIGATE_CELL;
 /// Turn length, from `data.rs` CONST.
 const TURN_SECONDS: f32 = 10.0;
 
