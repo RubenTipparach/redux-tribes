@@ -9,14 +9,17 @@
  *
  * FACES, not cubes. A box per cell is twelve triangles whichever way it is
  * turned, and on a Terran that is 4644 cells and 55728 triangles for one ship:
- * four of those took a headless frame from 22 fps to 2.2. What can actually be
- * seen is the faces between a solid cell and the space outside, which is 2536
- * quads and 5072 triangles for the same hull, eleven times less. The interior
- * is not drawn at all, because on a battlefield nothing looks inside a hull.
+ * four of those took a headless frame from 22 fps to 2.2. A face wherever a
+ * solid cell meets one that is not is 1606 quads for the same hull, an order
+ * of magnitude less, and the greedy pass merges those into rectangles.
  *
- * Outside is a flood fill from the edge of the lattice rather than "any empty
- * neighbour": a frigate is full of gaps between its frame and its parts, and
- * counting those as visible drew most of the ship twice over.
+ * The plain VOXEL rule, deliberately, including the faces nothing outside can
+ * see. It used to be a flood fill from the edge of the lattice, so only the
+ * outward skin existed: a frigate is mostly hollow, and the first shot through
+ * its plating looked into a ship with no inside at all, stars showing through
+ * the hole. Meshing the interior costs 18% more quads over a four frigate
+ * skirmish (6183 to 7289) and is what makes a wound read as a hull with a hole
+ * in it rather than as an empty shell.
  *
  * The editor draws the same cells its own way, through an instanced mesh it
  * can pick single cells out of and ghost the plate on. Two renderers, two sets
@@ -261,30 +264,24 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     });
   });
 
-  // What the outside can reach: a flood fill through empty cells from the
-  // boundary of the lattice. "Any empty neighbour" is not the same question: a
-  // frigate is full of gaps between its frame and its parts, and counting
-  // those as visible drew most of the ship twice over.
-  const outside = new Uint8Array(NX * NY * NZ);
-  const queue: number[] = [];
-  const reach = (i: number, j: number, k: number) => {
-    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return;
-    const n = idx(i, j, k);
-    if (outside[n] || grid[n]) return;
-    outside[n] = 1;
-    queue.push(i, j, k);
-  };
-  for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) { reach(0, j, k); reach(NX - 1, j, k); }
-  for (let k = 0; k < NZ; k++) for (let i = 0; i < NX; i++) { reach(i, 0, k); reach(i, NY - 1, k); }
-  for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) { reach(i, j, 0); reach(i, j, NZ - 1); }
-  for (let h = 0; h < queue.length; h += 3) {
-    const i = queue[h] as number, j = queue[h + 1] as number, k = queue[h + 2] as number;
-    reach(i - 1, j, k); reach(i + 1, j, k);
-    reach(i, j - 1, k); reach(i, j + 1, k);
-    reach(i, j, k - 1); reach(i, j, k + 1);
-  }
+  // A face is drawn wherever a solid cell meets one that is not: the plain
+  // voxel rule, and nothing cleverer.
+  //
+  // This used to be a flood fill from the edge of the lattice, so only the
+  // faces the OUTSIDE could reach were built. That is a smaller mesh and it is
+  // wrong the moment anything opens the hull: a frigate is mostly hollow, the
+  // enclosed gaps between its frame and its parts were never meshed, and a
+  // shot through the plating therefore looked into a ship with no inside at
+  // all. Stars came through the hole, because behind the hole there was
+  // literally nothing drawn.
+  //
+  // The greedy pass absorbs most of what that saved, which is why the flood
+  // fill was never worth what it cost in correctness: measured over the stock
+  // fleet, 6183 quads to 7289 for a four frigate skirmish and 26932 to 30402
+  // over all seventeen hulls, 18% and 13%. A hull you can see through is not
+  // a saving.
   const open = (i: number, j: number, k: number) =>
-    (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) ? 1 : outside[idx(i, j, k)];
+    (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) ? 1 : (grid[idx(i, j, k)] ? 0 : 1);
 
   /** A cell's colour, which is what decides whether two faces may merge. */
   const colourAt = (i: number, j: number, k: number): number => {
