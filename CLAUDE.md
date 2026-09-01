@@ -667,6 +667,11 @@ source on a different rustc differs by a couple of kilobytes. Quote the shipped 
 one: the same source on rustc 1.94.1 here comes out 134607, and a figure nobody
 else can reproduce is not a measurement.
 
+The fleet cost **4999 bytes**: 158044 against 163043 on the SAME compiler
+either side of the commit, for twelve classes with their subsystem and mount
+tables, `ft_class_count`, `ft_ship_mount`, the wider ship record and the class
+index refusal. CI shipped that source at 161302, which is the figure to quote.
+
 Attribute growth to the change that caused it, not to the branch it landed on.
 Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
 either side of the commit. Reading it off the shipped figure instead would have
