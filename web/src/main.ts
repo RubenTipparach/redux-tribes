@@ -251,6 +251,51 @@ function restoreFacing(): void {
     if (r !== undefined) o.roll = r;
   }
 }
+
+/**
+ * Re-fire the pattern each ship just flew, on the fresh turn its orders were
+ * cleared into.
+ *
+ * A weapons queue used to start empty every turn, which meant a battery
+ * fought exactly once unless the player sat back down and requeued it a
+ * second time. What each mount fired last turn is read straight from
+ * `match.history`, which is the actually-executed order rather than a second
+ * copy of it kept for this purpose, and reapplied through the same
+ * `slotBlock` gate a manual queue goes through: a mount whose cooldown runs
+ * past the turn boundary is not skipped, it is SHIFTED forward to the next
+ * second it is actually free at, which cascades the rest of that mount's own
+ * pattern the same way a hand requeuing it one slot at a time would. A shot
+ * that still cannot fit before the turn ends, or whose target is gone, is
+ * dropped rather than guessed at.
+ */
+function reuseFireConfig(): void {
+  const rec = match.history[match.history.length - 1];
+  if (!rec) return;
+  for (const s of ships) {
+    if (!mine(s) || s.destroyed) continue;
+    const prevShots = rec.orders.get(s.id)?.weapons;
+    if (!prevShots?.length) continue;
+    const o = match.order(s.id);
+    for (const shot of [...prevShots].sort((a, b) => a.second - b.second)) {
+      const t = ships.find(x => x.id === shot.targetShip && !x.destroyed);
+      if (!t) continue;
+      let sec = shot.second;
+      for (let tries = 0; tries < 8 && sec <= TURN_SECONDS; tries++) {
+        const block = slotBlock(s.id, shot.weaponIndex, sec, o.weapons);
+        if (!block) {
+          o.weapons.push({
+            weaponIndex: shot.weaponIndex, second: sec, targetShip: t.id, targetSub: shot.targetSub,
+          });
+          break;
+        }
+        if (block.kind !== 'after') break;
+        sec = block.at;
+      }
+    }
+    o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
+  }
+}
+
 /**
  * Which second's fire slot is open, or null.
  *
@@ -441,6 +486,7 @@ function start(): void {
     view.setSelection(selected);
     view.fit();
     restoreFacing();
+    reuseFireConfig();
     refreshAiPlans();
   }
   planTurnEnvelopes();
@@ -1181,8 +1227,9 @@ function renderTuning(): void {
 function renderWeapons(): void {
   const host = $('weps');
   host.innerHTML = '';
+  const fireAllBtn = $<HTMLButtonElement>('bFireAll');
   const s = selectedShip();
-  if (!s) return;
+  if (!s) { fireAllBtn.disabled = true; return; }
   // The SHIP's mounts, not its class's. A hull flying a design carries the
   // design's guns and the resolver fires those, so a panel built from the class
   // table offers rows for guns that are not aboard and the wrong arcs for the
@@ -1190,6 +1237,7 @@ function renderWeapons(): void {
   // of the row agree with it.
   const mountCount = s.mountCount;
   const order = match.order(s.id);
+  let anyFireable = false;
   for (let i = 0; i < mountCount; i++) {
     const m = match.shipMount(s.id, i);
     if (!m) continue;
@@ -1233,6 +1281,7 @@ function renderWeapons(): void {
       // second the preview on screen is showing. No arming step, so the row
       // does the thing it names rather than putting the console in a mode.
       div.onclick = () => { queueShot(scrubbedSecond(), i); };
+      anyFireable = true;
     }
     host.appendChild(div);
   }
@@ -1244,6 +1293,9 @@ function renderWeapons(): void {
     : `Firing at ${shipName(aimed)} at t+${scrubbedSecond()}s. `
       + 'Tap a hostile to switch, or a fire slot to pick the second.';
   host.appendChild(note);
+
+  fireAllBtn.disabled = !canPlan() || !aimed || !anyFireable;
+  fireAllBtn.onclick = fireAll;
 }
 
 /**
@@ -1365,6 +1417,37 @@ function unqueueShot(sec: number, weaponIndex: number): void {
   const at = o.weapons.findIndex(w => w.second === sec && w.weaponIndex === weaponIndex);
   if (at < 0) return;
   o.weapons.splice(at, 1);
+  refreshAll();
+}
+
+/**
+ * Queue every mount on the selected ship that can fire at the scrubbed
+ * second, in one press, at the current target.
+ *
+ * Goes through the exact gate a click on a mount's own row does (`slotBlock`)
+ * rather than a second opinion about what "can fire" means: a mount this
+ * skips is a mount that row would also have refused, and a mount it queues is
+ * one the resolver will honour. Nothing is pushed for a mount it skips, so
+ * nothing about it is marked cooling: nothing fired, nothing to cool down
+ * from.
+ */
+function fireAll(): void {
+  if (!canPlan() || selected < 0) return;
+  const s = selectedShip();
+  const t = targetShip();
+  if (!s || !t) { flash('Nothing left to shoot at.'); return; }
+  const sec = scrubbedSecond();
+  const o = match.order(s.id);
+  let queued = 0;
+  for (let i = 0; i < s.mountCount; i++) {
+    if (!match.shipMount(s.id, i)) continue;
+    if (slotBlock(s.id, i, sec, o.weapons)) continue;
+    o.weapons.push({ weaponIndex: i, second: sec, targetShip: t.id, targetSub: aimSubFor(t.id) });
+    queued++;
+  }
+  if (!queued) { flash(`t+${sec}s: nothing can fire this second.`); return; }
+  o.weapons.sort((a, b) => a.second - b.second || a.weaponIndex - b.weaponIndex);
+  flash(`Queued ${queued} mount${queued === 1 ? '' : 's'} at t+${sec}s.`);
   refreshAll();
 }
 
@@ -1537,6 +1620,30 @@ function renderBoard(): void {
 }
 
 /**
+ * How far the review panel needs to sit above the footer to clear the canvas
+ * controls without any of them moving.
+ *
+ * Measured, not guessed: which of the toolbar, the heading dials and the
+ * altitude readout are even on screen depends on the move mode and the
+ * working altitude, so the panel rises to clear whichever of them currently
+ * sits highest rather than a fixed number that would be wrong the moment one
+ * of them was not there. This used to run the other way, pushing those
+ * controls up by the panel's own height: opening the panel then jumped the
+ * whole control row, which is exactly the motion this is here to remove.
+ */
+function syncReviewClearance(): void {
+  const footerTop = document.querySelector('footer')?.getBoundingClientRect().top;
+  if (footerTop === undefined) return;
+  let top = footerTop;
+  for (const id of ['toolbar', 'attitude', 'pAlt'] as const) {
+    const el = $(id);
+    if (el.offsetParent === null) continue;
+    top = Math.min(top, el.getBoundingClientRect().top);
+  }
+  document.documentElement.style.setProperty('--lift', `${Math.max(0, footerTop - top + 8)}px`);
+}
+
+/**
  * The whole review panel: which turns exist, which one is aimed at, and what
  * the transport is offering to do with it.
  *
@@ -1554,12 +1661,7 @@ function renderReview(): void {
     ? 'Nothing to watch yet: fight a turn first'
     : open ? 'Close the review and return to the live turn'
     : `Watch turns already fought, all ${match.history.length} of them`;
-  // The controls under it step up by exactly this, measured rather than
-  // guessed: the panel floats over the canvas, and a control it covers is
-  // visible, enabled and swallowing every tap. That is how the fire slots
-  // became unreachable on a phone, and it is not happening twice.
-  document.documentElement.style.setProperty('--lift',
-    open ? `${panel.offsetHeight + 10}px` : '0px');
+  if (open) syncReviewClearance();
   if (!open || !review) return;
 
   const rec = match.history[review.at];
@@ -1596,9 +1698,6 @@ function renderReview(): void {
     : playing ? 'watching this turn' : 'paused';
 
   renderTurnStrip();
-  // The strip has just changed height, so the lift is re-read from the panel
-  // as it now stands rather than as it stood before the chips went in.
-  document.documentElement.style.setProperty('--lift', `${panel.offsetHeight + 10}px`);
 }
 
 function renderTurnStrip(): void {
@@ -1783,21 +1882,19 @@ function draw(): void {
   envelopeWanted = true;
 }
 
-/** Units the working plane moves per step, and per step of a long press. */
-const ALT_STEP = 1;
-const ALT_FAST = 5;
-
 /**
- * Move the working plane, and say where it now is.
+ * Say where the working plane is now, and move whatever draws from it.
  *
- * The step used to be 5, which is the contour interval, so the plane could
- * only ever sit on the same ladder of heights and a target between two rungs
- * was unpickable. A unit step reaches every height; the readout carries the
- * value, since a plane you can put anywhere is one you can lose track of.
+ * Called once a frame rather than once a press: the plane eases toward its
+ * goal continuously (`View#updateWorkAlt`), so a reading taken only on button
+ * events would lag a hold by up to a whole ease. Skipped when nothing moved,
+ * since `draw()` marks the envelope wanted and a re-probe costs a frame of
+ * its own; a plane sitting still has nothing to re-probe for.
  */
-function nudgeAlt(dir: number, step = ALT_STEP): void {
-  view.workAlt += dir * step;
-  view.clampWorkAlt();
+let lastWorkAlt = view.workAlt;
+function syncWorkPlane(): void {
+  if (view.workAlt === lastWorkAlt) return;
+  lastWorkAlt = view.workAlt;
   view.setSelection(selected);
   draw();
   const a = view.workAlt;
@@ -1807,43 +1904,34 @@ function nudgeAlt(dir: number, step = ALT_STEP): void {
 }
 
 /**
- * Tap for one unit, hold to keep going.
+ * Wire one elevation button to the view's own hold: a press drives the goal
+ * continuously and faster the longer it runs, and `workAlt` eases after it
+ * every frame, so a tap reads as a small smooth move and a hold reads as an
+ * accelerating one rather than either jumping in fixed steps.
  *
- * A unit step is precise and slow: crossing a frigate's envelope is about
- * forty of them. So a press held past 350 ms repeats every 90 ms, and widens
- * to 5 units after a second, which crosses the shape in about the time the
- * old single step took to press eight times. The click that ends a long press
- * is swallowed, or the hold would land one extra step on release.
+ * The `click` a real press also fires is swallowed, or releasing would land
+ * one more nudge on top of whatever the hold already did. Only a synthetic
+ * activation with no pointer event behind it - keyboard Enter or Space on the
+ * button, assistive tech - reaches it, and that gets a small fixed nudge
+ * since it has no hold duration to measure.
  */
-function holdRepeat(el: HTMLElement, dir: number): void {
-  let delay = 0;
-  let timer = 0;
-  let ticks = 0;
-  let repeated = false;
-  const stop = (): void => {
-    clearTimeout(delay);
-    clearInterval(timer);
-    delay = 0;
-    timer = 0;
-  };
+function bindElev(el: HTMLElement, dir: -1 | 1): void {
+  let pressed = false;
+  let sawPointer = false;
   el.addEventListener('pointerdown', () => {
-    stop();
-    repeated = false;
-    ticks = 0;
-    delay = window.setTimeout(() => {
-      repeated = true;
-      timer = window.setInterval(() => {
-        ticks++;
-        nudgeAlt(dir, ticks > 11 ? ALT_FAST : ALT_STEP);
-      }, 90);
-    }, 350);
+    pressed = true;
+    sawPointer = true;
+    view.setElevHold(dir);
   });
-  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
-    el.addEventListener(ev, stop);
-  }
+  const release = (): void => {
+    if (!pressed) return;
+    pressed = false;
+    view.setElevHold(0);
+  };
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(ev, release);
   el.addEventListener('click', () => {
-    if (repeated) { repeated = false; return; }
-    nudgeAlt(dir);
+    if (sawPointer) { sawPointer = false; return; }
+    view.bumpWorkAlt(dir);
   });
 }
 
@@ -2321,8 +2409,8 @@ addEventListener('keydown', ev => {
     refreshAll();
   };
   switch (ev.key.toLowerCase()) {
-    case 'q': nudgeAlt(-1); break;
-    case 'e': nudgeAlt(1); break;
+    case 'q': view.setElevHold(-1); break;
+    case 'e': view.setElevHold(1); break;
     case 'a': nudgeHeading(-15); break;
     case 'd': nudgeHeading(15); break;
     case 'f': {
@@ -2335,6 +2423,17 @@ addEventListener('keydown', ev => {
     default: return;
   }
   ev.preventDefault();
+});
+
+// The keyboard's own hold: OS auto-repeat fires keydown for as long as the
+// key is down, so the release has nowhere to come from but keyup. Both keys
+// drive the same single hold direction the on-canvas buttons do, so holding
+// one and tapping the other briefly hands it control rather than fighting it.
+addEventListener('keyup', ev => {
+  switch (ev.key.toLowerCase()) {
+    case 'q': case 'e': view.setElevHold(0); break;
+    default: return;
+  }
 });
 
 
@@ -2618,8 +2717,8 @@ function renderAttitude(): void {
   $('atPitch').setAttribute('aria-valuenow', String(p));
 }
 
-holdRepeat($('pUp'), 1);
-holdRepeat($('pDown'), -1);
+bindElev($('pUp'), 1);
+bindElev($('pDown'), -1);
 $('pCCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
 $('pCW').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'd' }));
 $('pFace').onclick = () => dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
@@ -3208,6 +3307,7 @@ function frameBody(): void {
       view.setSelection(selected);
       atAttitude = null;
       restoreFacing();
+      reuseFireConfig();
       refreshAiPlans();
       view.invalidateEnvelope();
       planTurnEnvelopes();
@@ -3220,6 +3320,7 @@ function frameBody(): void {
   // because the hull under them is moving.
   renderInspect();
   view.render();
+  syncWorkPlane();
 }
 
 /**

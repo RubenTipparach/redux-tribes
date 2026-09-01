@@ -51,21 +51,40 @@ export const COOL_TICKS = 900;
  * orange. Which of the two carries the hue is the whole difference between a
  * wound that looks molten and one that looks painted.
  *
- * The last stop is not black: a cold wound is still a hole with a burnt edge,
- * and pure black reads as a gap in the mesh, which is the exact failure this
- * file exists to fix.
+ * The last stop is not pure black: a cold wound is still a hole with a burnt
+ * edge, and FLAT black reads as a gap in the mesh, which is the exact failure
+ * this file exists to fix. It is close to it, though: what a cooled wound
+ * settles on is char, and char is nearly black with a whisper of warmth left
+ * in it, not the mid grey a "not black" rule might suggest.
  */
 const HEAT: ReadonlyArray<readonly [number, number, number, number]> = [
   [1.00, 1.00, 1.00, 1.00],
   [0.70, 1.00, 0.82, 0.62],
   [0.40, 0.88, 0.44, 0.22],
   [0.18, 0.52, 0.20, 0.09],
-  [0.00, 0.22, 0.17, 0.16],
+  [0.00, 0.10, 0.085, 0.08],
 ];
 
 /** Where a cell sits on that ramp, given how long ago it died. */
 export function heatOf(diedAt: number, tick: number): number {
   return Math.max(0, Math.min(1, 1 - (tick - diedAt) / COOL_TICKS));
+}
+
+/**
+ * How much of the char crust still covers the part it burned, given how hot
+ * the cell is right now.
+ *
+ * This used to be the heat itself, so a cooled wound's alpha went to zero and
+ * the crust lifted clean off, uncovering the reactor or the drive underneath
+ * looking exactly as it would if it had never been hit. A hull that heals its
+ * own damage cosmetically the moment the fire goes out reads as undamaged from
+ * across the map, which is the opposite of what a wound is for. A crust does
+ * not un-char itself: the floor is what stays once the embers are gone, and
+ * only the last sliver above it is the fire's own light fading out.
+ */
+const COLD_CRUST = 0.82;
+function crustAlpha(heat: number): number {
+  return COLD_CRUST + heat * (1 - COLD_CRUST);
 }
 
 /**
@@ -334,9 +353,9 @@ export function buildWound(
       // to char: a hole a minute old was a black void with the reactor and the
       // drive somewhere inside it and nothing to see. They are parts, and the
       // shipyard has always drawn them when the plate is turned off, so the
-      // battlefield draws them too. The ember sits OVER this on its own layer
-      // and fades off as it cools, uncovering the component underneath rather
-      // than leaving a hole where one should be.
+      // battlefield draws them too. The ember sits OVER this on its own layer,
+      // mostly opaque even once it has cooled, so what shows through is the
+      // char the fire left rather than the part looking freshly built.
       const nc = idx(ni, nj, nk);
       const mat = grid[nc] as number;
       if (mat === Mat.Plate || mat === Mat.Skinned) exposed.plate++;
@@ -355,9 +374,11 @@ export function buildWound(
         iCol.push(or_, og, ob);
         world(ax, ay, az, gPos);
         gNrm.push(back[0], back[1], back[2]);
-        // Alpha is the heat, so the ember layer takes itself off as it cools
-        // instead of settling to char over the part it is covering.
-        gCol.push(rgb[0], rgb[1], rgb[2], heat);
+        // Alpha is the crust, not the heat: it fades from the fire's own
+        // light down to a char that stays, so the wound settles into a burnt
+        // mark on the hull instead of lifting off and uncovering the part
+        // underneath looking untouched.
+        gCol.push(rgb[0], rgb[1], rgb[2], crustAlpha(heat));
         const cu = CORNER_UV[corner] as readonly [number, number];
         gUv.push(
           u0 + ATLAS_PAD + (cu[0] as number) * (ATLAS_STEP - 2 * ATLAS_PAD),
@@ -432,9 +453,9 @@ export function coolWound(w: Wound, dead: ReadonlyMap<number, number>, tick: num
     arr[v * 4] = rgb[0];
     arr[v * 4 + 1] = rgb[1];
     arr[v * 4 + 2] = rgb[2];
-    // Alpha is the heat: a cold edge takes itself off and uncovers the part
-    // underneath rather than sitting over it as char.
-    arr[v * 4 + 3] = heat;
+    // Alpha is the crust: a cold edge settles to char and stays over the part
+    // underneath rather than lifting off and uncovering it.
+    arr[v * 4 + 3] = crustAlpha(heat);
   }
   col.needsUpdate = true;
 }

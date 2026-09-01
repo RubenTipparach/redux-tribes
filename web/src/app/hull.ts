@@ -362,6 +362,26 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   /** Every window face found, by decal kind: cell, and which way it looks. */
   const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
 
+  /**
+   * Which rig owns a cell, or -1.
+   *
+   * A turret is bolted to the hull, not part of it: at rest most of its cells
+   * sit flush against the plating, and the outside flood fill treats that
+   * seam as interior forever, because it is computed once for a hull that
+   * never moves. But the mount DOES move, so the seam is exactly the face
+   * left staring at empty space the instant the barrel swings off rest. A rig
+   * cell therefore needs every face not shared with another cell of its own
+   * rig, whatever sits on the other side of it, rather than the "outside"
+   * test the rest of the hull uses.
+   */
+  const rigCellAt = (i: number, j: number, k: number): number => {
+    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return -1;
+    const n = idx(i, j, k);
+    if (!grid[n]) return -1;
+    const owner = own[n] as number;
+    return owner > 0 ? rigOfPart.get(owner - 1) ?? -1 : -1;
+  };
+
   const at = [0, 0, 0];
   for (let di = 0; di < DIRS.length; di++) {
     const dir = DIRS[di] as (typeof DIRS)[number];
@@ -377,8 +397,10 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         put(at, axis, u, v, w);
         const i = at[0] as number, j = at[1] as number, k = at[2] as number;
         if (!grid[idx(i, j, k)]) continue;
+        const rig = rigCellAt(i, j, k);
         put(at, axis, u, v, w + dir.step);
-        if (!open(at[0] as number, at[1] as number, at[2] as number)) continue;
+        const ni = at[0] as number, nj = at[1] as number, nk = at[2] as number;
+        if (rig >= 0 ? rigCellAt(ni, nj, nk) === rig : !open(ni, nj, nk)) continue;
         // A window face leaves the plate pass entirely rather than merging
         // into it. Each one needs its own slice of a variant strip, so it
         // cannot share a quad with its neighbour, and the hole it leaves in
@@ -393,7 +415,10 @@ export function hullMesh(d: Design, bare = false): HullMesh {
           if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
           continue;
         }
-        mask[u + v * uN] = colourAt(i, j, k);
+        // Tagged with the rig so a turret's own faces never merge into a
+        // neighbour's or the hull's: two cells drawing the same colour would
+        // otherwise share a quad that only half of them should turn with.
+        mask[u + v * uN] = colourAt(i, j, k) | ((rig + 1) << 24);
         owner[u + v * uN] = idx(i, j, k);
         if (i < loX) loX = i; if (i > hiX) hiX = i;
         if (j < loY) loY = j; if (j > hiY) hiY = j;
@@ -436,7 +461,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
           const corners: ReadonlyArray<readonly [number, number]> = ccw
             ? [[0, 0], [wide, 0], [wide, tall], [0, tall]]
             : [[0, 0], [0, tall], [wide, tall], [wide, 0]];
-          c.setHex(hex);
+          c.setHex(hex & 0xffffff);
           for (const [du, dv] of corners) {
             put(at, axis, u + du, v + dv, w + face);
             pos.push(

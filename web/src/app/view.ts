@@ -45,9 +45,24 @@ import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
  * span floor allows, so a fully zoomed in ship is always inside it.
  */
 /** How fast the camera closes on its goal, per second. See `#ease`. */
-const CAMERA_EASE = 14;
+const CAMERA_EASE = 28;
 /** Close enough to stop easing and lock on. About a fiftieth of a cell. */
 const LOCK_EPS = 0.002;
+/** How fast the working plane closes on its goal, per second. Snappier than
+ *  the camera: this is a control the player is actively driving, not a view
+ *  settling after them, so it should feel attached to the finger rather than
+ *  trailing it. */
+const ELEV_EASE = 22;
+/** Units a second the elevation goal moves at the moment a hold begins. */
+const ELEV_RATE = 6;
+/** How many times ELEV_RATE a hold reaches once fully ramped up. */
+const ELEV_MAX_MULT = 3;
+/** Seconds of holding to go from ELEV_RATE to ELEV_RATE * ELEV_MAX_MULT. */
+const ELEV_RAMP = 1.1;
+/** What a synthetic activation with no pointer behind it (keyboard Enter or
+ *  Space on the button, assistive tech) nudges the goal by, since it has no
+ *  hold duration to measure. */
+const ELEV_TAP = 1;
 /** An angle brought into (-pi, pi], so a turn takes the short way round. */
 const wrapPi = (a: number): number => {
   let x = a;
@@ -341,6 +356,15 @@ export class View {
 
   /** The horizontal plane a click is projected onto, as an offset in y. */
   workAlt = 0;
+  /** Where the elevation control is driving the plane toward. `workAlt` eases
+   *  after it the same way the camera eases after its own goal, so a tap or a
+   *  hold both read as motion rather than a jump. */
+  #workAltGoal = 0;
+  /** -1, 0 or 1: which way the elevation control is currently held. */
+  #elevHold: -1 | 0 | 1 = 0;
+  /** How long the current hold has run, so it can ramp up rather than snap to
+   *  full speed the instant a finger lands. */
+  #elevHeldFor = 0;
 
   #hulls = new Map<number, THREE.Mesh>();
   /**
@@ -1305,9 +1329,10 @@ export class View {
    * drawing 120. A fixed fraction is a different curve at every frame rate,
    * which is how a move that feels right on a desk feels sluggish on a phone.
    *
-   * 14 puts about 95 percent of a move in a fifth of a second: fast enough
-   * that a drag still feels attached to the finger, slow enough that a jump
-   * across the map reads as a move.
+   * 28 puts about 95 percent of a move in a tenth of a second, twice the rate
+   * a first pass at this landed on: that read as attached to the finger but
+   * lagged a snappy feel, still slow enough that a jump across the map reads
+   * as a move rather than a cut.
    */
   #ease(dt: number): number { return 1 - Math.exp(-CAMERA_EASE * dt); }
 
@@ -1389,15 +1414,64 @@ export class View {
    * Held a hair inside the extreme, because exactly at it the plane is tangent
    * and meets the surface in a point rather than a curve.
    */
-  clampWorkAlt(): void {
+  /** The shape's own bounds on the plane, in the same offset `workAlt` is, or
+   *  null while there is nothing to bound it against. Shared by the clamp and
+   *  by the goal a hold or a tap is driving toward, so the two can never
+   *  disagree about where the plane is allowed to be. */
+  #workAltBounds(): { lo: number; hi: number } | null {
     const sel = this.#ships.find(s => s.id === this.#selected);
     const built = sel ? this.#shells.get(sel.id)?.built : null;
-    if (!sel || !built) return;
+    if (!sel || !built) return null;
     const inset = (built.yhi - built.ylo) * 0.02;
     const lo = built.ylo + inset - sel.pos.y;
     const hi = built.yhi - inset - sel.pos.y;
-    if (hi < lo) return;
-    this.workAlt = Math.min(hi, Math.max(lo, this.workAlt));
+    return hi < lo ? null : { lo, hi };
+  }
+
+  clampWorkAlt(): void {
+    const b = this.#workAltBounds();
+    if (!b) return;
+    this.workAlt = Math.min(b.hi, Math.max(b.lo, this.workAlt));
+    this.#workAltGoal = Math.min(b.hi, Math.max(b.lo, this.#workAltGoal));
+  }
+
+  /**
+   * Start or stop driving the elevation goal in a direction, -1, 1 or 0 to
+   * release. Called once per press and once per release, not per frame: the
+   * ramp itself lives in `#updateWorkAlt`, which is what actually moves the
+   * goal every frame the hold is still down.
+   */
+  setElevHold(dir: -1 | 0 | 1): void {
+    if (dir !== this.#elevHold) this.#elevHeldFor = 0;
+    this.#elevHold = dir;
+  }
+
+  /** A synthetic activation with no hold behind it: a fixed small nudge. */
+  bumpWorkAlt(dir: -1 | 1): void {
+    this.#workAltGoal += dir * ELEV_TAP;
+    this.clampWorkAlt();
+  }
+
+  /**
+   * Move the goal while a hold is down, ramping its speed up the longer it
+   * runs, then ease the visible plane after it.
+   *
+   * Two separate motions, on purpose. The goal can jump the full distance a
+   * frame's worth of holding covers, because nothing is watching it directly;
+   * what the player sees is `workAlt` chasing it, and THAT has to be smooth
+   * however far the goal just moved, or a dropped frame would show up as a
+   * stutter in the plane rather than in the number driving it.
+   */
+  #updateWorkAlt(dt: number): void {
+    if (this.#elevHold) {
+      this.#elevHeldFor += dt;
+      const ramp = Math.min(1, this.#elevHeldFor / ELEV_RAMP);
+      const rate = ELEV_RATE * (1 + (ELEV_MAX_MULT - 1) * ramp);
+      this.#workAltGoal += this.#elevHold * rate * dt;
+      this.clampWorkAlt();
+    }
+    const t = 1 - Math.exp(-ELEV_EASE * dt);
+    this.workAlt += (this.#workAltGoal - this.workAlt) * t;
   }
 
   planeY(): number {
@@ -3306,6 +3380,7 @@ export class View {
     const dt = this.#posedAt ? Math.min(0.1, (now - this.#posedAt) / 1000) : 0.016;
     this.#posedAt = now;
     this.#poseTurrets(dt);
+    this.#updateWorkAlt(dt);
     // The shimmer the bake had to give up. A uniform, not a re-bake.
     if (this.#stars) {
       const u = (this.#stars.material as THREE.ShaderMaterial).uniforms;
