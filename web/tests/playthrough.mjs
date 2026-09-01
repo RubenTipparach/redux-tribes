@@ -86,6 +86,13 @@ let unresolved = 0;
  *  also right. What would be wrong is one that carried on THROUGH what it hit,
  *  which shows as an end nowhere near the hull. */
 let worstBeam = null;
+/** The most pool lights a blast ever lit at once, and the strongest total.
+ *
+ *  A fireball is drawn whether or not it throws any light, and the two look
+ *  nearly the same in a still. So the light is asked about directly: if the
+ *  pool never lit, the explosions are stickers. */
+let blastLightsPeak = 0;
+let blastLightPowerPeak = 0;
 let hittingBeams = 0;
 let outcome = 'ran out of turns';
 let final = null;
@@ -106,6 +113,7 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();
+  if (attempt === 1) await checkTheFieldIsDressed();
   if (attempt === 1) await checkHullsAreShips(page);
   if (attempt === 1) await checkFleetChips();
   if (attempt === 1) await checkSchematic();
@@ -216,6 +224,20 @@ log(`shots land on the hull: ${blastsSeen} blasts sampled, worst `
   + `worst stopping ${worstBeam ? worstBeam.off : 0} u out against `
   + `${worstBeam ? worstBeam.hullR : 0} u`);
 
+// AN EXPLOSION THROWS LIGHT.
+//
+// The fireball is additive geometry and would draw perfectly well over a
+// scene it does not light at all, so this asks the lights rather than the
+// picture. A whole match of hits with the pool never leaving zero means the
+// blasts are stickers on the screen.
+if (!blastLightsPeak) {
+  console.log('\nFAIL: a whole match of blasts and not one of them threw any '
+    + 'light: the pool never left zero intensity');
+  process.exit(1);
+}
+log(`explosions throw light: up to ${blastLightsPeak} pool light(s) at once, `
+  + `peak total intensity ${blastLightPowerPeak.toFixed(1)}`);
+
 /**
  * Nothing a player needs may sit UNDER a sheet.
  *
@@ -253,6 +275,65 @@ async function checkHullsAreShips(page) {
     process.exit(1);
   }
   log(`hulls are drawn from their own cells: ${quads.join(', ')} quads, ${total} in all`);
+}
+
+/**
+ * The field is somewhere, and it is lit.
+ *
+ * Everything here is invisible to the other suites: a scene renders perfectly
+ * happily with no sky, one light and no post chain, and nothing but a browser
+ * can say whether it did. Checked once per run, at the start, because a sky is
+ * baked at launch and either arrived or did not.
+ */
+async function checkTheFieldIsDressed() {
+  const st = await page.evaluate(() => ({
+    post: window.ftDebug.post(),
+    lights: window.ftDebug.lights(),
+    backdrop: window.ftDebug.backdrop(),
+  }));
+
+  // The sky baked. Without it the background falls back to a flat colour,
+  // which is exactly the look this replaced, and it would go unnoticed.
+  if (!st.post.sky) {
+    console.log('\nFAIL: the sky did not bake, so the field is a flat colour again');
+    process.exit(1);
+  }
+
+  // Three lights and a floor. Counted by KIND rather than by number alone, so
+  // deleting the rim and adding a second ambient could not pass.
+  const dir = st.lights.filter(l => l.kind === 'DirectionalLight');
+  const amb = st.lights.filter(l => l.kind === 'AmbientLight');
+  if (dir.length < 3) {
+    console.log(`\nFAIL: the three point rig is ${dir.length} directional light(s), not 3`);
+    process.exit(1);
+  }
+  if (!amb.length) {
+    console.log('\nFAIL: no ambient floor, so the unlit side of a hull is absent rather than dark');
+    process.exit(1);
+  }
+  // A rig whose lights are all the same strength is not a rig, it is three
+  // lamps: a key has to actually dominate.
+  const power = dir.map(l => l.intensity).sort((a, b) => b - a);
+  if (power[0] <= power[power.length - 1]) {
+    console.log(`\nFAIL: no key light dominates, intensities ${power.join(', ')}`);
+    process.exit(1);
+  }
+
+  // The scenery exists and the sun is a real object rather than a direction
+  // nothing was ever drawn at.
+  if (!st.backdrop.sun) {
+    console.log('\nFAIL: the scenario has a sun direction but no sun was drawn');
+    process.exit(1);
+  }
+  if (st.backdrop.planets < 1) {
+    console.log('\nFAIL: no planets in the backdrop, so the field has no sense of scale');
+    process.exit(1);
+  }
+
+  log(`the field is dressed: sky baked, ${dir.length} directional lights `
+    + `(key ${power[0]}, weakest ${power[power.length - 1]}), a sun and `
+    + `${st.backdrop.planets} planet(s), post is ${st.post.quality}`
+    + `${st.post.stoodDown ? ` (${st.post.stoodDown})` : ''}`);
 }
 
 async function checkNothingIsBuried() {
@@ -918,6 +999,8 @@ async function playMatch() {
       if (!b.resolved) unresolved++;
       if (!worstBlast || b.off - b.hullR > worstBlast.off - worstBlast.hullR) worstBlast = b;
     }
+    blastLightsPeak = Math.max(blastLightsPeak, snap.fx.blastLights ?? 0);
+    blastLightPowerPeak = Math.max(blastLightPowerPeak, snap.fx.blastLightPower ?? 0);
     for (const b of snap.fx.beamLen) {
       if (!b.hit || !b.hullR) continue;
       hittingBeams++;

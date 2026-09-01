@@ -449,6 +449,90 @@ either side of the commit. Reading it off the shipped figure instead would have
 charged it 14002, which is gravity, the reach chart and the scenario table as
 well.
 
+## The field is somewhere: sky, sun, three lights and bloom
+
+The map used to be a flat `0x0a0e14` clear colour, one near vertical key and a
+hemisphere. That lights every hull identically from above, and it gives a fight
+no scale and no direction: two frigates a hundred units apart look exactly like
+two a thousand apart, and turning the camera tells you nothing because there is
+nothing out there to turn against.
+
+**The sky is the archive's own, not a new one.** `SHADER_CATALOG.md` 3.4
+records `Procgen_Space_Skybox.shadergraph` down to the octave counts, and
+`sky.ts` is that graph in GLSL: two fBm nebula layers (8 / 1.5 / 1 and
+5 / 3 / 0.5), a Voronoi star field, `Fractal_offset` reseeding the whole thing,
+and per mission recolouring that varies two colours and nothing else. Skirmish
+gets `space_mission_4`'s green over near black purple because that is what the
+archived Skirmish scene used.
+
+**It is BAKED into a cubemap, once.** Two layers of fBm plus a Voronoi lookup
+per fragment of a full sky, sixty times a second, is not a thing a Raspberry Pi
+5 does (ADR-13). Baked, it costs one render at launch and a texture fetch after
+that. What the bake gives up is the shimmer, which would mean re-baking every
+frame, and that is the one part of 3.4 deliberately not ported.
+
+The cubemap is also handed to `scene.environment`, and it is worth knowing
+exactly what that does and does not do. Three applies the scene environment to
+`MeshStandardMaterial` ONLY: `materialProperties.environment =
+material.isMeshStandardMaterial ? scene.environment : null`. The hulls are
+`MeshLambertMaterial`, so **the nebula does not light the ships**; it lights
+the gravity well bodies, which are the one standard material out there. The
+cool bounce on a shadowed flank is the FILL light. Setting `envMap` by hand
+would reach Lambert, but Lambert treats it as a mirror reflection rather than
+irradiance, so the plating would come out shiny. Check which materials a
+renderer feature actually applies to before writing down what it does.
+
+**Turbulence is folded per octave, and the reason is worth keeping.** The first
+cut folded the finished fBm sum with `1 - |2n - 1|`. Eight octaves of value
+noise concentrate hard around 0.5 (measured: mean 0.535, p10 0.337, p90 0.694)
+and that expression is MAXIMAL at 0.5, so it came out mean 0.779 and painted
+the entire sky green. Folded per octave it is mean 0.345, p10 0.170: dark
+nearly everywhere, with filaments where octaves agree. The mask then sits at
+0.42, which passes 19.5% of the sky (0.35 passes 41%, 0.5 passes 5%). A fifth
+is where the sky has structure and the ships still read against it. Measure the
+distribution before tuning a threshold; two screenshots in a row said "still
+too bright" and neither said why.
+
+**One sun, one key light.** `backdrop.ts` publishes a direction; the sprite in
+the sky and the key light both read it, so the lit side of a hull and the bright
+dot behind it are the same fact. Planets sit at 250 to 660 units, the band
+`DESIGN.md` records, outside the 200 unit fight and inside the 6000 unit far
+plane. All of it is drawn and none of it is simulated: no collider, no pick
+target, `userData.pickable = false`, because a planet that swallowed a click
+would put a move order on the sky.
+
+**Three lights, then a floor.** Key from the sun, cool fill opposite, and a rim
+low and behind. The rim is what separates a dark hull from a dark sky; without
+it a silhouetted ship has no edge at all. Ambient is deliberately weak because
+the environment map does most of that job.
+
+**Bloom is the whole post budget.** ADR-13's quality ladder says "bloom-only
+post" and that is exactly what `post.ts` runs: `RenderPass`, `UnrealBloomPass`,
+`OutputPass`, on a `NeutralToneMapping` renderer. The tone mapping is not
+decoration: with none at all everything above white clips to white, so a blast
+and the sun and a lit hull all arrive at the same flat value and a thresholded
+bloom has nothing to threshold.
+
+**The ladder is the point, not the bloom.** A post chain a phone cannot run is
+worse than none, because it fails as a slideshow rather than as a plain
+picture. So it measures itself and stands down: 90 consecutive frames over
+33.3 ms (ADR-13 says turn based play is comfortable at 30 fps) and bloom goes,
+permanently for that session. Slow to fire, because the first seconds of a
+match are the worst frames it will ever have while hulls build and shaders
+compile; permanent once fired, because a look that comes back whenever the
+camera stops moving is worse than either look. It reports WHY, and the
+playthrough prints it.
+
+Measured, headless, in software rasterisation, which is the wrong machine and
+overstates a blur chain badly: 1280x860 bloom 86.96 ms against plain 53.36 ms;
+390x844 bloom 48.85 ms against plain 30.68 ms. The ladder duly fired at 18
+seconds with "90 frames over 33.3 ms, last 99.6 ms", which is it working. Bloom
+does move the picture: on a held frame, 13.9% of pixels shifted by more than
+6 of 255 and the worst by 132. Hold the SAME tick for that comparison, since
+scrubbing is a pure function of (turn, tick); two playback frames either side
+of a toggle differ because time passed, and a bloom pass that did nothing would
+pass that test.
+
 ## The battlefield draws the ship you built
 
 Every hull on the map used to be a five sided cone. It reads at a glance and it

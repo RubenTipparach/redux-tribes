@@ -356,6 +356,12 @@ function start(): void {
     : flownNames.length ? `in ${flownNames.join(', ')}`
     : '';
   match.start(seed, scenario, launch.humanSides);
+  // Dress the field before the first frame. A level is somewhere: its own
+  // nebula, its own sun, its own planets, and the key light aimed at that sun
+  // so the lit side of a hull agrees with the sky behind it. Keyed by the
+  // scenario NAME rather than the enum, because the presets are authored
+  // beside the level list a player reads.
+  view.setSky(launch.scenario);
   // What each ship is flying, so the map draws the hull rather than a stand in
   // for it: the picked design for the slot that picked it, and each class's
   // stock hull for everyone else. Kept rather than handed straight over,
@@ -3257,6 +3263,13 @@ Object.defineProperty(window, 'ftDebug', {
     /** What the effects layer is drawing right now, and how far the biggest
      * blast has grown, so "bigger and more visible" is a measurement. */
     fx: () => view.fxStats(),
+    // What the renderer settled on: whether the sky baked, which post path is
+    // running and why, and the rig that lights the field. OBSERVE only, like
+    // everything else here.
+    post: () => view.postState(),
+    lights: () => view.lightState(),
+    backdrop: () => view.backdropState(),
+    forceQuality: (q: 'bloom' | 'plain') => view.forceQuality(q),
     /** Which recorded turn is being WATCHED, or null when none is: the panel
      * being open and aimed is not the same thing as a past world being on
      * screen, and a harness that conflated them would pass on a review that
