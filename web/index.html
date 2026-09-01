@@ -954,6 +954,25 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
    state too, and a class that only works in one container is a class that
    quietly does nothing in the others. */
 #lobby .s { font-size:11px; color:var(--muted); }
+/* The briefing floats over the lobby and scrolls inside itself: on a phone the
+   roster plus a library of hulls is taller than the screen, and a popup that
+   pushes its own Launch button off the bottom is a popup you cannot use. */
+#briefing { position:fixed; inset:0; z-index:20; display:grid; place-items:center;
+  background:#04070ccc; -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px); }
+#briefing.hidden { display:none; }
+.briefBox { width:min(560px, calc(100vw - 24px)); max-height:calc(100vh - 24px);
+  padding:12px; border-radius:10px; background:var(--panel);
+  border:1px solid var(--line); display:grid; gap:8px; min-height:0;
+  grid-template-rows:auto minmax(0, 1fr) auto; }
+/* The ROSTER scrolls, not the box. A library of a dozen hulls is taller than a
+   phone, and a box that scrolled whole would push its own Launch button off the
+   bottom: a control that is only reachable by scrolling past everything is the
+   same defect as a control drawn under a sheet. Header and Launch are the
+   fixed rows either side of it. */
+#briefScroll { overflow:auto; min-height:0; display:grid; gap:8px; align-content:start; }
+#briefShips { display:grid; gap:8px; }
+.briefRow { display:grid; gap:6px; }
+#briefGo { padding:8px; font-size:14px; }
 .roomRow { cursor:pointer; }
 .roomRow:hover { border-color:var(--cyan); }
 /* Forgetting a saved game. Small, quiet and on the row itself, because it is
@@ -988,7 +1007,6 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .picks.hulls { grid-template-columns:repeat(auto-fill, minmax(122px, 1fr)); }
 .picks.hulls button.on { border-color:var(--cyan); background:#0d2231; }
 .picks.hulls button.on .n { color:var(--cyan); }
-#practiceHullNote { margin-top:6px; }
 
 /* Which design the fleet was taken out in, on the panel that lists it. */
 #hullNote { float:right; font-size:9px; letter-spacing:.06em; color:var(--cyan);
@@ -1209,12 +1227,10 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
             <div class="s">Play the AI offline. Nothing is sent anywhere.</div>
           </div>
         </div>
-        <!-- Which hull you take in, above the levels rather than beside each
-             one: it is one choice that applies to whichever you tap, and a
-             copy of it per level would be seven controls saying one thing. -->
-        <div class="dzgrp" style="margin-top:10px">Your hull</div>
-        <div id="practiceHull" class="picks hulls"></div>
-        <div id="practiceHullNote" class="s"></div>
+        <!-- Which hull you take in is asked per LEVEL now, in the briefing
+             that opens when one is tapped: the choice is per ship, and a
+             single picker above the list could only ever say "every hull I
+             field is this one". -->
         <!-- One button a level. A dropdown beside a Play button hid six of
              the seven behind a gesture nobody makes on a phone. -->
         <div id="practiceList" class="picks"></div>
@@ -1283,6 +1299,28 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 </div>
 
 <div id="waitBanner" class="hidden">waiting for opponent</div>
+
+<!-- The briefing. Tapping a level opens this rather than launching, because
+     what you fly is a decision per SHIP and the roster is what you are
+     deciding over: "swap the second one" can only be said when the second one
+     is on screen. The roster comes from the core, so this describes the match
+     about to be played rather than a second copy of it. -->
+<div id="briefing" class="hidden">
+  <div class="briefBox">
+    <div class="row">
+      <div class="grow">
+        <div class="t" id="briefName">Level</div>
+        <div class="s" id="briefBlurb"></div>
+      </div>
+      <button id="briefClose" title="Back to the levels">Close</button>
+    </div>
+    <div id="briefScroll">
+      <div id="briefShips"></div>
+      <div id="briefNote" class="s"></div>
+    </div>
+    <button id="briefGo" class="go">Launch</button>
+  </div>
+</div>
 
 <div id="app">
   <header>

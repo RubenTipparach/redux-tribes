@@ -97,7 +97,12 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.goto(URL, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#lobby:not(.hidden)');
   await page.waitForFunction(() => document.getElementById('whoName').textContent !== '...');
+  // Tapping a level opens its briefing; Launch is what starts the match. The
+  // hulls are left as the level authored them, which is what this suite is
+  // about: the game, not the chooser.
   await tap('#bPractice');
+  await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+  await tap('#briefGo');
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();

@@ -855,15 +855,23 @@ async function checkLibrary(page) {
 async function checkHullPick(page, name, classKey, hull) {
   await page.click('#dzClose');
   await page.waitForTimeout(1200);
-  const chips = await page.$$eval('#practiceHull button', bs =>
-    bs.map(b => (b.querySelector('.n')?.textContent ?? '').trim()));
-  const at = chips.findIndex(t => t.includes(name));
-  if (at < 0) { fail(`the saved hull is not offered on the practice screen: ${chips.join(', ')}`); return; }
-  ok(`the practice screen offers the saved hull among ${chips.length} choices`);
-
-  await (await page.$$('#practiceHull button'))[at].click();
-  await page.waitForTimeout(250);
+  // Tapping a level opens its briefing: the roster it seats, and a hull per
+  // ship. The pick lives there now rather than in one chooser above the list,
+  // because it is a choice per SHIP.
   await page.click('#bPractice');
+  await page.waitForTimeout(700);
+  // The FIRST ship's card. A flat index across every row would land in
+  // whichever row it happened to fall in, which is how a check about swapping
+  // one ship ends up swapping another.
+  const row = page.locator('#briefShips .briefRow').first();
+  const chips = await row.locator('.picks button .n').allTextContents();
+  const at = chips.findIndex(t => t.includes(name));
+  if (at < 0) { fail(`the saved hull is not offered in the briefing: ${chips.join(', ')}`); return; }
+  ok(`the briefing offers the saved hull among ${chips.length} choices`);
+
+  await row.locator('.picks button').nth(at).click();
+  await page.waitForTimeout(250);
+  await page.click('#briefGo');
   await page.waitForFunction(() => document.getElementById('lobby').classList.contains('hidden'),
     null, { timeout: 20000 });
   await page.waitForTimeout(2500);
@@ -877,22 +885,25 @@ async function checkHullPick(page, name, classKey, hull) {
   });
   const want = ['terran_frigate', 'karisen_frigate', 'rogue_frigate',
     'benefactor_frigate', 'freighter'].indexOf(classKey);
+  // The picked SHIP, and only it. A design is a ship rather than a uniform:
+  // swapping the first hull must leave the one beside it as authored.
   if (!flown.mine.length) fail('the match spawned nothing for the player');
-  else if (flown.mine.some(c => c !== want))
-    fail(`picked a ${classKey} and flew classes ${flown.mine.join(', ')}`);
+  else if (flown.mine[0] !== want)
+    fail(`picked a ${classKey} for the first ship and it flew class ${flown.mine[0]}`);
+  else if (flown.mine.length > 1 && flown.mine[1] === want && want !== 0)
+    fail('the pick reached the ship beside it, which is not a swap, it is a uniform');
   else if (!flown.note.includes(name))
     fail(`the console does not say which design was taken out: "${flown.note}"`);
-  else ok(`every hull the player fields is the picked ${classKey}, `
+  else ok(`the picked ship flies the ${classKey}, the one beside it does not, `
     + `and the panel says "${flown.note}"`);
 
   // And it is the DESIGN, not just its class: the hull points the editor
-  // showed are the hull points the ship spawned with, because the core derived
-  // them once and both asked it.
-  const off = flown.hulls.map(h => Math.abs(h - hull));
+  // showed are the hull points that ship spawned with, because the core
+  // derived them once and both asked it.
   if (!flown.hulls.length) fail('no hull points to compare');
-  else if (Math.max(...off) > 0.5)
-    fail(`the editor said hull ${hull.toFixed(1)} and the ships spawned with `
-      + `${flown.hulls.map(h => h.toFixed(1)).join(', ')}`);
+  else if (Math.abs(flown.hulls[0] - hull) > 0.5)
+    fail(`the editor said hull ${hull.toFixed(1)} and the ship spawned with `
+      + `${flown.hulls[0].toFixed(1)}`);
   else ok(`and it spawns with the hull the editor derived: ${hull.toFixed(1)}`);
   if (flown.foes.every(c => c === want) && want >= 0 && flown.foes.length)
     fail('the pick reached the other side as well, which is not a pick, it is a mod');

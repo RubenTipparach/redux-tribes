@@ -32,10 +32,15 @@ export interface SavedGame {
   readonly scenario: string;
   readonly humanSides: number;
   readonly side: number;
-  /** The design fielded, whole, so a game resumes into the same ship even if
-   *  the library row it came from has since been edited or deleted. */
-  readonly hull?: unknown;
-  readonly hullName?: string;
+  /**
+   * The design each ship fields, by slot, whole.
+   *
+   * The whole record rather than a library id, so a game resumes into the same
+   * ships even if the row it came from has since been edited or deleted: a
+   * save that pointed at a design would replay a different match the day
+   * somebody tightened its armour.
+   */
+  readonly hulls?: ReadonlyArray<{ readonly design: unknown; readonly name: string } | null>;
   /** One entry per resolved turn, in order. Index IS the turn number. */
   readonly turns: SavedTurn[];
   /**
@@ -77,10 +82,31 @@ function read(): Shelf {
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
-    return parsed as Shelf;
+    return migrate(parsed as Shelf);
   } catch {
     return {};
   }
+}
+
+/**
+ * A game saved before a pick was per ship.
+ *
+ * `hull` meant "every ship this side fields is this one", so the faithful
+ * reading is that design in every slot: a resume REPLAYS its orders, and a
+ * fleet that came back one ship short of what those orders were given to would
+ * play a different match while looking like the same one. Four is the core's
+ * slot count; slots past the ships a level seats are ignored there.
+ */
+interface OldSave { hull?: unknown; hullName?: string }
+function migrate(shelf: Shelf): Shelf {
+  for (const g of Object.values(shelf)) {
+    const old = g as unknown as OldSave;
+    if (g.hulls || old.hull === undefined) continue;
+    const one = { design: old.hull, name: old.hullName ?? 'your design' };
+    (g as { hulls?: ReadonlyArray<{ design: unknown; name: string } | null> }).hulls =
+      [one, one, one, one];
+  }
+  return shelf;
 }
 
 function write(shelf: Shelf): void {

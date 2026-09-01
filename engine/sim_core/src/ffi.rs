@@ -666,7 +666,14 @@ pub extern "C" fn ft_look_basis(fx: f32, fy: f32, fz: f32) -> u32 {
 /// a preference. Set before `ft_match_new`, which consumes it; the scenario
 /// still decides where the ships stand and how many there are, because a
 /// player picking a hull is not a player redrawing the engagement.
-static mut HULL_CHOICE: [i32; 2] = [-1, -1];
+/// How many ships a side may have hulls picked for.
+///
+/// The scenarios field one or two a side; four is room to grow into without
+/// carrying an allocation for a fleet nobody spawns. A slot past this is
+/// refused rather than wrapped, because silently applying a design to the
+/// wrong ship is worse than not applying it.
+pub const HULL_SLOTS: usize = 4;
+static mut HULL_CHOICE: [[i32; HULL_SLOTS]; 2] = [[-1; HULL_SLOTS]; 2];
 
 /// A designed hull per side: what the core derived from it, and the mounts the
 /// client measured off it.
@@ -674,8 +681,11 @@ static mut HULL_CHOICE: [i32; 2] = [-1, -1];
 /// Stored derived rather than raw, so a match applies numbers that were worked
 /// out once, here, by the thing that owns the rules. Cleared by setting a
 /// design with no parts, and consumed by `ft_match_new` like the hull choice.
-static mut HULL_DESIGN: [Option<crate::design::Derived>; 2] = [None, None];
-static mut HULL_MOUNTS: [Vec<(WeaponKey, V3, [u32; ARC_WORDS])>; 2] = [Vec::new(), Vec::new()];
+static mut HULL_DESIGN: [[Option<crate::design::Derived>; HULL_SLOTS]; 2] =
+    [[None; HULL_SLOTS]; 2];
+static mut HULL_MOUNTS: [[Vec<(WeaponKey, V3, [u32; ARC_WORDS])>; HULL_SLOTS]; 2] =
+    [[Vec::new(), Vec::new(), Vec::new(), Vec::new()],
+     [Vec::new(), Vec::new(), Vec::new(), Vec::new()]];
 
 /// Derive a design and hold it for one side.
 ///
@@ -686,6 +696,7 @@ static mut HULL_MOUNTS: [Vec<(WeaponKey, V3, [u32; ARC_WORDS])>; 2] = [Vec::new(
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn ft_hull_design(
     side: u32,
+    slot: u32,
     class_idx: u32,
     plate_cells: i32,
     ext_x: i32,
@@ -695,7 +706,7 @@ pub extern "C" fn ft_hull_design(
     fouled: i32,
     parts: u32,
 ) -> u32 {
-    if side > 1 {
+    if side > 1 || slot as usize >= HULL_SLOTS {
         return 0;
     }
     if ft_derive(class_idx, plate_cells, ext_x, ext_y, ext_z, radius_cells, fouled, parts) == 0 {
@@ -719,12 +730,12 @@ pub extern "C" fn ft_hull_design(
         return 0;
     }
     unsafe {
-        HULL_DESIGN[side as usize] = Some(d);
-        HULL_MOUNTS[side as usize].clear();
+        HULL_DESIGN[side as usize][slot as usize] = Some(d);
+        HULL_MOUNTS[side as usize][slot as usize].clear();
     }
     // The class comes with it: a design is a hull of its own class, and the
     // spawn still needs to know which one.
-    ft_hull_choice(side, class_idx as i32);
+    ft_hull_choice(side, slot, class_idx as i32);
     1
 }
 
@@ -743,8 +754,10 @@ pub extern "C" fn ft_hull_design(
 /// with nothing to say passes `masked = 0` and the mount has a clear field of
 /// fire.
 #[no_mangle]
-pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32, masked: u32) -> u32 {
-    if side > 1 {
+pub extern "C" fn ft_hull_mount(
+    side: u32, slot: u32, key: u32, x: f32, y: f32, z: f32, masked: u32,
+) -> u32 {
+    if side > 1 || slot as usize >= HULL_SLOTS {
         return 0;
     }
     let k = match key {
@@ -763,22 +776,26 @@ pub extern "C" fn ft_hull_mount(side: u32, key: u32, x: f32, y: f32, z: f32, mas
         }
     }
     unsafe {
-        HULL_MOUNTS[side as usize].push((k, V3::new(x, y, z), mask));
+        HULL_MOUNTS[side as usize][slot as usize].push((k, V3::new(x, y, z), mask));
     }
     1
 }
 
-/// Forget a side's design, so the next match is flown in the authored hull.
+/// Forget every hull a side picked, so the next match is flown in the ones the
+/// scenario authored. All of its slots: a lobby that cleared one and left
+/// another standing would field a ship from the match before last.
 #[no_mangle]
 pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
     if side > 1 {
         return 0;
     }
-    unsafe {
-        HULL_DESIGN[side as usize] = None;
-        HULL_MOUNTS[side as usize].clear();
+    for slot in 0..HULL_SLOTS {
+        unsafe {
+            HULL_DESIGN[side as usize][slot] = None;
+            HULL_MOUNTS[side as usize][slot].clear();
+        }
+        ft_hull_choice(side, slot as u32, -1);
     }
-    ft_hull_choice(side, -1);
     1
 }
 
@@ -788,11 +805,22 @@ pub extern "C" fn ft_hull_clear(side: u32) -> u32 {
 /// of the snapshot must not be handed back their starting values.
 fn apply_mounts(sim: &mut Sim) {
     for side in 0..2usize {
-        let mounts = unsafe { HULL_MOUNTS[side].clone() };
-        if mounts.is_empty() {
-            continue;
-        }
-        for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
+        // A side's ships in spawn order, which is the order the slots were
+        // filled in: slot n is the nth ship this side fields, so a design
+        // swapped onto the second hull lands on the second hull.
+        let ids: Vec<usize> = sim
+            .ships
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.side as usize == side)
+            .map(|(i, _)| i)
+            .collect();
+        for (slot, &si) in ids.iter().enumerate().take(HULL_SLOTS) {
+            let mounts = unsafe { HULL_MOUNTS[side][slot].clone() };
+            if mounts.is_empty() {
+                continue;
+            }
+            let ship = &mut sim.ships[si];
             // Cooldowns survive: a restored mount is the same mount, and
             // forgetting when it last fired would hand a ship a free shot.
             // Cooldowns and damage both survive: a restored mount is the same
@@ -824,8 +852,16 @@ fn apply_mounts(sim: &mut Sim) {
 fn apply_designs(sim: &mut Sim) {
     apply_mounts(sim);
     for side in 0..2usize {
-        let Some(d) = (unsafe { HULL_DESIGN[side] }) else { continue };
-        for ship in sim.ships.iter_mut().filter(|s| s.side as usize == side) {
+        let ids: Vec<usize> = sim
+            .ships
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.side as usize == side)
+            .map(|(i, _)| i)
+            .collect();
+        for (slot, &si) in ids.iter().enumerate().take(HULL_SLOTS) {
+            let Some(d) = (unsafe { HULL_DESIGN[side][slot] }) else { continue };
+            let ship = &mut sim.ships[si];
             ship.hull = d.hull;
             ship.hull_max = d.hull;
             ship.mass = d.mass;
@@ -846,29 +882,85 @@ fn apply_designs(sim: &mut Sim) {
 }
 
 #[no_mangle]
-pub extern "C" fn ft_hull_choice(side: u32, class_idx: i32) -> u32 {
-    if side > 1 {
+pub extern "C" fn ft_hull_choice(side: u32, slot: u32, class_idx: i32) -> u32 {
+    if side > 1 || slot as usize >= HULL_SLOTS {
         return 0;
     }
     unsafe {
-        HULL_CHOICE[side as usize] = if class_idx < 0 || class_idx as usize >= ALL_CLASSES.len() {
-            -1
-        } else {
-            class_idx
-        };
+        HULL_CHOICE[side as usize][slot as usize] =
+            if class_idx < 0 || class_idx as usize >= ALL_CLASSES.len() {
+                -1
+            } else {
+                class_idx
+            };
     }
     1
 }
 
-/// Apply the choice to one side's spawn list, in place.
+/// Apply the picks to one side's spawn list, in place, ship by ship.
+///
+/// Per SHIP rather than per side: a player swapping one hull out of a pair is
+/// not asking for two of it. A slot nobody picked keeps the class the scenario
+/// authored, which is what makes "swap the second one" a thing that can be
+/// said at all.
 fn choose_hulls(side: usize, specs: &mut [SpawnSpec]) {
-    let pick = unsafe { HULL_CHOICE[side] };
-    if pick < 0 {
-        return;
+    for (slot, s) in specs.iter_mut().enumerate().take(HULL_SLOTS) {
+        let pick = unsafe { HULL_CHOICE[side][slot] };
+        if pick < 0 {
+            continue;
+        }
+        s.class = crate::data::class_from_index(pick as u32);
     }
-    let class = crate::data::class_from_index(pick as u32);
-    for s in specs.iter_mut() {
-        s.class = class;
+}
+
+/// What a scenario fields, before anybody picks anything.
+///
+/// Two slots a ship at `OUT`: the side, and the class index the scenario
+/// authored. The lobby needs this to offer a hull per ship, and it has to be
+/// the AUTHORED roster rather than what the current picks would produce, or
+/// the list would describe itself.
+///
+/// Built by running the scenario and reading the ships out, rather than by
+/// listing the rosters a second time here: a second list is a list that gets
+/// out of step the first time a scenario is retuned, and it would be the one
+/// the lobby believed. The picks are put aside and restored around it for the
+/// same reason, because `skirmish` applies them on the way through.
+///
+/// Returns the number of ships.
+#[no_mangle]
+pub extern "C" fn ft_scenario_roster(scenario: u32) -> u32 {
+    let saved = unsafe { HULL_CHOICE };
+    unsafe {
+        HULL_CHOICE = [[-1; HULL_SLOTS]; 2];
+    }
+    let sim = build_scenario("0000000000000000", scenario, 0b01);
+    unsafe {
+        HULL_CHOICE = saved;
+    }
+    let s = scratch();
+    let n = sim.ships.len();
+    for (i, ship) in sim.ships.iter().enumerate() {
+        let b = OUT + i * 2;
+        if b + 2 > SCRATCH_LEN {
+            return i as u32;
+        }
+        s[b] = ship.side as f32;
+        s[b + 1] = class_index(ship.class) as f32;
+    }
+    n as u32
+}
+
+/// One scenario id to one match. Shared by `ft_match_new` and the roster
+/// query, so the thing the lobby describes is the thing that gets played.
+fn build_scenario(seed: &str, scenario: u32, mask: u8) -> Sim {
+    match scenario {
+        1 => scenario_duel(seed, mask),
+        2 => scenario_convoy(seed, mask),
+        3 => scenario_low_orbit(seed, mask),
+        4 => scenario_binary(seed, mask),
+        5 => scenario_slingshot(seed, mask),
+        6 => scenario_sandbox(seed, mask),
+        _ => scenario_skirmish(seed, mask),
     }
 }
 
@@ -886,16 +978,7 @@ pub extern "C" fn ft_match_new(seed_hi: u32, seed_lo: u32, scenario: u32, human_
     }
     let seed = core::str::from_utf8(&hex).unwrap_or("0000000000000000");
     let mask = (human_sides & 0b11) as u8;
-    let sim = match scenario {
-        1 => scenario_duel(seed, mask),
-        2 => scenario_convoy(seed, mask),
-        3 => scenario_low_orbit(seed, mask),
-        4 => scenario_binary(seed, mask),
-        5 => scenario_slingshot(seed, mask),
-        6 => scenario_sandbox(seed, mask),
-        _ => scenario_skirmish(seed, mask),
-    };
-    let mut sim = sim;
+    let mut sim = build_scenario(seed, scenario, mask);
     apply_designs(&mut sim);
     let n = sim.ships.len();
     unsafe {

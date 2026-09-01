@@ -331,29 +331,41 @@ function start(): void {
   // what it can take and how it flies, and hashes the result. The client's
   // only contribution is measuring its own picture.
   match.clearHulls();
-  const picked = launch.hull as Design | undefined;
-  let flying = '';
-  if (picked) {
-    const r = rasterise(picked);
-    const took = match.setHull(launch.side, classIndexOf(picked.classKey), {
+  // One hull per SHIP, by slot: slot n is the nth ship this side seats, which
+  // is the order the roster reports and the order the core fills. A player
+  // swapping one hull out of a pair is not asking for two of it.
+  const picks = launch.hulls ?? [];
+  const took: Array<Design | null> = [];
+  const refused: string[] = [];
+  picks.forEach((pick, slot) => {
+    took[slot] = null;
+    if (!pick) return;
+    const d = pick.design as Design;
+    const r = rasterise(d);
+    const ok = match.setHull(launch.side, classIndexOf(d.classKey), {
       plateCells: r.plateCells, ext: r.extent, radiusCells: r.radiusCells, fouled: r.fouled,
-    }, partsOf(picked), mountsOf(picked), arcMasks(picked));
+    }, partsOf(d), mountsOf(d), arcMasks(d), slot);
     // The core refuses an illegal hull, and saying so beats spawning the class
     // hull and letting a player wonder why their ship is somebody else's.
-    flying = took ? `in ${launch.hullName ?? 'your design'}`
-      : `${launch.hullName ?? 'that design'} is not legal, flying the class hull`;
-  }
+    if (ok) took[slot] = d;
+    else refused.push(pick.name);
+  });
+  const flownNames = picks.map((p, n) => (took[n] ? p?.name : null)).filter(Boolean);
+  const flying = refused.length
+    ? `${refused.join(', ')} not legal, flying the class hull`
+    : flownNames.length ? `in ${flownNames.join(', ')}`
+    : '';
   match.start(seed, scenario, launch.humanSides);
   // What each ship is flying, so the map draws the hull rather than a stand in
-  // for it: the picked design for the side that picked it, and each class's
+  // for it: the picked design for the slot that picked it, and each class's
   // stock hull for everyone else. Kept rather than handed straight over,
   // because the chips and the schematic draw the same hulls and would
   // otherwise each work out their own answer to "what is this ship".
   hulls.clear();
+  let slot = 0;
   for (const s of match.ships()) {
-    hulls.set(s.id, picked && s.side === launch.side
-      ? picked
-      : stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
+    const own = s.side === launch.side ? took[slot++] : null;
+    hulls.set(s.id, own ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate'));
   }
   view.setDesigns(hulls);
   // Say what was taken out, on the panel that lists it. A design picked in the
@@ -3322,6 +3334,16 @@ designer.onSave(async req => {
     });
   void lobby.refreshLibrary();
   return { designId: saved.designId, name: saved.name, mine: true, owner: saved.owner.name };
+});
+
+// What a level seats, asked of the core so the briefing describes the match
+// that is about to be played rather than a second copy of the rosters. Side 0
+// only, which is the seat practice puts a player in: the list is what YOU are
+// choosing hulls for, and offering a hull for a ship you do not fly would be a
+// control that does nothing.
+lobby.onRoster(scenario => {
+  const id = SCENARIO_BY_NAME[scenario] ?? Scenario.Skirmish;
+  return match.roster(id).filter(r => r.side === 0).map(r => r.cls);
 });
 
 lobby.onOpenDesign(d => {

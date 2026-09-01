@@ -175,21 +175,25 @@ fn a_designed_hull_flies_and_fights_as_itself() {
             s[DERIVE_PARTS + i] = *p as f32;
         }
     }
-    assert_eq!(ft_hull_design(0, 2, 1632, 24, 14, 45, 24.315633, 0, parts.len() as u32), 1);
+    assert_eq!(ft_hull_design(0, 0, 2, 1632, 24, 14, 45, 24.315633, 0, parts.len() as u32), 1);
     // Two plasma up front, which the class does not carry.
-    ft_hull_mount(0, 2, -0.8, 0.2, 1.5, 0);
-    ft_hull_mount(0, 2, 0.8, 0.2, 1.5, 0);
+    ft_hull_mount(0, 0, 2, -0.8, 0.2, 1.5, 0);
+    ft_hull_mount(0, 0, 2, 0.8, 0.2, 1.5, 0);
 
     ft_match_new(0xdead_beef, 0xcafe_0002, 0, 0b01);
     let flown = read();
-    for (side, hull, marines, radius, mounts) in flown.iter().copied() {
-        if side == 0 {
-            assert!((hull - 194.848).abs() < 0.1, "a designed hull carries its own hull: {hull}");
-            assert_eq!(marines, 40, "and its own marines");
-            assert!((radius - 2.6595).abs() < 0.01, "and its own radius: {radius}");
-            assert_eq!(mounts, 2, "and the guns it was built with");
-        }
-    }
+    // Slot 0, so the FIRST hull this side fields and no other. A design is a
+    // ship, not a uniform: swapping one out of a pair must leave the one
+    // beside it exactly as the scenario authored it.
+    let ours: Vec<_> = flown.iter().filter(|(side, ..)| *side == 0).copied().collect();
+    let (_, hull, marines, radius, mounts) = ours[0];
+    assert!((hull - 194.848).abs() < 0.1, "a designed hull carries its own hull: {hull}");
+    assert_eq!(marines, 40, "and its own marines");
+    assert!((radius - 2.6595).abs() < 0.01, "and its own radius: {radius}");
+    assert_eq!(mounts, 2, "and the guns it was built with");
+    let stock_ours: Vec<_> = stock.iter().filter(|(side, ..)| *side == 0).copied().collect();
+    assert!(ours.len() >= 2, "the skirmish seats two, or the next line proves nothing");
+    assert_eq!(ours[1], stock_ours[1], "the ship beside it is untouched");
     assert_ne!(flown[0].1, mine.1, "the design changed the ship it was applied to");
 
     // The other side is untouched, and clearing puts everything back.
@@ -227,7 +231,50 @@ fn an_illegal_hull_is_not_fielded() {
         let s = unsafe { core::slice::from_raw_parts_mut(ft_scratch_ptr(), 16384) };
         s[DERIVE_PARTS] = 16.0;
     }
-    assert_eq!(ft_hull_design(0, 0, 10, 4, 4, 8, 5.0, 0, 1), 0, "an illegal hull is refused");
+    assert_eq!(ft_hull_design(0, 0, 0, 10, 4, 4, 8, 5.0, 0, 1), 0, "an illegal hull is refused");
     ft_match_new(0xdead_beef, 0xcafe_0003, 0, 0b01);
     assert_eq!(hulls(), stock, "and the match is flown in the authored hulls");
+}
+
+#[test]
+fn a_scenario_says_what_it_fields_before_anybody_picks() {
+    // The lobby offers a hull per SHIP, so it has to know which ships a
+    // scenario seats before it starts one. Asked of the core rather than
+    // listed a second time in the client: a second list is a list that goes
+    // out of step the first time a scenario is retuned, and it would be the
+    // one the player was reading.
+    use sim_core::ffi::{ft_hull_clear, ft_hull_choice, ft_scenario_roster, ft_scratch_ptr};
+    let _lock = alone();
+    ft_hull_clear(0);
+    ft_hull_clear(1);
+
+    let read = |scenario: u32| {
+        let n = ft_scenario_roster(scenario) as usize;
+        let s = unsafe { core::slice::from_raw_parts(ft_scratch_ptr(), 16384) };
+        (0..n).map(|i| (s[64 + i * 2] as u32, s[64 + i * 2 + 1] as u32)).collect::<Vec<_>>()
+    };
+
+    // The duel is one a side; the skirmish is two.
+    let duel = read(1);
+    assert_eq!(duel.len(), 2, "the duel seats one each");
+    assert_eq!(duel.iter().filter(|(side, _)| *side == 0).count(), 1);
+    let skirmish = read(0);
+    assert_eq!(skirmish.iter().filter(|(side, _)| *side == 0).count(), 2);
+
+    // And it reports what the SCENARIO authored, not what the current picks
+    // would produce. A roster that described the picks would describe itself,
+    // and the list a player is choosing from would already contain the choice.
+    ft_hull_choice(0, 0, 4);
+    assert_eq!(read(1), duel, "a pick must not change what the roster reports");
+    // The pick still works after the query, which is the other half: putting
+    // the picks aside has to put them back.
+    use sim_core::ffi::{ft_match_new, ft_read_ships, SHIP_STRIDE};
+    ft_match_new(0xdead_beef, 0xcafe_0007, 1, 0b01);
+    let n = ft_read_ships() as usize;
+    let s = unsafe { core::slice::from_raw_parts(ft_scratch_ptr(), 16384) };
+    let mine = (0..n)
+        .map(|i| (s[64 + i * SHIP_STRIDE + 3] as u32, s[64 + i * SHIP_STRIDE + 1] as u32))
+        .find(|(side, _)| *side == 0);
+    assert_eq!(mine.map(|(_, cls)| cls), Some(4), "the pick survived the roster query");
+    ft_hull_clear(0);
 }

@@ -57,6 +57,8 @@ else ok('the lobby is /');
 // ------------------------------------------------------------- a new game --
 
 await page.click('#bPractice');
+await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+await page.click('#briefGo');
 await page.waitForFunction(
   () => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
 await page.waitForTimeout(1500);
@@ -134,6 +136,119 @@ if (!slot.designId) {
   else if (open.slot.designId !== slot.designId) {
     fail(`/ship/${slot.designId} opened design ${open.slot.designId}`);
   } else ok(`a design has an address that reloads into it: /ship/${slot.designId}`);
+}
+
+// ------------------------------------------------------- swapping a ship --
+
+/**
+ * The briefing: one card per ship the level seats, and a hull per card.
+ *
+ * The point of it is that a swap is per SHIP. One chooser above the levels
+ * could only ever say "every hull I field is this one", which is not what
+ * swapping a ship out means, and the check that matters is the one after the
+ * launch: the ship you swapped is the design, and the ship beside it is still
+ * what the level authored.
+ */
+await boot('/');
+{
+  const roster = async (level) => {
+    await page.locator('#practiceList button', { hasText: level }).first().click();
+    await page.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+    await page.waitForTimeout(400);
+    return page.evaluate(() =>
+      [...document.querySelectorAll('#briefShips .briefRow .t')].map(e => e.textContent));
+  };
+  const duel = await roster('Duel');
+  await page.click('#briefClose');
+  await page.waitForTimeout(250);
+  const skirmish = await roster('Skirmish');
+  if (duel.length !== 1) fail(`the duel briefing lists ${duel.length} ships`);
+  else if (skirmish.length !== 2) fail(`the skirmish briefing lists ${skirmish.length} ships`);
+  else ok(`a level says what it seats: duel ${duel.length}, skirmish ${skirmish.length}`);
+
+  // Swap the SECOND ship only, if there is a design to swap in.
+  const rows = page.locator('#briefShips .briefRow');
+  const opts = await rows.nth(1).locator('.picks button .n').allTextContents();
+  const swapTo = opts.find(t => t.startsWith('Route '));
+  if (!swapTo) {
+    fail(`no saved design offered in the briefing: ${opts.join(', ')}`);
+  } else {
+    await rows.nth(1).locator('.picks button', { hasText: swapTo }).click();
+    await page.waitForTimeout(300);
+    await page.click('#briefGo');
+    await page.waitForFunction(
+      () => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 20000 });
+    await page.waitForTimeout(2000);
+    const flown = await page.evaluate(() => {
+      const side = window.ftDebug.side();
+      return window.ftDebug.ships().filter(s => s.side === side).map(s => s.hull);
+    });
+    if (flown.length !== 2) fail(`fielded ${flown.length} hulls for a two ship level`);
+    else if (flown[0] === flown[1]) {
+      fail(`swapped one ship and both came out at ${flown[0]} hull points`);
+    } else ok(`swapping one ship changes that ship only: ${flown[0]} and ${flown[1]} hull points`);
+  }
+}
+
+// --------------------------------------------------- the briefing, on a phone --
+
+/**
+ * The briefing is a new panel, so it is checked the way every panel here is:
+ * at both phone sizes, for a page that does not scroll sideways and for taps
+ * that ARRIVE. A modal is the easy way to draw a control nothing can press,
+ * because it sits over a lobby that is still there underneath it.
+ */
+for (const size of [{ w: 390, h: 844, name: 'phone 390x844' },
+                    { w: 390, h: 560, name: 'phone landscape 390x560' }]) {
+  const pctx = await browser.newContext({
+    viewport: { width: size.w, height: size.h }, hasTouch: true, isMobile: true,
+  });
+  const p2 = await pctx.newPage();
+  await p2.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
+  await p2.waitForSelector('#practiceList button', { timeout: 20000 });
+  await p2.locator('#practiceList button', { hasText: 'Skirmish' }).first().click();
+  await p2.waitForSelector('#briefing:not(.hidden)', { timeout: 10000 });
+  await p2.waitForTimeout(400);
+
+  const wide = await p2.evaluate(() =>
+    document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  if (wide > 1) fail(`${size.name}: the briefing scrolls ${wide}px sideways`);
+  else ok(`${size.name}: the briefing fits, no horizontal scroll`);
+
+  // Launch and Close have to be there without scrolling: a roster of a dozen
+  // hulls is taller than the screen, and a Launch button below all of them is
+  // a button a player has to go looking for. The picks may be scrolled to,
+  // which is what the roster area is for; what is checked of them is that the
+  // tap ARRIVES once they are on screen.
+  const blocked = await p2.evaluate(() => {
+    const bad = [];
+    const hits = (el) => {
+      const r = el.getBoundingClientRect();
+      const name = el.id || el.textContent.trim().slice(0, 20);
+      if (r.width < 1 || r.height < 1) return 'not drawn: ' + name;
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) return 'offscreen: ' + name;
+      let hit = document.elementFromPoint(x, y);
+      while (hit) { if (hit === el) return null; hit = hit.parentElement; }
+      return 'covered: ' + name;
+    };
+    for (const id of ['briefGo', 'briefClose']) {
+      const why = hits(document.getElementById(id));
+      if (why) bad.push(why);
+    }
+    const picks = [...document.querySelectorAll('#briefShips .picks button')];
+    for (const el of picks) {
+      el.scrollIntoView({ block: 'center' });
+      const why = hits(el);
+      if (why) bad.push(why);
+    }
+    return { bad, n: picks.length + 2 };
+  });
+  if (blocked.bad.length) {
+    fail(`${size.name}: ${blocked.bad.length} briefing control(s) do not take a tap: `
+      + blocked.bad.join(', '));
+  } else ok(`${size.name}: all ${blocked.n} briefing controls take a tap`);
+  await pctx.close();
 }
 
 // ----------------------------------------------------------------- a room --

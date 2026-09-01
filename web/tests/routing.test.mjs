@@ -106,6 +106,28 @@ test('turns are recorded by index, so a rewind does not stack two histories', ()
   assert.equal(g.turns[1][0].mode, 3);
 });
 
+test('a game saved when a hull was per side comes back as a hull per ship', () => {
+  // The shape changed under games that were already on somebody's shelf. Old
+  // `hull` meant every ship this side fields, so it has to come back filling
+  // the slots: a resume replays its orders, and a fleet one ship short of what
+  // those orders were given to plays a different match that looks the same.
+  localStorage.setItem('ft.games.v1', JSON.stringify({
+    old1: {
+      id: 'old1', name: 'Skirmish, in Bulwark', seed: 'c', scenario: 'skirmish',
+      humanSides: 1, side: 0, turns: [], startedMs: 1, updatedMs: 1, seq: 99,
+      hull: { classKey: 'terran_frigate' }, hullName: 'Bulwark',
+    },
+  }));
+  const g = saves.load('old1');
+  assert.ok(g.hulls, 'an old save should read as hulls');
+  assert.equal(g.hulls.length, 4);
+  for (const h of g.hulls) {
+    assert.equal(h.name, 'Bulwark');
+    assert.deepEqual(h.design, { classKey: 'terran_frigate' });
+  }
+  saves.remove('old1');
+});
+
 test('an outcome sticks, and a forgotten game is gone', () => {
   saves.create({ id: 'g3', name: 'X', seed: 'b', scenario: 'skirmish', humanSides: 1, side: 0 });
   saves.finish('g3', 'won');
