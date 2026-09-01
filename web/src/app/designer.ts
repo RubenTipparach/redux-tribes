@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import { bindOrbit, frameBox } from './orbitcam.js';
+import * as drafts from './drafts.js';
 import { AT_REST, blockedPct, blockedShell, easeAngle, turretGoal } from './turret.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
@@ -96,6 +97,19 @@ export class Designer {
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
   #tab: 'parts' | 'armour' | 'stats' = 'parts';
+  /**
+   * Which draft slot this hull's unsaved work belongs in, which is the same
+   * string the URL carries: a design id for a saved hull, a class key for one
+   * that has never been saved. One name for "what am I editing" rather than
+   * two that can disagree.
+   */
+  #draftKey = 'terran_frigate';
+  /** Coalesces the writes. A plate stroke fires per cell, and serialising a
+   *  whole hull per cell would make drawing feel like treacle. */
+  #draftTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set while a draft is being put back, so restoring does not immediately
+   *  re-save what it just read. */
+  #restoring = false;
 
   // three
   #renderer: THREE.WebGLRenderer | null = null;
@@ -206,12 +220,72 @@ export class Designer {
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
     };
     this.#slot = slot;
+    // The draft slot for a saved hull is its own id, which is also what the
+    // URL carries. One name for what is being edited.
+    this.#draftKey = slot.designId ?? d.classKey;
     this.#syncDrawSets();
     this.#socket = null;
     this.#note = null;
     this.#said('');
+    this.#syncSaveButton();
     if (this.#renderer) this.#refresh();
+    // After the load, so what comes back sits over the stored version rather
+    // than under it: the draft is the newer work.
+    this.#restoreDraft();
   }
+
+  /**
+   * A blank slate: a stock hull, owned by nobody yet.
+   *
+   * This is what `/ship` with no id MEANS, and until it existed the route
+   * could not say it. The designer simply showed whatever was already in it,
+   * so closing a saved design and pressing Shipyard again put you back in that
+   * design at an address claiming a new one, and Save then quietly updated the
+   * row you thought you had left. A route that cannot express "nothing loaded"
+   * is a route that lies the moment something has been loaded.
+   *
+   * Idempotent on purpose: `showRoute` re-enters `/ship` on Back and on close,
+   * and wiping a hull somebody is drawing because a route fired twice would be
+   * worse than the bug this fixes.
+   */
+  newDesign(classKey?: string): void {
+    const want = classKey ?? this.#design.classKey;
+    // Idempotent on the hull it is already showing. `showRoute` re-enters
+    // `/ship` on Back and on close, and re-seeding a stock hull under somebody
+    // who is drawing on it would be worse than the bug this fixes.
+    if (!this.#slot.designId && !this.#slot.name && this.#design.classKey === want
+        && this.#draftKey === want) return;
+    // Anything in progress on the way out is kept, not dropped: switching
+    // class is browsing, not discarding.
+    this.#flushDraft();
+    this.#design = stockFor(want);
+    this.#slot = { designId: null, name: '', mine: false };
+    this.#draftKey = want;
+    this.#syncDrawSets();
+    this.#socket = null;
+    this.#note = null;
+    this.#said('');
+    this.#syncSaveButton();
+    const field = $<HTMLInputElement>('dzSaveName');
+    if (field) field.value = '';
+    if (this.#renderer) this.#refresh();
+    this.#restoreDraft();
+  }
+
+  /** Throw this hull's unsaved work away, once the real thing exists or the
+   *  person asked for a clean slate. */
+  clearDraft(key?: string): void {
+    if (this.#draftTimer) { clearTimeout(this.#draftTimer); this.#draftTimer = null; }
+    drafts.forget(key ?? this.#draftKey);
+  }
+
+  /** Move the draft slot, for when a hull acquires an id by being saved. */
+  setDraftKey(key: string): void { this.#draftKey = key; }
+
+  /** Told when an unsaved hull's class changes, so whoever owns the address
+   *  can point it at that stock ship. The designer does not own the router. */
+  #onPickClass: ((classKey: string) => void) | null = null;
+  onPickClass(fn: (classKey: string) => void): void { this.#onPickClass = fn; }
 
   get visible(): boolean { return !$('designer').classList.contains('hidden'); }
 
@@ -224,6 +298,10 @@ export class Designer {
   }
 
   hide(): void {
+    // The debounce is a timer on a page that is about to stop drawing, so the
+    // pending write happens now. Leaving on Back was one of the two ways an
+    // hour of work used to vanish.
+    this.#flushDraft();
     $('designer').classList.add('hidden');
     if (this.#raf) { cancelAnimationFrame(this.#raf); this.#raf = 0; }
   }
@@ -921,7 +999,74 @@ export class Designer {
     this.#renderKey();
     this.#renderStats();
     this.#renderHeader();
+    // Every mutation in the editor ends here, so this is the one place a draft
+    // needs writing from. Hooking each handler instead would mean remembering
+    // to hook the next one, and the one that got forgotten would be the one
+    // that lost an hour of work.
+    this.#keepDraft();
   }
+
+  /**
+   * Write the unsaved hull to its draft slot, coalesced.
+   *
+   * Debounced rather than immediate because a plate stroke calls `#refresh`
+   * per cell, and serialising a whole design per cell turns drawing to
+   * treacle. Half a second is long enough to swallow a stroke and short enough
+   * that a tab closed in frustration still has the work in it.
+   */
+  #keepDraft(): void {
+    if (this.#restoring) return;
+    if (this.#draftTimer) clearTimeout(this.#draftTimer);
+    this.#draftTimer = setTimeout(() => {
+      this.#draftTimer = null;
+      drafts.remember(
+        this.#draftKey, this.#design,
+        $<HTMLInputElement>('dzSaveName')?.value ?? '',
+        this.#slot.name || 'a new hull',
+      );
+    }, 500);
+  }
+
+  /** Flush a pending draft write now. Called on the way out, because the
+   *  debounce is measured in a timer the page is about to stop running. */
+  #flushDraft(): void {
+    if (!this.#draftTimer) return;
+    clearTimeout(this.#draftTimer);
+    this.#draftTimer = null;
+    drafts.remember(
+      this.#draftKey, this.#design,
+      $<HTMLInputElement>('dzSaveName')?.value ?? '',
+      this.#slot.name || 'a new hull',
+    );
+  }
+
+  /**
+   * Put a draft back over the hull that was just loaded, if there is one.
+   *
+   * The draft WINS over the stored version, because it is the newer work and
+   * the stored version is a click away in the library. Silence would be the
+   * wrong call either way, so it says which it did.
+   */
+  #restoreDraft(): boolean {
+    const d = drafts.recall(this.#draftKey);
+    if (!d) return false;
+    this.#restoring = true;
+    try {
+      this.#design = d.design as Design;
+      this.#syncDrawSets();
+      this.#socket = null;
+      if (this.#renderer) this.#refresh();
+      const field = $<HTMLInputElement>('dzSaveName');
+      if (field && d.name) field.value = d.name;
+      this.#said('unsaved changes restored');
+    } finally {
+      this.#restoring = false;
+    }
+    return true;
+  }
+
+  /** Which hull's unsaved work is on screen, for the harness to read. */
+  get draftKey(): string { return this.#draftKey; }
 
   #renderHeader(): void {
     const d = this.#derived;
@@ -945,6 +1090,15 @@ export class Designer {
       // less would leave a Terran's gun rings on a hull that has none.
       b.onclick = () => {
         if (f.classKey === this.#design.classKey) return;
+        // On an unsaved hull, picking a class is picking a DIFFERENT stock
+        // ship, and that ship has an address. Say so, and let the route do the
+        // seeding: one path in, so the class on screen and the class in the
+        // URL cannot drift apart. On a SAVED design it is a change to that
+        // design instead, so the address stays where it is.
+        if (!this.#slot.designId && this.#onPickClass) {
+          this.#onPickClass(f.classKey);
+          return;
+        }
         this.#design = stockFor(f.classKey);
         this.#socket = null;
         this.#note = null;
@@ -1908,6 +2062,9 @@ export class Designer {
     return {
       classKey: this.#design.classKey,
       parts: this.#design.parts.length,
+      // Which hull's unsaved work is on screen. The cell counts a harness
+      // compares across a reload are already here as `drawn` and `cutCells`.
+      draftKey: this.#draftKey,
       socket: this.#socket,
       derived: this.#derived,
       stockCount: STOCK.length,
