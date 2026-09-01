@@ -114,12 +114,6 @@ const float NEB_GAIN = 0.55;
 const vec2  REMAP_IN  = vec2(0.41, 2.24);
 const vec2  REMAP_OUT = vec2(0.0, 1.84);
 
-// StarDensity 1000 over the sphere, and the mask that keeps all but the
-// brightest cells dark. A density of 1000 cells across a direction vector is
-// the cell size below rather than a count, which is what the Voronoi node did.
-const float STAR_DENSITY = 42.0;
-const float STAR_MASK    = 2.0;
-
 float hash13(vec3 p) {
   p = fract(p * 0.1031);
   p += dot(p, p.yzx + 33.33);
@@ -190,26 +184,6 @@ float fbm(vec3 p, int octaves, float freq, float amp) {
   return norm > 0.0 ? sum / norm : 0.0;
 }
 
-/** Distance to the nearest Voronoi feature point. Stars are the cells whose
- *  centre a ray very nearly passes through, which is why almost all of them
- *  are dark and a few are points. */
-float voronoi(vec3 p) {
-  vec3 i = floor(p);
-  vec3 f = p - i;
-  float best = 1.0;
-  for (int x = -1; x <= 1; x++) {
-    for (int y = -1; y <= 1; y++) {
-      for (int z = -1; z <= 1; z++) {
-        vec3 g = vec3(float(x), float(y), float(z));
-        vec3 o = hash33(i + g);
-        float d = length(g + o - f);
-        best = min(best, d);
-      }
-    }
-  }
-  return best;
-}
-
 float remap(float v, vec2 inRange, vec2 outRange) {
   float t = (v - inRange.x) / max(1e-5, inRange.y - inRange.x);
   return outRange.x + clamp(t, 0.0, 1.0) * (outRange.y - outRange.x);
@@ -243,19 +217,16 @@ void main() {
   // original reading as one colour with holes in it.
   neb += colorA * 0.22 * smoothstep(0.72, 1.0, t2) * density * NEB_GAIN;
 
-  // Stars. The mask keeps all but the near centres black, and the small
-  // detail term stops the field looking like a regular lattice.
-  float v = voronoi(p * STAR_DENSITY);
-  float star = pow(clamp(1.0 - v, 0.0, 1.0), 24.0) * STAR_MASK;
-  float twinkleSize = 0.6 + 0.8 * hash13(floor(p * STAR_DENSITY));
-  star *= twinkleSize;
-
-  // A few stars are much brighter than the rest, which is what gives a sky
-  // depth: an even field reads as noise.
-  float bright = smoothstep(0.985, 1.0, hash13(floor(p * STAR_DENSITY) + 5.0));
-  vec3 starCol = mix(vec3(0.75, 0.82, 1.0), vec3(1.0, 0.92, 0.78), hash13(floor(p * STAR_DENSITY) + 9.0));
-
-  vec3 col = neb + starCol * star * (1.0 + bright * 6.0);
+  // NO STARS HERE. They used to be a Voronoi lookup in this shader, and
+  // baking them was the mistake: a cube face is 512 texels across 90 degrees,
+  // so at a 50 degree field of view every texel is stretched over 3.2 screen
+  // pixels and a one texel star arrives as a three pixel smudge. Mipmapping
+  // made it worse by averaging them away outright. A nebula is low frequency
+  // and survives that; a star is a POINT and no texture survives it.
+  //
+  // They are geometry now, in starfield() below, at the same Voronoi feature
+  // points this shader used to test rays against.
+  vec3 col = neb;
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -410,4 +381,175 @@ export function bakeSky(
   mat.dispose();
 
   return target.texture;
+}
+
+// ---------------------------------------------------------------- stars --
+
+/**
+ * The star field, as GEOMETRY rather than as pixels in the sky texture.
+ *
+ * This was a Voronoi lookup inside the baked shader, and baking it was the
+ * mistake. A cube face is 512 texels across 90 degrees; at a 50 degree field
+ * of view on a 1280 wide canvas, every texel is stretched over 3.24 screen
+ * pixels, so a one texel star arrived as a three pixel smudge and `LinearFilter`
+ * smeared it further. `generateMipmaps` finished the job by averaging stars
+ * out of existence in the lower mips.
+ *
+ * Raising the resolution does not fix it: 1024 faces are still 1.62x magnified
+ * and cost 25 MB, and only 2048 is genuinely sharp, at 101 MB of VRAM on a
+ * renderer whose floor is a Raspberry Pi 5. The problem was never the budget,
+ * it was baking two things with opposite frequency content into one texture. A
+ * nebula is smooth and survives resampling; a star is a POINT and no texture
+ * survives one under magnification.
+ *
+ * So the nebula stays baked and the stars become points: 7238 of them in one
+ * draw call and about 200 KB, always exactly as crisp as the display, because
+ * a point is rasterised at its real size rather than resampled from a grid.
+ *
+ * **They are the same stars.** These are the Voronoi FEATURE POINTS the shader
+ * used to measure rays against: the cell centres, jittered by the same hash,
+ * at the same lattice density. Drawing the centres directly is what the
+ * distance test was approximating all along.
+ *
+ * Being geometry also gives back the shimmer that baking gave up
+ * (`ShimmerSpeed` in SHADER_CATALOG 3.4), because moving a point costs a
+ * uniform rather than a re-bake.
+ */
+
+/** The lattice density the feature points are drawn from. 24 gives about
+ *  4*pi*24^2 = 7238 cells on the shell, which is a sky with depth in it
+ *  without being a wall of white. */
+const STAR_LATTICE = 24;
+
+/** `hash33` from the shader, in JS, so the field is the same one the sky was
+ *  drawing and a seed still reshapes it. Exact agreement with GLSL is not
+ *  needed and not attempted: this decides where a dot goes, and nothing that
+ *  crosses the boundary. */
+function hash33(x: number, y: number, z: number): [number, number, number] {
+  const d1 = x * 127.1 + y * 311.7 + z * 74.7;
+  const d2 = x * 269.5 + y * 183.3 + z * 246.1;
+  const d3 = x * 113.5 + y * 271.9 + z * 124.6;
+  const f = (v: number) => {
+    const r = Math.sin(v) * 43758.5453123;
+    return r - Math.floor(r);
+  };
+  return [f(d1), f(d2), f(d3)];
+}
+
+const VERT_STARS = /* glsl */`
+attribute float size;
+attribute float phase;
+attribute vec3 tint;
+uniform float time;
+uniform float pixelRatio;
+varying vec3 vTint;
+varying float vGlow;
+void main() {
+  vTint = tint;
+  // The archive's shimmer, at last: baking a sky meant it could never move,
+  // and a point can. Slow and shallow, because a sky that pulses reads as a
+  // fault rather than as space.
+  float tw = 0.82 + 0.18 * sin(time * 0.9 + phase);
+  vGlow = tw;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  // No size attenuation. A star is at infinity, so it is a fixed number of
+  // PIXELS however far the camera moves, which is also what keeps it crisp.
+  gl_PointSize = size * tw * pixelRatio;
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const FRAG_STARS = /* glsl */`
+precision highp float;
+varying vec3 vTint;
+varying float vGlow;
+void main() {
+  // A round dot with a soft edge. A square point is obvious at three pixels,
+  // which is exactly the size the brightest stars are.
+  vec2 d = gl_PointCoord - vec2(0.5);
+  float r = dot(d, d);
+  if (r > 0.25) discard;
+  float a = smoothstep(0.25, 0.02, r);
+  gl_FragColor = vec4(vTint * vGlow, a);
+}
+`;
+
+/**
+ * Build the star field for one sky.
+ *
+ * `radius` puts them outside everything else in the scene and inside the
+ * camera's far plane, so they read as infinitely distant without being
+ * clipped.
+ */
+export function starfield(preset: SkyPreset, radius = 4500): THREE.Points {
+  const pos: number[] = [];
+  const tint: number[] = [];
+  const size: number[] = [];
+  const phase: number[] = [];
+
+  const D = STAR_LATTICE;
+  const seed = preset.seed;
+  const lo = D - 0.5;
+  const hi = D + 0.5;
+  // Walk the lattice shell that the unit sphere passes through, and take each
+  // cell's jittered feature point. This is the Voronoi field the shader had.
+  for (let i = -D - 1; i <= D + 1; i++) {
+    for (let j = -D - 1; j <= D + 1; j++) {
+      for (let k = -D - 1; k <= D + 1; k++) {
+        const h = hash33(i + seed[0], j + seed[1], k + seed[2]);
+        const fx = i + h[0], fy = j + h[1], fz = k + h[2];
+        const len = Math.sqrt(fx * fx + fy * fy + fz * fz);
+        // One shell only. Every radius would give a solid ball of stars and
+        // the same direction many times over.
+        if (len < lo || len > hi) continue;
+        pos.push((fx / len) * radius, (fy / len) * radius, (fz / len) * radius);
+
+        // Brightness is heavily skewed: a handful of bright ones over a dust
+        // of faint ones is what gives a sky depth. An even field reads as
+        // noise, which is what the first cut of this looked like.
+        const b = hash33(i * 3.1 + 5, j * 3.1 + 5, k * 3.1 + 5)[0];
+        const bright = Math.pow(b, 7);
+        size.push(1.0 + bright * 2.6);
+
+        // Cool white through to warm, the colours of real stars.
+        const c = hash33(i * 1.7 + 9, j * 1.7 + 9, k * 1.7 + 9)[0];
+        const warm = 0.45 + 0.55 * bright;
+        tint.push(
+          (0.74 + 0.26 * c) * warm + (1 - warm) * 0.30,
+          (0.80 + 0.18 * c) * warm + (1 - warm) * 0.34,
+          (1.00 - 0.16 * c) * warm + (1 - warm) * 0.42,
+        );
+        phase.push(hash33(i + 31, j + 31, k + 31)[0] * 6.283);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('tint', new THREE.Float32BufferAttribute(tint, 3));
+  geo.setAttribute('size', new THREE.Float32BufferAttribute(size, 1));
+  geo.setAttribute('phase', new THREE.Float32BufferAttribute(phase, 1));
+
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: VERT_STARS,
+    fragmentShader: FRAG_STARS,
+    uniforms: {
+      time: { value: 0 },
+      pixelRatio: { value: Math.min(devicePixelRatio || 1, 2) },
+    },
+    transparent: true,
+    depthWrite: false,
+    // Drawn before everything and not depth tested, so the scenery in front of
+    // them covers them by drawing later. The planets do not write depth, so a
+    // depth test would let stars through them.
+    depthTest: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  points.renderOrder = -20;
+  points.userData.pickable = false;
+  points.userData.stars = pos.length / 3;
+  return points;
 }
