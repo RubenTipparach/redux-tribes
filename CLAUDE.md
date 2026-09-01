@@ -415,6 +415,30 @@ Extensibility checks that have paid off: could a native Rust client use this
 unchanged? Could a third faction be added without touching the resolver? Could a
 new weapon kind be added by adding data and one match arm?
 
+## Dark gradients band, and the fix is two things
+
+A nebula and a planet terminator are both very slow gradients across a very
+dark range, which is exactly what an 8 bit pipeline cannot carry: the value
+crawls, the output byte holds, and where it finally tips there is a hard edge.
+Magnify that (the sky cubemap is blown up about four times to fill the
+viewport) and each step is a contour forty pixels wide.
+
+Two separate fixes, and both are needed:
+
+- **Storage.** `bakeSky` renders to a `HalfFloatType` cubemap, so no step
+  exists in the texture to magnify. 12 MB a sky against 6, once, at launch.
+- **Output.** The canvas is still eight bits. The sky is drawn by `skyDome`,
+  our own mesh, which dithers with triangular PDF noise below one output step,
+  hashed off the pixel so a still sky stays still. Not three's background pass,
+  which does not dither and offers no hook; not a post pass, because `post.ts`
+  can take the composer away entirely and that would leave the sky banding only
+  on the machines least able to afford a second look at it. Lit meshes get
+  three's own `dithering` property instead, which is the same idea one line
+  long.
+
+Measured on a wide skirmish shot: the longest flat run of luma fell from 128 px
+to 90 and the 99th percentile from 44 to 35.
+
 ## Performance: measure, then decide
 
 Budget everything (GUIDELINES 7). The web build is the constraint, and a
@@ -712,6 +736,20 @@ They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
 
+## A lookup that falls back cannot find its own typos
+
+`skyFor` and `backdropFor` answer an unknown scenario with a default rather
+than throwing. That is right at runtime, where a level with no entry should
+still be playable, and lethal at authoring time: `SKIES` and `BACKDROPS` were
+keyed `low_orbit` against a scenario called `low-orbit`, so the one level whose
+entire premise is a heavy body below you matched nothing, wore the skirmish sky
+and had no body below it. Nothing failed. It just looked finished.
+
+`tests/scenery.test.mjs` closes it in both directions: every practice level
+must have a sky and a backdrop of its own, and no table may carry a key the
+menu never asks for. The second half is what catches a rename that only
+happened on one side.
+
 ## Load every asset from the SITE ROOT
 
 The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
@@ -731,6 +769,22 @@ So: a leading slash, and PROVE it rather than asserting it.
 finish's file name and whether that file has pixels, and the playthrough fails
 if a bound finish has none. Putting `./` back flips `loaded` to false on every
 hull, which is how the guard was checked.
+
+## A class wears its own surface
+
+Four frigates in the same riveted plate are four frigates a player tells apart
+by colour alone, and colour is already saying whose side they are on. So each
+stock design carries a finish and its two PBR numbers, and each pick is the
+class's own description read back: Terran riveted (a working navy's standard),
+Karisen corrugated (it plates all four long faces and the silhouette is
+stacked; corrugation gives a hull a direction), Rogue battered and barely
+metallic (least hull in the game, a third of its mass in boarding gear),
+Benefactor ablative hex, tight and glossy (the one hull that looks engineered
+rather than fabricated), the freighter on grip deck with almost no specular.
+
+`stockFor` copies them across. It rebuilds a design field by field, so a new
+field that is not listed there goes missing between the table and the map
+silently, exactly as if it had never been set.
 
 ## Textures: Material Maker is the tool, the script is a stopgap
 

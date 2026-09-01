@@ -1724,8 +1724,13 @@ export class View {
     // metalness renders black.
     const mesh = new THREE.Mesh(hull.geo, new THREE.MeshStandardMaterial({
       vertexColors: true,
-      metalness: HULL_METAL,
-      roughness: HULL_ROUGH,
+      // The DESIGN's, falling back to the default. These are the two numbers
+      // that separate painted steel from bare alloy, and they belong to the
+      // hull rather than to the map: a Benefactor is glossy and a Rogue is
+      // not, and reading a constant here would have made them the same ship
+      // in two colours.
+      metalness: design.metal ?? HULL_METAL,
+      roughness: design.rough ?? HULL_ROUGH,
       normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
       // A dark hull under one key light is another slow gradient in a narrow
       // range, and it contours on an eight bit canvas for the same reason the

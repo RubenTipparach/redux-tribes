@@ -1805,10 +1805,36 @@ function detailFor(id: string, s: CoreStats, r: Raster, frame: FrameDef): string
 
 /** The ship a player is handed, at about 85 percent of budget so their first
  *  action is not turning the editor red. */
+/**
+ * The surface a class flies out of the yard wearing.
+ *
+ * A finish is a fact about who built the ship, so the stock hulls wear one
+ * rather than all sharing the default: four frigates in the same riveted plate
+ * are four frigates a player tells apart by colour alone, and colour is
+ * already doing the job of saying whose side they are on.
+ *
+ * Each pick is the class's own description, read back:
+ *
+ * - Terran flies the heaviest sustained battery in the game off a plain hull.
+ *   Riveted plate, faintly metallic, is a working navy's standard and the
+ *   thing every other finish reads as a departure from.
+ * - Karisen plates all four long faces rather than running a belt, and the
+ *   silhouette is stacked. Corrugation is structural and it gives a hull a
+ *   DIRECTION, which is what that stack is.
+ * - Rogue has the least hull in the game and a third of its mass in boarding
+ *   gear. It is battered because it has been, and it is the roughest and least
+ *   metallic surface here: nothing about that ship is new.
+ * - Benefactor breaks belts with pen 2 cannon and is the most advanced hull on
+ *   the field. Ablative hex, tight and glossy, is the one finish that looks
+ *   engineered rather than fabricated.
+ * - The freighter is a hold with a skin on it and people walking about outside.
+ *   Grip deck, and almost no specular at all: nothing on it is polished.
+ */
 function stock(classKey: string, parts: Placement[], sections: Partial<Sections>,
-  faction: string, paint: number): Design {
+  faction: string, paint: number,
+  finish: string, metal: number, rough: number): Design {
   return { classKey, parts, sections: { ...zeroSections(), ...sections },
-    armour: 'wrapped', faction, paint };
+    armour: 'wrapped', faction, paint, finish, metal, rough };
 }
 
 const P = (socket: string, module: string): Placement => ({ socket, module });
@@ -1828,7 +1854,7 @@ export const STOCK: readonly Design[] = [
     P('b3', 'UTL-AIR'), P('b4', 'UTL-AIR'), P('b6', 'UTL-AIR'), P('b7', 'UTL-AIR'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
-    'terran', 0x0095E9),
+    'terran', 0x0095E9, 'plate', 0.30, 0.50),
 
   // Three bells in a row and a ventral rack. Plate on all four long faces
   // rather than a belt, which is the stacked silhouette read from the inside.
@@ -1842,7 +1868,7 @@ export const STOCK: readonly Design[] = [
     P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
-    'karisen', 0xFA6A0A),
+    'karisen', 0xFA6A0A, 'ribbed', 0.35, 0.45),
 
   // Its boarding gear is roughly a third of its mass, which is why it is short,
   // why it has the least hull, and why it turns better than anything else.
@@ -1862,7 +1888,7 @@ export const STOCK: readonly Design[] = [
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'),
     P('c3', 'UTL-CLM'), P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'),
   ], { beltFwd: 1, beltMid: 1, beltAft: 1, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
-    'rogue', 0x494182),
+    'rogue', 0x494182, 'battered', 0.18, 0.72),
 
   // One heavy bell does the pushing but caps top speed at 7.0, so the light
   // nozzle beside it exists purely to raise the ceiling. Two cannon at pen 2
@@ -1877,7 +1903,7 @@ export const STOCK: readonly Design[] = [
     P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('a0', 'UTL-AIR'), P('a1', 'UTL-AIR'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 1, ventral: 1, bow: 1, stern: 1 },
-    'benefactor', 0x1A7A3E),
+    'benefactor', 0x1A7A3E, 'hex', 0.45, 0.30),
 
   // A hold and a skin. Two holds are most of what it has, and no gun ring
   // exists on the frame at all.
@@ -1889,13 +1915,19 @@ export const STOCK: readonly Design[] = [
     P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'),
     P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 4, ventral: 4, bow: 1, stern: 1 },
-    'civil', 0xD8E2EC),
+    'civil', 0xD8E2EC, 'tread', 0.15, 0.70),
 ];
 
 export const stockFor = (classKey: string): Design => {
   const s = STOCK.find(d => d.classKey === classKey) ?? (STOCK[0] as Design);
+  // The surface comes across too. A copy that rebuilt the record field by
+  // field and forgot one is how a class's own finish would go missing between
+  // the table and the map, silently, exactly as if it had never been set.
   return { classKey: s.classKey, parts: s.parts.map(p => ({ ...p })),
     sections: { ...s.sections }, armour: s.armour, faction: s.faction, paint: s.paint,
+    finish: s.finish ?? DEFAULT_FINISH,
+    metal: s.metal ?? DEFAULT_METAL,
+    rough: s.rough ?? DEFAULT_ROUGH,
     plate: [], cut: [] };
 };
 
