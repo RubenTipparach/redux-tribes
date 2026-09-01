@@ -296,6 +296,17 @@ export class View {
 
   // camera: an orbit around a focus, which pan slides and pinch zooms
   #focus = new THREE.Vector3(0, 0, 0);
+  /**
+   * The ship the camera is locked to, or -1.
+   *
+   * `focusOn` used to copy a ship's position ONCE, which is right for a hull
+   * sitting still and wrong for every other moment: watching a turn, the ship
+   * flew out from under the camera and left it looking at the space the ship
+   * had been in, taking the volume labels with it because they are placed
+   * from where the camera is pointing. A lock rather than a snapshot, held
+   * until the player takes the camera somewhere themselves.
+   */
+  #follow = -1;
   #yaw = 0.6;
   #pitch = 0.75;
   #dist = 150;
@@ -349,8 +360,14 @@ export class View {
   #ray = new THREE.Raycaster();
   #arcShell = new THREE.Group();
   #arcShellKey = '';
+  // GREEN, and it shows where the gun CAN shoot.
+  //
+  // It drew the blocked directions in red before, which is the same
+  // information upside down and reads as a warning wrapped round the ship: the
+  // eye goes to the red and the red is the part that does not matter. Where a
+  // turret bears is the thing a player is deciding about.
   #arcShellMat = new THREE.MeshBasicMaterial({
-    color: 0xE0503A, transparent: true, opacity: 0.16,
+    color: 0x4CD97B, transparent: true, opacity: 0.20,
     side: THREE.DoubleSide, depthWrite: false,
   });
   #debris: THREE.InstancedMesh | null = null;
@@ -633,6 +650,12 @@ export class View {
         // business and how hot it looks is the ramp's.
         const glow = new THREE.Mesh(w.glow, new THREE.MeshBasicMaterial({
           vertexColors: true, map: ember(),
+          // The ember is a LAYER over the exposed part, and its alpha is the
+          // heat, so it takes itself off as the edge cools and uncovers the
+          // reactor or the drive underneath instead of settling to char over
+          // it. `depthWrite` off because it sits exactly on the surface it is
+          // covering: writing depth would have the two fight for the pixel.
+          transparent: true, depthWrite: false,
         }));
         skin.frustumCulled = false;
         glow.frustumCulled = false;
@@ -1008,6 +1031,7 @@ export class View {
     const scale = this.#dist * 0.0016;
     const right = new THREE.Vector3().setFromMatrixColumn(this.#camera.matrix, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(this.#camera.matrix, 1);
+    this.#breakFollow();
     this.#focus.addScaledVector(right, -dx * scale);
     this.#focus.addScaledVector(up, dy * scale);
   }
@@ -1020,6 +1044,8 @@ export class View {
   }
 
   centreOn(p: Vec3): void {
+    // A deliberate move to a POINT, which is not a ship, so the lock goes.
+    this.#breakFollow();
     this.#focus.set(p.x, p.y, p.z);
   }
 
@@ -1036,7 +1062,14 @@ export class View {
     const span = Math.max(ship.radius, 2);
     this.#focus.set(ship.pos.x, ship.pos.y, ship.pos.z);
     this.#dist = Math.max(9, Math.min(this.#dist, span * (INSPECT_SPANS - 2)));
+    this.#follow = ship.id;
   }
+
+  /** Stop following, because the player has taken the camera somewhere. */
+  #breakFollow(): void { this.#follow = -1; }
+
+  /** Which ship the camera is locked to, or -1. For the harness to read. */
+  followedShip(): number { return this.#follow; }
 
   /** Frame every live ship, so "where is everyone" is one tap away. */
   fit(): void {
@@ -1044,6 +1077,7 @@ export class View {
     if (!live.length) return;
     const box = new THREE.Box3();
     for (const s of live) box.expandByPoint(v(s.pos));
+    this.#breakFollow();
     box.getCenter(this.#focus);
     const size = box.getSize(new THREE.Vector3()).length();
     this.#dist = Math.max(60, size * 1.4 + 40);
@@ -1083,6 +1117,12 @@ export class View {
   }
 
   #applyCamera(): void {
+    // Follow first, so the camera, the labels and the inspector's own range
+    // test all use the same position the hull is actually at this tick.
+    if (this.#follow >= 0) {
+      const s = this.#ships.find(x => x.id === this.#follow);
+      if (s) this.#focus.set(s.pos.x, s.pos.y, s.pos.z);
+    }
     this.#sizeMarkers();
     const cp = Math.cos(this.#pitch);
     this.#camera.position.set(
@@ -1270,12 +1310,16 @@ export class View {
     // rotation for free: a shell that had to be moved every frame is a shell
     // that lags the hull it describes by exactly one.
     this.#hulls.get(ship)?.add(this.#arcShell);
-    const reach = Math.max(1.2, s.radius * 0.5);
+    // Sized to the TURRET, not to the ship. Half the hull radius put a dome
+    // over most of the hull, so several mounts' shells overlapped into one
+    // shape and none of them could be read. A mount is a handful of cells
+    // across, so this sits just outside one.
+    const reach = Math.max(0.6, s.radius * 0.22);
     for (let n = 0; n < rigs.length; n++) {
       if (only >= 0 && n !== only) continue;
       const r = rigs[n];
       if (!r?.mask) continue;
-      const pts = blockedShell(r.mask, reach);
+      const pts = blockedShell(r.mask, reach, false);
       if (!pts.length) continue;
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));

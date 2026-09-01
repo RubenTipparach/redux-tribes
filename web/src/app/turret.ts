@@ -96,7 +96,9 @@ export function easeAngle(cur: number, goal: number, dt: number, wrapped = false
  * itself: this is a picture, and a picture that differs in its last bits
  * between two machines is still the same picture.
  */
-export function blockedShell(mask: Uint32Array, reach: number): number[] {
+export function blockedShell(
+  mask: Uint32Array, reach: number, blocked = true,
+): number[] {
   const at = (yi: number, pi: number): readonly [number, number, number] => {
     const yaw = (yi / ARC_YAW) * Math.PI * 2 - Math.PI;
     const pitch = (pi / ARC_PITCH) * Math.PI - Math.PI / 2;
@@ -107,7 +109,12 @@ export function blockedShell(mask: Uint32Array, reach: number): number[] {
   for (let pi = 0; pi < ARC_PITCH; pi++) {
     for (let yi = 0; yi < ARC_YAW; yi++) {
       const bit = pi * ARC_YAW + yi;
-      if (!(((mask[bit >>> 5] ?? 0) >>> (bit & 31)) & 1)) continue;
+      // One scan, both answers. `blocked` picks which side of the mask is
+      // drawn: the shipyard shows what the hull is in the way of, and the map
+      // shows where the gun CAN shoot, which is the same set inverted and not
+      // a second function that could disagree about the winding.
+      const set = ((mask[bit >>> 5] ?? 0) >>> (bit & 31)) & 1;
+      if ((set === 1) !== blocked) continue;
       const a = at(yi, pi), b = at(yi + 1, pi);
       const c = at(yi + 1, pi + 1), d = at(yi, pi + 1);
       pts.push(...a, ...b, ...c, ...a, ...c, ...d);
