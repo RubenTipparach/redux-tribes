@@ -15,6 +15,10 @@
 import * as THREE from 'three';
 import { bindOrbit, frameBox } from './orbitcam.js';
 import * as drafts from './drafts.js';
+// The same loaders the map uses, so the yard cannot spell a path its own way
+// and cannot drift onto a different surface than the thing being designed will
+// fly with.
+import { finishMap, partMap } from './textures.js';
 import { AT_REST, blockedPct, blockedShell, easeAngle, turretGoal } from './turret.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
@@ -22,12 +26,38 @@ import {
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
-  arcMasks, rasterSig,
+  arcMasks, rasterSig, DEFAULT_FINISH,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
 } from './design.js';
 
 /** What the plate is doing: solid, see through, or off. */
 type PlateView = 'on' | 'ghost' | 'off';
+
+/** The three materials a hull is drawn with: machinery, plate, ghosted plate. */
+interface HullSurfaces {
+  part: THREE.MeshStandardMaterial;
+  plate: THREE.MeshStandardMaterial;
+  ghost: THREE.MeshStandardMaterial;
+}
+
+/**
+ * How metallic the yard draws a hull, whatever the design says.
+ *
+ * NOT the design's own number, and this is a measurement rather than a taste.
+ * Metalness with no environment renders black, and an environment is the one
+ * thing this view cannot afford: the yard draws a BOX PER CELL, about 6500 of
+ * them on a Terran, where the map draws 1083 greedy quads. It is fill bound,
+ * and a PMREM lookup per fragment is most of the frame. Measured headless at
+ * 1400x900: standard with a normal map and an environment 1.0 fps, the same
+ * without the environment 1.7, and the Lambert it replaced 1.8. The normal map
+ * itself is free (0.9 with an environment and no normal map, which is the same
+ * number inside noise), so the finish stays and the reflection goes.
+ *
+ * The battlefield keeps the full material, because it is not paying a box per
+ * cell. What a player loses here is the sheen; what they keep is the plating,
+ * the rivets and the greebles, which is what the yard is for.
+ */
+const YARD_METAL = 0.0;
 
 /**
  * Gunnery preview: two independent switches, not one three way cycle.
@@ -369,6 +399,47 @@ export class Designer {
   #geo<T extends THREE.BufferGeometry>(g: T): T { this.#geoms.push(g); return g; }
   #mat<T extends THREE.Material>(m: T): T { this.#mats.push(m); return m; }
 
+  /**
+   * The three surfaces a hull is drawn with, made ONCE and updated in place.
+   *
+   * Not through `#mat`, which disposes everything it is handed on the next
+   * rebuild. That is right for the little wireframes and markers and wrong for
+   * these: disposing a material releases its compiled program, so a material
+   * rebuilt per edit is a SHADER rebuilt per edit, and a standard material
+   * with a normal map is the most expensive shader in this view.
+   *
+   * The only parameter that can change is the finish, and that is an
+   * assignment. `needsUpdate` is set only when the MAP actually changed:
+   * setting it every rebuild is the recompile this exists to avoid, spelled a
+   * different way.
+   */
+  #surfaces: HullSurfaces | null = null;
+
+  #surfaceFor(design: Design): HullSurfaces {
+    if (!this.#surfaces) {
+      const base = () => new THREE.MeshStandardMaterial({
+        metalness: YARD_METAL, roughness: 0.62, dithering: true,
+      });
+      const part = base();
+      // Machinery, once: it never depends on the design. A drive bell and an
+      // armour panel are not the same surface, and painting the plate's rivets
+      // onto a reactor made a ship one material with parts drawn on it.
+      part.normalMap = partMap();
+      const plate = base();
+      const ghost = base();
+      ghost.transparent = true;
+      ghost.opacity = 0.3;
+      ghost.depthWrite = false;
+      this.#surfaces = { part, plate, ghost };
+    }
+    const s = this.#surfaces;
+    const finish = finishMap(design.finish ?? DEFAULT_FINISH);
+    for (const m of [s.plate, s.ghost]) {
+      if (m.normalMap !== finish) { m.normalMap = finish; m.needsUpdate = true; }
+    }
+    return s;
+  }
+
   /** World position of a cell centre, with the lattice centred on the origin. */
   #pos(cell: number, i: number, j: number, k: number): THREE.Vector3 {
     return new THREE.Vector3(
@@ -573,23 +644,28 @@ export class Designer {
     // drive on anybody's ship, red is a gun, green is the bridge. That is what
     // makes an unfamiliar hull readable without a legend, and it is why the
     // paint bucket is not allowed in here.
-    place(solid, this.#mat(new THREE.MeshLambertMaterial({})),
+    // Standard rather than Lambert, because the map draws these same cells as
+    // a PBR surface and a yard that drew them flat showed a player one ship
+    // and flew them another. Lambert has no normal map, which is the whole of
+    // what a finish is.
+    const surf = this.#surfaceFor(this.#design);
+
+    place(solid, surf.part,
       q => solidCol[q] as number);
     // The plate over it, in the faction's whole scheme rather than one colour:
     // panels, an underside, a dorsal spine, a waist stripe, a nose flash and a
     // transom band, all eight swatches on the hull at once.
-    place(skin, this.#mat(new THREE.MeshLambertMaterial({})),
+    place(skin, surf.plate,
       q => skinCol[q] as number);
     // Ghosted armour draws last and never into the depth buffer, so what is
     // under it stays readable rather than fighting it. It is not pickable:
     // a click through the ghost should reach the part you can see.
-    place(ghost, this.#mat(new THREE.MeshLambertMaterial({
-      transparent: true, opacity: 0.3, depthWrite: false })),
+    place(ghost, surf.ghost,
       q => ghostCol[q] as number, false);
     // Every gun in its own group, drawn about its pivot so a rotation of the
     // group is a rotation of the turret on its mount.
     this.#rigs.forEach((r, n) => {
-      place(rigCells[n] as number[], this.#mat(new THREE.MeshLambertMaterial({})),
+      place(rigCells[n] as number[], surf.part,
         q => (rigCols[n] as number[])[q] as number, true, r.group, r.pivot);
     });
 

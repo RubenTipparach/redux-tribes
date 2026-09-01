@@ -835,6 +835,122 @@ must have a sky and a backdrop of its own, and no table may carry a key the
 menu never asks for. The second half is what catches a rename that only
 happened on one side.
 
+## A wound is TWO surfaces, and both keep their UVs
+
+A hit does two different things to a hull, and drawing them as one material
+gets one of them wrong. The surviving cells of a partly hit plate are still
+PLATE: they keep the hull's own finish, because a panel shot round the edges is
+not made of something else. The faces the hit OPENED are the inside of the
+ship, and they wear what machinery wears.
+
+Both need UVs, and neither had any. `quadGeometry` takes them as an optional
+argument and the wound passed none, so the normal map had nothing to sample and
+a shot took the plating detail off a whole region: what grew back was flat
+paint, which is exactly what a finish DELETED by damage would look like. The
+material was bound and the texture was loaded and only a geometry channel was
+missing, which is why nothing caught it.
+
+`ftDebug.surfaces()` reports each torn surface's UVs and whether its map has
+pixels, and the playthrough fails on either. Dropping the `sUv` argument flips
+`uv` to false on the plate wound, which is how the guard was checked.
+
+## The camera has a goal and a position
+
+Two of everything: a GOAL that input writes and a value the camera is drawn
+from, eased toward it with `1 - exp(-k * dt)` so the ease takes the same wall
+time at 20 frames a second as at 120. Distance eases in LOG space, because zoom
+is multiplicative: a step from 900 to 800 and one from 20 to 18 are the same
+gesture, and a linear lerp makes the first crawl and the second snap.
+
+**A follow is the exception, and that is the whole point.** Easing toward a
+target that moves every tick is a camera that never arrives and always lags,
+which reads as jitter rather than as smoothness. So a follow eases IN once and
+then locks: `#locked` goes true when the gap closes, and from there the focus
+is copied exactly. The ORBIT keeps easing either way, because turning round a
+ship you are following is still a camera move.
+
+Readiness tests read the GOAL rather than the eased value. A camera on its way
+in has been sent, and testing where it happens to be this frame flashes the
+ship data overlay off for the fifth of a second the move takes.
+
+## Anything drawn ON a hull asks the MESH where it is
+
+`ShipState.pos` is the pose a turn STARTED from. `setPoses` moves the meshes
+every tick of a playback without touching it, so anything that reads the state
+tracks a ship to where it used to be. This has now been the same bug three
+times: the camera lock, the volume labels, and `pickShip`, where the sphere a
+player clicks to focus on a hull stayed behind while the hull flew off, so
+clicking the ship they could SEE did nothing.
+
+`poseOf` and `#livePos` are the answer, and everything drawn on or pointed at a
+hull goes through them. Expect a fourth.
+
+## Three pictures of one hull, one surface
+
+The map, the shipyard and the schematic all draw the same cells, and until
+recently only the map drew them as a PBR surface. A player designed on flat
+Lambert and flew plated Standard, which is the same ship shown two ways and
+the exact divergence GUIDELINES 5.1 is about.
+
+All three draw `MeshStandardMaterial` now, with the DESIGN's own finish,
+metalness and roughness. Two surfaces rather than one, and the distinction is
+plate against machinery: an armour panel and a drive bell are not the same
+thing, and painting the plate's rivets onto a reactor made a ship one material
+with parts drawn on it. `PART_FINISH` is greebled, more metallic and rougher,
+and every cell that belongs to a placement wears it: the yard's parts, the
+schematic's torn edge, and the inside of a wound on the map.
+
+One finish for all machinery rather than one per module kind. A player can
+already tell a drive from a gun by its COLOUR, which is the shipyard's whole
+legend; what they could not tell was machinery from plate, and that is one
+distinction, not nine.
+
+The yard and the modal are indoor views with no sky, and metalness with no
+environment renders BLACK, so both take `studioEnv` from `textures.ts`: the
+same PMREM'd strip, cached, whose two ends are the colours their own hemisphere
+light already uses.
+
+The YARD is the one that cannot afford the whole material, and that is a
+measurement rather than a taste. It draws a BOX PER CELL, about 6500 of them on
+a Terran, where the map draws 1083 greedy quads: it is fill bound, and a PMREM
+environment lookup per fragment is most of its frame. Measured headless at
+1400x900: standard with a normal map and an environment 1.0 fps, the same
+without the environment 1.4, and the Lambert it replaced 1.8. So the yard keeps
+the finish and drops the reflection, which means its metalness is zero, and the
+battlefield keeps the full material because it is not paying a box per cell.
+
+That cost a test, and the fix was to make the test measure the right thing. The
+turret tracking check waited 2.6 SECONDS for a turret to swing; at 1.4 fps
+against the delta clamp that is four frames of movement, so it was reading the
+renderer's speed and calling it a turret that would not turn. It waits for
+FRAMES now.
+
+`thumb.ts` stays Lambert on purpose. A 44 pixel chip has no room for a normal
+map and no environment to reflect, so it would be two texture fetches for a
+picture nobody can see them in.
+
+## A window is a hole in the PLATING, not a part
+
+Authored on the module (`ModuleDef.window`) and derived onto the skin: the
+plate cell whose inner neighbour belongs to a bridge wears the bridge viewport,
+one over a barracks wears cabin panes, one over a clamp wears running lights.
+That survives any change to the rasteriser, which a list of cell indices would
+not, and it means a stock hull gets its windows for free from the rooms it
+already carries.
+
+Three maps, and emission alone cannot do it. Emission only ADDS, so an unlit
+pane over hull paint is hull paint, which is how a cabin came out the same
+shade as the plating and one window looked missing altogether. The COLOUR map
+is what makes glass dark; emission lights the panes that are on; the normal
+seats the whole thing into the plate.
+
+Window faces leave the greedy pass entirely rather than merging into it, and
+they are unmerged on purpose: each picks its own slice of its decal's variant
+strip by a hash of its CELL, so a run of quarters down a flank is lit
+differently along its length instead of reading as one panel repeated. A hash
+rather than a counter, so adding a cabin elsewhere on the ship does not relight
+this one, and so both seats and a re-watch light it the same way.
+
 ## Load every asset from the SITE ROOT
 
 The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
@@ -847,7 +963,10 @@ like. The ember atlas and all nine armour finishes shipped dead that way, on a
 branch whose commit message said they were live.
 
 `main.ts` already loaded the wasm absolutely and said why on the line above it.
-Three later loads did not copy the lesson. Expect the fourth to try.
+Three later loads did not copy the lesson. So there is ONE loader now:
+`textures.ts` owns every path, and the map, the shipyard and the schematic all
+ask it. A fourth caller cannot spell the path its own way because it has
+nowhere to spell it.
 
 So: a leading slash, and PROVE it rather than asserting it.
 `ftDebug.surfaces()` reports, per hull, the material, its two PBR numbers, the

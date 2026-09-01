@@ -1,0 +1,462 @@
+<title>Beam Shader</title>
+<meta name="description" content="Four ways to draw a beam weapon, side by side and moving: the line the game ships now, a camera facing quad with a hot core, that plus travel and a muzzle flare, and a lance with a shock ring at the far end. What each costs and which one survives at map range.">
+<script src="../vendor/three.global.js"></script>
+<style>
+/* Self contained: no network, no remote fonts, no CDN (mockup rule 2.1). */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --amber:#FFC24B; --red:#FF4B4B;
+  --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 16px 96px;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.6;-webkit-text-size-adjust:100%}
+.wrap{max-width:1040px;margin:0 auto}
+header{padding:40px 0 20px;border-bottom:1px solid var(--line);margin-bottom:26px}
+h1{margin:0 0 6px;font-size:clamp(24px,5vw,38px);line-height:1.15;letter-spacing:-.02em}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--cyan);margin:0 0 10px}
+.lede{color:var(--muted);max-width:66ch;margin:0}
+h2{font-size:19px;margin:38px 0 10px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:10px}
+h2 .num{font-family:var(--mono);font-size:11px;color:var(--cyan);letter-spacing:.14em}
+.say{max-width:70ch;color:var(--muted);margin:0 0 16px}
+.note{border-left:3px solid var(--cyan);background:var(--panel2);padding:14px 16px;
+  margin:20px 0;border-radius:0 6px 6px 0}
+.note b{color:var(--ink)}
+.stage{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:12px;margin:18px 0}
+.cap{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 10px}
+canvas{display:block;width:100%;border-radius:6px;background:#05070c}
+.rows{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;align-items:center}
+.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.lbl{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted)}
+button{font-family:var(--ui);font-size:12px;padding:6px 11px;border-radius:6px;
+  border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--cyan);color:var(--cyan)}
+input[type=range]{width:150px;accent-color:var(--cyan)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:14px 0}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--muted);font-weight:400}
+td b{color:var(--cyan)}
+code{font-family:var(--mono);font-size:.92em;background:var(--panel);padding:1px 5px;
+  border-radius:4px;color:var(--amber)}
+.grid4{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+.card h3{margin:0 0 6px;font-size:14px;letter-spacing:.02em}
+.card p{margin:0;font-size:12.5px;color:var(--muted);line-height:1.5}
+.card .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--cyan);display:block;margin-bottom:4px}
+footer{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);
+  font-size:13px}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kicker">Fallen Tribes / Mockup</p>
+  <h1>Beam Shader</h1>
+  <p class="lede">A beam is currently one <code>THREE.Line</code> in flat cyan, one pixel
+  wide at every range, with an opacity that fades over its second. It reads as a
+  diagram. Here are three shaders that read as a weapon, against that line, moving,
+  at the two ranges that matter.</p>
+</header>
+
+<div class="note"><b>What is being decided here.</b> Which of the three, and whether
+the extra draw is worth it. Nothing below is wired into the game. A beam cannot change
+an outcome, so none of this crosses the boundary and none of it is hashed: the core
+already decided what was hit, and this is only how the shot is drawn.</div>
+
+<h2><span class="num">1</span> The four, side by side</h2>
+<p class="say">Same shot, same second, four treatments. The camera pulls back through
+the loop so each is seen at inspection range and at map range, because a beam that
+looks good filling the screen and vanishes at 300 units is a beam a player never sees
+in a real turn.</p>
+
+<div class="stage">
+  <p class="cap">one shot, four ways, camera pulling back</p>
+  <canvas id="cFour"></canvas>
+  <div class="rows">
+    <div class="row"><span class="lbl">camera</span>
+      <button id="bOrbit" aria-pressed="true">Pull back</button>
+      <button id="bHold" aria-pressed="false">Hold close</button></div>
+    <div class="row"><span class="lbl">age</span>
+      <button id="bRun" aria-pressed="true">Firing</button>
+      <input id="sAge" type="range" min="0" max="100" value="15"></div>
+    <div class="row"><span class="lbl">screen floor</span>
+      <input id="sFloor" type="range" min="0" max="60" value="25">
+      <span class="lbl" id="floorOut">2.5 px</span></div>
+  </div>
+</div>
+
+<div class="grid4">
+  <div class="card"><span class="tag">A</span><h3>The line, as shipped</h3>
+    <p>One <code>THREE.Line</code>, flat cyan, additive. One pixel wide whatever the
+    range and whatever the gun. It is the control, not a candidate.</p></div>
+  <div class="card"><span class="tag">B</span><h3>Cored lance</h3>
+    <p>A camera facing quad with a white hot core and a coloured falloff across its
+    width. The one change that does most of the work: a beam gains a thickness the
+    range can act on.</p></div>
+  <div class="card"><span class="tag">C</span><h3>Cored, travelling, flared</h3>
+    <p>B, plus energy running along the beam and a flare at the muzzle. The travel
+    says which way the shot is going, which a symmetric beam never does.</p></div>
+  <div class="card"><span class="tag">D</span><h3>Lance and shock ring</h3>
+    <p>C, plus a ring at the far end that expands and fades on impact. The end of a
+    beam is where the interesting thing happened and it is currently unmarked.</p></div>
+</div>
+
+<h2><span class="num">2</span> Why a quad and not a line</h2>
+<p class="say">A line's width is a lie on most hardware: WebGL ignores
+<code>linewidth</code> on nearly every driver, so a beam is one pixel at four units
+and one pixel at four hundred. That is why the current beam reads as a diagram, and
+it is not something a nicer colour fixes.</p>
+<p class="say">A camera facing quad gives width in WORLD units, so a beam thins with
+distance the way a real thing does, and it gives a coordinate ACROSS the beam, which
+is what a core and a falloff need. Two triangles a shot, and the quad is rebuilt per
+frame from the two endpoints the event already carries: no geometry is kept between
+frames, so scrubbing a turn backwards runs the beams backwards with everything else.</p>
+
+<div class="stage">
+  <p class="cap">the same beam at four widths, held at map range</p>
+  <canvas id="cWidth"></canvas>
+  <div class="rows">
+    <div class="row"><span class="lbl">width</span>
+      <input id="sWide" type="range" min="4" max="90" value="34">
+      <span class="lbl" id="wideOut">0.34 u</span></div>
+    <div class="row"><span class="lbl">core</span>
+      <input id="sCore" type="range" min="2" max="60" value="22">
+      <span class="lbl" id="coreOut">0.22</span></div>
+  </div>
+</div>
+
+<div class="note"><b>The floor is the finding.</b> A world width alone vanishes at
+range: 0.34 units seen from 250 units out is a third of a pixel, so the beam a player
+is meant to be watching is the one they cannot see. Pull the camera back with the
+floor at zero and the three shaders disappear while the flat line survives, which is
+the one thing the line is good at. The width is therefore the world width OR a floor
+in screen pixels, whichever is wider: close in the world width wins and a beam has
+real thickness, far out the floor holds it at a readable two or three pixels. Two and
+a half is where a beam stops disappearing without becoming a stripe across the map.</div>
+
+<h2><span class="num">3</span> What each one costs</h2>
+<table>
+  <tr><th>treatment</th><th>draws a shot</th><th>the shader does</th><th>reads at 300 u</th></tr>
+  <tr><td><b>A</b> line</td><td>1 line</td><td>a constant colour</td><td>a hairline, same as at 4 u</td></tr>
+  <tr><td><b>B</b> cored</td><td>1 quad</td><td>one <code>exp</code> across the width</td><td>yes, and it thins with range</td></tr>
+  <tr><td><b>C</b> travelling</td><td>1 quad</td><td>B, plus a sine along the length</td><td>yes, and the direction reads</td></tr>
+  <tr><td><b>D</b> and a ring</td><td>1 quad + 1 ring</td><td>C, plus a ring that expands once</td><td>yes, and the impact reads</td></tr>
+</table>
+<p class="say">All four are additive with depth writing off, which is what makes beams
+light each other rather than cut holes, and is what the blasts already do. The bloom
+pass thresholds just under one after tone mapping, so the core is authored above that
+and the falloff below it: the middle of a beam blooms and its edges do not, which is
+the difference between a glow and a smear.</p>
+
+<footer>Rendered with three.js r169, vendored. No network, no CDN, and nothing here is
+in <code>web/</code>. Say which one survives and it gets built.</footer>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var T = window.THREE;
+
+  // ---- the beam material, which is the whole proposal ------------------
+  //
+  // Two coordinates: `vAcross` is -1..1 over the WIDTH and `vAlong` is 0..1
+  // from muzzle to impact. Everything a beam looks like is a function of
+  // those two and the shot's age.
+  var VERT = [
+    'uniform float uWide;',
+    'uniform float uPxScale;',
+    'uniform vec3 uA;',
+    'uniform vec3 uB;',
+    'varying float vAcross;',
+    'varying float vAlong;',
+    'void main() {',
+    // The quad is built in the shader from the two endpoints, so the CPU
+    // never touches a vertex: `position.x` is which end and `position.y` is
+    // which side, and the side is pushed out perpendicular to both the beam
+    // and the direction the camera is looking.
+    '  vAlong = position.x;',
+    '  vAcross = position.y;',
+    '  vec3 mid = mix(uA, uB, vAlong);',
+    '  vec4 mv = modelViewMatrix * vec4(mid, 1.0);',
+    '  vec3 axis = normalize((modelViewMatrix * vec4(uB, 1.0)).xyz',
+    '                      - (modelViewMatrix * vec4(uA, 1.0)).xyz);',
+    // In view space the eye is down -Z, so the direction that widens the
+    // beam toward the camera is the axis crossed with the view vector.
+    '  vec3 side = normalize(cross(axis, normalize(-mv.xyz)));',
+    // A world width alone vanishes at range: 0.34 units at 250 units out is a
+    // third of a pixel, so the beam a player is meant to watch is the one they
+    // cannot see. So the width is the world width OR a floor in screen pixels,
+    // whichever is wider. Near the ship the world width wins and the beam has
+    // real thickness; far away the floor holds it at a readable few pixels.
+    '  float depth = max(0.001, -mv.z);',
+    '  float wide = max(uWide, uPxScale * depth);',
+    '  mv.xyz += side * vAcross * wide;',
+    '  gl_Position = projectionMatrix * mv;',
+    '}'
+  ].join('\n');
+
+  var FRAG = [
+    'precision highp float;',
+    'uniform vec3 uColor;',
+    'uniform float uAge;',
+    'uniform float uCore;',
+    'uniform float uTravel;',
+    'uniform float uFlare;',
+    'uniform float uTime;',
+    'varying float vAcross;',
+    'varying float vAlong;',
+    'void main() {',
+    '  float r = abs(vAcross);',
+    // The core: a narrow band that stays white, inside a wider falloff that
+    // carries the colour. Authored so the core is above the bloom threshold
+    // and the falloff below it, which is what makes the middle glow and the
+    // edges stay an edge.
+    '  float body = exp(-r * r * 2.6);',
+    '  float core = smoothstep(uCore, 0.0, r);',
+    '  core *= core;',
+    // Ends taper rather than stopping square, or a beam looks like a plank.
+    '  float ends = smoothstep(0.0, 0.02, vAlong) * smoothstep(1.0, 0.94, vAlong);',
+    // Energy running from the muzzle to the impact. Only along the length, so
+    // it never breaks the beam up across its width.
+    '  float run = 1.0;',
+    '  if (uTravel > 0.5) {',
+    '    run = 0.78 + 0.34 * sin((vAlong * 26.0) - uTime * 15.0);',
+    '  }',
+    // The muzzle flare: a short bright swell at the firing end.
+    '  float flare = 0.0;',
+    '  if (uFlare > 0.5) {',
+    '    flare = exp(-vAlong * 26.0) * exp(-r * r * 2.2) * 1.4;',
+    '  }',
+    // A shot holds bright for the first third of its second and then dies
+    // down, which is what a sustained beam looks like and what a line that
+    // simply vanishes never does.
+    '  float life = uAge < 0.35 ? 1.0 : 1.0 - (uAge - 0.35) / 0.65;',
+    '  life = max(0.0, life);',
+    '  vec3 col = uColor * body * run + vec3(1.0) * core * 0.9 + uColor * flare;',
+    '  float a = clamp((body * run + core + flare) * ends * life, 0.0, 1.0);',
+    '  gl_FragColor = vec4(col * life, a);',
+    '}'
+  ].join('\n');
+
+  // The quad, in the shader's own coordinates: x runs 0..1 along the beam and
+  // y runs -1..1 across it. Shared by every beam on screen.
+  function beamGeometry() {
+    var g = new T.BufferGeometry();
+    g.setAttribute('position', new T.Float32BufferAttribute(
+      [0, -1, 0, 1, -1, 0, 1, 1, 0, 0, 1, 0], 3));
+    g.setIndex([0, 1, 2, 0, 2, 3]);
+    return g;
+  }
+
+  function beamMaterial(opts) {
+    return new T.ShaderMaterial({
+      vertexShader: VERT, fragmentShader: FRAG,
+      transparent: true, depthWrite: false, blending: T.AdditiveBlending,
+      side: T.DoubleSide,
+      uniforms: {
+        uColor: { value: new T.Color(opts.color || 0x35C7FF) },
+        uA: { value: new T.Vector3() },
+        uB: { value: new T.Vector3() },
+        uWide: { value: opts.wide === undefined ? 0.34 : opts.wide },
+        uPxScale: { value: 0 },
+        uCore: { value: opts.core === undefined ? 0.22 : opts.core },
+        uAge: { value: 0 },
+        uTravel: { value: opts.travel ? 1 : 0 },
+        uFlare: { value: opts.flare ? 1 : 0 },
+        uTime: { value: 0 }
+      }
+    });
+  }
+
+  // A shock ring at the impact end: expands once and fades, so the end of a
+  // beam is marked as the place something happened.
+  function ringMaterial(colour) {
+    return new T.MeshBasicMaterial({
+      color: colour, transparent: true, depthWrite: false,
+      blending: T.AdditiveBlending, side: T.DoubleSide, opacity: 0
+    });
+  }
+
+  function stage(canvas, height) {
+    var r = new T.WebGLRenderer({ canvas: canvas, antialias: true, alpha: false });
+    r.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    var scene = new T.Scene();
+    scene.background = new T.Color(0x05070c);
+    var cam = new T.PerspectiveCamera(50, 2, 0.1, 4000);
+    scene.add(new T.HemisphereLight(0x5f7fa0, 0x0a0e14, 1.6));
+    var key = new T.DirectionalLight(0xdfefff, 1.1);
+    key.position.set(0.4, 1, 0.25);
+    scene.add(key);
+    function size() {
+      var w = canvas.clientWidth || 640;
+      var h = height;
+      r.setSize(w, h, false);
+      cam.aspect = w / h;
+      cam.updateProjectionMatrix();
+    }
+    canvas.style.height = height + 'px';
+    size();
+    window.addEventListener('resize', size);
+    return { r: r, scene: scene, cam: cam };
+  }
+
+  // A stand in for a ship: a block, so a beam has something to leave and
+  // something to arrive at.
+  function hull(scene, at, colour) {
+    var m = new T.Mesh(new T.BoxGeometry(1.1, 0.7, 3.0),
+      new T.MeshStandardMaterial({ color: colour, metalness: 0.3, roughness: 0.5 }));
+    m.position.copy(at);
+    scene.add(m);
+    return m;
+  }
+
+  // ---------------------------------------------------- section one ----
+  var four = stage(document.getElementById('cFour'), 420);
+  var LANES = [
+    { name: 'A line', line: true },
+    { name: 'B cored', travel: false, flare: false },
+    { name: 'C travelling', travel: true, flare: true },
+    { name: 'D and a ring', travel: true, flare: true, ring: true }
+  ];
+  var lanes = [];
+  var SPAN = 26;
+  LANES.forEach(function (spec, n) {
+    var y = (1.5 - n) * 7.0;
+    var a = new T.Vector3(-SPAN / 2, y, 0);
+    var b = new T.Vector3(SPAN / 2, y, 0);
+    hull(four.scene, a.clone(), 0x2f5f9e);
+    hull(four.scene, b.clone(), 0xa8481a);
+    var lane = { spec: spec, a: a, b: b };
+    if (spec.line) {
+      var g = new T.BufferGeometry().setFromPoints([a, b]);
+      lane.mesh = new T.Line(g, new T.LineBasicMaterial({
+        color: 0x35C7FF, transparent: true, opacity: 0.95,
+        blending: T.AdditiveBlending, depthWrite: false
+      }));
+    } else {
+      lane.mat = beamMaterial(spec);
+      lane.mat.uniforms.uA.value.copy(a);
+      lane.mat.uniforms.uB.value.copy(b);
+      lane.mesh = new T.Mesh(beamGeometry(), lane.mat);
+      lane.mesh.frustumCulled = false;
+    }
+    four.scene.add(lane.mesh);
+    if (spec.ring) {
+      lane.ringMat = ringMaterial(0x7fd8ff);
+      lane.ring = new T.Mesh(new T.RingGeometry(0.72, 0.86, 56), lane.ringMat);
+      lane.ring.position.copy(b);
+      lane.ring.rotation.y = Math.PI / 2;
+      four.scene.add(lane.ring);
+    }
+    lanes.push(lane);
+  });
+
+  /**
+   * How many world units one screen pixel is, per unit of depth.
+   *
+   * `2 * tan(fov / 2) / height` is the height of one pixel at a depth of one,
+   * so multiplying by the depth gives the world size of a pixel there. The
+   * floor is that times however many pixels a beam must never go below.
+   */
+  function pxScale(cam, canvas, pixels) {
+    var h = canvas.clientHeight || 1;
+    return pixels * 2 * Math.tan((cam.fov * Math.PI / 180) / 2) / h;
+  }
+
+  var pullBack = true, running = true, manualAge = 0.15, floorPx = 2.5;
+  document.getElementById('bOrbit').onclick = function () { setCam(true); };
+  document.getElementById('bHold').onclick = function () { setCam(false); };
+  function setCam(v) {
+    pullBack = v;
+    document.getElementById('bOrbit').setAttribute('aria-pressed', String(v));
+    document.getElementById('bHold').setAttribute('aria-pressed', String(!v));
+  }
+  var bRun = document.getElementById('bRun');
+  var sAge = document.getElementById('sAge');
+  bRun.onclick = function () {
+    running = !running;
+    bRun.setAttribute('aria-pressed', String(running));
+    bRun.textContent = running ? 'Firing' : 'Held';
+  };
+  sAge.oninput = function () { manualAge = Number(sAge.value) / 100; running = false;
+    bRun.setAttribute('aria-pressed', 'false'); bRun.textContent = 'Held'; };
+  var sFloor = document.getElementById('sFloor');
+  sFloor.oninput = function () {
+    floorPx = Number(sFloor.value) / 10;
+    document.getElementById('floorOut').textContent = floorPx.toFixed(1) + ' px';
+  };
+
+  // ---------------------------------------------------- section two ----
+  var wide = stage(document.getElementById('cWidth'), 300);
+  var wa = new T.Vector3(-SPAN / 2, 0, 0), wb = new T.Vector3(SPAN / 2, 0, 0);
+  hull(wide.scene, wa.clone(), 0x2f5f9e);
+  hull(wide.scene, wb.clone(), 0xa8481a);
+  var wideMat = beamMaterial({ travel: true, flare: true });
+  wideMat.uniforms.uA.value.copy(wa);
+  wideMat.uniforms.uB.value.copy(wb);
+  var wideMesh = new T.Mesh(beamGeometry(), wideMat);
+  wideMesh.frustumCulled = false;
+  wide.scene.add(wideMesh);
+  var sWide = document.getElementById('sWide'), sCore = document.getElementById('sCore');
+  function widths() {
+    wideMat.uniforms.uWide.value = Number(sWide.value) / 100;
+    wideMat.uniforms.uCore.value = Number(sCore.value) / 100;
+    document.getElementById('wideOut').textContent =
+      (Number(sWide.value) / 100).toFixed(2) + ' u';
+    document.getElementById('coreOut').textContent =
+      (Number(sCore.value) / 100).toFixed(2);
+  }
+  sWide.oninput = widths; sCore.oninput = widths; widths();
+
+  var t0 = performance.now();
+  function frame() {
+    requestAnimationFrame(frame);
+    var t = (performance.now() - t0) / 1000;
+    var age = running ? (t % 2.2) / 2.2 : manualAge;
+
+    // The camera walks from inspection range out to map range and back, so
+    // every treatment is judged at both without anyone having to drag.
+    var k = pullBack ? 0.5 - 0.5 * Math.cos(t * 0.42) : 0;
+    var d = 30 + k * 220;
+    four.cam.position.set(d * 0.35, 2 + k * 40, d);
+    four.cam.lookAt(0, 0, 0);
+
+    var scale = pxScale(four.cam, document.getElementById('cFour'), floorPx);
+    lanes.forEach(function (lane) {
+      if (lane.spec.line) {
+        lane.mesh.material.opacity = age < 0.35 ? 0.95 : Math.max(0, 0.95 * (1 - (age - 0.35) / 0.65));
+        return;
+      }
+      lane.mat.uniforms.uAge.value = age;
+      lane.mat.uniforms.uTime.value = t;
+      lane.mat.uniforms.uPxScale.value = scale;
+      if (lane.ring) {
+        // One expansion per shot, and it is over well before the beam is.
+        var e = Math.min(1, age / 0.3);
+        lane.ring.scale.setScalar(0.5 + e * 3.4);
+        // Fades on a curve rather than linearly, so the ring is a flash that
+        // leaves rather than a disc that dims.
+        lane.ringMat.opacity = Math.max(0, Math.pow(1 - e, 1.8));
+        lane.ring.lookAt(four.cam.position);
+      }
+    });
+    four.r.render(four.scene, four.cam);
+
+    wide.cam.position.set(70, 26, 92);
+    wide.cam.lookAt(0, 0, 0);
+    wideMat.uniforms.uAge.value = 0.15;
+    wideMat.uniforms.uTime.value = t;
+    wideMat.uniforms.uPxScale.value =
+      pxScale(wide.cam, document.getElementById('cWidth'), floorPx);
+    wide.r.render(wide.scene, wide.cam);
+  }
+  frame();
+})();
+</script>
