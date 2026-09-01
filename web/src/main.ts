@@ -15,8 +15,8 @@ import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from 
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
 import {
-  arcMasks, gunByKey, moduleById, mountsOf, partsOf, PURPOSE, rasterise, stockFor,
-  useArcDirs, useCore, type Design,
+  arcMasks, gunByKey, mountsOf, partAtCell, partsOf, PURPOSE, rasterise,
+  stockFor, useArcDirs, useCore, type Design,
 }
   from './app/design.js';
 import { hullTone } from './app/hull.js';
@@ -670,6 +670,9 @@ function schematicOf(id: number): SchematicSubject | null {
         at: { x: at.x, y: at.y, z: at.z },
       };
     }),
+    // The map's own carve, so the hole in the modal is the hole on the field.
+    dead: view.carvedCells(id),
+    tick: shownIndex() * TICKS_PER_TURN + (playTick ?? TICKS_PER_TURN),
   };
 }
 
@@ -699,6 +702,10 @@ function refreshSchematic(): void {
   const s = ships.find(x => x.id === schemaOf);
   if (!s) return;
   const key = `${s.hull.toFixed(1)}|${s.destroyed}|${s.drifting}|${s.marines}|`
+    // How much of the hull has gone. A modal open while a turn plays has to
+    // follow the cells coming off, and the count is the cheapest thing that
+    // changes exactly when they do.
+    + `${view.carvedCells(schemaOf).size}|`
     + subsOf(schemaOf).map(v => `${v.index}:${v.hp.toFixed(1)}:${v.dead}`).join(',');
   if (key === schemaKey) return;
   schemaKey = key;
@@ -856,9 +863,7 @@ function showTip(clientX: number, clientY: number): void {
   const tip = $('partTip');
   if (changed) {
     const design = hullOf(s);
-    const owner = rasterise(design).own[at.cell] ?? 0;
-    const part = owner > 0 ? design.parts[owner - 1] : undefined;
-    const mod = part ? moduleById(part.module) : undefined;
+    const mod = partAtCell(design, at.cell)?.module;
     let body: string;
     if (mod) {
       const pu = PURPOSE[mod.purpose];
@@ -3326,6 +3331,8 @@ Object.defineProperty(window, 'ftDebug', {
     /** The shipyard, read only. */
     designer: () => (designer.visible ? designer.debug() : null),
     /** The schematic modal: what it is describing, or null when it is down. */
+    /** The schematic modal: what it is describing, what its armour is doing,
+     *  and which cell and turret the pointer is on. */
     schematic: () => (schematic.visible ? schematic.debug() : null),
     /** The map inspector: which hull it is labelling, whether it may be
      *  offered at this zoom, and which volume the pointer is on. */

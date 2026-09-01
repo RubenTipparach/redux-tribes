@@ -193,7 +193,11 @@ impl Sim {
                 hull_share = dmg - absorbed;
                 let sub = &mut self.ships[si].subs[bi];
                 sub.hp = (sub.hp - absorbed).max(0.0);
-                if sub.hp <= 0.0 {
+                // Offline at a fifth of its mass rather than at the last point
+                // of it: the machinery in a volume goes a piece at a time and
+                // the box stops being what it was long before the last piece
+                // has gone. `Sub::offline` is the one place that says where.
+                if !sub.dead && sub.offline() {
                     sub.dead = true;
                     let mut e = Event::new(EventKind::SubsystemDestroyed, tick);
                     e.ship = si as i32;
@@ -986,8 +990,16 @@ impl Sim {
                     .find(|s| defs[s.def].kind == SubKind::Thruster)
                 {
                     if thr.dead {
+                        // The archive's 50 HP, measured the way every other
+                        // figure in the table is: fifty of ABSORB, on top of
+                        // the fifth the bay would be offline at. Setting a
+                        // bare 50 would be under that line on a big enough
+                        // volume, which is a repair that hands back a bay
+                        // reading dead by `Sub::offline` and alive by the
+                        // flag, and which of the two a caller saw would depend
+                        // on which it asked.
+                        thr.hp = thr.max_hp * data::SUB_FAIL_FRAC + 50.0;
                         thr.dead = false;
-                        thr.hp = 50.0;
                         ship.drift_active = false;
                     }
                 }

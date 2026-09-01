@@ -16,8 +16,10 @@
  */
 
 import * as THREE from 'three';
-import { PURPOSE, type Design } from './design.js';
-import { hullMesh, tintHull } from './hull.js';
+import { PURPOSE, arcMasks, gunByKey, partAtCell, type Design } from './design.js';
+import { hullMesh, tintHull, type HullMesh } from './hull.js';
+import { buildWound } from './wound.js';
+import { blockedPct } from './turret.js';
 import { bindOrbit, frameBox, orbitStart } from './orbitcam.js';
 import { SUB_BLURB, SUB_LABEL, type Vec3 } from '../sim/types.js';
 
@@ -61,6 +63,9 @@ export interface SchematicVolume {
   readonly at: Vec3;
 }
 
+/** What the armour is doing: solid, see through, or off. */
+export type PlateView = 'on' | 'ghost' | 'off';
+
 /** A whole ship, as much of it as a schematic shows. */
 export interface SchematicSubject {
   readonly title: string;
@@ -73,6 +78,17 @@ export interface SchematicSubject {
   /** Header figures, already formatted: this draws them, it does not derive them. */
   readonly stats: ReadonlyArray<readonly [string, string]>;
   readonly volumes: readonly SchematicVolume[];
+  /**
+   * The cells this hull has actually lost, and the tick each went on.
+   *
+   * The map's own carve, handed over rather than recomputed: a schematic
+   * showing a whole ship while the map shows a hole in it is the modal
+   * disagreeing with the picture it was opened from. Empty for a hull nothing
+   * has touched.
+   */
+  readonly dead: ReadonlyMap<number, number>;
+  /** Where playback is, so a wound is as cool here as it is out there. */
+  readonly tick: number;
 }
 
 export class Schematic {
@@ -90,6 +106,26 @@ export class Schematic {
    *  camera may come right up to the plating and no closer. */
   #solid = new THREE.Vector3(1, 1, 1);
   #subject: SchematicSubject | null = null;
+  /** What the armour is doing. A hull with its plate on is a hull whose
+   *  insides are a rumour, and the insides are what this modal is for. */
+  #plate: PlateView = 'on';
+  /** The hull as it is drawn right now, for turning a pick into a cell. */
+  #drawn: HullMesh | null = null;
+  /**
+   * The mesh whose quads `#drawn` describes, and everything a ray may stop on.
+   *
+   * Two fields rather than an index into one list. The torn edge is a mesh of
+   * its own with its own quads, so a ray that stopped on it and was read
+   * through the BODY's quad list would name whichever cell that index happened
+   * to land on: a plausible answer to a question nobody asked. Only the body
+   * carries a cell list, and only the body may answer.
+   */
+  #body: THREE.Mesh | null = null;
+  #picks: THREE.Mesh[] = [];
+  /** The cell and rig under the pointer, or -1. A turret is a THING on a hull
+   *  and until this existed there was no way to point at one. */
+  #cell = -1;
+  #rig = -1;
   /** Which volume the pointer or the list is on, by index, or -1. */
   #hot = -1;
   /** The picked one, which survives the pointer leaving: a phone has no hover,
@@ -108,6 +144,8 @@ export class Schematic {
     this.#subject = subject;
     this.#hot = -1;
     this.#held = -1;
+    this.#cell = -1;
+    this.#rig = -1;
     $('schema').classList.remove('hidden');
     if (!this.#renderer) this.#initThree();
     this.#build();
@@ -153,22 +191,41 @@ export class Schematic {
     // orbits, two pinch, a press that did not travel names a volume, and a
     // mouse can hover one without committing to it.
     bindOrbit(cv, this.#cam, {
-      onTap: (x, y) => { this.#held = this.#pickAt(x, y); this.#hot = this.#held; this.#renderCard(); },
+      onTap: (x, y) => {
+        this.#pickPart(x, y);
+        this.#held = this.#pickAt(x, y);
+        this.#hot = this.#held;
+        this.#paintMarks();
+        this.#renderCard();
+      },
       onHover: (x, y) => {
+        const part = this.#pickPart(x, y);
         const at = this.#pickAt(x, y);
         const want = at >= 0 ? at : this.#held;
-        if (want === this.#hot) return;
+        if (want === this.#hot && !part) return;
         this.#hot = want;
         this.#paintMarks();
         this.#renderCard();
       },
       onLeave: () => {
-        if (this.#hot === this.#held) return;
+        const had = this.#cell;
+        this.#cell = -1;
+        this.#rig = -1;
+        if (this.#hot === this.#held && had < 0) return;
         this.#hot = this.#held;
         this.#paintMarks();
         this.#renderCard();
       },
     });
+
+    // The plate toggle. Three states rather than two, and the same three the
+    // shipyard has: solid, see through, off. Ghost is the one that answers
+    // "where in the hull is that" and off is the one that answers "what is in
+    // there", and a player wanting one usually wants the other next.
+    $('scPlate').onclick = () => {
+      this.#plate = this.#plate === 'on' ? 'ghost' : this.#plate === 'ghost' ? 'off' : 'on';
+      this.#build();
+    };
 
     if (window.ResizeObserver) new ResizeObserver(() => this.#resize()).observe($('scView'));
     window.addEventListener('resize', () => this.#resize());
@@ -209,7 +266,13 @@ export class Schematic {
     this.#geoms = [];
     this.#spheres = [];
 
-    const hull = hullMesh(s.design);
+    // What the body of the hull IS, in this mode. With the plate on it is the
+    // whole ship; with it ghosted or off it is the frame and the parts, meshed
+    // by the same mesher against a lattice the armour has been taken out of.
+    const bare = this.#plate !== 'on';
+    const hull = hullMesh(s.design, bare);
+    this.#drawn = hull;
+    this.#picks = [];
     // Opaque. The volumes over it are the transparent things, and a hull that
     // is transparent too leaves nothing solid for them to be volumes OF.
     const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
@@ -217,7 +280,25 @@ export class Schematic {
     // made of, so the side wash gets out of the way of the design's own paint.
     tintHull(mat, s.tone, s.lost, 0);
     this.#owned.push(mat);
-    this.#hull.add(new THREE.Mesh(hull.geo, mat));
+    const body = new THREE.Mesh(this.#carve(hull, s, bare), mat);
+    this.#hull.add(body);
+    this.#body = body;
+    this.#picks.push(body);
+
+    // The armour, when it is being shown THROUGH rather than shown or hidden.
+    // Drawn after the body and with no depth write, so the parts inside read
+    // through it instead of being z fought over by it.
+    if (this.#plate === 'ghost') {
+      const plated = hullMesh(s.design);
+      const ghost = new THREE.MeshLambertMaterial({
+        vertexColors: true, transparent: true, opacity: 0.22, depthWrite: false,
+      });
+      tintHull(ghost, s.tone, s.lost, 0);
+      this.#owned.push(ghost);
+      const shell = new THREE.Mesh(this.#carve(plated, s, false), ghost);
+      shell.renderOrder = 2;
+      this.#hull.add(shell);
+    }
 
     // The volumes, as the spheres the damage model actually uses. Drawn at the
     // radius the core reports rather than a token dot: how much of a hull one
@@ -282,6 +363,84 @@ export class Schematic {
     this.#renderCard();
   }
 
+  /**
+   * The same hull with the same cells shot off it.
+   *
+   * The map keeps the carve, so it is handed over rather than recomputed here:
+   * a modal that worked out its own damage would be a second opinion about
+   * which cells are gone, and the two would part the first time either was
+   * touched. `buildWound` says which greedy quads went entirely and puts the
+   * survivors of a partly hit plate back one cell at a time, exactly as the
+   * battlefield does, so the hole in here is the hole out there.
+   *
+   * A hull nothing has touched is handed straight back: no walk, no copy.
+   */
+  #carve(hull: HullMesh, s: SchematicSubject, bare: boolean): THREE.BufferGeometry {
+    if (!s.dead.size) return hull.geo;
+    const wound = buildWound(hull, s.design, s.dead, s.tick, bare);
+    // The ember layer is the battlefield's. In here a hole is a fact about the
+    // hull rather than a fire, so it is disposed rather than drawn.
+    wound.glow.dispose();
+    const geo = hull.geo.clone();
+    this.#geoms.push(geo);
+    // A quad that is entirely gone collapses to a point, which is a triangle
+    // with no area and therefore nothing to draw and nothing to pick. The
+    // same trick the map uses, for the same reason: rewriting the index buffer
+    // would renumber every quad and break `cellOf` under it.
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    for (let q = 0; q < hull.quads; q++) {
+      if (!wound.whole[q]) continue;
+      const b = q * 4;
+      const x = pos.getX(b), y = pos.getY(b), z = pos.getZ(b);
+      for (let v = 1; v < 4; v++) pos.setXYZ(b + v, x, y, z);
+    }
+    pos.needsUpdate = true;
+    // And the torn edge: the survivors of a partly hit plate, and the inside
+    // the hit opened, in the parts' own colours.
+    const torn = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    tintHull(torn, s.tone, s.lost, 0);
+    this.#owned.push(torn);
+    this.#geoms.push(wound.skin);
+    const skin = new THREE.Mesh(wound.skin, torn);
+    this.#hull.add(skin);
+    this.#picks.push(skin);
+    return geo;
+  }
+
+  /**
+   * Which CELL of the hull is under a screen point, and which turret if any.
+   *
+   * The picture IS the grid: a ray gives a triangle, two triangles are a quad,
+   * and `cellOf` says which lattice cell that quad was a face of. The same
+   * lookup the map's tooltip does, because it is the same question about the
+   * same cells. Without it a turret was a thing a player could see and not
+   * point at: the only pickable objects in here were the volume boxes, and a
+   * mount is not one of those.
+   */
+  #pickPart(clientX: number, clientY: number): boolean {
+    const hull = this.#drawn;
+    if (!this.#renderer || !hull || !this.#body) return false;
+    const cv = $<HTMLCanvasElement>('scCanvas');
+    const r = cv.getBoundingClientRect();
+    this.#ray.setFromCamera(new THREE.Vector2(
+      ((clientX - r.left) / r.width) * 2 - 1,
+      -((clientY - r.top) / r.height) * 2 + 1), this.#camera);
+    const hit = this.#ray.intersectObjects(this.#picks, false)[0];
+    const was = this.#cell;
+    this.#cell = -1;
+    this.#rig = -1;
+    // Only the body carries a quad list; the torn edge is its own geometry
+    // and names no cell, which is right: a cut face is not a part.
+    if (hit && hit.object === this.#body && hit.faceIndex != null) {
+      const quad = (hit.faceIndex as number) >> 1;
+      if (quad >= 0 && quad < hull.quads) {
+        this.#cell = hull.cellOf[quad] as number;
+        this.#rig = hull.rigOf[quad] as number;
+      }
+    }
+    return this.#cell !== was;
+  }
+
   /** The one under the pointer stands out; the rest fade back. */
   #paintMarks(): void {
     for (const { index, mesh, cage } of this.#spheres) {
@@ -312,6 +471,11 @@ export class Schematic {
   #renderHead(): void {
     const s = this.#subject;
     if (!s) return;
+    const plate = $('scPlate');
+    plate.textContent = this.#plate === 'on' ? 'Armour on'
+      : this.#plate === 'ghost' ? 'Armour ghost' : 'Armour off';
+    plate.classList.toggle('ghost', this.#plate === 'ghost');
+    plate.classList.toggle('off', this.#plate === 'off');
     $('scName').textContent = s.title;
     // innerHTML, because the subtitle is punctuated with entities like every
     // other label in this console; as textContent they arrive spelled out.
@@ -368,13 +532,49 @@ export class Schematic {
     }
   }
 
+  /**
+   * What is physically under the pointer, as a line of the card.
+   *
+   * A volume is where a shot GOES; a part is what is standing there. Both are
+   * true about one pixel and a player asking about a turret is asking the
+   * second question, so the card answers both rather than making them two
+   * modes. A turret gets its gun's figures and how much of its own sphere the
+   * hull it is bolted to takes away, which is the same thing the map's tooltip
+   * says about the same mount.
+   */
+  #partLine(): string {
+    const s = this.#subject;
+    if (!s || this.#cell < 0) return '';
+    const at = partAtCell(s.design, this.#cell);
+    if (!at) {
+      return `<span class="part"><b>Hull plating.</b> Frame and armour, which `
+        + `belong to no part: this is the ship itself.</span>`;
+    }
+    const pu = PURPOSE[at.module.purpose];
+    let out = `<span class="part"><b>${at.module.name}</b> &middot; ${pu.label}`;
+    if (this.#rig >= 0) {
+      const gun = gunByKey(at.module.weapon ?? '');
+      const mask = arcMasks(s.design)[this.#rig];
+      out += ` &middot; <span class="gun">mount ${this.#rig}</span>`;
+      if (gun) {
+        out += `<br>${gun.dmg} dmg${gun.batch > 1 ? ` x${gun.batch}` : ''}`
+          + ` &middot; ${gun.range} u &middot; ${gun.cooldown}s`;
+      }
+      if (mask) {
+        out += `<br>its own hull blocks <b>${blockedPct(mask).toFixed(0)}%</b> of its sphere`;
+      }
+    }
+    return `${out}</span>`;
+  }
+
   #renderCard(): void {
     const card = $('scCard');
     const v = this.#subject?.volumes.find(x => x.index === this.#hot);
     this.#markList();
+    const part = this.#partLine();
     if (!v) {
-      card.classList.add('hidden');
-      card.innerHTML = '';
+      card.classList.toggle('hidden', !part);
+      card.innerHTML = part;
       return;
     }
     card.classList.remove('hidden');
@@ -394,15 +594,24 @@ export class Schematic {
       + `<b>${(v.half.x * 2).toFixed(1)} x ${(v.half.y * 2).toFixed(1)}`
       + ` x ${(v.half.z * 2).toFixed(1)}</b> u.`
       + `</p>`
-      + `<p class="sub">${SUB_BLURB[v.kind] ?? ''}</p>`;
+      + `<p class="sub">${SUB_BLURB[v.kind] ?? ''}</p>`
+      + part;
   }
 
   /** For the harness: what is on screen, without letting it write any of it. */
   debug(): {
     title: string; volumes: number; hot: number;
+    plate: PlateView; cell: number; rig: number; carved: number; quads: number;
     cam: { yaw: number; pitch: number; dist: number };
   } {
     return {
+      /** What the armour is doing, and what the pointer is on: a turret is a
+       *  thing to point at now, and a harness has to be able to say so. */
+      plate: this.#plate,
+      cell: this.#cell,
+      rig: this.#rig,
+      carved: this.#subject?.dead.size ?? 0,
+      quads: this.#drawn?.quads ?? 0,
       cam: {
         yaw: +this.#cam.yaw.toFixed(3),
         pitch: +this.#cam.pitch.toFixed(3),

@@ -71,7 +71,8 @@ export const BACKDROPS: Readonly<Record<string, Backdrop>> = {
       { at: [0.28, 0.62, -0.73], radius: 18, color: 0x5c6470, shade: 0x0d1014 },
     ],
   },
-  low_orbit: {
+  // Hyphen: the scenario is 'low-orbit'. See the note in `sky.ts`.
+  'low-orbit': {
     // A low orbit engagement has the planet FILLING one side of the sky,
     // which is the whole reason the scenario reads differently from a duel.
     sun: [0.25, 0.78, -0.57],
@@ -213,7 +214,13 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
       // this scene is FILL bound, not triangle bound. The cost of the backdrop
       // is the pixels it covers, so the place to look, if it ever needs to be
       // cheaper, is the sky and the light count and not the meshes.
-      new THREE.SphereGeometry(p.radius, 24, 16),
+      // Segments with SIZE. 24x16 is plenty for a bead on the horizon and it
+      // is a polygon for a planet that fills half the sky: `low-orbit` puts a
+      // 240 unit body 500 units out, where every facet of a coarse sphere is
+      // a visible crease down the terminator. Triangles are free here (this
+      // scene is fill bound: 48x32 measured the same 50 ms as 24x16), so the
+      // one case that needs them gets them and the beads stay cheap.
+      new THREE.SphereGeometry(p.radius, p.radius > 120 ? 96 : 24, p.radius > 120 ? 64 : 16),
       // Lambert, like the hulls: the planet is lit by the SAME sun, so its
       // terminator runs the same way as the lit edge of a ship. That
       // agreement is most of what sells a backdrop as a place.
@@ -221,6 +228,11 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
         color: p.color,
         emissive: p.shade,
         depthWrite: false,
+        // A planet is a very slow gradient across a very dark range, which is
+        // the same thing the nebula is and it bands the same way: the shading
+        // crawls, the output byte holds, and the terminator comes out as a
+        // contour map. Three's own dither is one property and it is the fix.
+        dithering: true,
       }),
     );
     body.position.copy(dir).multiplyScalar(dist);
@@ -238,6 +250,7 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
           transparent: true,
           opacity: 0.32,
           depthWrite: false,
+          dithering: true,
         }),
       );
       ring.position.copy(body.position);

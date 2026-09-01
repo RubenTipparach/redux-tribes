@@ -201,6 +201,14 @@ anything that is not an API route with the app shell, so the module arrived as
 HTML and the page booted no further than its own markup. Asset URLs are
 absolute for that reason.
 
+It also drives the **ship detail modal on a hull that has been shot**, which is
+the only state the interesting half of it exists in: that the modal knows about
+the same cells the map has taken off, that the armour toggle cycles on / ghost
+/ off and that armour off really is a different mesh rather than the same
+picture relabelled, and that a turret can be POINTED AT. Until it could, the
+only pickable objects in there were the volume boxes, and a mount is not one of
+those.
+
 ### And one for the shipyard
 
 ```sh
@@ -406,6 +414,30 @@ find two, delete one rather than keeping them in step.
 Extensibility checks that have paid off: could a native Rust client use this
 unchanged? Could a third faction be added without touching the resolver? Could a
 new weapon kind be added by adding data and one match arm?
+
+## Dark gradients band, and the fix is two things
+
+A nebula and a planet terminator are both very slow gradients across a very
+dark range, which is exactly what an 8 bit pipeline cannot carry: the value
+crawls, the output byte holds, and where it finally tips there is a hard edge.
+Magnify that (the sky cubemap is blown up about four times to fill the
+viewport) and each step is a contour forty pixels wide.
+
+Two separate fixes, and both are needed:
+
+- **Storage.** `bakeSky` renders to a `HalfFloatType` cubemap, so no step
+  exists in the texture to magnify. 12 MB a sky against 6, once, at launch.
+- **Output.** The canvas is still eight bits. The sky is drawn by `skyDome`,
+  our own mesh, which dithers with triangular PDF noise below one output step,
+  hashed off the pixel so a still sky stays still. Not three's background pass,
+  which does not dither and offers no hook; not a post pass, because `post.ts`
+  can take the composer away entirely and that would leave the sky banding only
+  on the machines least able to afford a second look at it. Lit meshes get
+  three's own `dithering` property instead, which is the same idea one line
+  long.
+
+Measured on a wide skirmish shot: the longest flat run of luma fell from 128 px
+to 90 and the 99th percentile from 44 to 35.
 
 ## Performance: measure, then decide
 
@@ -623,6 +655,27 @@ boundary by position and renaming one is a contract change for nothing. What
 the rule governs is the WORDS: `SUB_LABEL` is the one place the on screen name
 is written, and everything else asks it rather than spelling a name again.
 
+## A volume is offline before it is gone
+
+A hit volume is a box full of machinery, not a barrel with a health bar on it.
+Shots take it apart a piece at a time, so it stops being what it was long
+before the last piece has gone: past **a fifth of its starting mass** it is
+offline, and `Sub::offline` in `state.rs` is the one place that says so.
+
+That is the OPPOSITE of a weapon mount, deliberately. A turret is bolted on
+whole and comes off whole; it is never partly shot away, and
+`WeaponSlot::destroyed` is its own separate answer. The two rules are the two
+halves of "what does losing part of a ship mean", and confusing them is how a
+gun ends up firing out of an empty socket.
+
+`SUB_FAIL_FRAC` is mirrored in `prototype/sim/data.js`, and has to be: the
+prototype is the design reference, and a reference that disagrees with the
+thing it references is worse than none. The one place the two could part is
+the prize crew's emergency repair, which hands a captured hull's drive back at
+a fixed 50 HP: on a big enough bay that is still under the line, so both
+implementations clamp it above one. `tests/subsystems.rs` pins that they never
+disagree.
+
 ## Damage is spatial: the layout IS the damage model
 
 A shot is not scored against a health bar. It is aimed at a point, it travels,
@@ -687,6 +740,56 @@ asserted on the hull.
 They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
+
+## A lookup that falls back cannot find its own typos
+
+`skyFor` and `backdropFor` answer an unknown scenario with a default rather
+than throwing. That is right at runtime, where a level with no entry should
+still be playable, and lethal at authoring time: `SKIES` and `BACKDROPS` were
+keyed `low_orbit` against a scenario called `low-orbit`, so the one level whose
+entire premise is a heavy body below you matched nothing, wore the skirmish sky
+and had no body below it. Nothing failed. It just looked finished.
+
+`tests/scenery.test.mjs` closes it in both directions: every practice level
+must have a sky and a backdrop of its own, and no table may carry a key the
+menu never asks for. The second half is what catches a rename that only
+happened on one side.
+
+## Load every asset from the SITE ROOT
+
+The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
+there is `/play/ember.png`, and the shell route answers that with the index
+page. A texture handed 86 KB of HTML does not throw. `TextureLoader` fails to
+decode it, the material keeps a normal map with no pixels in it, three.js then
+samples an empty texture so every fragment gets a garbage normal, and the hull
+draws as flat dark paint: exactly what a finish that was never applied looks
+like. The ember atlas and all nine armour finishes shipped dead that way, on a
+branch whose commit message said they were live.
+
+`main.ts` already loaded the wasm absolutely and said why on the line above it.
+Three later loads did not copy the lesson. Expect the fourth to try.
+
+So: a leading slash, and PROVE it rather than asserting it.
+`ftDebug.surfaces()` reports, per hull, the material, its two PBR numbers, the
+finish's file name and whether that file has pixels, and the playthrough fails
+if a bound finish has none. Putting `./` back flips `loaded` to false on every
+hull, which is how the guard was checked.
+
+## A class wears its own surface
+
+Four frigates in the same riveted plate are four frigates a player tells apart
+by colour alone, and colour is already saying whose side they are on. So each
+stock design carries a finish and its two PBR numbers, and each pick is the
+class's own description read back: Terran riveted (a working navy's standard),
+Karisen corrugated (it plates all four long faces and the silhouette is
+stacked; corrugation gives a hull a direction), Rogue battered and barely
+metallic (least hull in the game, a third of its mass in boarding gear),
+Benefactor ablative hex, tight and glossy (the one hull that looks engineered
+rather than fabricated), the freighter on grip deck with almost no specular.
+
+`stockFor` copies them across. It rebuilds a design field by field, so a new
+field that is not listed there goes missing between the table and the map
+silently, exactly as if it had never been set.
 
 ## Textures: Material Maker is the tool, the script is a stopgap
 

@@ -10,7 +10,7 @@
  */
 
 import * as THREE from 'three';
-import { bakeSky, skyFor, type SkyPreset } from './sky.js';
+import { bakeSky, skyDome, skyFor, type SkyPreset } from './sky.js';
 import { backdropFor, buildBackdrop, disposeBackdrop, sunDirection, type Backdrop } from './backdrop.js';
 import { Post, type Quality } from './post.js';
 import type { Match } from '../sim/match.js';
@@ -114,6 +114,9 @@ function finishMap(key: string): THREE.Texture | null {
   finishMaps.set(key, t);
   return t;
 }
+
+/** Handed back for a hull nothing has shot, so a caller never has to check. */
+const EMPTY_CELLS: ReadonlyMap<number, number> = new Map();
 
 /** What a hull is made of until a design says otherwise. */
 const HULL_METAL = DEFAULT_METAL;
@@ -938,6 +941,8 @@ export class View {
   /** The baked sky, and the scenery in front of it. Both belong to a match:
    *  the next launch gets its own and these are disposed. */
   #sky: THREE.CubeTexture | null = null;
+  /** The mesh that DRAWS that sky, so it can be dithered on the way out. */
+  #skyDome: THREE.Mesh | null = null;
   #backdrop: THREE.Group | null = null;
   /** Bloom, and the ladder that can take it away. */
   #post: Post | null = null;
@@ -1292,6 +1297,10 @@ export class View {
       this.#focus.z + this.#dist * cp * Math.cos(this.#yaw),
     );
     this.#camera.lookAt(this.#focus);
+    // The sky travels with the eye. A cube of half extent one centred on the
+    // camera covers every direction and stays clear of the near plane, so
+    // there is no far away sphere to keep the fleet inside of.
+    this.#skyDome?.position.copy(this.#camera.position);
   }
 
   // -------------------------------------------------------------- input --
@@ -1715,9 +1724,18 @@ export class View {
     // metalness renders black.
     const mesh = new THREE.Mesh(hull.geo, new THREE.MeshStandardMaterial({
       vertexColors: true,
-      metalness: HULL_METAL,
-      roughness: HULL_ROUGH,
+      // The DESIGN's, falling back to the default. These are the two numbers
+      // that separate painted steel from bare alloy, and they belong to the
+      // hull rather than to the map: a Benefactor is glossy and a Rogue is
+      // not, and reading a constant here would have made them the same ship
+      // in two colours.
+      metalness: design.metal ?? HULL_METAL,
+      roughness: design.rough ?? HULL_ROUGH,
       normalMap: finishMap(design.finish ?? DEFAULT_FINISH),
+      // A dark hull under one key light is another slow gradient in a narrow
+      // range, and it contours on an eight bit canvas for the same reason the
+      // sky does. One property, and the plating grades instead of stepping.
+      dithering: true,
     }));
     this.#tintHull(mesh, s);
     this.#buildRigs(s.id, design, hull);
@@ -1808,6 +1826,7 @@ export class View {
     carved: Array<[number, number]>;
     chunks: number;
     turrets: Array<{ ship: number; rig: number; gone: number; cells: number }>;
+    exposed: Array<{ ship: number; plate: number; part: number }>;
   } {
     // Per mount, how many of its cells are gone out of how many it has. A
     // turret is whole or it is gone, so `gone` is only ever 0 or `cells`, and
@@ -1820,11 +1839,29 @@ export class View {
         turrets.push({ ship: id, rig, gone, cells: cells.length });
       });
     }
+    // What each hole is looking AT: plating on the far side, or machinery.
+    const exposed: Array<{ ship: number; plate: number; part: number }> = [];
+    for (const [id, c] of this.#carved) {
+      if (c.wound) exposed.push({ ship: id, ...c.wound.exposed });
+    }
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
       turrets,
+      exposed,
     };
+  }
+
+  /**
+   * The cells one hull has lost, and the tick each went on.
+   *
+   * The carve lives here because the map is where it happens. Handed over
+   * rather than copied: the schematic draws the same hole, and a modal that
+   * worked its own damage out would be a second opinion about which cells are
+   * gone. Empty for a hull nothing has touched.
+   */
+  carvedCells(id: number): ReadonlyMap<number, number> {
+    return this.#carved.get(id)?.cells ?? EMPTY_CELLS;
   }
 
   /** Where the camera is and what the wash over the ship is, for judging what
@@ -3039,6 +3076,12 @@ export class View {
     }
     this.#sky?.dispose();
     this.#sky = null;
+    if (this.#skyDome) {
+      this.#scene.remove(this.#skyDome);
+      this.#skyDome.geometry.dispose();
+      (this.#skyDome.material as THREE.Material).dispose();
+      this.#skyDome = null;
+    }
 
     // A lost context, a headless run with no float targets, or any other
     // reason the bake cannot happen must leave a playable game rather than a
@@ -3046,7 +3089,13 @@ export class View {
     try {
       const baked = bakeSky(this.#renderer, sky);
       this.#sky = baked;
-      this.#scene.background = baked;
+      // Drawn by our own dome rather than by `scene.background`, because the
+      // canvas is eight bits and a nebula is a very slow gradient across a
+      // very dark range: without a dither on the way out it quantises into
+      // contours whatever the texture holds. `skyDome` says the rest.
+      this.#scene.background = null;
+      this.#skyDome = skyDome(baked);
+      this.#scene.add(this.#skyDome);
       this.#scene.environment = baked;
       // Low. The environment is there to fill shadow, not to flatten the key
       // light that gives a hull its shape.
