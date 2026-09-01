@@ -32,7 +32,15 @@
       vel: V.zero(),                // units per SECOND, carried across turns
       flight: Object.assign({}, cls.flight),   // per ship so it can be tuned live
       hull: cls.hull, hullMax: cls.hull,
-      subsystems: cls.subsystems().map(s => ({ ...s, offset: V.clone(s.offset), maxHp: s.hp, dead: false })),
+      // The authored number is what a volume ABSORBS; its MASS is that plus
+      // the fifth it goes offline with still on it. Reading the table as the
+      // mass instead takes a fifth off every subsystem in the game, which is
+      // not a fiction about wreckage, it is a flat balance cut. Mirrors
+      // `Sub::mass_for` in the Rust core.
+      subsystems: cls.subsystems().map(s => {
+        const mass = s.hp / (1 - data.SUB_FAIL_FRAC);
+        return { ...s, offset: V.clone(s.offset), hp: mass, maxHp: mass, dead: false };
+      }),
       weapons: cls.weapons.map(w => ({ key: w.key, mount: V.clone(w.mount), lastFiredTurn: -99 })),
       marines: cls.marines,
       boardingParties: [],          // [{faction, count}]
@@ -161,7 +169,12 @@
       const absorbed = dmg * (sub.blockPct / 100);
       hullShare = dmg - absorbed;
       sub.hp = Math.max(0, sub.hp - absorbed);
-      if (sub.hp <= 0) {
+      // Offline at a fifth of its mass, not at the last point of it: the
+      // machinery in a volume goes a piece at a time and the box stops being
+      // what it was long before the last piece has. Same number the Rust core
+      // uses, because a reference that disagrees with the thing it references
+      // is worse than no reference.
+      if (sub.hp <= sub.maxHp * data.SUB_FAIL_FRAC) {
         sub.dead = true;
         events.push({ tick, type: "SubsystemDestroyed", ship: ship.id, sub: sub.id });
         if (sub.type === "thruster" && !hasLive(ship, "thruster")) {
@@ -663,7 +676,15 @@
           ship.boardingParties = ship.boardingParties.filter(p => p !== party);
           // emergency thruster heal (the original's 50 HP prize-crew repair)
           const thr = ship.subsystems.find(s => s.type === "thruster");
-          if (thr && thr.dead) { thr.dead = false; thr.hp = 50; ship.drift.active = false; }
+          // Fifty of ABSORB on top of the line a volume is offline at, which is
+      // how every other figure in the table is measured. A bare 50 could be
+      // under that line, which is a repair that hands back a bay reading dead
+      // by the rule and alive by the flag.
+      if (thr && thr.dead) {
+        thr.hp = thr.maxHp * data.SUB_FAIL_FRAC + 50;
+        thr.dead = false;
+        ship.drift.active = false;
+      }
           events.push({ tick, type: "ShipCaptured", ship: ship.id, byFaction: party.faction });
         }
       }

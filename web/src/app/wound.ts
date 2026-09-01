@@ -27,7 +27,7 @@
 
 import * as THREE from 'three';
 import {
-  Mat, NX, NY, NZ, RUNG, armourColour, cellColour, frameFor, rasterise, type Design,
+  Mat, NX, NY, NZ, RUNG, armourColour, bareGrid, cellColour, frameFor, rasterise, type Design,
 } from './design.js';
 import type { HullMesh } from './hull.js';
 
@@ -127,6 +127,17 @@ export interface Wound {
   readonly vents: readonly Vent[];
   /** Which greedy quads are gone entirely, so the skin can collapse them. */
   readonly whole: Uint8Array;
+  /**
+   * What the hole is looking at, by kind: faces of exposed plate against faces
+   * of exposed COMPONENT.
+   *
+   * "The interior is not drawn" and "the interior is drawn and the shots never
+   * reach it" look identical on screen, and only one of them is a bug in this
+   * file. So the wound counts what it exposed, and the playthrough asserts
+   * that a hull which has lost hundreds of cells is showing some machinery and
+   * not just the far side of its own armour.
+   */
+  readonly exposed: { plate: number; part: number };
 }
 
 /**
@@ -194,10 +205,17 @@ function faceCorners(
  */
 export function buildWound(
   hull: HullMesh, design: Design, dead: ReadonlyMap<number, number>, tick: number,
+  bare = false,
 ): Wound {
   const frame = frameFor(design.classKey);
   const cell = RUNG[frame.rung];
-  const { grid, purp } = rasterise(design);
+  const raster = rasterise(design);
+  const purp = raster.purp;
+  // The SAME lattice the hull it is tearing was meshed from. A wound built
+  // against the plated grid while the picture has its plate off would put
+  // torn edges where the armour used to be and leave the frame behind them
+  // untouched: two answers about one ship.
+  const grid = bare ? bareGrid(raster.grid) : raster.grid;
   // What a cell is made of, so the inside of a hull is drawn as the parts that
   // are in it. Same answer `hull.ts` gives the outside, asked the same way.
   const colourOf = (n: number): number => {
@@ -215,6 +233,7 @@ export function buildWound(
   const gPos: number[] = [], gNrm: number[] = [], gCol: number[] = [], gUv: number[] = [];
   const glowCell: number[] = [];
   const vents: Vent[] = [];
+  const exposed = { plate: 0, part: 0 };
   const rgb: [number, number, number] = [0, 0, 0];
 
   const world = (a: number, b: number, c: number, out: number[]) => {
@@ -281,6 +300,9 @@ export function buildWound(
       // and fades off as it cools, uncovering the component underneath rather
       // than leaving a hole where one should be.
       const nc = idx(ni, nj, nk);
+      const mat = grid[nc] as number;
+      if (mat === Mat.Plate || mat === Mat.Skinned) exposed.plate++;
+      else exposed.part++;
       const own = colourOf(nc);
       const or_ = ((own >> 16) & 255) / 255;
       const og = ((own >> 8) & 255) / 255;
@@ -321,6 +343,7 @@ export function buildWound(
     glowCell: new Int32Array(glowCell),
     vents,
     whole,
+    exposed,
   };
 }
 

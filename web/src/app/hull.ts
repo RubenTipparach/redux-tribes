@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat,
-  armourColour, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
+  armourColour, bareGrid, cellColour, frameFor, moduleById, rasterise, rasterSig, socketsOf,
   type Design,
 } from './design.js';
 
@@ -179,14 +179,32 @@ const cache = new Map<string, HullMesh>();
  *  matches all session cannot grow this without bound. */
 const CACHE_MAX = 12;
 
-export function hullMesh(d: Design): HullMesh {
-  const key = rasterSig(d) + '|' + d.faction + '|' + d.paint;
+/**
+ * Mesh a hull, optionally with its armour taken off.
+ *
+ * `bare` is the shipyard's x ray, on the same mesher rather than beside it.
+ * The plate simply is not there: a plate cell reads as empty, so the flood
+ * fill runs through where it was and the greedy pass meshes the FRAME and the
+ * parts against the outside, which is exactly the picture the editor draws
+ * when a player turns the plate off. A `Skinned` cell goes back to being the
+ * frame member it always was, because that is what it is once the shell it was
+ * standing in is gone.
+ *
+ * The alternative was a second mesher for interiors, and a second mesher is a
+ * second answer to "what colour is this cell" and "which cells are visible",
+ * either of which drifting would draw a player a ship that is not the one they
+ * built (GUIDELINES 5.1).
+ */
+export function hullMesh(d: Design, bare = false): HullMesh {
+  const key = rasterSig(d) + '|' + d.faction + '|' + d.paint + (bare ? '|bare' : '');
   const hit = cache.get(key);
   if (hit) return hit;
 
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
-  const { grid, purp, own } = rasterise(d);
+  const raster = rasterise(d);
+  const purp = raster.purp, own = raster.own;
+  const grid = bare ? bareGrid(raster.grid) : raster.grid;
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
   // The guns, and which placement each one is, so the quads that belong to a

@@ -624,7 +624,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 #scStats { display:flex; gap:11px; min-width:0; flex:0 1 auto;
   overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
 #scStats::-webkit-scrollbar { display:none; }
-#scClose { flex:0 0 auto; }
+#scPlate, #scClose { flex:0 0 auto; }
+/* Close never gives way; the armour toggle is the next thing along, so on a
+   narrow header it loses its word and keeps its state in the colour. */
+@media (max-width: 900px) {
+  #scPlate { padding-left:8px; padding-right:8px; }
+}
+#scPlate.ghost { border-color:var(--cyan); color:var(--cyan); }
+#scPlate.off { border-color:var(--amber, #ffd24b); color:var(--amber, #ffd24b); }
+/* A part named off the model, under the volume it sits in: one card, both
+   facts, because "which volume is this in" and "what IS this" are both
+   questions a player has about the same pixel. */
+#scCard .part { display:block; margin:6px 0 0; padding-top:6px;
+  border-top:1px solid var(--line); font-size:11px; line-height:1.45; color:var(--muted); }
+#scCard .part b { color:var(--ink); font-weight:700; }
+#scCard .part .gun { color:var(--cyan); }
 #scView { grid-area:view; position:relative; min-width:0; min-height:0; background:#070a0f; }
 #scCanvas { display:block; width:100%; height:100%; touch-action:none;
   -webkit-user-select:none; user-select:none; }
@@ -1178,11 +1192,17 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <span class="dzstat" id="scWhat"></span>
     <span class="dzgap"></span>
     <span id="scStats"></span>
+    <!-- The shipyard's own plate toggle, spelled the same way, because a
+         player who has turned the plate off to look inside a design they were
+         building already knows this control. Here it is the only way to see
+         what a hull is made of without shooting it first. -->
+    <button id="scPlate" title="Armour: solid, see through, or off">Armour on</button>
     <button id="scClose">Close</button>
   </header>
   <section id="scView">
     <canvas id="scCanvas"></canvas>
-    <div id="scHint">tap a volume to name it &middot; drag to orbit &middot; pinch or wheel to zoom</div>
+    <div id="scHint">tap a part or a volume to name it &middot; Armour to see inside
+      &middot; drag to orbit &middot; pinch or wheel to zoom</div>
   </section>
   <!-- A sibling of the view rather than a child of it, so a phone can give the
        card a row of its own instead of laying it over the model it describes.

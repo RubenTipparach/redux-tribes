@@ -8,6 +8,16 @@
   const CRITICAL_RADIUS = 14;
   const CRITICAL_DAMAGE = 140;
 
+  // How much of a volume's mass has to be gone before it stops working.
+  //
+  // A hit volume is a box full of machinery, not a barrel with a health bar on
+  // it: shots take it apart a piece at a time, and a drive bay missing four
+  // fifths of itself is wreckage rather than a bay running at a fifth. Mirrors
+  // `data::SUB_FAIL_FRAC` in the Rust core, and it has to: the two are one rule
+  // with two implementations, and a rule that differs between them is a
+  // reference that no longer says what the core does.
+  const SUB_FAIL_FRAC = 0.20;
+
   const CONST = {
     TICKS_PER_SECOND: 60,
     TURN_SECONDS: 10,
@@ -178,7 +188,7 @@
   };
 
   const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, nominalReach,
-    CRITICAL_RADIUS, CRITICAL_DAMAGE };
+    CRITICAL_RADIUS, CRITICAL_DAMAGE, SUB_FAIL_FRAC };
   global.FT = global.FT || {};
   global.FT.data = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

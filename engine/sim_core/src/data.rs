@@ -202,6 +202,21 @@ pub enum SubKind {
 pub const MOUNT_HP: f32 = 110.0;
 pub const MOUNT_RADIUS: f32 = 0.45;
 
+/// How much of a volume's MASS has to be gone before it stops working.
+///
+/// A hit volume is not a barrel with a hit point on it: it is a box full of
+/// machinery, and a shot into it takes cells out a piece at a time. A drive
+/// bay missing four fifths of itself is not a drive bay with a fifth of its
+/// thrust, it is wreckage, and a bay that keeps running until the very last
+/// point of hp does not match the hole a player can see through it.
+///
+/// So a volume is offline at a fifth of what it started with, and the cells
+/// coming off the picture and the hp coming off the state are two views of the
+/// same shots rather than two rules. This is the OPPOSITE of a weapon mount,
+/// which is never partly shot away: a turret is bolted on whole, and it comes
+/// off whole.
+pub const SUB_FAIL_FRAC: f32 = 0.20;
+
 pub const CRITICAL_RADIUS: f32 = 14.0;
 pub const CRITICAL_DAMAGE: f32 = 140.0;
 

@@ -115,6 +115,9 @@ function finishMap(key: string): THREE.Texture | null {
   return t;
 }
 
+/** Handed back for a hull nothing has shot, so a caller never has to check. */
+const EMPTY_CELLS: ReadonlyMap<number, number> = new Map();
+
 /** What a hull is made of until a design says otherwise. */
 const HULL_METAL = DEFAULT_METAL;
 const HULL_ROUGH = DEFAULT_ROUGH;
@@ -1808,6 +1811,7 @@ export class View {
     carved: Array<[number, number]>;
     chunks: number;
     turrets: Array<{ ship: number; rig: number; gone: number; cells: number }>;
+    exposed: Array<{ ship: number; plate: number; part: number }>;
   } {
     // Per mount, how many of its cells are gone out of how many it has. A
     // turret is whole or it is gone, so `gone` is only ever 0 or `cells`, and
@@ -1820,11 +1824,29 @@ export class View {
         turrets.push({ ship: id, rig, gone, cells: cells.length });
       });
     }
+    // What each hole is looking AT: plating on the far side, or machinery.
+    const exposed: Array<{ ship: number; plate: number; part: number }> = [];
+    for (const [id, c] of this.#carved) {
+      if (c.wound) exposed.push({ ship: id, ...c.wound.exposed });
+    }
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
       turrets,
+      exposed,
     };
+  }
+
+  /**
+   * The cells one hull has lost, and the tick each went on.
+   *
+   * The carve lives here because the map is where it happens. Handed over
+   * rather than copied: the schematic draws the same hole, and a modal that
+   * worked its own damage out would be a second opinion about which cells are
+   * gone. Empty for a hull nothing has touched.
+   */
+  carvedCells(id: number): ReadonlyMap<number, number> {
+    return this.#carved.get(id)?.cells ?? EMPTY_CELLS;
   }
 
   /** Where the camera is and what the wash over the ship is, for judging what

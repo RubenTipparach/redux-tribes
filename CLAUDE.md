@@ -201,6 +201,14 @@ anything that is not an API route with the app shell, so the module arrived as
 HTML and the page booted no further than its own markup. Asset URLs are
 absolute for that reason.
 
+It also drives the **ship detail modal on a hull that has been shot**, which is
+the only state the interesting half of it exists in: that the modal knows about
+the same cells the map has taken off, that the armour toggle cycles on / ghost
+/ off and that armour off really is a different mesh rather than the same
+picture relabelled, and that a turret can be POINTED AT. Until it could, the
+only pickable objects in there were the volume boxes, and a mount is not one of
+those.
+
 ### And one for the shipyard
 
 ```sh
@@ -618,6 +626,27 @@ boundary by position and renaming one is a contract change for nothing. What
 the rule governs is the WORDS: `SUB_LABEL` is the one place the on screen name
 is written, and everything else asks it rather than spelling a name again.
 
+## A volume is offline before it is gone
+
+A hit volume is a box full of machinery, not a barrel with a health bar on it.
+Shots take it apart a piece at a time, so it stops being what it was long
+before the last piece has gone: past **a fifth of its starting mass** it is
+offline, and `Sub::offline` in `state.rs` is the one place that says so.
+
+That is the OPPOSITE of a weapon mount, deliberately. A turret is bolted on
+whole and comes off whole; it is never partly shot away, and
+`WeaponSlot::destroyed` is its own separate answer. The two rules are the two
+halves of "what does losing part of a ship mean", and confusing them is how a
+gun ends up firing out of an empty socket.
+
+`SUB_FAIL_FRAC` is mirrored in `prototype/sim/data.js`, and has to be: the
+prototype is the design reference, and a reference that disagrees with the
+thing it references is worse than none. The one place the two could part is
+the prize crew's emergency repair, which hands a captured hull's drive back at
+a fixed 50 HP: on a big enough bay that is still under the line, so both
+implementations clamp it above one. `tests/subsystems.rs` pins that they never
+disagree.
+
 ## Damage is spatial: the layout IS the damage model
 
 A shot is not scored against a health bar. It is aimed at a point, it travels,
@@ -682,6 +711,26 @@ asserted on the hull.
 They are two questions. WHICH ship is nearest is decided by where the segment
 enters. WHAT it hit on that ship is the first live volume along the segment
 inside it. Ask them separately.
+
+## Load every asset from the SITE ROOT
+
+The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
+there is `/play/ember.png`, and the shell route answers that with the index
+page. A texture handed 86 KB of HTML does not throw. `TextureLoader` fails to
+decode it, the material keeps a normal map with no pixels in it, three.js then
+samples an empty texture so every fragment gets a garbage normal, and the hull
+draws as flat dark paint: exactly what a finish that was never applied looks
+like. The ember atlas and all nine armour finishes shipped dead that way, on a
+branch whose commit message said they were live.
+
+`main.ts` already loaded the wasm absolutely and said why on the line above it.
+Three later loads did not copy the lesson. Expect the fourth to try.
+
+So: a leading slash, and PROVE it rather than asserting it.
+`ftDebug.surfaces()` reports, per hull, the material, its two PBR numbers, the
+finish's file name and whether that file has pixels, and the playthrough fails
+if a bound finish has none. Putting `./` back flips `loaded` to false on every
+hull, which is how the guard was checked.
 
 ## Textures: Material Maker is the tool, the script is a stopgap
 

@@ -679,6 +679,92 @@ async function checkSchematic() {
 }
 
 /**
+ * The same modal on a hull that has actually been shot.
+ *
+ * The first pass runs before a shot is fired, which is the only state in which
+ * a schematic showing NO damage looks correct. Three things only exist once a
+ * hull is holed, and every one of them was missing: the modal drew a pristine
+ * ship while the map drew a wreck, there was no way to see inside a hull
+ * without shooting it first, and a turret was a thing a player could see and
+ * not point at, because the only pickable objects in here were the volume
+ * boxes and a mount is not one of those.
+ */
+async function checkSchematicOnAWreck() {
+  const fail = (msg) => { console.log(`\nFAIL: ${msg}`); process.exit(1); };
+  const worst = await page.evaluate(() => {
+    const d = window.ftDebug.damage().carved.slice().sort((a, b) => b[1] - a[1])[0];
+    return d ? { ship: d[0], cells: d[1] } : null;
+  });
+  if (!worst || worst.cells < 40) {
+    log('note: no hull lost enough cells to check the schematic against damage');
+    return;
+  }
+  await sheet(true);
+  const chip = page.locator(`.chip[data-ship="${worst.ship}"] .chipInfo`).first();
+  if (!(await chip.count())) { log('note: the damaged hull has no chip to open'); return; }
+  await (MOBILE ? chip.tap() : chip.click());
+  await page.waitForSelector('#schema:not(.hidden)', { timeout: 5000 });
+  await page.waitForTimeout(500);
+
+  const open = await page.evaluate(() => window.ftDebug.schematic());
+  if (open.carved !== worst.cells) {
+    fail(`the map has taken ${worst.cells} cells off that hull and the schematic knows about ${open.carved}`);
+  }
+  if (open.plate !== 'on') fail(`the modal opened with its armour ${open.plate}`);
+
+  // The armour comes off, and the hull underneath is a DIFFERENT mesh: the
+  // frame and the parts, meshed against a lattice the plate has been taken
+  // out of. Same quad count both ways would mean the toggle drew the same
+  // picture twice and only relabelled itself.
+  const plated = open.quads;
+  const seen = [];
+  for (let n = 0; n < 3; n++) {
+    await tap('#scPlate');
+    await page.waitForTimeout(350);
+    seen.push(await page.evaluate(() => window.ftDebug.schematic()));
+  }
+  if (seen.map(x => x.plate).join(',') !== 'ghost,off,on') {
+    fail(`the armour toggle cycled ${seen.map(x => x.plate).join(' -> ')}`);
+  }
+  const bare = seen[1].quads;
+  if (bare === plated) {
+    fail(`armour off draws the same ${bare} quads as armour on, so nothing came off`);
+  }
+  if (seen[1].carved !== worst.cells) {
+    fail(`the damage was lost when the armour came off: ${seen[1].carved} of ${worst.cells}`);
+  }
+
+  // And a turret can be pointed at. Swept rather than aimed, because where a
+  // mount lands on screen depends on the angle the modal framed the hull at.
+  if (!MOBILE) {
+    const box = await (await page.$('#scCanvas')).boundingBox();
+    let hit = null;
+    for (let gy = 0.25; gy <= 0.8 && !hit; gy += 0.04) {
+      for (let gx = 0.12; gx <= 0.9; gx += 0.03) {
+        await page.mouse.move(box.x + box.width * gx, box.y + box.height * gy);
+        const d = await page.evaluate(() => window.ftDebug.schematic());
+        if (d.rig >= 0) { hit = { gx, gy, ...d }; break; }
+      }
+    }
+    if (!hit) fail('no point on the model named a turret, so a mount still cannot be pointed at');
+    await page.mouse.click(box.x + box.width * hit.gx, box.y + box.height * hit.gy);
+    await page.waitForTimeout(250);
+    const card = await page.evaluate(() => document.getElementById('scCard').textContent ?? '');
+    if (!/mount \d/.test(card)) {
+      fail(`clicked mount ${hit.rig} and the card never named it: ${card.slice(0, 120)}`);
+    }
+    log(`the schematic names a turret: mount ${hit.rig} on cell ${hit.cell}`);
+  }
+
+  await tap('#scClose');
+  await page.waitForFunction(
+    () => document.getElementById('schema').classList.contains('hidden'), null, { timeout: 3000 });
+  await sheet(false);
+  log(`schematic on a wreck: ${worst.cells} cells gone, ${plated} quads plated`
+    + ` against ${bare} bare, and the armour toggle cycles`);
+}
+
+/**
  * The map inspector: offered only close up, and it lets go on its own.
  *
  * Both halves matter. A button that never appears is a feature nobody finds; a
@@ -1079,6 +1165,7 @@ log('shots queued   :', shotsQueued);
 log('my ships       :', final.mine.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 log('hostiles       :', final.foes.map(m => `${m.name}${m.gone ? ' (lost)' : ''}`).join(', '));
 await checkReview();
+await checkSchematicOnAWreck();
 // Again at the end, where a fought match has actually put systems out: the
 // interesting half of the chip is the one that only exists after damage.
 const listed = await checkFleetChips();

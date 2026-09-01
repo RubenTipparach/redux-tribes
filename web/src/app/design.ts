@@ -1086,6 +1086,49 @@ const NUDGE: ReadonlyArray<readonly [number, number, number]> = (() => {
   return out;
 })();
 
+/**
+ * The same lattice with the armour taken off.
+ *
+ * A plate cell simply is not there, so a flood fill runs through where it was
+ * and a mesher meshes the frame and the parts against the outside. A `Skinned`
+ * cell goes back to being the frame member it always was, because that is what
+ * it is once the shell it was standing in has gone.
+ *
+ * One definition, because three pictures now want it: the editor's plate
+ * toggle, the schematic's, and the wound that has to agree with whichever of
+ * them is on screen. A copy rather than a mutation, since `rasterise` caches
+ * and zeroing its grid in place would take the plate off every other reader.
+ */
+export function bareGrid(grid: Uint8Array): Uint8Array {
+  const out = Uint8Array.from(grid);
+  for (let n = 0; n < out.length; n++) {
+    const m = out[n] as number;
+    if (m === Mat.Plate) out[n] = Mat.Empty;
+    else if (m === Mat.Skinned) out[n] = Mat.Frame;
+  }
+  return out;
+}
+
+/**
+ * Which placement a lattice cell belongs to, and what that placement is.
+ *
+ * The picture IS the grid, so naming what is under a pointer is this lookup
+ * and not a guess. Here rather than beside each caller: the map's tooltip and
+ * the schematic's card ask the same question about the same cells, and two
+ * copies would be two names for one part the first time either was tuned.
+ * Plate and frame belong to no placement and answer null; they are the hull.
+ */
+export function partAtCell(
+  d: Design, cell: number,
+): { index: number; part: Placement; module: ModuleDef } | null {
+  const owner = rasterise(d).own[cell] ?? 0;
+  if (owner <= 0) return null;
+  const part = d.parts[owner - 1];
+  if (!part) return null;
+  const module = moduleById(part.module);
+  return module ? { index: owner - 1, part, module } : null;
+}
+
 export function rasterise(d: Design): Raster {
   const sig = rasterSig(d);
   if (rasterCache && rasterCache.sig === sig) return rasterCache.raster;

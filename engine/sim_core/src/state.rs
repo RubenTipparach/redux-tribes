@@ -59,6 +59,40 @@ pub struct Sub {
     pub dead: bool,
 }
 
+impl Sub {
+    /// The mass a volume carries, given how much damage it is authored to
+    /// absorb.
+    ///
+    /// `data`'s number is the ABSORB budget, which is what it has always been
+    /// and what every value in that table was balanced as. A volume that goes
+    /// offline with a fifth of itself left has to carry that fifth ON TOP, or
+    /// the threshold is not a fiction about wreckage, it is a flat cut to
+    /// every subsystem in the game.
+    ///
+    /// So mass = absorb / (1 - fail), and the sum a volume soaks before
+    /// `offline` turns true is exactly the authored figure again.
+    /// `tests/subsystems.rs` pins that.
+    pub fn mass_for(absorb: f32) -> f32 {
+        absorb / (1.0 - crate::data::SUB_FAIL_FRAC)
+    }
+
+    /// Whether this volume has taken enough to stop working.
+    ///
+    /// A drive bay is not a barrel: it is a volume full of machinery, and it
+    /// loses that machinery a piece at a time. It stops being a drive bay long
+    /// before the last piece has gone, so the threshold is a share of its MASS
+    /// rather than the last point of it: past `data::SUB_FAIL_FRAC` of what it
+    /// started with, it is offline.
+    ///
+    /// One definition, because two would be a rule the resolver and the
+    /// planner could disagree about. A mount is the other case and is
+    /// deliberately unlike this one: a turret is whole or it is knocked off,
+    /// never partly shot away, and `WeaponSlot::destroyed` says so separately.
+    pub fn offline(&self) -> bool {
+        self.hp <= self.max_hp * crate::data::SUB_FAIL_FRAC
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WeaponSlot {
     pub key: WeaponKey,
@@ -207,7 +241,18 @@ impl Ship {
                 .subsystems
                 .iter()
                 .enumerate()
-                .map(|(i, d)| Sub { def: i, hp: d.hp, max_hp: d.hp, dead: false })
+                // The authored number is what a volume ABSORBS, and the mass
+                // is that plus the fifth it goes offline with still on it, so
+                // `Sub::mass_for` scales it. Reading the table as the mass
+                // instead would quietly take a fifth off every volume on every
+                // ship in the game: measured, that stalled a skirmish that had
+                // been ending on turn ten past turn twenty seven, which is the
+                // same failure the mount catch radius caused and the same way
+                // it showed, as combat going quiet rather than as a bug.
+                .map(|(i, d)| {
+                    let mass = Sub::mass_for(d.hp);
+                    Sub { def: i, hp: mass, max_hp: mass, dead: false }
+                })
                 .collect(),
             weapons: cls
                 .weapons
