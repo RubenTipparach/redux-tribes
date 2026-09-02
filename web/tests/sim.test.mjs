@@ -760,6 +760,50 @@ test('a hull is meshed by the voxel rule, so it has an inside', async () => {
 // language can catch a disagreement, because every one of them is just a list,
 // so this is the only thing standing between a renumbered class and a desync
 // that reads as two clients disagreeing about physics.
+test('every livery uses its whole palette, and the pick is the plating', async () => {
+  // The two halves of the rule, and only one of them is visible in a picture.
+  //
+  // A livery is a permutation: role `hull` is the picked swatch and the other
+  // seven are fixed offsets round the palette from it. That is what guarantees
+  // all eight land on every ship whichever swatch is chosen, and it is a
+  // property of a table rather than of a render, so it belongs here rather
+  // than in a browser. `shipyard.mjs` checks the cells actually come out that
+  // way; this checks the scheme could not have come out any other way.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { LIVERY, LIVERY_ROLES, FACTION_PAINT, roleColour, ARMOUR_BANDS, ROLE_BAND } = design;
+
+  for (const { key, swatches } of FACTION_PAINT) {
+    const livery = LIVERY[key];
+    assert.ok(livery, `${key} has no livery`);
+    assert.equal(swatches.length, 8, `${key} does not carry eight swatches`);
+    const offsets = LIVERY_ROLES.map(r => livery.offset[r]);
+    assert.equal(offsets[LIVERY_ROLES.indexOf('hull')], 0,
+      `${key}: the broad plating is not the picked swatch`);
+    assert.deepEqual([...offsets].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7],
+      `${key}: the offsets are not a permutation, so a swatch goes unused`);
+    // From EVERY pick, not just the first: a rotation of a cycle is still a
+    // cycle, and this is what says so rather than assuming it.
+    for (const pick of swatches) {
+      const laid = LIVERY_ROLES.map(r => roleColour(key, pick, r));
+      assert.equal(new Set(laid).size, 8,
+        `${key} at 0x${pick.toString(16)}: ${new Set(laid).size} of 8 swatches on the hull`);
+      assert.equal(roleColour(key, pick, 'hull'), pick,
+        `${key} at 0x${pick.toString(16)}: the plating is not the colour picked`);
+    }
+    // Every band has at least one role, or a hull pays for a draw call and
+    // draws nothing with it.
+    const used = new Set(LIVERY_ROLES.map(r => ROLE_BAND[r]));
+    assert.equal(used.size, ARMOUR_BANDS, `${key}: ${used.size} of ${ARMOUR_BANDS} bands used`);
+    assert.equal(new Set(livery.finish).size >= 2, true,
+      `${key}: every band wears the same finish, so the bands are not banded`);
+  }
+});
+
 test('every class spawns the ship its own stock hull derives', async () => {
   // CLAUDE.md's rule, checked rather than asserted in prose: "the stock spawn
   // and the stock design are the same ship". A class's table entry in
