@@ -460,6 +460,23 @@ seats. `radius` and `mass` are also the SPHERE and MASS gates, and
 disagree the editor's budget bar and the gate disagree, and a hull reads legal
 and is refused.
 
+**A pair of fittings lands on mirrored cells, and that takes four rules.** The
+plane a ship is symmetric about runs BETWEEN columns 15 and 16, not down the
+middle of column 16, which is the same trap `acrossFrom` was written for. So:
+`PX` and `SX` name cells out from the plane and eighty four hand authored
+`CX - n` / `CX + n` pairs that were a cell apart now use them; a part is seated
+from the PLANE outward rather than from its box's low edge, and a centreline
+part straddles it; the collision nudge walks MIRRORED on the starboard side,
+because a list of absolute directions makes a pair move the same way in the
+lattice and therefore opposite ways relative to the hull; and a pair is placed
+AS a pair, the second taking the mirror of where the first landed rather than
+searching for its own hole. Unmirrored part cells fell from 16.6 to 13.6
+percent of the fleet.
+
+What is left cannot be fixed by arithmetic: an ODD width part on the centreline
+cannot be symmetric about a boundary, and a fitting the nudge has to walk a long
+way lands where there is room rather than where its twin is.
+
 **Sockets are seated by the PROFILE, not by counted cells.** `seatAt` takes a
 fraction of the half beam and half depth at a station, so a socket is inside
 the skin whatever section the class has, and `suite` lays the plumbing every
@@ -1369,12 +1386,38 @@ and a container ship with twelve boxes in it showed six door panels.
 window still means "a room immediately behind this skin" rather than "a room
 somewhere along this line". Counts went from single digits to hundreds.
 
-**Two decals are face specific, and `WINDOW_FACE` is what says so.** A
-container's doors are on its END and a radiator's slats run down a FLANK, so
-tiling either over every exposed face of the module turns a box into a wall of
-doors: a container ship came out wearing a thousand of them, one per cell, each
-the size of a hand. It wears eleven now, which is about one per container,
-which is what a container has.
+**A cabin does not have a window in the roof, and `WINDOW_FACE` is what says
+so.** It names the axes a decal's normal may run along: `x` the flanks, `y` the
+deck and belly, `z` the bow and transom. The first cut had two settings, `ends`
+and `sides`, and `sides` meant "across or up", so every room decal tiled the
+DECK and the BELLY as well: a Terran frigate carried a field of a hundred and
+forty lit cabin panes across the top of its hull. A berth looks out sideways,
+and so do a promenade, a gallery and an airlock porthole. A bridge is the
+exception among rooms and keeps the bow, because a bridge looks where the ship
+is going. Running lights genuinely go anywhere, because they are lights rather
+than windows.
+
+Three are about the module's own shape instead. A container's doors are on its
+END and a radiator's slats run down a FLANK, so tiling either over every
+exposed face of the module turns a box into a wall of doors: a container ship
+came out wearing a thousand of them, one per cell, each the size of a hand. It
+wears eleven now, which is about one per container, which is what a container
+has.
+
+**Windows are asked about the room behind the MIRROR cell as well.** A ship is
+symmetric about its keel and its windows should look it; measured over the
+fleet, half of every window cell had no twin. The rooms are not the problem:
+every fitting is authored on a mirrored pair of sockets and all 432 pairs are
+exact. What moves them is the rasteriser's own collision nudge, which walks a
+part until it fits, sees whatever the placements before it left, and therefore
+displaces one side and not the other. So the skin is asked about its own room
+and about its mirror's, which is the ship as DESIGNED rather than as the packer
+settled it. Both cells have to be plating with the mirrored face exposed, so it
+can never light a pane on a surface that is not there.
+
+`sim.test.mjs` holds the fleet above sixty percent mirrored. The gap is honest
+and is about the hull rather than the windows: plating that is not itself
+mirrored, and fittings the nudge walks off their sockets.
 
 
 Authored on the module (`ModuleDef.window`) and derived onto the skin: the

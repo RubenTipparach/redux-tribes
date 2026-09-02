@@ -443,7 +443,7 @@ test('class and mount metadata cross intact', () => {
   // `--check` fails if the two part. The literal here is only a spot check
   // that a number crossed the boundary at all; the fleet wide agreement is
   // the test below it.
-  assert.ok(Math.abs(terran.hull - 297.718) < 0.01, `terran hull ${terran.hull}`);
+  assert.ok(Math.abs(terran.hull - 299.554) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
@@ -780,13 +780,25 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, moduleById, useCore } = design;
+  const { FRAMES, stockFor, moduleById, useCore, NX } = design;
   useCore(() => null);
+
+  /** The same cell on the other side of the keel. The plane runs BETWEEN
+   *  columns 15 and 16, so the mirror of column i is NX - 1 - i. */
+  const mirror = (n) => { const i = n % NX; return (NX - 1 - i) + (n - i); };
+  let lop = 0, all = 0;
 
   for (const f of FRAMES) {
     const d = stockFor(f.classKey);
     const h = hullMesh(d);
     const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // Symmetry, counted over every decal at once, because what a person sees
+    // is a lit window and not which room is behind it: a cabin to port and an
+    // airlock to starboard are two windows, not none.
+    const lit = new Set();
+    for (const w of h.windows) for (const n of w.cellOf) lit.add(n);
+    all += lit.size;
+    for (const n of lit) if (!lit.has(mirror(n))) lop++;
     // Twenty is not a taste: below that a hull reads as unlit at map range,
     // which is what every one of them did.
     assert.ok(faces >= 20,
@@ -800,6 +812,22 @@ test('every stock hull has windows, and they are cut where a room is', async () 
         `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);
     }
   }
+
+  // A ship is symmetric about its keel and its windows should look it: a row
+  // of cabins down one flank with nothing facing them is the one thing on a
+  // hull that reads as a mistake at a glance. Half of every window cell had no
+  // twin before the skin was asked about the room behind its MIRROR as well.
+  //
+  // A ceiling rather than zero, and the gap is honest. What is left is plating
+  // that is not itself mirrored and fittings the rasteriser's collision nudge
+  // walks off their sockets, and both are about the hull rather than about the
+  // windows. It is here so the number cannot quietly climb back.
+  const lopsided = lop / all;
+  assert.ok(lopsided < 0.40,
+    `${(100 * lopsided).toFixed(1)}% of window cells have no twin across the keel `
+    + `(${lop} of ${all})`);
+  console.log(`  windows: ${(100 * (1 - lopsided)).toFixed(1)}% mirrored across the keel, `
+    + `${all} lit cells over ${FRAMES.length} hulls`);
 });
 
 test('no stock mount is blocked in the direction it rests', async () => {

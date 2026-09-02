@@ -943,12 +943,31 @@ const acrossFrom = (half: number, frac: number, n: number): number => {
   return frac >= 0 ? out : (2 * half - 1) - out;
 };
 
+/**
+ * Cells `n` out from the centreline PLANE, to port and to starboard.
+ *
+ * The plane runs BETWEEN columns 15 and 16, not down the middle of column 16,
+ * so a pair written `CX - n` and `CX + n` is not a mirrored pair at all: the
+ * mirror of 16 - n is 15 + n, and the starboard half of every such pair sat
+ * one cell further out than its twin. Eighty four pairs across the fleet were
+ * authored that way, which is most of why a hull was not symmetric and why its
+ * windows came out on one side and not the other.
+ *
+ * `acrossFrom` has always done this correctly for anything seated by fraction;
+ * these are the two names for doing it by hand.
+ */
+const PX = (n: number): number => CX - 1 - n;
+const SX = (n: number): number => CX + n;
+
 const seatAt = (prof: readonly Station[], kind: SocketKind, id: string,
-  label: string, z: number, u = 0, v = 0): Socket => {
+  label: string, z: number, u = 0, v = 0, facing?: number): Socket => {
   const [hw, hh] = hullAt(prof, z);
   return {
     id, kind, label,
     at: [acrossFrom(CX, u, hw as number), acrossFrom(CY, v, hh as number), z],
+    // Authored only where the hull makes the positional default wrong; see
+    // `ringFacing`, and `sim.test.mjs` is what proves each one.
+    ...(facing === undefined ? {} : { facing }),
   };
 };
 
@@ -1580,39 +1599,39 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_frigate', name: 'Terran Frigate',
     faction: 'terran', tier: 'frigate', rung: 'frigate',
-    radius: 3.6, massMax: 1.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.6, massMax: 1.09, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN,
     spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
     sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 5, CY - 2, 4], label: 'drive, port lower' },
+      { id: 'd0', kind: 'drive', at: [PX(4), CY - 2, 4], label: 'drive, port lower' },
       { id: 'd1', kind: 'drive', at: [CX, CY - 2, 4], label: 'drive, centre lower' },
-      { id: 'd2', kind: 'drive', at: [CX + 5, CY - 2, 4], label: 'drive, starboard lower' },
-      { id: 'd3', kind: 'drive', at: [CX - 5, CY + 3, 4], label: 'drive, port upper' },
+      { id: 'd2', kind: 'drive', at: [SX(4), CY - 2, 4], label: 'drive, starboard lower' },
+      { id: 'd3', kind: 'drive', at: [PX(4), CY + 3, 4], label: 'drive, port upper' },
       { id: 'd4', kind: 'drive', at: [CX, CY + 3, 4], label: 'drive, centre upper' },
-      { id: 'd5', kind: 'drive', at: [CX + 5, CY + 3, 4], label: 'drive, starboard upper' },
+      { id: 'd5', kind: 'drive', at: [SX(4), CY + 3, 4], label: 'drive, starboard upper' },
       seatAt(PROF_TERRAN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN, 0.86), 0, 0.62),
       seatAt(PROF_TERRAN, 'gun', 'g1', 'gun ring, port', zAt(PROF_TERRAN, 0.54), -0.72, 0.32),
       seatAt(PROF_TERRAN, 'gun', 'g2', 'gun ring, starboard', zAt(PROF_TERRAN, 0.54), 0.72, 0.32),
-      { id: 'r0', kind: 'retro', at: [CX - 7, CY, 50], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 7, CY, 50], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 48], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 10, CY, 48], label: 'rcs, starboard bow' },
+      { id: 'r0', kind: 'retro', at: [PX(6), CY, 50], label: 'retro, port' },
+      { id: 'r1', kind: 'retro', at: [SX(6), CY, 50], label: 'retro, starboard' },
+      { id: 'y0', kind: 'rcs', at: [PX(9), CY, 48], label: 'rcs, port bow' },
+      { id: 'y1', kind: 'rcs', at: [SX(9), CY, 48], label: 'rcs, starboard bow' },
       { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 40], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 40], label: 'rcs, ventral' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 4, 44], label: 'bay, forward dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 5, CY, 28], label: 'bay, port' },
-      { id: 'b2', kind: 'bay', at: [CX + 5, CY, 28], label: 'bay, starboard' },
+      { id: 'b1', kind: 'bay', at: [PX(4), CY, 28], label: 'bay, port' },
+      { id: 'b2', kind: 'bay', at: [SX(4), CY, 28], label: 'bay, starboard' },
       { id: 'b3', kind: 'bay', at: [CX, CY - 4, 22], label: 'bay, ventral' },
       { id: 'b4', kind: 'bay', at: [CX, CY + 3, 16], label: 'bay, aft' },
-      { id: 'b5', kind: 'bay', at: [CX - 5, CY + 2, 20], label: 'bay, port aft' },
-      { id: 'b6', kind: 'bay', at: [CX + 5, CY + 2, 20], label: 'bay, starboard aft' },
+      { id: 'b5', kind: 'bay', at: [PX(4), CY + 2, 20], label: 'bay, port aft' },
+      { id: 'b6', kind: 'bay', at: [SX(4), CY + 2, 20], label: 'bay, starboard aft' },
       { id: 'b7', kind: 'bay', at: [CX, CY - 3, 34], label: 'bay, ventral forward' },
-      { id: 'b8', kind: 'bay', at: [CX - 4, CY + 4, 28], label: 'bay, spare port' },
-      { id: 'b9', kind: 'bay', at: [CX + 4, CY + 4, 28], label: 'bay, spare starboard' },
-      { id: 'y2', kind: 'rcs', at: [CX - 9, CY, 20], label: 'rcs, port quarter' },
-      { id: 'y3', kind: 'rcs', at: [CX + 9, CY, 20], label: 'rcs, starboard quarter' },
-      { id: 'c0', kind: 'clamp', at: [CX - 9, CY - 4, 26], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 9, CY - 4, 26], label: 'clamp, starboard' },
+      { id: 'b8', kind: 'bay', at: [PX(3), CY + 4, 28], label: 'bay, spare port' },
+      { id: 'b9', kind: 'bay', at: [SX(3), CY + 4, 28], label: 'bay, spare starboard' },
+      { id: 'y2', kind: 'rcs', at: [PX(8), CY, 20], label: 'rcs, port quarter' },
+      { id: 'y3', kind: 'rcs', at: [SX(8), CY, 20], label: 'rcs, starboard quarter' },
+      { id: 'c0', kind: 'clamp', at: [PX(8), CY - 4, 26], label: 'clamp, port' },
+      { id: 'c1', kind: 'clamp', at: [SX(8), CY - 4, 26], label: 'clamp, starboard' },
     ],
     note: 'A slab body on one deep keel. Six small bells in a three by two block '
       + 'on the transom and armour standing off the flanks, both read straight off '
@@ -1621,37 +1640,40 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.7, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.8, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
     spine: [keel(CY, 8, 54), keel(CY + 5, 12, 50, 8, 2), keel(CY - 5, 4, 58, 5, 3),
       ...ribs(PROF_KARISEN, [12, 19, 26, 33, 40, 47])],
     sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 6, CY - 1, 5], label: 'drive, port' },
+      { id: 'd0', kind: 'drive', at: [PX(5), CY - 1, 5], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY - 1, 5], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 6, CY - 1, 5], label: 'drive, starboard' },
+      { id: 'd2', kind: 'drive', at: [SX(5), CY - 1, 5], label: 'drive, starboard' },
       { id: 'd3', kind: 'drive', at: [CX, CY + 4, 5], label: 'drive, dorsal vernier' },
       seatAt(PROF_KARISEN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN, 0.82), 0, 0.6),
       seatAt(PROF_KARISEN, 'missile', 'm0', 'missile pad, ventral',
         zAt(PROF_KARISEN, 0.46), 0, -0.5),
-      seatAt(PROF_KARISEN, 'gun', 's0', 'sponson, port', zAt(PROF_KARISEN, 0.32), -0.78, -0.2),
+      // A sponson set into the flank, with the body of the ship both fore and
+      // aft of it: neither way along the keel is clear, so it rests trained
+      // out of its own recess.
+      seatAt(PROF_KARISEN, 'gun', 's0', 'sponson, port', zAt(PROF_KARISEN, 0.32), -0.78, -0.2, 1),
       seatAt(PROF_KARISEN, 'gun', 's1', 'sponson, starboard',
         zAt(PROF_KARISEN, 0.32), 0.78, -0.2),
-      { id: 'r0', kind: 'retro', at: [CX - 7, CY, 48], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 7, CY, 48], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 46], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 10, CY, 46], label: 'rcs, starboard bow' },
+      { id: 'r0', kind: 'retro', at: [PX(6), CY, 48], label: 'retro, port' },
+      { id: 'r1', kind: 'retro', at: [SX(6), CY, 48], label: 'retro, starboard' },
+      { id: 'y0', kind: 'rcs', at: [PX(9), CY, 46], label: 'rcs, port bow' },
+      { id: 'y1', kind: 'rcs', at: [SX(9), CY, 46], label: 'rcs, starboard bow' },
       { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 38], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 38], label: 'rcs, ventral' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 4, 42], label: 'bay, dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 4, CY - 4, 26], label: 'bay, port keel' },
-      { id: 'b2', kind: 'bay', at: [CX + 4, CY - 4, 26], label: 'bay, starboard keel' },
+      { id: 'b1', kind: 'bay', at: [PX(3), CY - 4, 26], label: 'bay, port keel' },
+      { id: 'b2', kind: 'bay', at: [SX(3), CY - 4, 26], label: 'bay, starboard keel' },
       { id: 'b3', kind: 'bay', at: [CX, CY + 2, 18], label: 'bay, aft' },
-      { id: 'b4', kind: 'bay', at: [CX - 5, CY + 3, 34], label: 'bay, port dorsal' },
-      { id: 'b5', kind: 'bay', at: [CX + 5, CY + 3, 34], label: 'bay, starboard dorsal' },
-      { id: 'c0', kind: 'clamp', at: [CX - 9, CY - 5, 24], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 9, CY - 5, 24], label: 'clamp, starboard' },
+      { id: 'b4', kind: 'bay', at: [PX(4), CY + 3, 34], label: 'bay, port dorsal' },
+      { id: 'b5', kind: 'bay', at: [SX(4), CY + 3, 34], label: 'bay, starboard dorsal' },
+      { id: 'c0', kind: 'clamp', at: [PX(8), CY - 5, 24], label: 'clamp, port' },
+      { id: 'c1', kind: 'clamp', at: [SX(8), CY - 5, 24], label: 'clamp, starboard' },
     ],
     note: 'A stacked spine rather than a slab: body run, dorsal stringer, and a '
       + 'ventral keel beam longer than the ship. Two sponsons ship empty.',
@@ -1666,43 +1688,43 @@ export const FRAMES: readonly FrameDef[] = [
     spine: [keel(CY, 14, 48), [CX - 11, CY - 2, 26, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE, [18, 24, 30, 36, 42])],
     sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 6, CY, 11], label: 'drive, port' },
+      { id: 'd0', kind: 'drive', at: [PX(5), CY, 11], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY, 11], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 6, CY, 11], label: 'drive, starboard' },
+      { id: 'd2', kind: 'drive', at: [SX(5), CY, 11], label: 'drive, starboard' },
       seatAt(PROF_ROGUE, 'gun', 'g0', 'gun ring, port', zAt(PROF_ROGUE, 0.74), -0.7, 0.4),
       seatAt(PROF_ROGUE, 'gun', 'g1', 'gun ring, starboard', zAt(PROF_ROGUE, 0.74), 0.7, 0.4),
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 44], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 44], label: 'retro, starboard' },
+      { id: 'r0', kind: 'retro', at: [PX(5), CY, 44], label: 'retro, port' },
+      { id: 'r1', kind: 'retro', at: [SX(5), CY, 44], label: 'retro, starboard' },
       { id: 'r2', kind: 'retro', at: [CX, CY + 5, 44], label: 'retro, dorsal' },
-      { id: 'y0', kind: 'rcs', at: [CX - 11, CY, 40], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 11, CY, 40], label: 'rcs, starboard bow' },
-      { id: 'y2', kind: 'rcs', at: [CX - 11, CY, 18], label: 'rcs, port quarter' },
-      { id: 'y3', kind: 'rcs', at: [CX + 11, CY, 18], label: 'rcs, starboard quarter' },
+      { id: 'y0', kind: 'rcs', at: [PX(10), CY, 40], label: 'rcs, port bow' },
+      { id: 'y1', kind: 'rcs', at: [SX(10), CY, 40], label: 'rcs, starboard bow' },
+      { id: 'y2', kind: 'rcs', at: [PX(10), CY, 18], label: 'rcs, port quarter' },
+      { id: 'y3', kind: 'rcs', at: [SX(10), CY, 18], label: 'rcs, starboard quarter' },
       { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 36], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 36], label: 'rcs, ventral' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 4, 40], label: 'bay, bridge' },
-      { id: 'b1', kind: 'bay', at: [CX - 8, CY, 28], label: 'gallery bay, port outer' },
-      { id: 'b2', kind: 'bay', at: [CX - 4, CY, 28], label: 'gallery bay, port inner' },
-      { id: 'b3', kind: 'bay', at: [CX + 4, CY, 28], label: 'gallery bay, starboard inner' },
-      { id: 'b4', kind: 'bay', at: [CX + 8, CY, 28], label: 'gallery bay, starboard outer' },
-      { id: 'b5', kind: 'bay', at: [CX - 7, CY, 22], label: 'gallery bay, port aft' },
-      { id: 'b6', kind: 'bay', at: [CX + 7, CY, 22], label: 'gallery bay, starboard aft' },
+      { id: 'b1', kind: 'bay', at: [PX(7), CY, 28], label: 'gallery bay, port outer' },
+      { id: 'b2', kind: 'bay', at: [PX(3), CY, 28], label: 'gallery bay, port inner' },
+      { id: 'b3', kind: 'bay', at: [SX(3), CY, 28], label: 'gallery bay, starboard inner' },
+      { id: 'b4', kind: 'bay', at: [SX(7), CY, 28], label: 'gallery bay, starboard outer' },
+      { id: 'b5', kind: 'bay', at: [PX(6), CY, 22], label: 'gallery bay, port aft' },
+      { id: 'b6', kind: 'bay', at: [SX(6), CY, 22], label: 'gallery bay, starboard aft' },
       { id: 'b7', kind: 'bay', at: [CX, CY - 4, 22], label: 'bay, ventral' },
-      { id: 'b8', kind: 'bay', at: [CX - 10, CY + 2, 26], label: 'collar, port' },
-      { id: 'b9', kind: 'bay', at: [CX + 10, CY + 2, 26], label: 'collar, starboard' },
-      { id: 'c0', kind: 'clamp', at: [CX - 12, CY, 30], label: 'clamp, port forward' },
-      { id: 'c1', kind: 'clamp', at: [CX + 12, CY, 30], label: 'clamp, starboard forward' },
-      { id: 'c2', kind: 'clamp', at: [CX - 12, CY, 24], label: 'clamp, port aft' },
-      { id: 'c3', kind: 'clamp', at: [CX + 12, CY, 24], label: 'clamp, starboard aft' },
-      { id: 'a0', kind: 'bay', at: [CX - 10, CY - 4, 30], label: 'collar, port forward' },
-      { id: 'a1', kind: 'bay', at: [CX + 10, CY - 4, 30], label: 'collar, starboard forward' },
-      { id: 'a2', kind: 'bay', at: [CX - 10, CY - 4, 24], label: 'collar, port aft' },
-      { id: 'a3', kind: 'bay', at: [CX + 10, CY - 4, 24], label: 'collar, starboard aft' },
+      { id: 'b8', kind: 'bay', at: [PX(9), CY + 2, 26], label: 'collar, port' },
+      { id: 'b9', kind: 'bay', at: [SX(9), CY + 2, 26], label: 'collar, starboard' },
+      { id: 'c0', kind: 'clamp', at: [PX(11), CY, 30], label: 'clamp, port forward' },
+      { id: 'c1', kind: 'clamp', at: [SX(11), CY, 30], label: 'clamp, starboard forward' },
+      { id: 'c2', kind: 'clamp', at: [PX(11), CY, 24], label: 'clamp, port aft' },
+      { id: 'c3', kind: 'clamp', at: [SX(11), CY, 24], label: 'clamp, starboard aft' },
+      { id: 'a0', kind: 'bay', at: [PX(9), CY - 4, 30], label: 'collar, port forward' },
+      { id: 'a1', kind: 'bay', at: [SX(9), CY - 4, 30], label: 'collar, starboard forward' },
+      { id: 'a2', kind: 'bay', at: [PX(9), CY - 4, 24], label: 'collar, port aft' },
+      { id: 'a3', kind: 'bay', at: [SX(9), CY - 4, 24], label: 'collar, starboard aft' },
       { id: 'a4', kind: 'bay', at: [CX, CY - 6, 27], label: 'collar, ventral' },
-      { id: 'b10', kind: 'bay', at: [CX - 4, CY + 4, 36], label: 'bay, spare port' },
-      { id: 'b11', kind: 'bay', at: [CX + 4, CY + 4, 36], label: 'bay, spare starboard' },
-      { id: 'c4', kind: 'clamp', at: [CX - 12, CY + 4, 27], label: 'clamp, port upper' },
-      { id: 'c5', kind: 'clamp', at: [CX + 12, CY + 4, 27], label: 'clamp, starboard upper' },
+      { id: 'b10', kind: 'bay', at: [PX(3), CY + 4, 36], label: 'bay, spare port' },
+      { id: 'b11', kind: 'bay', at: [SX(3), CY + 4, 36], label: 'bay, spare starboard' },
+      { id: 'c4', kind: 'clamp', at: [PX(11), CY + 4, 27], label: 'clamp, port upper' },
+      { id: 'c5', kind: 'clamp', at: [SX(11), CY + 4, 27], label: 'clamp, starboard upper' },
     ],
     note: 'Short and wide, with a boarding gallery across its waist. The gear that '
       + 'makes it a raider is roughly a third of its mass, which is also why it has '
@@ -1711,7 +1733,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 0.92, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.5, massMax: 0.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -1719,8 +1741,8 @@ export const FRAMES: readonly FrameDef[] = [
       ...ribs(PROF_BENEFACTOR, [18, 25, 32, 39, 46, 52])],
     sockets: [
       { id: 'd0', kind: 'drive', at: [CX, CY - 3, 5], label: 'drive, main' },
-      { id: 'd1', kind: 'drive', at: [CX + 6, CY - 3, 6], label: 'drive, starboard' },
-      { id: 'd2', kind: 'drive', at: [CX - 6, CY - 3, 6], label: 'drive, port' },
+      { id: 'd1', kind: 'drive', at: [SX(5), CY - 3, 6], label: 'drive, starboard' },
+      { id: 'd2', kind: 'drive', at: [PX(5), CY - 3, 6], label: 'drive, port' },
       { id: 'd3', kind: 'drive', at: [CX, CY + 5, 6], label: 'drive, dorsal' },
       seatAt(PROF_BENEFACTOR, 'gun', 'g0', 'gun ring, port',
         zAt(PROF_BENEFACTOR, 0.72), -0.82, 0.46),
@@ -1732,22 +1754,22 @@ export const FRAMES: readonly FrameDef[] = [
         zAt(PROF_BENEFACTOR, 0.20), 0, -0.62),
       seatAt(PROF_BENEFACTOR, 'gun', 'k1', 'aft stack, dorsal',
         zAt(PROF_BENEFACTOR, 0.20), 0, 0.62),
-      { id: 'a0', kind: 'bay', at: [CX - 6, CY - 4, 34], label: 'collar, port' },
-      { id: 'a1', kind: 'bay', at: [CX + 6, CY - 4, 34], label: 'collar, starboard' },
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 50], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 50], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 9, CY, 46], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 9, CY, 46], label: 'rcs, starboard bow' },
+      { id: 'a0', kind: 'bay', at: [PX(5), CY - 4, 34], label: 'collar, port' },
+      { id: 'a1', kind: 'bay', at: [SX(5), CY - 4, 34], label: 'collar, starboard' },
+      { id: 'r0', kind: 'retro', at: [PX(5), CY, 50], label: 'retro, port' },
+      { id: 'r1', kind: 'retro', at: [SX(5), CY, 50], label: 'retro, starboard' },
+      { id: 'y0', kind: 'rcs', at: [PX(8), CY, 46], label: 'rcs, port bow' },
+      { id: 'y1', kind: 'rcs', at: [SX(8), CY, 46], label: 'rcs, starboard bow' },
       { id: 'p0', kind: 'rcs', at: [CX, CY + 9, 38], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 9, 38], label: 'rcs, ventral' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 4, 42], label: 'bay, dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 4, CY, 28], label: 'bay, port' },
-      { id: 'b2', kind: 'bay', at: [CX + 4, CY, 28], label: 'bay, starboard' },
+      { id: 'b1', kind: 'bay', at: [PX(3), CY, 28], label: 'bay, port' },
+      { id: 'b2', kind: 'bay', at: [SX(3), CY, 28], label: 'bay, starboard' },
       { id: 'b3', kind: 'bay', at: [CX, CY - 5, 22], label: 'bay, ventral' },
-      { id: 'b4', kind: 'bay', at: [CX - 5, CY + 3, 34], label: 'bay, port dorsal' },
-      { id: 'b5', kind: 'bay', at: [CX + 5, CY + 3, 34], label: 'bay, starboard dorsal' },
-      { id: 'c0', kind: 'clamp', at: [CX - 8, CY - 4, 26], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 8, CY - 4, 26], label: 'clamp, starboard' },
+      { id: 'b4', kind: 'bay', at: [PX(4), CY + 3, 34], label: 'bay, port dorsal' },
+      { id: 'b5', kind: 'bay', at: [SX(4), CY + 3, 34], label: 'bay, starboard dorsal' },
+      { id: 'c0', kind: 'clamp', at: [PX(7), CY - 4, 26], label: 'clamp, port' },
+      { id: 'c1', kind: 'clamp', at: [SX(7), CY - 4, 26], label: 'clamp, starboard' },
     ],
     note: 'A long hull that steps down deeply aft, with a forward pair of cannon '
       + 'rings and a ventral missile rack. The aft stack ships empty.',
@@ -1755,7 +1777,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'freighter', name: 'Freighter',
     faction: 'civil', tier: 'freighter', rung: 'escort',
-    radius: 4.9, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.9, massMax: 2.62, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
       ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
@@ -1763,26 +1785,26 @@ export const FRAMES: readonly FrameDef[] = [
     // a ring, so the authored empty mount table becomes geometry rather than a
     // convention. No clamp seat either: its short reach is an absence.
     sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 5, CY, 9], label: 'drive, port' },
+      { id: 'd0', kind: 'drive', at: [PX(4), CY, 9], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY, 9], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 5, CY, 9], label: 'drive, starboard' },
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 46], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 46], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 8, CY, 44], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 8, CY, 44], label: 'rcs, starboard bow' },
+      { id: 'd2', kind: 'drive', at: [SX(4), CY, 9], label: 'drive, starboard' },
+      { id: 'r0', kind: 'retro', at: [PX(5), CY, 46], label: 'retro, port' },
+      { id: 'r1', kind: 'retro', at: [SX(5), CY, 46], label: 'retro, starboard' },
+      { id: 'y0', kind: 'rcs', at: [PX(7), CY, 44], label: 'rcs, port bow' },
+      { id: 'y1', kind: 'rcs', at: [SX(7), CY, 44], label: 'rcs, starboard bow' },
       { id: 'p0', kind: 'rcs', at: [CX, CY + 7, 38], label: 'rcs, dorsal' },
       { id: 'p1', kind: 'rcs', at: [CX, CY - 7, 38], label: 'rcs, ventral' },
       { id: 'h0', kind: 'bay', at: [CX, CY, 38], label: 'hold, forward' },
       { id: 'h1', kind: 'bay', at: [CX, CY, 22], label: 'hold, aft' },
       { id: 'b0', kind: 'bay', at: [CX, CY + 5, 46], label: 'bay, bridge' },
-      { id: 'b1', kind: 'bay', at: [CX - 6, CY, 14], label: 'bay, port aft' },
-      { id: 'b2', kind: 'bay', at: [CX + 6, CY, 14], label: 'bay, starboard aft' },
+      { id: 'b1', kind: 'bay', at: [PX(5), CY, 14], label: 'bay, port aft' },
+      { id: 'b2', kind: 'bay', at: [SX(5), CY, 14], label: 'bay, starboard aft' },
       { id: 'b3', kind: 'bay', at: [CX, CY + 5, 30], label: 'bay, dorsal' },
-      { id: 'b4', kind: 'bay', at: [CX - 6, CY - 4, 30], label: 'collar, port' },
-      { id: 'b5', kind: 'bay', at: [CX + 6, CY - 4, 30], label: 'collar, starboard' },
+      { id: 'b4', kind: 'bay', at: [PX(5), CY - 4, 30], label: 'collar, port' },
+      { id: 'b5', kind: 'bay', at: [SX(5), CY - 4, 30], label: 'collar, starboard' },
       { id: 'b6', kind: 'bay', at: [CX, CY - 5, 18], label: 'collar, ventral' },
-      { id: 'b7', kind: 'bay', at: [CX - 5, CY + 4, 22], label: 'bay, spare port' },
-      { id: 'b8', kind: 'bay', at: [CX + 5, CY + 4, 22], label: 'bay, spare starboard' },
+      { id: 'b7', kind: 'bay', at: [PX(4), CY + 4, 22], label: 'bay, spare port' },
+      { id: 'b8', kind: 'bay', at: [SX(4), CY + 4, 22], label: 'bay, spare starboard' },
     ],
     note: 'A long square brick with two holds under a dorsal door. No gun ring '
       + 'exists on this frame, which is what the empty mount table looks like as '
@@ -1802,7 +1824,11 @@ export const FRAMES: readonly FrameDef[] = [
     spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
     sockets: [
       ...suite(PROF_TERRAN_CV, [[-0.5, -0.2], [0.5, -0.2]], 5, 2),
-      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN_CV, 0.42), 0, 0.45),
+      // Rests FORWARD rather than abeam. It is a waist ring by position, and
+      // the waist default is abeam because the destroyer's ventral pair look
+      // at each other along the keel; on this hull the beam is what is
+      // blocked and the bow is clear.
+      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN_CV, 0.42), 0, 0.45, 0),
       seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', zAt(PROF_TERRAN_CV, 0.24), 0, 0.55),
     ],
     note: 'The frigate’s slab cut down to a bell, a nozzle and two rings. Short enough '
@@ -1812,7 +1838,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.6, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.5, massMax: 2.62, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1835,7 +1861,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.4, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.4, massMax: 5.53, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -1883,7 +1909,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.8, massMax: 2.02, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -1901,7 +1927,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 4.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -1969,7 +1995,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
     faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.3, massMax: 2.88, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.3, massMax: 2.91, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CA,
     spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
       [CX - 13, CY - 2, 34, 26, 4, 6] as const,
@@ -2013,7 +2039,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.2, massMax: 2.35, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.37, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -2033,7 +2059,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7, massMax: 4.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7, massMax: 4.69, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
@@ -2092,7 +2118,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_boxship', name: 'Container Ship',
     faction: 'civil', tier: 'boxship', rung: 'cruiser',
-    radius: 7.3, massMax: 5.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 5.77, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BOXSHIP,
     spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
       ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
@@ -2108,7 +2134,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_tanker', name: 'Tanker',
     faction: 'civil', tier: 'tanker', rung: 'cruiser',
-    radius: 6.9, massMax: 5.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.9, massMax: 5.71, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TANKER,
     spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
       ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
@@ -2144,7 +2170,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_liner', name: 'Liner',
     faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.5, massMax: 5.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.5, massMax: 5.34, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LINER,
     spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
       ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
@@ -2423,6 +2449,14 @@ export const outwardAt = (
 const BOW_RING = 0.70, STERN_RING = 0.25;
 
 const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
+  // An authored facing wins. Where a ring sits decides which way it rests in
+  // almost every case, and in a handful it cannot: the Terran corvette's waist
+  // deck ring and the Terran destroyer's waist ventral ring are in the same
+  // band and want opposite answers, because what is actually in the way is the
+  // hull rather than the position. A rule that guessed from position alone
+  // would have to be wrong about one of them, so the frame gets the last word
+  // and `sim.test.mjs` is what proves the word was right.
+  if (s.facing !== undefined) return s;
   const prof = frame.profile;
   const [ox, oy] = outwardAt(prof, s.at);
   const aft = Math.round((prof[0] as Station)[0]);
@@ -2950,6 +2984,46 @@ export function rasterise(d: Design): Raster {
   // Which cells the weld pass grew, so the mount rule can ask whether a base
   // is on the SHIP rather than on a spar the weld grew to catch it.
   const welded = new Uint8Array(CELLS);
+
+  /**
+   * Where a placement ended up, and which placement is its mirror twin.
+   *
+   * A pair of fittings on exactly mirrored sockets still came out on cells
+   * that were not mirrored, because each one SEARCHED for its own hole. The
+   * search sees the grid the placements before it left, and one asymmetric
+   * part makes the next one's search asymmetric, so a single displaced fitting
+   * cascades down the whole list: the Terran frigate's clamps ended six cells
+   * inboard of their sockets, five cells apart in z, and every beacon window
+   * on the hull was on one side only.
+   *
+   * So a pair is placed AS a pair. The first of the two searches; the second
+   * takes the mirror of what the first found, and only falls back to its own
+   * search if the mirror does not fit. Symmetry by construction rather than by
+   * two searches happening to agree.
+   */
+  const placedAt = new Map<number, readonly [number, number, number]>();
+  const twinOf = new Map<number, number>();
+  {
+    const bySocket = new Map<string, number>();
+    d.parts.forEach((p, n) => bySocket.set(p.socket, n));
+    for (const s of allSockets) {
+      const mine = bySocket.get(s.id);
+      if (mine === undefined) continue;
+      const mx = 2 * CX - 1 - (s.at[0] as number);
+      if (mx === (s.at[0] as number)) continue;
+      const twin = allSockets.find(t => t.id !== s.id && t.kind === s.kind
+        && (t.at[0] as number) === mx && t.at[1] === s.at[1] && t.at[2] === s.at[2]);
+      if (!twin) continue;
+      const other = bySocket.get(twin.id);
+      if (other === undefined) continue;
+      // Only a pair carrying the SAME part is a mirror of the other: a
+      // barracks to port and a magazine to starboard occupy mirrored volumes
+      // and are still two different shapes.
+      if ((d.parts[other] as Placement).module !== (d.parts[mine] as Placement).module) continue;
+      twinOf.set(mine, other);
+    }
+  }
+
   for (const pi of order) {
     const p = d.parts[pi] as Placement;
     const sock = allSockets.find(k => k.id === p.socket);
@@ -2964,7 +3038,24 @@ export function rasterise(d: Design): Raster {
     const seat = seatOf(frame, sock, v);
     // The PIVOT lands on the socket, not the box centre.
     const pv = rotatedPivot(m, face);
-    const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
+    // Three cases about the centreline PLANE, which runs between columns 15
+    // and 16 rather than down the middle of column 16.
+    //
+    // A part was seated from its box's LOW edge in every case, so a fitting
+    // and its mirror twin, on sockets that really were exact mirrors, came out
+    // one cell apart: the port box grew outward from its origin and the
+    // starboard one grew outward from a mirrored origin, which is inward.
+    // Seated from the plane, a pair lands on mirrored cells, and a centreline
+    // part straddles rather than sitting to one side of it. An ODD width part
+    // on the centreline cannot be symmetric about a boundary at all and is
+    // simply put as near to it as a whole cell allows.
+    const MIRX = 2 * CX - 1;
+    const onCentre = (sock.at[0] as number) === CX - 1 || (sock.at[0] as number) === CX;
+    const bx = onCentre
+      ? CX - Math.ceil(v.sx / 2)
+      : (seat[0] as number) >= CX
+        ? MIRX - (Math.round((MIRX - (seat[0] as number)) - ((pv[0] as number) + 0.5)) + v.sx - 1)
+        : Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
 
@@ -2998,10 +3089,27 @@ export function rasterise(d: Design): Raster {
     // the same cells: five of the Rogue's lost every cell they had and the
     // ship claimed boarding gear it did not visibly carry. The search is
     // bounded and ordered, so it is the same nudge on both seats.
+    // Walked MIRRORED on the starboard side. The list is in absolute lattice
+    // directions, so a port fitting and its starboard twin, meeting the same
+    // obstruction reflected, both took the first offset in the list that fit:
+    // the same absolute direction, which relative to the hull is opposite.
+    // One moved inboard while its twin moved outboard, and a pair authored on
+    // exactly mirrored sockets came out on cells that were not mirrored.
+    const flip = (seat[0] as number) >= CX ? -1 : 1;
     let ox = bx, oy = by, oz = bz, best = lossAt(bx, by, bz);
+    // The twin went first: take the mirror of where it landed, and only search
+    // if that will not do. `v.sx` is the part's own width, so the mirror of a
+    // box is its far edge reflected.
+    const twin = twinOf.get(pi);
+    const was = twin === undefined ? undefined : placedAt.get(twin);
+    if (was) {
+      const tx = (2 * CX - 1) - ((was[0] as number) + v.sx - 1);
+      const lost = lossAt(tx, was[1] as number, was[2] as number);
+      if (lost <= best) { best = lost; ox = tx; oy = was[1] as number; oz = was[2] as number; }
+    }
     if (best > 0) {
       for (const [dx, dy, dz] of NUDGE) {
-        const tx = bx + dx, ty = by + dy, tz = bz + dz;
+        const tx = bx + dx * flip, ty = by + dy, tz = bz + dz;
         if (exposureOf(sock.kind) === 'enclosed' && !boxInside(prof,
           tx + v.sx / 2, ty + v.sy / 2, tz + v.sz / 2, v.sx / 2, v.sy / 2, v.sz / 2)) continue;
         // (tx, ty, tz) is the box origin either way, so the box test is the
@@ -3011,6 +3119,8 @@ export function rasterise(d: Design): Raster {
         if (best === 0) break;
       }
     }
+
+    placedAt.set(pi, [ox, oy, oz] as const);
 
     // A turret swivels, so its own volume belongs to it and to nothing else.
     // Recorded as the placed box rather than as its filled cells, because the
@@ -3836,7 +3946,11 @@ export const STOCK: readonly Design[] = [
     // keel rail that overruns the body at both ends, so it looks into its own
     // ship BOTH ways: fore blocked, aft blocked, up and down clear. Turned a
     // quarter, it rests trained up and over the deck.
-    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1', 1),
+    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'),
+    // No quarter turn on the placement any more: the RING rests trained out
+    // of its recess now, and the turn that used to do that job was being
+    // added on top of it and carrying the barrel back into the hull.
+    P('s0/t', 'WPN-BM1'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
     'karisen', 0xFA6A0A, 'ribbed', 0.35, 0.45),

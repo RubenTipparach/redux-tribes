@@ -101,21 +101,36 @@ export function partMap(): THREE.Texture | null { return finishMap(PART_FINISH);
  * offset per cell is 1/N of the image, so a wrong N samples across a seam.
  */
 /**
- * Which FACES of a hull a decal may appear on.
+ * Which FACES of a hull a decal may appear on, as the axes its normal may run
+ * along: `x` the flanks, `y` the deck and the belly, `z` the bow and transom.
  *
- * A window is a hole in the plating over a room, and most rooms present the
- * same face whichever side you look at them from: a cabin is a cabin from
- * abeam and from above. Two are not like that. A container's doors are on its
- * END, and a radiator's slats run down a FLANK, so tiling either over every
- * exposed face of the module turns a box into a wall of doors: a container
- * ship came out wearing a thousand of them, one per cell, each the size of a
- * hand.
+ * **A cabin does not have a window in the roof.** The first cut of this had
+ * two settings, `ends` and `sides`, and `sides` meant "across or up", so every
+ * room decal that was not a container door tiled the DECK and the BELLY as
+ * well as the flanks: a Terran frigate carried a field of a hundred and forty
+ * lit cabin panes across the top of its hull, which is the one thing on a ship
+ * nobody has ever seen. A berth looks out sideways. So does a promenade, an
+ * observation gallery and an airlock porthole.
  *
- * 'ends' means a face whose normal runs along the hull, 'sides' one whose
- * normal runs across or up it. Anything unlisted goes anywhere.
+ * A bridge is the exception among rooms, because a bridge looks where the ship
+ * is GOING: it keeps the bow as well as the flanks.
+ *
+ * Three are about the module's own shape rather than about the view. A
+ * container's doors are on its END and a radiator's slats run down a FLANK, so
+ * tiling either over every exposed face turns a box into a wall of doors: a
+ * container ship came out wearing a thousand of them, one per cell, each the
+ * size of a hand.
+ *
+ * Running lights are the one thing that genuinely goes anywhere, because they
+ * are lights rather than windows: a clamp marks itself on whatever face it
+ * presents. Anything unlisted goes anywhere.
  */
-export const WINDOW_FACE: Readonly<Record<string, 'ends' | 'sides'>> = {
-  cargo: 'ends', hangar: 'ends', louvre: 'sides',
+export const WINDOW_FACE: Readonly<Record<string, string>> = {
+  // Rooms people look out of, and people look sideways.
+  panes: 'x', porthole: 'x', promenade: 'x', strip: 'x',
+  bridge: 'xz',
+  // Shape rather than view.
+  cargo: 'z', hangar: 'z', louvre: 'x',
 };
 
 export const WINDOW_VARIANTS: Readonly<Record<string, number>> = {

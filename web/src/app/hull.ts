@@ -439,12 +439,9 @@ export function hullMesh(d: Design, bare = false): HullMesh {
    * Plate only. A window in the middle of a drive bell would be a window on a
    * part that is standing outside the hull, which is a hole in an engine.
    */
-  const windowAt = (
+  const roomBehind = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
-    const n = idx(i, j, k);
-    const mat = grid[n] as number;
-    if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
     // Through the PLATING, not one step in.
     //
     // A belt is three to five courses thick and a room behind it is therefore
@@ -467,15 +464,69 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         const part = d.parts[owner - 1];
         const key = (part ? moduleById(part.module)?.window : undefined) ?? null;
         if (!key) return null;
+        // Which axis this face's normal runs along, against the axes the
+        // decal is allowed on.
         const face = WINDOW_FACE[key];
-        if (face === 'ends' && dz === 0) return null;
-        if (face === 'sides' && dz !== 0) return null;
+        if (face) {
+          const axis = dx !== 0 ? 'x' : dy !== 0 ? 'y' : 'z';
+          if (!face.includes(axis)) return null;
+        }
         return key;
       }
       const inner = grid[m] as number;
       if (inner !== Mat.Plate && inner !== Mat.Skinned) return null;
     }
     return null;
+  };
+
+  /**
+   * The same question asked of the hull's OTHER SIDE as well.
+   *
+   * A ship is symmetric about its keel and its windows should be too: a row of
+   * cabins down the port flank with nothing facing them to starboard is the
+   * one thing on a hull that reads as a mistake at a glance. Measured over the
+   * fleet, half of every window cell had no twin.
+   *
+   * The rooms are not the problem. Every fitting is authored on a mirrored
+   * pair of sockets, and 432 of them are exact. What moves them is the
+   * rasteriser's own collision nudge: a part that cannot sit where its socket
+   * puts it walks until it fits, the walk sees whatever the placements before
+   * it left, and one displaced fitting sends the next one somewhere else
+   * again. The Terran frigate's clamps end six cells inboard of their sockets
+   * and five cells apart in z, so every beacon window on that hull was on one
+   * side only.
+   *
+   * So the skin is asked about the room behind it AND about the room behind
+   * its mirror, which is the ship as DESIGNED rather than as the packer
+   * happened to settle it. Both cells have to be plating and the mirrored face
+   * has to be the mirrored normal, so this can only ever light a pane on a
+   * surface that is really there; what it cannot do is invent a room, because
+   * a room is what it is asking about.
+   *
+   * Nothing here crosses the boundary or is hashed. Which cells are lit is the
+   * client drawing, and two clients that disagreed about a window would still
+   * play the same match.
+   */
+  const windowAt = (
+    i: number, j: number, k: number, dx: number, dy: number, dz: number,
+  ): string | null => {
+    const n = idx(i, j, k);
+    const mat = grid[n] as number;
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
+    const mine = roomBehind(i, j, k, dx, dy, dz);
+    if (mine) return mine;
+    // The mirror of this cell, looking the mirrored way: a face whose normal
+    // runs across the hull points the other way over there, and one running
+    // along it or up it points the same way.
+    const mi = NX - 1 - i;
+    if (mi === i) return null;
+    const mn = idx(mi, j, k);
+    const mm = grid[mn] as number;
+    if (mm !== Mat.Plate && mm !== Mat.Skinned) return null;
+    // And it has to be a face over there too, or this would light a pane on
+    // plating with more plating outside it.
+    if (!open(mi - dx, j - dy, k - dz)) return null;
+    return roomBehind(mi, j, k, -dx, dy, dz);
   };
   /** Every window face found, by decal kind: cell, and which way it looks. */
   const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
