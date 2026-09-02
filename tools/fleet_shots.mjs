@@ -228,13 +228,13 @@ async function ladder(faction) {
       box everywhere, and the grid inside it is what says whether a voxel is the
       same size from rung to rung.</div>
     ${shots.map((s) => `<div style="display:flex;align-items:center;gap:16px;padding:10px 18px">
-      <div style="width:170px;text-align:right;opacity:.85">${s.key}<br>
+      <div style="width:170px;flex:0 0 170px;text-align:right;opacity:.85">${s.key}<br>
         <b style="font-size:15px">${s.length.toFixed(2)} u</b>
         <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span></div>
       <div style="width:${Math.max(8, PPU).toFixed(0)}px;flex:0 0 auto;text-align:left">
         ${cube(s.cell)}</div>
       <canvas data-src="${s.url}" data-w="${Math.round(WIDEST * (s.length / longest))}"
-        style="display:block"></canvas>
+        style="display:block;flex:0 0 auto"></canvas>
     </div>`).join('')}
     <script>
     window.drawn = 0;
@@ -267,10 +267,34 @@ async function ladder(faction) {
       im.src = cv.dataset.src;
     }
     </script></body>`;
-  const sheet = await browser.newPage({ viewport: { width: 1060, height: 900 } });
+  // Wide enough for the LONGEST row, computed rather than guessed: label, gaps,
+  // the reference cube, the widest hull and the page padding.
+  //
+  // The sheet was a flat 1060 and the cruiser row wanted 1123, so the row
+  // overflowed and the flex items shrank to fit: the canvas came out 757 px
+  // where the scale called for 820, and the biggest hull on every ladder was
+  // drawn 7.7 percent small. `flex:0 0` above is the other half of it, because
+  // a row that still overflowed would squeeze rather than scroll, and the one
+  // thing this sheet exists to do is put every rung on one ruler.
+  const sheetW = Math.ceil(170 + 16 + Math.max(8, PPU) + 16 + WIDEST + 36 + 8);
+  const sheet = await browser.newPage({ viewport: { width: sheetW, height: 900 } });
   await sheet.setContent(html);
   await sheet.waitForFunction((n) => window.drawn === n, shots.length, { timeout: 30000 });
   await sheet.waitForTimeout(200);
+  // The sheet's whole claim is that every rung is on ONE RULER, so it checks
+  // rather than asserts: what a canvas was ASKED to be against what it ended up
+  // on the page. They parted once, silently, because a flex row that overflows
+  // shrinks its items instead of scrolling, and the biggest hull on every
+  // ladder came out 7.7 percent small.
+  const laid = await sheet.evaluate(() => [...document.querySelectorAll('canvas')]
+    .map((c) => ({ want: +c.dataset.w, got: Math.round(c.getBoundingClientRect().width) })));
+  const off = laid.filter((l) => Math.abs(l.want - l.got) > 1);
+  if (off.length) {
+    console.log(`  SCALE BROKEN: ${off.length} of ${laid.length} rows are not at their own scale`);
+    for (const l of off) console.log(`    wanted ${l.want}px, laid out at ${l.got}px`);
+  } else {
+    console.log(`  every rung on one ruler: ${laid.length} rows at ${PPU.toFixed(1)} px per unit`);
+  }
   const png = await sheet.screenshot({ fullPage: true });
   writeFileSync(`${OUT}/ladder-${faction}.png`, png);
   console.log(`  ladder-${faction}.png  ${(png.length / 1024).toFixed(0)} kB`);
