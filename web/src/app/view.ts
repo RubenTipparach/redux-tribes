@@ -964,6 +964,10 @@ export class View {
   /** Whether there is an envelope to show at all; how much of it is seen is
    *  the camera's business. */
   #shellShown = false;
+  /** Held down by a harness for one measurement. The frame loop decides the
+   *  shell's visibility every frame, so a plain `visible = false` would be
+   *  undone before the next screenshot. */
+  #reachHidden = false;
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
@@ -1379,8 +1383,9 @@ export class View {
     // most of it and the face almost none.
     if (mat.uniforms.strength) mat.uniforms.strength.value = near;
     (this.#shellLines.material as THREE.LineBasicMaterial).opacity = 0.5 * near;
-    this.#shell.visible = this.#shellShown && near > 0;
-    this.#shellLines.visible = this.#shellShown && near > 0;
+    const show = this.#shellShown && near > 0 && !this.#reachHidden;
+    this.#shell.visible = show;
+    this.#shellLines.visible = show;
   }
 
   /**
@@ -2066,9 +2071,18 @@ export class View {
     dist: number; shell: boolean; shellOpacity: number;
     follow: number; focus: { x: number; y: number; z: number };
     locked: boolean; goalDist: number;
+    yaw: number; pitch: number; goalYaw: number; goalPitch: number;
   } {
     return {
       dist: +this.#dist.toFixed(2),
+      /** The angles as well as the distance, because a pose is only
+       *  reproducible if all three are in it. Both the drawn value and the
+       *  goal, since a camera on its way somewhere is not where it is going
+       *  and a report of one of them alone cannot say which. */
+      yaw: +this.#yaw.toFixed(4),
+      pitch: +this.#pitch.toFixed(4),
+      goalYaw: +this.#goalYaw.toFixed(4),
+      goalPitch: +this.#goalPitch.toFixed(4),
       shell: this.#shell.visible,
       shellOpacity: +(((this.#shell.material as THREE.ShaderMaterial)
         .uniforms.strength?.value as number | undefined) ?? 0).toFixed(4),
@@ -2160,6 +2174,33 @@ export class View {
    *  them. Observation only: nothing in the console turns this off. */
   hullsVisible(on: boolean): void {
     for (const m of this.#hulls.values()) m.visible = on;
+  }
+
+  /**
+   * Hide the star field, so a harness can ask whether a star reaches a pixel
+   * a hull is standing on.
+   *
+   * That question cannot be answered by reading the material. Whether a star
+   * lands on a ship is decided by which of three's two render lists the field
+   * is sorted into, in what order that list is walked and what the depth
+   * buffer holds by then, and none of those are in the file that sets
+   * `depthTest`. Turning the field off and looking at the same pixels is the
+   * measurement. Observation only, like `hullsVisible`.
+   */
+  starsVisible(on: boolean): void {
+    if (this.#stars) this.#stars.visible = on;
+  }
+
+  /**
+   * Hide the movement envelope and its contours, so a harness can weigh a
+   * frame with the overlay against the same frame without it.
+   *
+   * It comes back on by itself the next time the shell is refreshed, which is
+   * every frame the camera moves, so this is a switch for one measurement
+   * rather than a setting. Observation only.
+   */
+  reachVisible(on: boolean): void {
+    this.#reachHidden = !on;
   }
 
   setShips(ships: ShipState[]): void {

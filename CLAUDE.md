@@ -821,6 +821,83 @@ scrubbing is a pure function of (turn, tick); two playback frames either side
 of a toggle differ because time passed, and a bloom pass that did nothing would
 pass that test.
 
+## Which LIST three.js drew it in decides what covers what
+
+`renderOrder` does not order the frame. Three sorts every object into two
+lists, opaque and transparent, and draws all of the first before any of the
+second; `renderOrder` sorts WITHIN a list. So a very negative one on a
+transparent object still puts it after every opaque hull on the map.
+
+That cost the star field. It was `transparent: true` (additive blending needs
+it) with `depthTest: false` and `renderOrder: -20`, and a comment explaining
+that it was therefore drawn first and covered by the scenery in front of it.
+It was drawn LAST, over everything, with the depth test off: a fleet with the
+sky showing through it. `skyDome` does work that way and that is why the
+mistake looked reasonable, but the dome is OPAQUE, which is the whole
+difference.
+
+The rule that comes out of it: **an object that must be behind the fleet is
+either opaque and first, or depth tested.** Blending decides which of those is
+available to you, so decide the blending first. The stars are depth tested now,
+at 4500 units inside a 6000 unit far plane, and the planets write depth so that
+something can stop them.
+
+`checkStarsStayBehindTheFleet` in the playthrough is the check, and its first
+cut is worth knowing about too. It measured from the fleet view, where a
+frigate is 650 px of a 700000 px canvas, and 7181 stars over a whole sky miss a
+target that size: putting the defect back left it GREEN. **A check whose
+subject is smaller than its noise floor tests nothing.** It centres on a hull
+and zooms all the way in first, which makes the silhouette 74000 px, and the
+defect then reads as 56 lit pixels at up to 191 of 255.
+
+## A NaN in a shader is not a wrong pixel, it is a hole
+
+`pow` of a negative base is undefined in GLSL, and drivers lower it to
+`exp2(y * log2(x))`, where `log2` of a negative is a NaN. `reach.ts` had
+`pow(1.0 - facing, 2.6)` with `facing = abs(dot(n, v))` on two normalised
+vectors, and a dot of two unit vectors comes back a shade over one when they
+are nearly parallel. So looking straight down the envelope's own normal made
+the base about -1e-7 and the alpha a NaN.
+
+What a NaN then does is the part worth remembering. Additive blending is
+`src.rgb * src.a + dst`, so a NaN alpha takes the DESTINATION with it: the sky
+and the ships behind the shell were written as zero. And bloom SPREAD it, since
+a NaN averaged with anything is a NaN and `UnrealBloomPass` runs a separable
+blur at five halvings, so one poisoned fragment came back as a hard edged black
+rectangle far larger than itself and square to the screen rather than shaped
+like the surface that made it.
+
+So: **guard every expression that can leave its domain, at the point it can
+leave it.** `max(0.0, ...)` inside a `pow`, a length test before dividing by
+one, a clamp on the way out. And do not expect these harnesses to catch the
+next one: SwiftShader gives `pow` of a negative base a defined answer, so 96
+poses across four window shapes and both pixel ratios found nothing while a
+real driver showed it immediately. What IS portable is the invariant, and
+`checkTheEnvelopeNeverBlacksAPixelOut` states it: an additive overlay may never
+put a lit pixel out.
+
+That check began as the stronger "may never make a pixel darker" and went red
+on 316 px at up to 192 of 255, none of it a defect. Additive is monotonic in
+the FRAMEBUFFER, and a screenshot is taken after tone mapping:
+`NeutralToneMapping` desaturates a highlight by scaling every channel by
+`newPeak / peak`, so a pixel that gains green has its red pulled DOWN. State an
+invariant where it is actually true.
+
+## C reports the camera, because a screenshot is half a bug report
+
+A render defect that only shows "at certain angles" cannot be chased from a
+picture: the pose is the missing half, and it is the half a person cannot read
+off their own screen. Pressing C on the map writes the whole pose (both angles,
+the distance and the focus, drawn value and goal alike), the match it is a pose
+of, the viewport, the pixel ratio and which post path is running, to the console
+AND to the clipboard, and says so on screen. `ftDebug.cameraReport()` is the
+same thing for a phone, which has no C.
+
+It sits outside the planning keys, which give up as soon as no ship is
+selected, because where the camera is has nothing to do with whose turn it is.
+Ctrl and Cmd pass through so copy still copies, and a C typed into a text box
+is a letter.
+
 ## The battlefield draws the ship you built
 
 Every hull on the map used to be a five sided cone. It reads at a glance and it
