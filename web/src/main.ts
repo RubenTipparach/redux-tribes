@@ -2829,6 +2829,21 @@ sheet('tShips', 'left');
 sheet('tLog', 'right');
 $('tFit').onclick = () => view.fit();
 
+// The events rail on a DESKTOP, where there is no tab bar and the rail was a
+// permanent third column. It is the one panel here that never takes an action:
+// a read only account of a turn that has already happened. So it is off until
+// it is asked for, and the 290px goes to the map.
+//
+// The canvas needs no telling. `view.resize()` runs every frame and reads the
+// element it is actually drawn into, so a column that appears or goes is
+// picked up on the next one.
+const logBtn = $('bLog');
+logBtn.onclick = () => {
+  const on = $('app').classList.toggle('logon');
+  logBtn.classList.toggle('on', on);
+  logBtn.setAttribute('aria-pressed', String(on));
+};
+
 // ------------------------------------------------------------ playback --
 
 /** The turn whose track and events are on screen: the one being watched in
