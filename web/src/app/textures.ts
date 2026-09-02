@@ -211,6 +211,25 @@ export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
     metalness: 0.15,
     roughness: 0.35,
     dithering: true,
+    // A window is a DECAL laid on plating, and on one of the three screens
+    // that draw it the plating is still there underneath.
+    //
+    // The map and the schematic mesh greedily and drop the plate quad exactly
+    // where a window goes, so the pane is the only surface in that plane. The
+    // SHIPYARD draws a box per cell, because seeing the cells is the whole
+    // point of an editor, and a box keeps all six of its faces: the pane and
+    // the face under it are then coplanar to the last bit and the depth test
+    // has no way to choose, which is the stipple across a hull's flank.
+    //
+    // A depth bias rather than nudging the quad outward by a fixed epsilon. A
+    // cell is 7/64 of a unit on a frigate and 14/64 on a heavy cruiser, and
+    // the same epsilon that separates the two surfaces up close is a pane
+    // visibly floating off its own hull at map range. `polygonOffset` is in
+    // DEPTH units and scales with the slope and the distance, which is the
+    // whole reason it exists.
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
   // Named so a harness can count the panes a screen actually DREW. The defect
   // worth catching is a hull whose rooms all carry windows and a screen that
