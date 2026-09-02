@@ -543,12 +543,28 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 - **What consumes designs?** DESIGN.md:211 has the Fleet panel doing repair only, DESIGN.md:216 has `ShipUpgradeType` as an enum with seven zero-byte placeholder files, Starport and Inventory are header stubs (DESIGN.md:247), and 'shipyard' appears only as a Hit-and-Run target. Without something that consumes a design - fleet points, a hull-class unlock ladder, salvage that yields parts - a player spends forty minutes producing a sidegrade to a ship they already own, and the mass budget is a puzzle constraint with no stakes rather than a currency. This decides whether the designer is a feature or a toy, and it wants deciding before slice 4, not after.
 
 
-## The fleet filled in: four navies, four rungs
+## The fleet filled in: four navies, four rungs, seven civil trades
 
 Shipped after the first cut. Corvette, frigate, destroyer and heavy cruiser for
-Terran, Karisen, Rogue and Benefactor, plus the civil Freighter. **Seventeen
-classes.** The `cruiser` rung is now flown; `capital` is still authored and
-still unused.
+Terran, Karisen, Rogue and Benefactor, and the civil yards' seven trades:
+Freighter, Lighter, Hauler, Container Ship, Tanker, Mining Ship and Liner.
+**Twenty three classes.** The `cruiser` rung is now flown; `capital` is still
+authored and still unused.
+
+The civil hulls are TRADES rather than a ladder, and each is its own `TierKey`
+for a reason that is not taxonomy: the shipyard's class picker addresses a
+class by the pair (faction, tier) and takes the first match, so two civil hulls
+sharing one tier would leave the second unreachable from the screen with
+nothing saying so. None of them carries a mount, which is what makes the arms
+gate pass on a hull with no gun ring anywhere.
+
+The ladder is EXACT now, and measured rather than asserted: `node
+tools/measure_fleet.mjs` prints the world size of every stock hull against its
+own navy's frigate, and it reads corvette 0.50, frigate 1, destroyer 1.45 to
+1.52, heavy cruiser 1.93 to 2.07. `node tools/fleet_shots.mjs --ladder terran`
+is the same claim as a picture, cropped to each hull and rescaled by its
+measured length, because the shipyard frames every hull to fill the view and
+therefore cannot show a size difference at all.
 
 **A rung is a cell size.** Every hull is the same 32x32x64 lattice and what
 changes is what one cell is worth: `frigate` 7/64, `escort` 10.5/64, `cruiser`
@@ -557,7 +573,7 @@ plate for fewer cells; a destroyer and a heavy cruiser are full length profiles
 at bigger cells, and since `design.rs` scales plate by the CUBE of the cell,
 the same cell count costs a cruiser eight times a frigate's mass and gives it
 eight times the hull. Almost the whole ladder falls out of that one number
-rather than out of seventeen hand tuned tables.
+rather than out of twenty three hand tuned tables.
 
 **Each navy's section is its signature and it holds at every rung.** Terran
 wide and flat on a raised dorsal spine, Karisen long and near round with a keel
