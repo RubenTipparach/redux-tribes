@@ -19,6 +19,7 @@
  *   node tools/fleet_shots.mjs --bare                # armour off, the frame
  *   node tools/fleet_shots.mjs --ladder terran       # the rungs, to one scale
  *   node tools/fleet_shots.mjs --map                 # the FIELD, not the yard
+ *   node tools/fleet_shots.mjs --map --fleet a,b,c,d # ...seating named hulls
  *
  * `--ladder` is the one that answers "are they actually bigger". The shipyard
  * FRAMES each hull to fill the view, so a corvette and a heavy cruiser come
@@ -52,6 +53,7 @@ const ONLY = arg('only', null);
 const BARE = has('bare');
 const LADDER = arg('ladder', null);
 const MAP = has('map');
+const FLEET = arg('fleet', null);
 const WIDE = has('mobile') ? { width: 390, height: 844 } : { width: 1100, height: 760 };
 
 mkdirSync(OUT, { recursive: true });
@@ -76,6 +78,57 @@ const frames = (n) => page.evaluate(async (want) => {
     requestAnimationFrame(tick);
   });
 }, n);
+
+/** Zoom the map by `n` notches, out for a positive count and in for a
+ *  negative one. The wheel handler is a fixed 1.1x per EVENT rather than a
+ *  function of the delta, so one big scroll is one step and the way anywhere
+ *  is to send several. */
+const wheel = async (n) => {
+  const box = await page.locator('#cv').boundingBox().catch(() => null);
+  const at = box ? { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    : { x: WIDE.width / 2, y: WIDE.height / 2 };
+  await page.mouse.move(at.x, at.y);
+  for (let i = 0; i < Math.abs(n); i++) await page.mouse.wheel(0, n > 0 ? 120 : -120);
+};
+
+/** Swing the camera round by a right button drag, which is what the map gives
+ *  a mouse for orbiting. The context menu is already suppressed over the
+ *  canvas, so this is the same gesture a player makes. */
+const orbitBy = async (dx, dy) => {
+  const box = await page.locator('#cv').boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(cx + dx, cy + dy, { steps: 16 });
+  await page.mouse.up({ button: 'right' });
+};
+
+/** Wheel until the camera is `want` units out, whatever it started from.
+ *
+ * A fixed count of notches cannot frame a fleet whose rungs differ by four
+ * times in length, and `focusOn` does not land at a fixed distance either: it
+ * takes the SMALLER of where the camera already was and a span off the ship's
+ * radius, so how close a focus gets depends on where the last shot left it.
+ * So the target is a distance, read back off the camera. */
+const closeTo = async (want) => {
+  let c = null;
+  for (let i = 0; i < 60; i++) {
+    c = await page.evaluate(() => window.ftDebug.camera());
+    if (Math.abs(Math.log(c.goalDist / want)) < 0.05) break;
+    await wheel(c.goalDist > want ? -1 : 1);
+  }
+  // Then wait for the camera to ARRIVE. A zoom sets a goal and the position
+  // eases toward it, so aiming at a hull the moment the goal changes aims
+  // through a camera that is still moving: the projection is stale by the
+  // time the click lands and the press hits empty space.
+  for (let i = 0; i < 60; i++) {
+    c = await page.evaluate(() => window.ftDebug.camera());
+    if (Math.abs(c.dist - c.goalDist) < 0.02 * c.goalDist) break;
+    await frames(6);
+  }
+  return c ? c.dist : 0;
+};
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(600);
@@ -198,28 +251,127 @@ async function ladder(faction) {
  * lights and bloom, and it is where a player actually looks at a ship: a
  * livery that reads in the yard and washes out on the field is a livery that
  * does not work.
+ *
+ * `--fleet` seats named hulls through the briefing's own chips rather than
+ * through any back door, which is what makes a shot of four navies a shot of
+ * the game: a skirmish authored as two frigates a side answers "does a Terran
+ * read differently from a Karisen" with four of the same ship.
  */
 async function battlefield() {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1200);
   await page.click('#bPractice');
   await page.waitForSelector('#briefing:not(.hidden)', { timeout: 15000 });
+
+  if (FLEET) {
+    const want = FLEET.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    for (let i = 0; i < want.length; i++) {
+      // Re-queried per row on purpose: a pick re-renders the whole briefing,
+      // so a handle taken before the click is a handle onto a dead node.
+      const got = await page.evaluate(({ n, name }) => {
+        const row = document.querySelectorAll('#briefShips .briefRow')[n];
+        if (!row) return null;
+        const chip = [...row.querySelectorAll('.picks button')].find(
+          (b) => (b.querySelector('.n')?.textContent ?? '').toLowerCase().includes(name));
+        if (!chip) return null;
+        chip.click();
+        return chip.querySelector('.n').textContent;
+      }, { n: i, name: want[i] });
+      console.log(`  ship ${i + 1}: ${got ?? `no chip matching "${want[i]}"`}`);
+      await page.waitForTimeout(150);
+    }
+  }
+
   await page.click('#briefGo');
   await page.waitForFunction(
     () => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 30000 });
-  await frames(60);
-  // Onto a hull, so the shot is of a ship rather than of a starfield with
-  // four specks in it. Second press is the one that goes and looks.
-  const at = await page.evaluate(() => window.ftDebug.screenOf(0));
-  if (at) {
-    await page.mouse.click(at.x, at.y);
-    await page.waitForTimeout(400);
-    await page.mouse.click(at.x, at.y);
+  await frames(80);
+
+  const wide = await page.screenshot();
+  writeFileSync(`${OUT}/map-wide.png`, wide);
+  console.log(`  map-wide.png  ${(wide.length / 1024).toFixed(0)} kB`);
+
+  // Then one close up per hull, because the wide shot is what the FIELD looks
+  // like and the question here is what a SHIP looks like on it.
+  const keys = await page.evaluate(() => window.ftDebug.classes());
+  const fleet = await page.evaluate(() => window.ftDebug.ships());
+  for (const s of fleet) {
+    // Back out until the hull is inside the CANVAS, then check afterwards
+    // which hull the press actually landed on, and try again if it was the
+    // wrong one.
+    //
+    // Three traps, and the first wrote a wrong picture under a right name.
+    // A focus locks the camera on its ship, so from there the next hull sits
+    // off to one side; `screenOf` answers in page pixels and the map canvas
+    // is a 560 pixel column inside an 1100 pixel page, so an aim of 889 is a
+    // click on the EVENTS panel rather than a miss anyone can see. Bounds are
+    // the canvas rect for that reason. Backing out is what brings a hull in,
+    // since the offset from a locked focus shrinks as the camera retreats,
+    // which is why that is a loop rather than one step. And backing far
+    // enough out to see a hull puts its neighbour on top of it: a side's two
+    // ships start eleven units apart and a cruiser's pick sphere is seven
+    // across, so a press aimed at the far one lands on the near one. Backing
+    // off does not help there and repeating the press helps less, since the
+    // ray is unchanged: the retry ORBITS first, and further each time.
+    const box = await page.locator('#cv').boundingBox();
+    let at = null;
+    let hit = false;
+    for (let attempt = 0; attempt < 4 && !hit; attempt++) {
+      if (attempt === 0) await closeTo(150);
+      // A repeat of a press that missed misses again: the camera has not
+      // moved, so the ray is the same ray. What defeats one hull standing in
+      // front of another is a different ANGLE, and further each time.
+      else await orbitBy(140 * attempt, 60);
+      at = null;
+      for (let tries = 0; tries < 12; tries++) {
+        await frames(10);
+        const seen = await page.evaluate((id) => window.ftDebug.screenOf(id), s.id);
+        if (seen && seen.x > box.x + 12 && seen.y > box.y + 12
+          && seen.x < box.x + box.width - 12 && seen.y < box.y + box.height - 12) {
+          at = seen;
+          break;
+        }
+        if ((await page.evaluate(() => window.ftDebug.camera())).goalDist > 880) break;
+        await wheel(4);
+      }
+      if (!at) break;
+      // First press names the hull, second goes and looks at it.
+      await page.mouse.click(at.x, at.y);
+      await page.waitForTimeout(400);
+      await page.mouse.dblclick(at.x, at.y);
+      await frames(60);
+      const c = await page.evaluate(() => window.ftDebug.camera());
+      hit = c.follow === s.id;
+      if (!hit) {
+        console.log(`  ship ${s.id}: pressed ${at.x | 0},${at.y | 0} at ${c.dist} u`
+          + ` and the camera followed ${c.follow}`);
+      }
+    }
+    if (!at) { console.log(`  ship ${s.id}: never came onto the canvas`); continue; }
+    if (!hit) { console.log(`  ship ${s.id}: every press landed on another hull`); continue; }
+    // Frame the ship by its own LENGTH, and inside twelve units either way.
+    // A focus lands well outside the movement envelope, and inside the
+    // envelope the hull reads through a green wash: the shell fades below
+    // twenty units and is gone by twelve. The labels go too, since a double
+    // click turns them on and they are drawn over the thing being looked at.
+    const row = rows.find((r) => r.key === keys[s.cls]);
+    const want = Math.max(3.5, Math.min(11.5, 0.85 * (row ? row.length : 8)));
+    const got = await closeTo(want);
+    const labels = page.locator('#bInspect');
+    if (await labels.count() && await labels.isVisible()
+      && (await labels.getAttribute('class') ?? '').includes('on')) {
+      await labels.click().catch(() => {});
+    }
+    // And take the pointer off the canvas, or the shot carries the hover tip
+    // for whatever cell it was left over. `pointerleave` is what puts it down.
+    await page.mouse.move(WIDE.width - 60, 200);
+    await frames(90);
+    const png = await page.screenshot();
+    const name = `map-${s.id}-${keys[s.cls] ?? s.cls}`;
+    writeFileSync(`${OUT}/${name}.png`, png);
+    console.log(`  ${name}.png  side ${s.side}  ${got.toFixed(1)} u out`
+      + `  ${(png.length / 1024).toFixed(0)} kB`);
   }
-  await frames(90);
-  const png = await page.screenshot();
-  writeFileSync(`${OUT}/map.png`, png);
-  console.log(`  map.png  ${(png.length / 1024).toFixed(0)} kB`);
 }
 
 if (MAP) {
