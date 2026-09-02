@@ -85,8 +85,14 @@ export const FACTION_PAINT: ReadonlyArray<{ key: string; name: string; swatches:
     [0x494182, 0x3A3466, 0x6B5FA8, 0x181425, 0x9A8FD1, 0xC9C4E0, 0x2A2440, 0xE0483C] },
   { key: 'benefactor', name: 'Benefactor', swatches:
     [0x1A7A3E, 0x146032, 0x2FA85B, 0x0E4423, 0x7FD9A0, 0xEDE7C8, 0x2F4A38, 0xF9A31B] },
+  // Seven greys and a gold was a merchant fleet in which every box on every
+  // deck came out the same pale grey. A hull's own plating is still white and
+  // grey, because that is what a civil hull is painted, but the palette now
+  // carries the three colours a container yard actually has in it: a line
+  // blue, a rust red and a green. The livery puts them where the ship is not
+  // (the belt, the trim, the cargo), which is exactly what they are for.
   { key: 'civil', name: 'Civilian', swatches:
-    [0xD8E2EC, 0xB9C6D4, 0x8C949E, 0x4F4F4F, 0xF2F5F8, 0x2A2E33, 0x6E7680, 0xC0A24A] },
+    [0xD8E2EC, 0xB9C6D4, 0x2E6F9E, 0xB4472B, 0xF2F5F8, 0x2A2E33, 0x2E8B76, 0xC0A24A] },
 ];
 
 /**
@@ -352,7 +358,17 @@ export function bandFinishes(d: {
 
 /** What a socket will accept. A part never fits a socket of another kind. */
 export type SocketKind =
-  | 'drive' | 'retro' | 'rcs' | 'gun' | 'trunnion' | 'missile' | 'bay' | 'clamp';
+  | 'drive' | 'retro' | 'rcs' | 'gun' | 'trunnion' | 'missile' | 'bay' | 'clamp'
+  /**
+   * A cargo station ON the hull rather than inside it.
+   *
+   * A container ship whose containers are enclosed bays is a grey slab with
+   * the cargo invisible inside it, which is what the first cut of the civil
+   * fleet came out as. A box is carried on deck, in tiers, and it is the boxes
+   * that make the ship read as a merchantman at all: this is the one socket
+   * kind whose whole point is that the part STANDS OUT.
+   */
+  | 'rack';
 
 export interface ModuleDef {
   readonly id: string;
@@ -526,13 +542,13 @@ export const MODULES: readonly ModuleDef[] = [
   // tank's radiator slats, a liner's promenade. A civil ship drawn without
   // them is a grey lozenge with an engine, which is exactly what the freighter
   // was.
-  { id: 'UTL-CTR', name: 'Container', cat: 'utility', fits: 'bay',
+  { id: 'UTL-CTR', name: 'Container', cat: 'utility', fits: 'rack',
     size: [7, 6, 11], mass: 87780, hull: 18480, purpose: 'structure', art: 'container',
     window: 'cargo', colour: 0x8494A8 },
-  { id: 'UTL-TNK', name: 'Pressure tank', cat: 'utility', fits: 'bay',
+  { id: 'UTL-TNK', name: 'Pressure tank', cat: 'utility', fits: 'rack',
     size: [8, 8, 12], mass: 145920, hull: 30720, purpose: 'structure', art: 'tank',
     window: 'louvre', colour: 0x8494A8 },
-  { id: 'UTL-ORE', name: 'Ore hopper', cat: 'utility', fits: 'bay',
+  { id: 'UTL-ORE', name: 'Ore hopper', cat: 'utility', fits: 'rack',
     size: [9, 7, 12], mass: 143640, hull: 30240, purpose: 'structure', art: 'hopper',
     window: 'louvre', colour: 0x8494A8 },
   { id: 'UTL-PAX', name: 'Passenger deck', cat: 'utility', fits: 'bay',
@@ -658,7 +674,7 @@ export const spinOf = (sock: Socket | undefined, rot: number | undefined): numbe
 export type Exposure = 'proud' | 'flush' | 'enclosed';
 
 export const EXPOSURE: Record<SocketKind, Exposure> = {
-  drive: 'proud', retro: 'proud', gun: 'proud', trunnion: 'proud',
+  drive: 'proud', retro: 'proud', gun: 'proud', trunnion: 'proud', rack: 'proud',
   rcs: 'flush',
   missile: 'enclosed', bay: 'enclosed', clamp: 'enclosed',
 };
@@ -1293,19 +1309,38 @@ export const decorOf = (frame: FrameDef): readonly Box[] => {
  * is FOR.
  */
 const rack = (prof: readonly Station[], count: number,
-  u = 0.44, v = 0.40): Socket[] => {
+  lanes = 2, tiers = 2): Socket[] => {
   const aft = Math.round((prof[0] as Station)[0]);
   const nose = Math.round((prof[prof.length - 1] as Station)[0]);
   const z0 = aft + 11, z1 = nose - 16;
-  const per = 4;
+  const per = lanes * tiers;
   const stations = Math.max(1, Math.ceil(count / per));
   const out: Socket[] = [];
   for (let n = 0; n < count; n++) {
     const k = Math.floor(n / per), slot = n % per;
     const z = Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
-    const where = ['port upper', 'starboard upper', 'port lower', 'starboard lower'][slot];
-    out.push(seatAt(prof, 'bay', `h${n}`, `hold, ${where} ${k + 1}`,
-      z, slot % 2 === 0 ? -u : u, slot < 2 ? v : -v));
+    const [hw, hh] = hullAt(prof, z);
+    const lane = slot % lanes, tier = Math.floor(slot / lanes);
+    // Across the deck in lanes, and UP it in tiers. Half a container of beam
+    // between lane centres and a container's own depth between tiers, so the
+    // stack is a stack rather than a pile.
+    const u = lanes === 1 ? 0 : ((lane * 2 + 1 - lanes) / lanes) * 0.52;
+    const x = acrossFrom(CX, u, hw as number);
+    // The BOTTOM of the box rests one cell above the skin AT ITS OWN LANE.
+    // A station is an ellipse, so the deck two thirds of the way out to the
+    // rail is two cells lower than the deck on the centreline: measured from
+    // the centreline the outboard boxes floated, and a floating box gets a
+    // spar per outboard cell, which on a twelve box ship is sixteen hundred
+    // cells of plate holding up cargo that should be sitting on the deck.
+    const deck = Math.floor(CY + deckAt(hw as number, hh as number,
+      x + 0.5 - CX) - 0.5);
+    const y = deck + 3 + tier * 6;
+    out.push({
+      id: `h${n}`, kind: 'rack',
+      label: `hold, ${lanes > 1 ? (lane === 0 ? 'port' : 'starboard') + ' ' : ''}`
+        + `tier ${tier + 1}, station ${k + 1}`,
+      at: [x, Math.min(NY - 4, y), z],
+    });
   }
   return out;
 };
@@ -1963,12 +1998,12 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_lighter', name: 'Lighter',
     faction: 'civil', tier: 'lighter', rung: 'frigate',
-    radius: 2.5, massMax: 0.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.6, massMax: 0.67, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LIGHTER,
     spine: [keel(CY, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],
     sockets: [
       ...suite(PROF_LIGHTER, [[-0.45, -0.1], [0.45, -0.1]], 5, 0),
-      ...rack(PROF_LIGHTER, 2),
+      ...rack(PROF_LIGHTER, 2, 1, 2),
     ],
     note: 'Two boxes and a bridge. The smallest thing anybody calls a ship: it '
       + 'runs between a hull in orbit and a yard, and it has no reason to be '
@@ -1977,13 +2012,13 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_hauler', name: 'Hauler',
     faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.3, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.4, massMax: 2.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_HAULER,
     spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
       ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
     sockets: [
       ...suite(PROF_HAULER, [[-0.5, -0.15], [0, -0.15], [0.5, -0.15]], 7, 2),
-      ...rack(PROF_HAULER, 6),
+      ...rack(PROF_HAULER, 6, 2, 2),
     ],
     note: 'Six boxes on a rack, three tug bells and a berth for the crew who '
       + 'ride with them. The hull most of everything anybody eats arrives on.',
@@ -1991,14 +2026,14 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_boxship', name: 'Container Ship',
     faction: 'civil', tier: 'boxship', rung: 'cruiser',
-    radius: 7.1, massMax: 5.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 5.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BOXSHIP,
     spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
       ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
     sockets: [
       ...suite(PROF_BOXSHIP, [[-0.55, -0.2], [0, -0.2], [0.55, -0.2],
         [-0.3, 0.35], [0.3, 0.35]], 7, 2),
-      ...rack(PROF_BOXSHIP, 12),
+      ...rack(PROF_BOXSHIP, 12, 2, 3),
     ],
     note: 'Twelve boxes in four tiers of three, and a bridge stuck on the front '
       + 'of them because there was nowhere else to put it. Nothing about this '
@@ -2007,14 +2042,14 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_tanker', name: 'Tanker',
     faction: 'civil', tier: 'tanker', rung: 'cruiser',
-    radius: 6.8, massMax: 5.77, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.9, massMax: 5.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TANKER,
     spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
       ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
     sockets: [
       ...suite(PROF_TANKER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
         [-0.28, 0.3], [0.28, 0.3]], 5, 0),
-      ...rack(PROF_TANKER, 6, 0.40, 0.34),
+      ...rack(PROF_TANKER, 6, 2, 1),
     ],
     note: 'Six pressure vessels with a walkway over the top of them and a hull '
       + 'wrapped round the lot. The radiator slats down the flanks are what it '
@@ -2023,13 +2058,13 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_miner', name: 'Mining Ship',
     faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.4, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.5, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_MINER,
     spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
       ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
     sockets: [
       ...suite(PROF_MINER, [[-0.45, -0.15], [0.45, -0.15]], 5, 2),
-      ...rack(PROF_MINER, 4, 0.42, 0.30),
+      ...rack(PROF_MINER, 4, 2, 1),
       // Rings, but not gun rings: a cutting head is a thing that TURNS, and a
       // ring is the frame's own answer to that. Nothing armed can go here,
       // because the class carries no mounts and the core reads the class.
@@ -2043,14 +2078,14 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_liner', name: 'Liner',
     faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.4, massMax: 5.28, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.5, massMax: 5.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LINER,
     spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
       ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
     sockets: [
       ...suite(PROF_LINER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
         [-0.28, 0.28], [0.28, 0.28]], 13, 2),
-      ...rack(PROF_LINER, 2, 0.36, 0.42),
+      ...rack(PROF_LINER, 2, 1, 2),
     ],
     note: 'Decks of people, lit from end to end. It is the one hull on the '
       + 'field that is brighter than the sky behind it, and the only thing it '
@@ -2596,10 +2631,15 @@ const NUDGE: ReadonlyArray<readonly [number, number, number]> = (() => {
  * them is on screen. A copy rather than a mutation, since `rasterise` caches
  * and zeroing its grid in place would take the plate off every other reader.
  */
-export function bareGrid(grid: Uint8Array): Uint8Array {
+export function bareGrid(grid: Uint8Array, own?: Int16Array): Uint8Array {
   const out = Uint8Array.from(grid);
   for (let n = 0; n < out.length; n++) {
     const m = out[n] as number;
+    // A cell a PART owns is not armour, whatever material it is drawn with.
+    // A container on the deck is painted in the ship's own livery, which is
+    // the same material a plate is, and taking the plate off should not take
+    // the cargo off with it.
+    if (own && (own[n] as number) > 0) continue;
     if (m === Mat.Plate) out[n] = Mat.Empty;
     else if (m === Mat.Skinned) out[n] = Mat.Frame;
   }
@@ -2791,7 +2831,21 @@ export function rasterise(d: Design): Raster {
       grid[n] = mat;
       purp[n] = code;
       own[n] = pi + 1;
-      if (!insideHull(prof, x, y, z)) {
+      // Cargo is PAINTED, not machined. A container is a box somebody owns
+      // and paints, so its panels are drawn with the hull's own palette and
+      // each placement takes a different role: a rack of twelve boxes is a
+      // rack in eight colours, which is what a container yard looks like and
+      // what the eight swatches are for. Its castings and rails stay
+      // machinery, so the shape still reads as a fitting.
+      if (mat === Mat.Plate) tone[n] = roleCode(LIVERY_ROLES[pi % LIVERY_ROLES.length] as LiveryRole);
+      // A RACK part is carried on the deck by the rails its navy already
+      // draws, so it does not get a spar per cell. Every other proud part
+      // does, and must: a pod hanging in space beside its own ship is the
+      // slop voxels were supposed to end. Twelve containers over a curved
+      // deck are two thousand cells of overhang, and a spar under each of
+      // them buried the ship in plate that was holding up cargo which is
+      // sitting on the deck already.
+      if (sock.kind !== 'rack' && !insideHull(prof, x, y, z)) {
         outboard.push(x, y, z);
         const ex = exposureOf(sock.kind);
         if (ex === 'enclosed') enclosedOutside++;
@@ -3162,7 +3216,7 @@ export function rasterise(d: Design): Raster {
     // of armour. The shell's own cells are counted where the shell is; charging
     // the coat as well would bill one volume twice, and it billed the Rogue
     // hardest, which is the class with the least plate to hide it in.
-    if (mat === Mat.Plate) plateCells++;
+    if (mat === Mat.Plate && !own[n]) plateCells++;
     if (i < loX) loX = i; if (i > hiX) hiX = i;
     if (j < loY) loY = j; if (j > hiY) hiY = j;
     if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
@@ -3833,7 +3887,7 @@ export const STOCK: readonly Design[] = [
     P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-AIR'), P('b3', 'UTL-AIR'),
     P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'),
   ], { beltFwd: 2, beltMid: 2, beltAft: 2, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
-    'civil', 0xD8E2EC, 'tread', 0.15, 0.70),
+    'civil', 0xB9C6D4, 'tread', 0.15, 0.70),
 
   stock('civil_hauler', [
     P('d0', 'DRV-T'), P('d1', 'DRV-T'), P('d2', 'DRV-T'),
@@ -3846,7 +3900,7 @@ export const STOCK: readonly Design[] = [
     P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'), P('h2', 'UTL-CTR'),
     P('h3', 'UTL-CTR'), P('h4', 'UTL-CTR'), P('h5', 'UTL-CTR'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
-    'civil', 0xB9C6D4, 'tread', 0.15, 0.70),
+    'civil', 0xC0A24A, 'tread', 0.15, 0.70),
 
   stock('civil_boxship', [
     P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-T'), P('d4', 'DRV-T'),
@@ -3860,7 +3914,7 @@ export const STOCK: readonly Design[] = [
     P('h4', 'UTL-CTR'), P('h5', 'UTL-CTR'), P('h6', 'UTL-CTR'), P('h7', 'UTL-CTR'),
     P('h8', 'UTL-CTR'), P('h9', 'UTL-CTR'), P('h10', 'UTL-CTR'), P('h11', 'UTL-CTR'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
-    'civil', 0x8C949E, 'tread', 0.15, 0.70),
+    'civil', 0x2E6F9E, 'tread', 0.15, 0.70),
 
   stock('civil_tanker', [
     P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-T'), P('d4', 'DRV-T'),
@@ -3872,7 +3926,7 @@ export const STOCK: readonly Design[] = [
     P('h0', 'UTL-TNK'), P('h1', 'UTL-TNK'), P('h2', 'UTL-TNK'),
     P('h3', 'UTL-TNK'), P('h4', 'UTL-TNK'), P('h5', 'UTL-TNK'),
   ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
-    'civil', 0x4F4F4F, 'crate', 0.22, 0.62),
+    'civil', 0xB4472B, 'crate', 0.22, 0.62),
 
   stock('civil_miner', [
     P('d0', 'DRV-T'), P('d1', 'DRV-T'),
@@ -3885,7 +3939,7 @@ export const STOCK: readonly Design[] = [
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
     P('h0', 'UTL-ORE'), P('h1', 'UTL-ORE'), P('h2', 'UTL-ORE'), P('h3', 'UTL-ORE'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
-    'civil', 0x6E7680, 'cracked', 0.18, 0.74),
+    'civil', 0x2E8B76, 'cracked', 0.18, 0.74),
 
   stock('civil_liner', [
     P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-N'), P('d4', 'DRV-N'),
@@ -4301,12 +4355,15 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
         if (!shell(x, y, z)) continue;
         const rib = (x === 0 || x === sx - 1) && z % 2 === 0;
         const rail = y === 0 || y === sy - 1;
-        put(x, y, z, rail ? Mat.Accent : rib ? Mat.Case : Mat.Machine);
+        // Plate is PAINT here, not armour: `rasterise` gives a part's plate
+        // cells a livery role and counts none of them as armour, so a box
+        // wears the ship's colours and costs its own mass and no more.
+        put(x, y, z, rail ? Mat.Accent : rib ? Mat.Case : Mat.Plate);
       }
       // The doors, and the corner castings that say it is a container rather
       // than a crate somebody welded up.
       for (let y = 1; y < sy - 1; y++) for (let x = 1; x < sx - 1; x++)
-        put(x, y, sz - 1, x === Math.round(cx) ? Mat.Accent : Mat.Case);
+        put(x, y, sz - 1, x === Math.round(cx) ? Mat.Accent : Mat.Plate);
       for (const x of [0, sx - 1]) for (const y of [0, sy - 1]) for (const z of [0, sz - 1])
         put(x, y, z, Mat.Glow);
       break;

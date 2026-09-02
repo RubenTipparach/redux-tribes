@@ -324,7 +324,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   const cell = RUNG[frame.rung];
   const raster = rasterise(d);
   const purp = raster.purp, own = raster.own, tone = raster.tone;
-  const grid = bare ? bareGrid(raster.grid) : raster.grid;
+  const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
   // The guns, and which placement each one is, so the quads that belong to a
