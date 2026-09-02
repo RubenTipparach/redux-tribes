@@ -2401,6 +2401,51 @@ const onWheel = (ev: WheelEvent) => {
 canvas.addEventListener('wheel', onWheel, { passive: false });
 $('inspect').addEventListener('wheel', onWheel, { passive: false });
 
+/**
+ * C reports the camera, because a picture of a bug is not a repro of one.
+ *
+ * A render defect that only appears "at certain angles" is a defect nobody can
+ * chase from a screenshot: the pose that produced it is the missing half of
+ * the report, and it is the half a person cannot read off their own screen.
+ * The reach shell's black patch went that way, and this is the answer to it.
+ *
+ * It reports the whole pose (both angles, the distance and the focus, drawn
+ * value and goal alike), the match it is a pose OF, and the things about the
+ * machine that decide whether a shader misbehaves on it: the viewport, the
+ * pixel ratio and which post path is running. To the console AND to the
+ * clipboard, because the point is to be pasted somewhere.
+ *
+ * Deliberately outside the planning keys below, which give up as soon as no
+ * ship is selected: where the camera is has nothing to do with whose turn it
+ * is. Ctrl and Cmd are let through untouched so copy still copies, and a key
+ * pressed into a text box is a letter rather than a command.
+ */
+function cameraReport(): string {
+  const st = view.cameraState();
+  const line = JSON.stringify({
+    camera: st,
+    match: { scenario: launch.scenario, kind: launch.kind, side: launch.side,
+             turn: match.turn, tick: playTick, hash: match.hash },
+    screen: { w: innerWidth, h: innerHeight, dpr: +(devicePixelRatio || 1).toFixed(2),
+              canvas: `${canvas.clientWidth}x${canvas.clientHeight}` },
+    render: view.postState(),
+    at: location.pathname,
+  });
+  console.log('camera report', line);
+  navigator.clipboard?.writeText(line).catch(() => {});
+  flash(`Camera: yaw ${st.yaw.toFixed(2)} pitch ${st.pitch.toFixed(2)} `
+    + `dist ${st.dist.toFixed(1)}. Copied, and in the console.`);
+  return line;
+}
+
+addEventListener('keydown', ev => {
+  if (ev.key.toLowerCase() !== 'c' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const t = ev.target as HTMLElement | null;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  cameraReport();
+  ev.preventDefault();
+});
+
 addEventListener('keydown', ev => {
   const s = selectedShip();
   if (!s) return;
@@ -3410,6 +3455,14 @@ Object.defineProperty(window, 'ftDebug', {
     /** What the hulls cost to draw, and a switch to weigh it against. */
     hullQuads: () => view.hullQuads(),
     hullsVisible: (on: boolean) => view.hullsVisible(on),
+    /** Hide the star field, so a harness can check that no star reaches a
+     *  pixel a hull is standing on. */
+    starsVisible: (on: boolean) => view.starsVisible(on),
+    /** Hide the movement envelope for one measurement, so a harness can weigh
+     *  a frame with the overlay against the same frame without it. */
+    reachVisible: (on: boolean) => view.reachVisible(on),
+    /** The same report the C key writes, for a phone, which has no C. */
+    cameraReport: () => cameraReport(),
     /** Who is in the match and what they are flying. */
     ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull,
       /** What this ship's CLASS has, so a harness can say whether a hull is

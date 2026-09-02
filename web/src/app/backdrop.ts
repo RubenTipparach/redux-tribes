@@ -155,9 +155,17 @@ function glowTexture(): THREE.Texture {
  * Returns a group to add to the scene. The caller owns it and disposes it on
  * the next launch: a backdrop belongs to a match, not to the renderer.
  *
- * `renderOrder` and `depthWrite` keep it behind everything: these objects are
- * hundreds of units out, but a planet 240 units across at 500 units would
- * still happily z-fight with a reach shell if it wrote depth.
+ * `renderOrder` keeps it behind everything: these objects are hundreds of
+ * units out and are drawn first so that the fleet lands on top of them.
+ *
+ * The BODIES write depth, and that is a change from the first cut, which
+ * withheld it for fear of z-fighting a reach shell. A fight needs two surfaces
+ * at nearly the same depth and there are none here: the whole engagement lives
+ * inside 200 units and the nearest planet is at 250. What withholding it did
+ * cost was real. Nothing could ever be occluded BY a planet, so the star field
+ * shone through every one of them, and two planets that overlapped were
+ * ordered by whichever happened to be drawn second rather than by which was in
+ * front.
  */
 export function buildBackdrop(b: Backdrop): THREE.Group {
   const group = new THREE.Group();
@@ -227,7 +235,9 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
       new THREE.MeshLambertMaterial({
         color: p.color,
         emissive: p.shade,
-        depthWrite: false,
+        // A body is solid, so it occludes: the stars behind it are 4500 units
+        // out and have to be stopped by something.
+        depthWrite: true,
         // A planet is a very slow gradient across a very dark range, which is
         // the same thing the nebula is and it bands the same way: the shading
         // crawls, the output byte holds, and the terminator comes out as a
