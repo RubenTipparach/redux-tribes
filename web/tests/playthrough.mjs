@@ -412,12 +412,18 @@ async function checkTheSkyIsABackdrop() {
   }
 
   // Move the eye a long way, through the controls rather than by writing
-  // state: focusing a hull is what a player does and it translates the camera
-  // across the field. Wait for the camera to have ARRIVED, since it eases.
-  const chip = page.locator('#hostiles .chip').first();
-  if (await chip.count()) { await chip.click().catch(() => {}); }
-  await page.waitForTimeout(300);
-  if (await chip.count()) { await chip.click().catch(() => {}); }
+  // state, and wait for it to have ARRIVED, since the camera eases.
+  //
+  // Pan, with the middle button, which is the one gesture that is always the
+  // camera and never an order. A pan slides the focus and leaves yaw and pitch
+  // alone, so the eye TRANSLATES without turning: the exact move a backdrop is
+  // supposed to be indifferent to.
+  const box = await page.locator('#cv').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down({ button: 'middle' });
+  for (let n = 1; n <= 10; n++) await page.mouse.move(cx - n * 22, cy - n * 8);
+  await page.mouse.up({ button: 'middle' });
   for (let n = 0; n < 60; n++) {
     await page.waitForTimeout(120);
     const a = (await read()).eye;
