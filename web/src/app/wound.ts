@@ -53,16 +53,19 @@ export const COOL_TICKS = 900;
  *
  * The last stop is not pure black: a cold wound is still a hole with a burnt
  * edge, and FLAT black reads as a gap in the mesh, which is the exact failure
- * this file exists to fix. It is close to it, though: what a cooled wound
- * settles on is char, and char is nearly black with a whisper of warmth left
- * in it, not the mid grey a "not black" rule might suggest.
+ * this file exists to fix. It went there once already: darkened to 0.08-0.10
+ * to read as "black smouldering", it multiplies an UNLIT material, so that
+ * multiplier IS the screen colour with no light to lift it, and 8-10%
+ * brightness against a near black space background is a hole again, just a
+ * charred coloured one instead of a bright one. 0.16-0.18 is dark enough to
+ * read as char and bright enough to read as a surface rather than void.
  */
 const HEAT: ReadonlyArray<readonly [number, number, number, number]> = [
   [1.00, 1.00, 1.00, 1.00],
   [0.70, 1.00, 0.82, 0.62],
   [0.40, 0.88, 0.44, 0.22],
   [0.18, 0.52, 0.20, 0.09],
-  [0.00, 0.10, 0.085, 0.08],
+  [0.00, 0.18, 0.15, 0.13],
 ];
 
 /** Where a cell sits on that ramp, given how long ago it died. */
