@@ -850,20 +850,36 @@ async function checkLookingAtShips() {
     return;
   }
 
-  // A double click goes there: centred AND closed, so the inspector is offered
-  // when it arrives.
+  // A double click goes there, and does NOT open the data panel: going in to
+  // look at a hull used to cover it with six labelled boxes, so the gesture
+  // that means "show me this ship" was also the one that hid it. The panel is
+  // a mode, entered by the button, which appears once the camera is close
+  // enough for the labels to mean anything.
   const before = await page.evaluate(() => window.ftDebug.camera().dist);
   await page.mouse.dblclick(at.x, at.y);
   await page.waitForTimeout(900);
   const after = await page.evaluate(() => window.ftDebug.camera().dist);
   if (!(after < before - 1)) fail(`double clicked a hull and the camera stayed at ${after}`);
+  if (await page.evaluate(() => window.ftDebug.inspect().ship) >= 0) {
+    fail('double clicking a hull opened the ship data over the hull it went to look at');
+  }
+  if (await page.evaluate(() => document.getElementById('bInspect').classList.contains('hidden'))) {
+    fail('the camera is on a hull and the ship data button is not offered');
+  }
+  log(`double click focuses without opening the panel: `
+    + `${before.toFixed(0)} u to ${after.toFixed(0)} u`);
+
+  // And the button still opens it, with the arcs that go with it.
+  await page.click('#bInspect');
+  await page.waitForTimeout(400);
   if (await page.evaluate(() => window.ftDebug.inspect().ship) < 0) {
-    fail('double clicked a hull and the ship data did not come up with it');
+    fail('the ship data button did not open the panel');
   }
   const allArcs = await page.evaluate(() => window.ftDebug.arcs());
   if (allArcs < 1) fail('ship data is up and no firing arc is drawn');
-  log(`double click focuses: ${before.toFixed(0)} u to ${after.toFixed(0)} u, `
-    + `${allArcs} firing arcs drawn`);
+  log(`the button opens it: ${allArcs} firing arcs drawn`);
+  await page.click('#bInspect');
+  await page.waitForTimeout(300);
 
   // A plain click on the hull names it and leaves the plan alone.
   const planBefore = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));

@@ -104,6 +104,16 @@ function materialsOf(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
   return (Array.isArray(m) ? m : [m]) as THREE.MeshStandardMaterial[];
 }
 
+/**
+ * How much of its own colour a torn interior throws back as light.
+ *
+ * Not a full self lit surface: at 1.0 the inside of a hull is a flat cutout
+ * with no shading at all, and the point is that it reads as machinery in a
+ * hole rather than as a sticker over one. Enough to be legible in a shadow
+ * that nothing in this scene can reach.
+ */
+const INTERIOR_LIGHT = 0.55;
+
 const HULL_METAL = DEFAULT_METAL;
 const HULL_ROUGH = DEFAULT_ROUGH;
 
@@ -176,6 +186,8 @@ interface Carved {
   /** The faces the hit opened, drawn as machinery rather than as plate. */
   woundInner: THREE.Mesh | null;
   woundGlow: THREE.Mesh | null;
+  /** The char on the plating around a hole, over the hull's own paint. */
+  woundScorch: THREE.Mesh | null;
   /** How many cells the wound was built for, so it rebuilds on change only. */
   woundFor: number;
   /** And how hot it was last painted, so a cold wound costs nothing. */
@@ -458,7 +470,7 @@ export class View {
     const c: Carved = {
       hull, design, geo, born: new Map(),
       cells: new Map(), wound: null, woundSkin: null, woundInner: null,
-      woundGlow: null, woundFor: -1,
+      woundGlow: null, woundScorch: null, woundFor: -1,
       woundHeat: -1, upTo: -1,
     };
     this.#carved.set(id, c);
@@ -484,7 +496,7 @@ export class View {
 
   /** Take the torn edges off the scene and give their buffers back. */
   #dropWound(c: Carved): void {
-    for (const m of [c.woundSkin, c.woundInner, c.woundGlow]) {
+    for (const m of [c.woundSkin, c.woundInner, c.woundGlow, c.woundScorch]) {
       if (!m) continue;
       m.removeFromParent();
       (m.material as THREE.Material).dispose();
@@ -496,6 +508,7 @@ export class View {
     c.woundSkin = null;
     c.woundInner = null;
     c.woundGlow = null;
+    c.woundScorch = null;
     c.woundFor = -1;
     c.woundHeat = -1;
   }
@@ -731,10 +744,33 @@ export class View {
         // The face a hit OPENED is the inside of the ship, which is machinery
         // and frame rather than plating, so it wears what machinery wears: the
         // same material the schematic gives the same faces.
-        const inner = new THREE.Mesh(w.inner, new THREE.MeshStandardMaterial({
+        //
+        // And it CARRIES ITS OWN LIGHT. Every lamp in this scene is outside the
+        // hull, so a face looking into a ship is lit by nothing at all: the
+        // machinery was drawn, in the right place, in its own colours, and came
+        // out black. Against a black sky that is indistinguishable from a hole
+        // with nothing behind it, which is what it was reported as. A ship's
+        // inside is lit from inside, the same reason its windows are, so the
+        // vertex colour is added to the emissive term as well as the diffuse
+        // one: it reads at a glance and still shades with the surface it is on.
+        const innerMat = new THREE.MeshStandardMaterial({
           vertexColors: true, normalMap: finishMap(surf.part),
           metalness: 0.55, roughness: 0.62,
           side: THREE.DoubleSide, dithering: true,
+        });
+        innerMat.onBeforeCompile = (sh) => {
+          sh.fragmentShader = sh.fragmentShader.replace(
+            '#include <emissivemap_fragment>',
+            '#include <emissivemap_fragment>\n'
+            + `  totalEmissiveRadiance += vColor.rgb * ${INTERIOR_LIGHT.toFixed(2)};`);
+        };
+        const inner = new THREE.Mesh(w.inner, innerMat);
+        // The burn on the plating outside, over the paint rather than instead
+        // of it: unlit like the glow, because soot is not a surface that takes
+        // a highlight, and no depth write because it sits exactly on the plate.
+        const scorch = new THREE.Mesh(w.scorch, new THREE.MeshBasicMaterial({
+          vertexColors: true, map: ember(),
+          transparent: true, depthWrite: false,
         }));
         // Unlit, so the colour IS the light coming off it. A lit material
         // would need a lamp inside the ship to read as burning. The map is the
@@ -753,14 +789,17 @@ export class View {
         skin.frustumCulled = false;
         inner.frustumCulled = false;
         glow.frustumCulled = false;
-        mesh.add(skin, inner, glow);
+        scorch.frustumCulled = false;
+        mesh.add(skin, inner, glow, scorch);
         c.woundSkin = skin;
         c.woundInner = inner;
         c.woundGlow = glow;
+        c.woundScorch = scorch;
       } else {
         keepSkin.geometry = w.skin;
         keepGlow.geometry = w.glow;
         if (c.woundInner) c.woundInner.geometry = w.inner;
+        if (c.woundScorch) c.woundScorch.geometry = w.scorch;
       }
       // The plate fragments are the hull's own paint, so they wear the hull's
       // own wash: two materials disagreeing about whose ship this is would

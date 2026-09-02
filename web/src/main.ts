@@ -2377,7 +2377,11 @@ canvas.addEventListener('dblclick', ev => {
   const s = ships.find(x => x.id === id);
   if (!s) return;
   view.focusOn(s);
-  setInspect(true);
+  // Focus only. The data panel is a MODE, and opening it on the way in put six
+  // labelled boxes over the hull you had just gone in to look at: the gesture
+  // that means "let me see this ship" was also the gesture that covered it.
+  // The button beside it is how the mode is entered, and it appears as soon as
+  // the camera is close enough for the labels to mean anything.
   draw();
 });
 
