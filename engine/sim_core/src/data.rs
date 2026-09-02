@@ -479,10 +479,10 @@ const fn civil_subs(radius: f32, hp: f32) -> [SubDef; 3] {
 }
 
 static LIGHTER_SUBS: [SubDef; 3] = civil_subs(2.6, 0.8);
-static HAULER_SUBS: [SubDef; 3] = civil_subs(5.2, 1.4);
+static HAULER_SUBS: [SubDef; 3] = civil_subs(3.5, 1.4);
 static BOXSHIP_SUBS: [SubDef; 3] = civil_subs(7.3, 2.4);
 static TANKER_SUBS: [SubDef; 3] = civil_subs(6.9, 2.6);
-static MINER_SUBS: [SubDef; 3] = civil_subs(4.5, 1.5);
+static MINER_SUBS: [SubDef; 3] = civil_subs(3.0, 1.5);
 static LINER_SUBS: [SubDef; 3] = civil_subs(7.5, 2.2);
 
 static TERRAN_MOUNTS: [MountDef; 3] = [
@@ -515,16 +515,16 @@ static BENEFACTOR_MOUNTS: [MountDef; 3] = [
 static FREIGHTER_MOUNTS: [MountDef; 0] = [];
 
 static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(1.0, 80.0, 0.65);
-static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.5, 80.0, 1.9);
+static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(3.7, 80.0, 1.9);
 static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.4, 80.0, 3.2);
 static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(1.2, 75.0, 0.6);
-static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 75.0, 1.75);
+static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(3.9, 75.0, 1.75);
 static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 75.0, 2.9);
 static ROGUE_CORVETTE_SUBS: [SubDef; 6] = hull_subs(1.0, 90.0, 0.45);
-static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(4.5, 90.0, 1.3);
+static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(3.0, 90.0, 1.3);
 static ROGUE_CRUISER_SUBS: [SubDef; 6] = hull_subs(6.3, 90.0, 2.2);
 static BENEFACTOR_CORVETTE_SUBS: [SubDef; 6] = hull_subs(1.0, 80.0, 0.7);
-static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.3, 80.0, 2.05);
+static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(3.5, 80.0, 2.05);
 static BENEFACTOR_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.0, 80.0, 3.5);
 
 static TERRAN_CORVETTE_MOUNTS: [MountDef; 2] = [
@@ -775,19 +775,19 @@ static C_TERRAN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::TerranDestroyer,
     key: "terran_destroyer",
     name: "Terran Destroyer",
-    hull: 787.678,
-    radius: 5.5,
-    mass: 2.61,
-    rung_cell: 0.1640625,
+    hull: 350.82,
+    radius: 3.7,
+    mass: 1.43,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 5.2548,
-        pitch_rate: 3.5207,
-        accel_fwd: 0.8796,
-        accel_retro: 0.2707,
-        accel_lat: 0.1804,
+        yaw_rate: 9.5904,
+        pitch_rate: 6.4256,
+        accel_fwd: 1.6054,
+        accel_retro: 0.494,
+        accel_lat: 0.3293,
         max_speed: 7.0,
     },
     boarding_range: 20.0,
@@ -856,19 +856,19 @@ static C_KARISEN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::KarisenDestroyer,
     key: "karisen_destroyer",
     name: "Karisen Destroyer",
-    hull: 630.538,
-    radius: 5.8,
-    mass: 2.03,
-    rung_cell: 0.1640625,
+    hull: 266.598,
+    radius: 3.9,
+    mass: 1.05,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.2088,
-        pitch_rate: 4.1599,
-        accel_fwd: 0.5507,
-        accel_retro: 0.3478,
-        accel_lat: 0.2319,
+        yaw_rate: 12.0333,
+        pitch_rate: 8.0623,
+        accel_fwd: 1.0674,
+        accel_retro: 0.6742,
+        accel_lat: 0.4494,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -937,19 +937,19 @@ static C_ROGUE_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::RogueDestroyer,
     key: "rogue_destroyer",
     name: "Rogue Destroyer",
-    hull: 373.111,
-    radius: 4.5,
-    mass: 1.48,
-    rung_cell: 0.1640625,
+    hull: 224.692,
+    radius: 3.0,
+    mass: 1.08,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 7.5625,
-        pitch_rate: 5.0669,
-        accel_fwd: 0.7893,
-        accel_retro: 0.4784,
-        accel_lat: 0.2232,
+        yaw_rate: 10.3804,
+        pitch_rate: 6.9548,
+        accel_fwd: 1.0834,
+        accel_retro: 0.6566,
+        accel_lat: 0.3064,
         max_speed: 9.5,
     },
     boarding_range: 40.0,
@@ -1018,19 +1018,19 @@ static C_BENEFACTOR_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::BenefactorDestroyer,
     key: "benefactor_destroyer",
     name: "Benefactor Destroyer",
-    hull: 726.717,
-    radius: 5.3,
-    mass: 2.37,
-    rung_cell: 0.1640625,
+    hull: 313.842,
+    radius: 3.5,
+    mass: 1.26,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.0034,
-        pitch_rate: 4.0222,
-        accel_fwd: 0.6464,
-        accel_retro: 0.2984,
-        accel_lat: 0.1989,
+        yaw_rate: 11.3485,
+        pitch_rate: 7.6035,
+        accel_fwd: 1.222,
+        accel_retro: 0.564,
+        accel_lat: 0.376,
         max_speed: 7.0,
     },
     boarding_range: 20.0,
@@ -1099,19 +1099,19 @@ static C_CIVIL_HAULER: ShipClass = ShipClass {
     id: ShipClassId::CivilHauler,
     key: "civil_hauler",
     name: "Hauler",
-    hull: 785.601,
-    radius: 5.2,
-    mass: 2.64,
-    rung_cell: 0.1640625,
+    hull: 358.03,
+    radius: 3.5,
+    mass: 1.49,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 4.1182,
-        pitch_rate: 2.7592,
-        accel_fwd: 0.4019,
-        accel_retro: 0.2679,
-        accel_lat: 0.134,
+        yaw_rate: 7.3279,
+        pitch_rate: 4.9097,
+        accel_fwd: 0.7151,
+        accel_retro: 0.4768,
+        accel_lat: 0.2384,
         max_speed: 5.0,
     },
     boarding_range: 20.0,
@@ -1177,19 +1177,19 @@ static C_CIVIL_MINER: ShipClass = ShipClass {
     id: ShipClassId::CivilMiner,
     key: "civil_miner",
     name: "Mining Ship",
-    hull: 684.83,
-    radius: 4.5,
-    mass: 2.44,
-    rung_cell: 0.1640625,
+    hull: 345.68,
+    radius: 3.0,
+    mass: 1.52,
+    rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 5.0137,
-        pitch_rate: 3.3592,
-        accel_fwd: 0.2899,
-        accel_retro: 0.2899,
-        accel_lat: 0.145,
+        yaw_rate: 8.0347,
+        pitch_rate: 5.3832,
+        accel_fwd: 0.4647,
+        accel_retro: 0.4647,
+        accel_lat: 0.2323,
         max_speed: 5.0,
     },
     boarding_range: 20.0,

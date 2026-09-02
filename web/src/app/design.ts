@@ -57,7 +57,29 @@ export const RUNG = {
    * that wants its own size gets its own rung.
    */
   lighter: 7 / 64,
-  escort: 10.5 / 64,
+  /**
+   * The destroyer, halved against the heavy cruiser.
+   *
+   * It was 10.5/64, three quarters of the cruiser's cell, so a destroyer came
+   * out at 0.74 to 0.78 of a cruiser's length and the two read as the same
+   * ship at a glance. Every rung is now double the one below it: 3.5, 7, 14,
+   * 28 sixty fourths, so the ladder is 0.5, 1, 2, 4 and each step is
+   * unmistakable.
+   *
+   * It shares a number with `lighter` and keeps its own name: a cargo tender
+   * and a destroyer being the same size is a coincidence, and folding them
+   * into one key would make the next change to either move both.
+   */
+  escort: 7 / 64,
+  /**
+   * The freighter keeps the escort's OLD cell.
+   *
+   * It shared `escort` and is not a destroyer, so halving that rung took a
+   * cargo hauler from 8.70 units to 5.80 with nobody asking. Twice now a rung
+   * has been two classes wearing one number: a rung is a cell SIZE, and a
+   * class that wants its own size needs its own key rather than a neighbour's.
+   */
+  freighter: 10.5 / 64,
   cruiser: 14 / 64,
   capital: 28 / 64,
 } as const;
@@ -1816,7 +1838,7 @@ export const FRAMES: readonly FrameDef[] = [
   },
   {
     classKey: 'freighter', name: 'Freighter',
-    faction: 'civil', tier: 'freighter', rung: 'escort',
+    faction: 'civil', tier: 'freighter', rung: 'freighter',
     radius: 4.9, massMax: 2.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
@@ -1878,7 +1900,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.5, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.7, massMax: 1.43, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1949,7 +1971,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.9, massMax: 1.05, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -2018,7 +2040,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.5, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3, massMax: 1.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -2079,7 +2101,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.3, massMax: 2.37, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.5, massMax: 1.26, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -2144,7 +2166,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_hauler', name: 'Hauler',
     faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.2, massMax: 2.64, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.5, massMax: 1.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_HAULER,
     spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
       ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
@@ -2190,7 +2212,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_miner', name: 'Mining Ship',
     faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.5, massMax: 2.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3, massMax: 1.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_MINER,
     spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
       ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
