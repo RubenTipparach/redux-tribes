@@ -391,6 +391,23 @@ cruiser for Terran, Karisen, Rogue and Benefactor. The civil yards do not build
 a ladder, they build TRADES: freighter, lighter, hauler, container ship,
 tanker, mining ship and liner. Twenty three classes.
 
+**Corvettes and frigates are half the size they were.** `RUNG.frigate` is
+3.5/64: a Terran frigate is 3.17 units where it was 6.34, and a corvette 1.59.
+Destroyers and heavy cruisers are untouched, on the owner's call, so the ladder
+is deliberately no longer 0.5/1/1.5/2: a destroyer is 2.95 times a frigate and
+the big step is now frigate to destroyer. The civil lighter has its own rung at
+the old cell, because it shared the frigate's and is neither.
+
+Two things follow from it and neither is cosmetic. **Plate mass and hull go as
+the CUBE of the cell**, so a Terran frigate carries 121 hull points where it
+carried 300 while a beam still does 27.5: these classes are much more fragile
+than they were, and `tests/turn.rs` asks its damage model questions of heavy
+cruisers now because a frigate no longer survives being pounded on one volume.
+And **`FRIGATE_CELL` in `data.rs` is a REFERENCE, not a statement about
+frigates**: `PLATE_UM`, `HULL_MILLI` and `MOUNT_RADIUS` are authored per cell
+of that size and every rung scales by its own `rung_cell` over it. Halving it
+alongside `RUNG.frigate` looks right and silently undoes the whole change.
+
 **A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
 every hull; what changes is what one cell is worth in the world, and `RUNG`
 authors four of those. A corvette is a SHORT profile at the frigate's cell; a

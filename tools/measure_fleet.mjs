@@ -265,7 +265,11 @@ if (process.argv.includes('--sync') || process.argv.includes('--check')) {
     console.log(`        (ShipClassId::${ID[r.key] ?? r.key},`);
     console.log(`         &[${r.partList.join(', ')}],`);
     console.log(`         Geometry { plate_cells: ${r.geo.plateCells}, `
-      + `ext: [${r.geo.ext.join(', ')}], radius_cells: ${r.geo.radiusCells}, `
+      // Through `f32` like every other float. A radius that lands on a whole
+      // number prints as `22` in JavaScript and Rust refuses an integer where
+      // it wants an f32, so the generated table would not compile on exactly
+      // the hulls whose numbers came out roundest.
+      + `ext: [${r.geo.ext.join(', ')}], radius_cells: ${f32(r.geo.radiusCells)}, `
       + `fouled: ${r.geo.fouled} },`);
     console.log(`         Expect { mass: ${f32(st.mass)}, hull: ${f32(st.hull)}, `
       + `radius: ${f32(st.radius)}, accel_fwd: ${f32(st.accelFwd)}, `

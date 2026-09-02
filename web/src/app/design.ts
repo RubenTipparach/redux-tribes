@@ -34,7 +34,29 @@ export const CELLS = NX * NY * NZ;
  * with a bigger cell, so a capital costs no more to store than a frigate.
  */
 export const RUNG = {
-  frigate: 7 / 64,
+  /**
+   * Corvettes and frigates, halved.
+   *
+   * They were too big on the field: a Terran frigate measured 6.34 units in a
+   * fight that happens inside 200 and under weapons that reach 300, so the
+   * smallest thing anyone flies was a third the size of the engagement it was
+   * in. Halving the CELL halves them, because a rung is a cell size and the
+   * ladder is a consequence of it rather than of twenty three tables.
+   *
+   * It costs the ladder, deliberately and on the owner's call: a destroyer is
+   * now 2.95 times a frigate rather than 1.5, so the step from frigate to
+   * destroyer is the big one and corvette to frigate stays the small one.
+   */
+  frigate: 3.5 / 64,
+  /**
+   * The civil lighter keeps the old cell.
+   *
+   * It shared the frigate's rung and it is neither a frigate nor a corvette:
+   * halving it was not asked for and would have shrunk a cargo tender because
+   * a warship two tables away changed size. A rung is a cell size, so a class
+   * that wants its own size gets its own rung.
+   */
+  lighter: 7 / 64,
   escort: 10.5 / 64,
   cruiser: 14 / 64,
   capital: 28 / 64,
@@ -1617,7 +1639,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_frigate', name: 'Terran Frigate',
     faction: 'terran', tier: 'frigate', rung: 'frigate',
-    radius: 3.6, massMax: 1.09, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.8, massMax: 0.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN,
     spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
     sockets: [
@@ -1658,7 +1680,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.8, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.9, massMax: 0.55, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
@@ -1699,7 +1721,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_frigate', name: 'Rogue Frigate',
     faction: 'rogue', tier: 'frigate', rung: 'frigate',
-    radius: 3, massMax: 0.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.5, massMax: 0.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
     profile: PROF_ROGUE,
@@ -1751,7 +1773,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 0.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.8, massMax: 0.58, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -1837,7 +1859,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_corvette', name: 'Terran Corvette',
     faction: 'terran', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1, massMax: 0.36, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CV,
     spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
     sockets: [
@@ -1908,7 +1930,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_corvette', name: 'Karisen Corvette',
     faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.4, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.2, massMax: 0.37, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CV,
     // The ventral rail overruns the body at both ends, which is the one
     // Karisen habit that survives at every rung.
@@ -1978,7 +2000,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_corvette', name: 'Rogue Corvette',
     faction: 'rogue', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1, massMax: 0.36, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CV,
     // A cross beam through the keel, carrying the clamps and the collars as
     // one structure, exactly as the frigate does.
@@ -2039,7 +2061,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
     faction: 'benefactor', tier: 'corvette', rung: 'frigate',
-    radius: 1.9, massMax: 0.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1, massMax: 0.31, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CV,
     spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
       ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
@@ -2107,7 +2129,7 @@ export const FRAMES: readonly FrameDef[] = [
   // written as geometry rather than as a convention.
   {
     classKey: 'civil_lighter', name: 'Lighter',
-    faction: 'civil', tier: 'lighter', rung: 'frigate',
+    faction: 'civil', tier: 'lighter', rung: 'lighter',
     radius: 2.6, massMax: 0.67, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LIGHTER,
     spine: [keel(CY, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],

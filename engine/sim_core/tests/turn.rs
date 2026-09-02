@@ -29,6 +29,25 @@ fn duel(seed: &str, sep: f32) -> Sim {
     )
 }
 
+/// The same duel on HEAVY CRUISERS, for the checks that pound one volume until
+/// it dies.
+///
+/// A frigate cannot survive that any more. Corvettes and frigates were halved,
+/// and plate mass and hull go as the CUBE of the cell, so a Terran frigate
+/// carries 121 hull points where it carried 300: a beam does 27.5, so the ship
+/// is gone in five hits and a single volume takes longer than that to kill.
+/// The subject of these checks is the damage MODEL, which is the same at every
+/// rung, so they ask it of a hull with enough structure to answer.
+fn heavy_duel(seed: &str, sep: f32) -> Sim {
+    Sim::new_skirmish(
+        seed,
+        &[spec(ShipClassId::TerranCruiser, V3::new(0.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0))],
+        &[spec(ShipClassId::KarisenCruiser, V3::new(0.0, 0.0, sep), V3::new(0.0, 0.0, -1.0))],
+        Faction::Karisen,
+        SOLO,
+    )
+}
+
 fn hold(target: V3) -> Order {
     Order { mode: Some(Mode::MoveAndTurn), target: Some(target), ..Default::default() }
 }
@@ -665,7 +684,7 @@ fn losing_the_weapon_bay_silences_every_mount() {
     // One bay feeds the whole hull, so this is not "the mount you shot": it is
     // every mount at once, and the client's own greying out has to agree
     // because it asks the same gate.
-    let mut sim = duel("seed-bay", 40.0);
+    let mut sim = heavy_duel("seed-bay", 40.0);
     assert!(sim.can_fire(1, 0), "a fresh hull can fire before anything is hit");
     let _ = pound(&mut sim, 4, 14);
     assert!(sim.ships[1].subs[4].dead, "focused fire on the bay must eventually take it");
@@ -693,7 +712,7 @@ fn losing_the_thrusters_keeps_the_drive_and_takes_the_turn_rates() {
     // Attitude authority and thrust are different systems, and losing one is
     // not losing the other: the hull still accelerates, it just cannot point
     // itself anywhere new.
-    let mut sim = duel("seed-jets", 40.0);
+    let mut sim = heavy_duel("seed-jets", 40.0);
     let authored = sim.ships[1].flight;
     let _ = pound(&mut sim, 3, 14);
     assert!(sim.ships[1].subs[3].dead, "focused fire on the thrusters must eventually take them");

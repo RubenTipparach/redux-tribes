@@ -211,8 +211,8 @@ test('a side fields the design it picked, derived by the core', () => {
   // What the core says the design is, asked directly.
   const stats = sim.derive(2, geo, parts);
   assert.ok(stats, 'the core derives the record');
-  assert.ok(Math.abs(stats.hull - 194.848) < 0.1, `hull ${stats.hull}`);
-  assert.ok(Math.abs(stats.mass - 0.789256) < 1e-4, `mass ${stats.mass}`);
+  assert.ok(Math.abs(stats.hull - 146.296) < 0.1, `hull ${stats.hull}`);
+  assert.ok(Math.abs(stats.mass - 0.677872) < 1e-4, `mass ${stats.mass}`);
   assert.equal(stats.marines, 40);
   assert.equal(stats.gates, 0b1111111, 'the stock Rogue passes every gate');
 
@@ -443,7 +443,7 @@ test('class and mount metadata cross intact', () => {
   // `--check` fails if the two part. The literal here is only a spot check
   // that a number crossed the boundary at all; the fleet wide agreement is
   // the test below it.
-  assert.ok(Math.abs(terran.hull - 299.554) < 0.01, `terran hull ${terran.hull}`);
+  assert.ok(Math.abs(terran.hull - 121.024) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
