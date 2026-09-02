@@ -100,6 +100,12 @@ export const ShipClass = {
   BenefactorCorvette: 14,
   BenefactorDestroyer: 15,
   BenefactorCruiser: 16,
+  CivilLighter: 17,
+  CivilHauler: 18,
+  CivilBoxship: 19,
+  CivilTanker: 20,
+  CivilMiner: 21,
+  CivilLiner: 22,
 } as const;
 export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
 
@@ -117,6 +123,8 @@ export const CLASS_KEYS: readonly string[] = [
   'karisen_corvette', 'karisen_destroyer', 'karisen_cruiser',
   'rogue_corvette', 'rogue_destroyer', 'rogue_cruiser',
   'benefactor_corvette', 'benefactor_destroyer', 'benefactor_cruiser',
+  'civil_lighter', 'civil_hauler', 'civil_boxship',
+  'civil_tanker', 'civil_miner', 'civil_liner',
 ];
 export const classIndexOf = (key: string): number => CLASS_KEYS.indexOf(key);
 
@@ -138,6 +146,12 @@ export const CLASS_NAMES: Record<number, string> = {
   14: 'Benefactor Corvette',
   15: 'Benefactor Destroyer',
   16: 'Benefactor Heavy Cruiser',
+  17: 'Lighter',
+  18: 'Hauler',
+  19: 'Container Ship',
+  20: 'Tanker',
+  21: 'Mining Ship',
+  22: 'Liner',
 };
 
 export const FACTION_NAMES: Record<number, string> = {

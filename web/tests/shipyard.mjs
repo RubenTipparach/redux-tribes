@@ -201,14 +201,22 @@ async function checkShips(page) {
       ok(`${name}: legal at ${(100 * d.derived.mass / d.derived.massMax).toFixed(0)}% of budget, hull ${d.derived.hull.toFixed(0)}`);
     }
     // The whole point of eight swatches is that eight of them are on the ship.
-    // The armour is the colour that was PICKED, and only that colour: nothing
-    // is chosen for the player and nothing varies by where a cell sits.
+    //
+    // This asserted the opposite until the livery landed: exactly ONE tone,
+    // the picked one. That rule existed because the scheme before it derived
+    // colours from position and left the pick invisible. What replaced it
+    // keeps the pick as role `hull` and rotates the other seven round the
+    // palette from there, so both halves are checkable: the whole palette is
+    // on the ship, AND the colour the player chose is one of them.
     const tones = d.armourTones;
-    if (tones.length !== 1 || tones[0] !== d.paint) {
-      fail(`${name}: picked 0x${d.paint.toString(16)} and the hull came out `
+    if (tones.length !== 8) {
+      fail(`${name}: the livery laid ${tones.length} of 8 swatches: `
         + `${tones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
-    } else ok(`${name}: every armour cell is the picked ${d.faction} colour, `
-      + `0x${d.paint.toString(16)}`);
+    } else if (!tones.includes(d.paint)) {
+      fail(`${name}: picked 0x${d.paint.toString(16)} and it is not on the hull: `
+        + `${tones.map(t => '0x' + t.toString(16)).join(', ')}`);
+    } else ok(`${name}: the whole ${d.faction} palette is on the hull, `
+      + `the picked 0x${d.paint.toString(16)} among it`);
     // Mounts live inside the frame. Only drives, retros, attitude thrusters, gun
     // rings and trunnions are allowed to stand proud of the hull.
     if (d.enclosedOutside > 0)
@@ -1032,13 +1040,24 @@ async function checkModesAndRotation(page) {
     await swatches[3].click();
     await page.waitForTimeout(400);
     const after = await page.evaluate(() => window.ftDebug.designer());
-    if (after.armourTones.length !== 1 || after.armourTones[0] !== after.paint)
-      fail(`the fourth swatch set paint 0x${after.paint.toString(16)} and the hull came out `
-        + `${after.armourTones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
-    else if (after.armourTones[0] === before[0])
-      fail('picking a different swatch did not change the hull colour');
-    else ok(`a picked swatch is the whole hull: 0x${(before[0] ?? 0).toString(16)} to `
-      + `0x${after.armourTones[0].toString(16)}`);
+    // A different pick has to REPAINT the ship, not merely be present on it.
+    // The palette is a cycle and the livery is a rotation of it, so the SET of
+    // eight tones is the same set whichever swatch is picked: what changes is
+    // which role wears which, and the only way to see that from outside is
+    // where the picked colour lands. So: the pick is on the hull, the whole
+    // palette is on the hull, and the broad plating is a different colour from
+    // the one it was.
+    const plate = await page.evaluate(() => window.ftDebug.designer().hullTone);
+    if (!after.armourTones.includes(after.paint))
+      fail(`the fourth swatch set paint 0x${after.paint.toString(16)} and it is not `
+        + `on the hull: ${after.armourTones.map(t => '0x' + t.toString(16)).join(', ') || 'nothing'}`);
+    else if (after.armourTones.length !== 8)
+      fail(`after a repick the hull wears ${after.armourTones.length} of 8 swatches`);
+    else if (plate !== after.paint)
+      fail(`the broad plating is 0x${plate.toString(16)}, not the picked `
+        + `0x${after.paint.toString(16)}`);
+    else ok(`a picked swatch is the hull's own plating: 0x${(before[0] ?? 0).toString(16)} `
+      + `to 0x${after.paint.toString(16)}, with all eight on the ship`);
     // Re-queried: picking a swatch rebuilds the palette, so the handles taken
     // before the click are pointing at buttons that no longer exist.
     await (await page.$$('#dzPaint button'))[0].click();

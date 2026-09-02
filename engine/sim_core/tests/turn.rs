@@ -720,7 +720,14 @@ fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
         &[spec(ShipClassId::TerranFrigate, V3::new(0.0, -30.0, 0.0), V3::new(0.0, 1.0, 0.0))],
         &[
             spec(ShipClassId::Freighter, V3::ZERO, V3::new(0.0, 0.0, 1.0)),
-            spec(ShipClassId::KarisenFrigate, V3::new(8.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0)),
+            // Eleven units, not eight. A freighter collides at 4.9 and a
+            // Karisen frigate at 3.8, so eight puts the two spheres inside
+            // each other: the contact solver then spent twenty turns pushing
+            // them apart and the bystander was sixty units downrange by the
+            // time the reactor went, which read as "a blast that does not
+            // reach". Outside the sum of the two radii and inside
+            // CRITICAL_RADIUS is the band this test is actually about.
+            spec(ShipClassId::KarisenFrigate, V3::new(11.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0)),
         ],
         Faction::Karisen,
         SOLO,
@@ -740,10 +747,10 @@ fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
     assert!(
         sim.ships[2].hull < bystander_before,
         "a hull {} units from a breach takes a share of it",
-        8.0,
+        11.0,
     );
     // And it is a blast, not a second kill: the falloff leaves a frigate at
-    // eight units alive.
+    // eleven units alive.
     assert!(!sim.ships[2].destroyed, "the blast falls off rather than clearing the field");
 }
 

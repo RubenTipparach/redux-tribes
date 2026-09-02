@@ -43,7 +43,7 @@ pub struct ModuleDef {
 /// worth writing, so the client sends the position and this table gives it a
 /// meaning. An entry inserted in the middle renumbers every part after it on
 /// one side and not the other, so new parts go on the end.
-pub static MODULES: [ModuleDef; 22] = [
+pub static MODULES: [ModuleDef; 28] = [
     ModuleDef { id: "DRV-V", mass_um: 1520, hull_milli: 320, thrust: 5, retro: 0, lat_x: 0, lat_y: 0, exhaust: 6.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
     ModuleDef { id: "DRV-N", mass_um: 12160, hull_milli: 2560, thrust: 15, retro: 0, lat_x: 0, lat_y: 0, exhaust: 8.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
     ModuleDef { id: "DRV-B", mass_um: 23750, hull_milli: 5000, thrust: 30, retro: 0, lat_x: 0, lat_y: 0, exhaust: 8.5, weapon: None, marines: 0, capacity: 0, reach: 0 },
@@ -66,6 +66,15 @@ pub static MODULES: [ModuleDef; 22] = [
     ModuleDef { id: "UTL-CLM", mass_um: 22800, hull_milli: 4800, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 5 },
     ModuleDef { id: "UTL-CGO", mass_um: 197600, hull_milli: 41600, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
     ModuleDef { id: "STR-STRUT", mass_um: 190, hull_milli: 40, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
+    // Appended, always. A part's POSITION here is the index the client sends,
+    // so a row slid in above renumbers every row under it and a hull comes
+    // back derived as though it carried something else.
+    ModuleDef { id: "UTL-OBS", mass_um: 27360, hull_milli: 5760, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
+    ModuleDef { id: "UTL-CTR", mass_um: 87780, hull_milli: 18480, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
+    ModuleDef { id: "UTL-TNK", mass_um: 145920, hull_milli: 30720, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
+    ModuleDef { id: "UTL-ORE", mass_um: 143640, hull_milli: 30240, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
+    ModuleDef { id: "UTL-PAX", mass_um: 66500, hull_milli: 14000, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 2, capacity: 0, reach: 0 },
+    ModuleDef { id: "UTL-DRL", mass_um: 42750, hull_milli: 9000, thrust: 0, retro: 0, lat_x: 0, lat_y: 0, exhaust: 0.0, weapon: None, marines: 0, capacity: 0, reach: 0 },
 ];
 
 /// The bridge, which every hull must carry exactly one of.

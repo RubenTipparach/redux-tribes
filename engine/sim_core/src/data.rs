@@ -282,6 +282,16 @@ pub enum ShipClassId {
     BenefactorCorvette,
     BenefactorDestroyer,
     BenefactorCruiser,
+    // The civil yards, appended for the same reason: an entry slid in above
+    // renumbers every class under it on one side of a lockstep pair and not
+    // the other. None of them carries a mount, so none of them can be armed,
+    // and `design.rs` passes the arms gate on an empty weapon table.
+    CivilLighter,
+    CivilHauler,
+    CivilBoxship,
+    CivilTanker,
+    CivilMiner,
+    CivilLiner,
 }
 
 pub struct ShipClass {
@@ -321,6 +331,8 @@ pub struct ShipClass {
 /// The frigate's radius, which every other hull's volumes are scaled against.
 /// One number rather than a magic 3.5 in the middle of the arithmetic below.
 const FRIGATE_RADIUS: f32 = 3.5;
+/// And the freighter's, which the civil volumes were authored against.
+const FREIGHTER_RADIUS: f32 = 4.5;
 
 const fn hull_subs(radius: f32, armor_block: f32, hp: f32) -> [SubDef; 6] {
     // One layout, sized to the hull it is inside. The offsets and half extents
@@ -403,38 +415,65 @@ const fn hull_subs(radius: f32, armor_block: f32, hp: f32) -> [SubDef; 6] {
 // A frigate is the unit: radius 3.5 and hp 1.0 are both exact in f32, so these
 // four come out of the scaled layout bit for bit as they came out of the
 // unscaled one.
-static TERRAN_SUBS: [SubDef; 6] = hull_subs(3.5, 80.0, 1.0);
-static KARISEN_SUBS: [SubDef; 6] = hull_subs(3.5, 75.0, 1.0);
-static ROGUE_SUBS: [SubDef; 6] = hull_subs(3.5, 90.0, 1.0);
+static TERRAN_SUBS: [SubDef; 6] = hull_subs(3.6, 80.0, 1.0);
+static KARISEN_SUBS: [SubDef; 6] = hull_subs(3.8, 75.0, 1.0);
+static ROGUE_SUBS: [SubDef; 6] = hull_subs(3.0, 90.0, 1.0);
 static BENEFACTOR_SUBS: [SubDef; 6] = hull_subs(3.5, 80.0, 1.0);
 /// No weapon bay, because the hull has no mounts to lose. A subsystem whose
 /// loss changes nothing is a hit box that teaches a player the wrong lesson.
-static FREIGHTER_SUBS: [SubDef; 3] = [
-    SubDef {
-        id: "engines",
-        kind: SubKind::Thruster,
-        hp: 100.0,
-        block_pct: 60.0,
-        offset: V3::new(0.0, 0.0, -3.3),
-        half: V3::new(0.9, 0.7, 0.8),
-    },
-    SubDef {
-        id: "rcs",
-        kind: SubKind::Rcs,
-        hp: 60.0,
-        block_pct: 40.0,
-        offset: V3::new(0.0, -1.2, 2.0),
-        half: V3::new(0.9, 0.4, 1.1),
-    },
-    SubDef {
-        id: "reactor",
-        kind: SubKind::Reactor,
-        hp: 120.0,
-        block_pct: 45.0,
-        offset: V3::new(0.0, 0.0, -1.0),
-        half: V3::new(0.8, 0.7, 1.0),
-    },
-];
+static FREIGHTER_SUBS: [SubDef; 3] = civil_subs(4.9, 1.0);
+
+/// The civil hull's three volumes, sized to the ship they are inside.
+///
+/// `FREIGHTER_SUBS` is the same layout authored at one size, and six more
+/// hulls at three rungs cannot each carry a hand written copy of it: the day
+/// somebody moved the reactor on the tanker and not on the hauler, one would
+/// be reachable from below and the other sealed and nothing would say so. So
+/// it is a function of the radius, exactly as `hull_subs` is for a warship.
+///
+/// Three volumes rather than six, and no weapon bay, because the hull has no
+/// mounts to lose: a subsystem whose loss changes nothing is a hit box that
+/// teaches a player the wrong lesson.
+const fn civil_subs(radius: f32, hp: f32) -> [SubDef; 3] {
+    // Against the FREIGHTER's radius, not the frigate's, because these offsets
+    // were authored on the freighter. Scaled off 3.5 the engines reached 1.17
+    // times the hull they sit in, so every civil ship had a drive bay hanging
+    // out through its own stern plating and `volumes.rs` said so.
+    let s = radius / FREIGHTER_RADIUS;
+    [
+        SubDef {
+            id: "engines",
+            kind: SubKind::Thruster,
+            hp: 100.0 * hp,
+            block_pct: 60.0,
+            offset: V3::new(0.0, 0.0, -3.3 * s),
+            half: V3::new(0.9 * s, 0.7 * s, 0.8 * s),
+        },
+        SubDef {
+            id: "rcs",
+            kind: SubKind::Rcs,
+            hp: 60.0 * hp,
+            block_pct: 40.0,
+            offset: V3::new(0.0, -1.2 * s, 2.0 * s),
+            half: V3::new(0.9 * s, 0.4 * s, 1.1 * s),
+        },
+        SubDef {
+            id: "reactor",
+            kind: SubKind::Reactor,
+            hp: 120.0 * hp,
+            block_pct: 45.0,
+            offset: V3::new(0.0, 0.0, -1.0 * s),
+            half: V3::new(0.8 * s, 0.7 * s, 1.0 * s),
+        },
+    ]
+}
+
+static LIGHTER_SUBS: [SubDef; 3] = civil_subs(2.5, 0.8);
+static HAULER_SUBS: [SubDef; 3] = civil_subs(5.3, 1.4);
+static BOXSHIP_SUBS: [SubDef; 3] = civil_subs(7.1, 2.4);
+static TANKER_SUBS: [SubDef; 3] = civil_subs(6.8, 2.6);
+static MINER_SUBS: [SubDef; 3] = civil_subs(4.4, 1.5);
+static LINER_SUBS: [SubDef; 3] = civil_subs(7.4, 2.2);
 
 static TERRAN_MOUNTS: [MountDef; 3] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.0, 0.4, 2.2) },
@@ -465,18 +504,18 @@ static BENEFACTOR_MOUNTS: [MountDef; 3] = [
 ];
 static FREIGHTER_MOUNTS: [MountDef; 0] = [];
 
-static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.5, 80.0, 0.65);
-static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 80.0, 1.9);
-static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 80.0, 3.2);
-static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.8, 75.0, 0.6);
-static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.7, 75.0, 1.75);
-static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(8.0, 75.0, 2.9);
-static ROGUE_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.3, 90.0, 0.45);
+static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.0, 80.0, 0.65);
+static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.5, 80.0, 1.9);
+static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.3, 80.0, 3.2);
+static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 75.0, 0.6);
+static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 75.0, 1.75);
+static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 75.0, 2.9);
+static ROGUE_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.0, 90.0, 0.45);
 static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(4.5, 90.0, 1.3);
-static ROGUE_CRUISER_SUBS: [SubDef; 6] = hull_subs(6.7, 90.0, 2.2);
-static BENEFACTOR_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 80.0, 0.7);
-static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.7, 80.0, 2.05);
-static BENEFACTOR_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.9, 80.0, 3.5);
+static ROGUE_CRUISER_SUBS: [SubDef; 6] = hull_subs(6.3, 90.0, 2.2);
+static BENEFACTOR_CORVETTE_SUBS: [SubDef; 6] = hull_subs(1.9, 80.0, 0.7);
+static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.2, 80.0, 2.05);
+static BENEFACTOR_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.0, 80.0, 3.5);
 
 static TERRAN_CORVETTE_MOUNTS: [MountDef; 2] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 0.26, 1.49) },
@@ -565,19 +604,19 @@ static C_TERRAN_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::TerranFrigate,
     key: "terran_frigate",
     name: "Terran Frigate",
-    hull: 300.0,
-    radius: 3.5,
-    mass: 1.0,
+    hull: 295.882,
+    radius: 3.6,
+    mass: 1.08,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.0,
-        pitch_rate: 4.0,
-        accel_fwd: 0.9,
-        accel_retro: 0.35,
-        accel_lat: 0.25,
+        yaw_rate: 6.267,
+        pitch_rate: 4.1989,
+        accel_fwd: 0.9854,
+        accel_retro: 0.3285,
+        accel_lat: 0.219,
         max_speed: 8.0,
     },
     boarding_range: 20.0,
@@ -591,24 +630,24 @@ static C_KARISEN_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::KarisenFrigate,
     key: "karisen_frigate",
     name: "Karisen Frigate",
-    hull: 250.0,
-    radius: 3.5,
-    mass: 1.0,
+    hull: 232.876,
+    radius: 3.8,
+    mass: 0.89,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.5,
-        pitch_rate: 4.0,
-        accel_fwd: 0.95,
-        accel_retro: 0.35,
-        accel_lat: 0.25,
+        yaw_rate: 7.2155,
+        pitch_rate: 4.8344,
+        accel_fwd: 1.2595,
+        accel_retro: 0.3977,
+        accel_lat: 0.2651,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
     marines: 15,
-    boarding_capacity: 8,
+    boarding_capacity: 4,
     subsystems: &KARISEN_SUBS,
     weapons: &KARISEN_MOUNTS,
 };
@@ -619,19 +658,19 @@ static C_ROGUE_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::RogueFrigate,
     key: "rogue_frigate",
     name: "Rogue Frigate",
-    hull: 180.0,
-    radius: 3.2,
-    mass: 0.9,
+    hull: 202.294,
+    radius: 3.0,
+    mass: 0.95,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 9.0,
-        pitch_rate: 6.0,
-        accel_fwd: 1.1,
-        accel_retro: 0.5,
-        accel_lat: 0.4,
+        yaw_rate: 10.5125,
+        pitch_rate: 7.0433,
+        accel_fwd: 1.2278,
+        accel_retro: 0.4341,
+        accel_lat: 0.2976,
         max_speed: 9.5,
     },
     boarding_range: 40.0,
@@ -645,19 +684,19 @@ static C_BENEFACTOR_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::BenefactorFrigate,
     key: "benefactor_frigate",
     name: "Benefactor Frigate",
-    hull: 250.0,
+    hull: 240.208,
     radius: 3.5,
-    mass: 1.0,
+    mass: 0.93,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 5.0,
-        pitch_rate: 3.5,
-        accel_fwd: 0.85,
-        accel_retro: 0.35,
-        accel_lat: 0.22,
+        yaw_rate: 7.4267,
+        pitch_rate: 4.9759,
+        accel_fwd: 1.0838,
+        accel_retro: 0.3825,
+        accel_lat: 0.255,
         max_speed: 8.0,
     },
     boarding_range: 20.0,
@@ -671,24 +710,24 @@ static C_FREIGHTER: ShipClass = ShipClass {
     id: ShipClassId::Freighter,
     key: "freighter",
     name: "Freighter",
-    hull: 600.0,
-    radius: 4.5,
-    mass: 2.0,
+    hull: 822.465,
+    radius: 4.9,
+    mass: 2.61,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 2.5,
-        pitch_rate: 1.5,
-        accel_fwd: 0.45,
-        accel_retro: 0.18,
-        accel_lat: 0.10,
+        yaw_rate: 2.8266,
+        pitch_rate: 1.8938,
+        accel_fwd: 0.4061,
+        accel_retro: 0.1354,
+        accel_lat: 0.0902,
         max_speed: 5.0,
     },
     boarding_range: 10.0,
     marines: 15,
-    boarding_capacity: 8,
+    boarding_capacity: 6,
     subsystems: &FREIGHTER_SUBS,
     weapons: &FREIGHTER_MOUNTS,
 };
@@ -700,19 +739,19 @@ static C_TERRAN_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::TerranCorvette,
     key: "terran_corvette",
     name: "Terran Corvette",
-    hull: 125.0,
-    radius: 2.5,
-    mass: 0.55,
+    hull: 145.932,
+    radius: 2.0,
+    mass: 0.57,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 9.57,
-        pitch_rate: 6.41,
-        accel_fwd: 1.04,
-        accel_retro: 0.69,
-        accel_lat: 0.23,
+        yaw_rate: 11.9356,
+        pitch_rate: 7.9969,
+        accel_fwd: 0.9383,
+        accel_retro: 0.6255,
+        accel_lat: 0.2085,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -726,19 +765,19 @@ static C_TERRAN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::TerranDestroyer,
     key: "terran_destroyer",
     name: "Terran Destroyer",
-    hull: 705.0,
-    radius: 5.8,
-    mass: 2.4,
+    hull: 780.793,
+    radius: 5.5,
+    mass: 2.59,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 5.45,
-        pitch_rate: 3.65,
-        accel_fwd: 0.96,
-        accel_retro: 0.3,
-        accel_lat: 0.2,
+        yaw_rate: 5.2925,
+        pitch_rate: 3.546,
+        accel_fwd: 0.8859,
+        accel_retro: 0.2726,
+        accel_lat: 0.1817,
         max_speed: 7.0,
     },
     boarding_range: 20.0,
@@ -752,19 +791,19 @@ static C_TERRAN_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::TerranCruiser,
     key: "terran_cruiser",
     name: "Terran Heavy Cruiser",
-    hull: 1755.0,
-    radius: 7.8,
-    mass: 5.45,
+    hull: 1785.232,
+    radius: 7.3,
+    mass: 5.52,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 2.32,
-        pitch_rate: 1.55,
-        accel_fwd: 0.56,
-        accel_retro: 0.13,
-        accel_lat: 0.09,
+        yaw_rate: 2.4847,
+        pitch_rate: 1.6648,
+        accel_fwd: 0.5546,
+        accel_retro: 0.128,
+        accel_lat: 0.0853,
         max_speed: 7.0,
     },
     boarding_range: 30.0,
@@ -781,19 +820,19 @@ static C_KARISEN_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::KarisenCorvette,
     key: "karisen_corvette",
     name: "Karisen Corvette",
-    hull: 110.0,
-    radius: 2.8,
-    mass: 0.5,
+    hull: 123.506,
+    radius: 2.4,
+    mass: 0.52,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 9.43,
-        pitch_rate: 6.32,
-        accel_fwd: 2.48,
-        accel_retro: 0.25,
-        accel_lat: 0.25,
+        yaw_rate: 10.0285,
+        pitch_rate: 6.7191,
+        accel_fwd: 2.2727,
+        accel_retro: 0.2296,
+        accel_lat: 0.2296,
         max_speed: 9.5,
     },
     boarding_range: 20.0,
@@ -807,19 +846,19 @@ static C_KARISEN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::KarisenDestroyer,
     key: "karisen_destroyer",
     name: "Karisen Destroyer",
-    hull: 570.0,
-    radius: 5.7,
-    mass: 1.9,
+    hull: 630.538,
+    radius: 5.8,
+    mass: 2.03,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.64,
-        pitch_rate: 4.45,
-        accel_fwd: 0.6,
-        accel_retro: 0.38,
-        accel_lat: 0.25,
+        yaw_rate: 6.2088,
+        pitch_rate: 4.1599,
+        accel_fwd: 0.5507,
+        accel_retro: 0.3478,
+        accel_lat: 0.2319,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -833,19 +872,19 @@ static C_KARISEN_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::KarisenCruiser,
     key: "karisen_cruiser",
     name: "Karisen Heavy Cruiser",
-    hull: 1550.0,
-    radius: 8.0,
-    mass: 4.65,
+    hull: 1340.776,
+    radius: 7.8,
+    mass: 4.07,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 2.63,
-        pitch_rate: 1.76,
-        accel_fwd: 0.47,
-        accel_retro: 0.15,
-        accel_lat: 0.1,
+        yaw_rate: 3.0483,
+        pitch_rate: 2.0424,
+        accel_fwd: 0.5351,
+        accel_retro: 0.1735,
+        accel_lat: 0.1157,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -862,19 +901,19 @@ static C_ROGUE_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::RogueCorvette,
     key: "rogue_corvette",
     name: "Rogue Corvette",
-    hull: 100.0,
-    radius: 2.3,
-    mass: 0.5,
+    hull: 94.7,
+    radius: 2.0,
+    mass: 0.44,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 11.7,
-        pitch_rate: 7.84,
-        accel_fwd: 1.85,
-        accel_retro: 0.26,
-        accel_lat: 0.26,
+        yaw_rate: 17.9217,
+        pitch_rate: 12.0076,
+        accel_fwd: 1.9163,
+        accel_retro: 0.2699,
+        accel_lat: 0.2699,
         max_speed: 9.5,
     },
     boarding_range: 20.0,
@@ -888,19 +927,19 @@ static C_ROGUE_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::RogueDestroyer,
     key: "rogue_destroyer",
     name: "Rogue Destroyer",
-    hull: 350.0,
+    hull: 369.783,
     radius: 4.5,
-    mass: 1.45,
+    mass: 1.47,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 8.22,
-        pitch_rate: 5.51,
-        accel_fwd: 0.82,
-        accel_retro: 0.5,
-        accel_lat: 0.23,
+        yaw_rate: 7.9326,
+        pitch_rate: 5.3149,
+        accel_fwd: 0.7941,
+        accel_retro: 0.4813,
+        accel_lat: 0.2246,
         max_speed: 9.5,
     },
     boarding_range: 40.0,
@@ -914,19 +953,19 @@ static C_ROGUE_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::RogueCruiser,
     key: "rogue_cruiser",
     name: "Rogue Heavy Cruiser",
-    hull: 910.0,
-    radius: 6.7,
-    mass: 3.1,
+    hull: 796.528,
+    radius: 6.3,
+    mass: 2.8,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 4.95,
-        pitch_rate: 3.32,
-        accel_fwd: 0.5,
-        accel_retro: 0.23,
-        accel_lat: 0.15,
+        yaw_rate: 5.9492,
+        pitch_rate: 3.986,
+        accel_fwd: 0.5559,
+        accel_retro: 0.2527,
+        accel_lat: 0.1684,
         max_speed: 9.5,
     },
     boarding_range: 50.0,
@@ -943,19 +982,19 @@ static C_BENEFACTOR_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::BenefactorCorvette,
     key: "benefactor_corvette",
     name: "Benefactor Corvette",
-    hull: 110.0,
-    radius: 2.4,
-    mass: 0.45,
+    hull: 123.578,
+    radius: 1.9,
+    mass: 0.49,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 7.75,
-        pitch_rate: 5.2,
-        accel_fwd: 0.67,
-        accel_retro: 0.8,
-        accel_lat: 0.19,
+        yaw_rate: 10.1577,
+        pitch_rate: 6.8057,
+        accel_fwd: 0.6119,
+        accel_retro: 0.7343,
+        accel_lat: 0.1713,
         max_speed: 8.0,
     },
     boarding_range: 20.0,
@@ -969,19 +1008,19 @@ static C_BENEFACTOR_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::BenefactorDestroyer,
     key: "benefactor_destroyer",
     name: "Benefactor Destroyer",
-    hull: 770.0,
-    radius: 5.7,
-    mass: 2.5,
+    hull: 729.7,
+    radius: 5.2,
+    mass: 2.38,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 5.16,
-        pitch_rate: 3.46,
-        accel_fwd: 0.62,
-        accel_retro: 0.28,
-        accel_lat: 0.19,
+        yaw_rate: 5.983,
+        pitch_rate: 4.0086,
+        accel_fwd: 0.6443,
+        accel_retro: 0.2973,
+        accel_lat: 0.1982,
         max_speed: 7.0,
     },
     boarding_range: 20.0,
@@ -995,19 +1034,19 @@ static C_BENEFACTOR_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::BenefactorCruiser,
     key: "benefactor_cruiser",
     name: "Benefactor Heavy Cruiser",
-    hull: 2180.0,
-    radius: 7.9,
-    mass: 6.5,
+    hull: 1547.048,
+    radius: 7.0,
+    mass: 4.74,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 1.92,
-        pitch_rate: 1.29,
-        accel_fwd: 0.35,
-        accel_retro: 0.11,
-        accel_lat: 0.07,
+        yaw_rate: 2.9988,
+        pitch_rate: 2.0092,
+        accel_fwd: 0.472,
+        accel_retro: 0.149,
+        accel_lat: 0.0994,
         max_speed: 7.0,
     },
     boarding_range: 30.0,
@@ -1015,6 +1054,165 @@ static C_BENEFACTOR_CRUISER: ShipClass = ShipClass {
     boarding_capacity: 12,
     subsystems: &BENEFACTOR_CRUISER_SUBS,
     weapons: &BENEFACTOR_CRUISER_MOUNTS,
+};
+
+/// The civil yards. Six trades rather than a ladder, and not one of them
+/// carries a mount: `FREIGHTER_MOUNTS` is the empty table they all share, which
+/// is what makes the arms gate pass on a hull with no gun ring anywhere.
+static C_CIVIL_LIGHTER: ShipClass = ShipClass {
+    id: ShipClassId::CivilLighter,
+    key: "civil_lighter",
+    name: "Lighter",
+    hull: 172.9,
+    radius: 2.5,
+    mass: 0.68,
+    rung_cell: 0.109375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 14.5629,
+        pitch_rate: 9.7572,
+        accel_fwd: 1.0527,
+        accel_retro: 0.5264,
+        accel_lat: 0.3509,
+        max_speed: 5.0,
+    },
+    boarding_range: 10.0,
+    marines: 5,
+    boarding_capacity: 4,
+    subsystems: &LIGHTER_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
+};
+
+static C_CIVIL_HAULER: ShipClass = ShipClass {
+    id: ShipClassId::CivilHauler,
+    key: "civil_hauler",
+    name: "Hauler",
+    hull: 772.52,
+    radius: 5.3,
+    mass: 2.6,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 3.8862,
+        pitch_rate: 2.6038,
+        accel_fwd: 0.4074,
+        accel_retro: 0.2716,
+        accel_lat: 0.1358,
+        max_speed: 5.0,
+    },
+    boarding_range: 20.0,
+    marines: 10,
+    boarding_capacity: 6,
+    subsystems: &HAULER_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
+};
+
+static C_CIVIL_BOXSHIP: ShipClass = ShipClass {
+    id: ShipClassId::CivilBoxship,
+    key: "civil_boxship",
+    name: "Container Ship",
+    hull: 1747.472,
+    radius: 7.1,
+    mass: 5.68,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 2.3754,
+        pitch_rate: 1.5915,
+        accel_fwd: 0.498,
+        accel_retro: 0.1245,
+        accel_lat: 0.083,
+        max_speed: 7.0,
+    },
+    boarding_range: 20.0,
+    marines: 10,
+    boarding_capacity: 6,
+    subsystems: &BOXSHIP_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
+};
+
+static C_CIVIL_TANKER: ShipClass = ShipClass {
+    id: ShipClassId::CivilTanker,
+    key: "civil_tanker",
+    name: "Tanker",
+    hull: 1844.936,
+    radius: 6.8,
+    mass: 5.77,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 2.4619,
+        pitch_rate: 0.8248,
+        accel_fwd: 0.4894,
+        accel_retro: 0.1224,
+        accel_lat: 0.0408,
+        max_speed: 7.0,
+    },
+    boarding_range: 10.0,
+    marines: 10,
+    boarding_capacity: 4,
+    subsystems: &TANKER_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
+};
+
+static C_CIVIL_MINER: ShipClass = ShipClass {
+    id: ShipClassId::CivilMiner,
+    key: "civil_miner",
+    name: "Mining Ship",
+    hull: 662.569,
+    radius: 4.4,
+    mass: 2.38,
+    rung_cell: 0.1640625,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 5.1406,
+        pitch_rate: 3.4442,
+        accel_fwd: 0.2973,
+        accel_retro: 0.2973,
+        accel_lat: 0.1486,
+        max_speed: 5.0,
+    },
+    boarding_range: 20.0,
+    marines: 10,
+    boarding_capacity: 4,
+    subsystems: &MINER_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
+};
+
+static C_CIVIL_LINER: ShipClass = ShipClass {
+    id: ShipClassId::CivilLiner,
+    key: "civil_liner",
+    name: "Liner",
+    hull: 1690.472,
+    radius: 7.4,
+    mass: 5.28,
+    rung_cell: 0.21875,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 2.4691,
+        pitch_rate: 1.6543,
+        accel_fwd: 0.4685,
+        accel_retro: 0.1339,
+        accel_lat: 0.0892,
+        max_speed: 8.0,
+    },
+    boarding_range: 20.0,
+    marines: 16,
+    boarding_capacity: 4,
+    subsystems: &LINER_SUBS,
+    weapons: &FREIGHTER_MOUNTS,
 };
 
 pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
@@ -1036,10 +1234,16 @@ pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
         ShipClassId::BenefactorCorvette => &C_BENEFACTOR_CORVETTE,
         ShipClassId::BenefactorDestroyer => &C_BENEFACTOR_DESTROYER,
         ShipClassId::BenefactorCruiser => &C_BENEFACTOR_CRUISER,
+        ShipClassId::CivilLighter => &C_CIVIL_LIGHTER,
+        ShipClassId::CivilHauler => &C_CIVIL_HAULER,
+        ShipClassId::CivilBoxship => &C_CIVIL_BOXSHIP,
+        ShipClassId::CivilTanker => &C_CIVIL_TANKER,
+        ShipClassId::CivilMiner => &C_CIVIL_MINER,
+        ShipClassId::CivilLiner => &C_CIVIL_LINER,
     }
 }
 
-pub const ALL_CLASSES: [ShipClassId; 17] = [
+pub const ALL_CLASSES: [ShipClassId; 23] = [
     ShipClassId::TerranFrigate,
     ShipClassId::KarisenFrigate,
     ShipClassId::RogueFrigate,
@@ -1057,6 +1261,12 @@ pub const ALL_CLASSES: [ShipClassId; 17] = [
     ShipClassId::BenefactorCorvette,
     ShipClassId::BenefactorDestroyer,
     ShipClassId::BenefactorCruiser,
+    ShipClassId::CivilLighter,
+    ShipClassId::CivilHauler,
+    ShipClassId::CivilBoxship,
+    ShipClassId::CivilTanker,
+    ShipClassId::CivilMiner,
+    ShipClassId::CivilLiner,
 ];
 
 pub fn class_from_index(i: u32) -> ShipClassId {

@@ -153,6 +153,201 @@ export function finishesOf(d: {
 export const paintFor = (key: string) =>
   FACTION_PAINT.find(f => f.key === key) ?? (FACTION_PAINT[0] as typeof FACTION_PAINT[number]);
 
+
+// --------------------------------------------------------------- livery --
+
+/**
+ * What a patch of armour is FOR, which is what decides its colour and which
+ * of the three plating finishes it wears.
+ *
+ * A hull used to be one colour and one normal map from transom to nose, and
+ * seventeen ships drawn that way are seventeen ships a player tells apart by
+ * hue alone. Eight roles is the whole palette used on every hull, and it is
+ * the same eight on every navy, so a deck is a deck and a belt is a belt
+ * whoever built the ship.
+ *
+ * This is a RETURN, and the thing it returns to was deleted on purpose, so
+ * the objection is worth answering rather than stepping round. The old
+ * scheme spread eight swatches over a hull by position and left the player
+ * picking a colour they then could not see: the pick became a seed for a
+ * scheme rather than the colour of the ship. What is different here is that
+ * the pick is role ZERO. Every other role is a fixed OFFSET from it round
+ * the palette, so the hull is the colour that was picked, the rest of the
+ * scheme turns with it, and picking the next swatch along really does
+ * repaint the whole ship rather than one part of it.
+ */
+export type LiveryRole =
+  | 'hull' | 'belt' | 'deck' | 'underside' | 'bow' | 'stern' | 'trim' | 'decor';
+
+export const LIVERY_ROLES: readonly LiveryRole[] =
+  ['hull', 'belt', 'deck', 'underside', 'bow', 'stern', 'trim', 'decor'];
+
+/** Role in one byte beside the material, the way purpose already is. Zero
+ *  means the cell is not armour at all. */
+export const roleCode = (r: LiveryRole): number => LIVERY_ROLES.indexOf(r) + 1;
+export const roleAt = (code: number): LiveryRole =>
+  LIVERY_ROLES[Math.max(0, code - 1)] ?? 'hull';
+
+/**
+ * The three plating surfaces a hull is drawn with.
+ *
+ * Colour is free: a vertex carries its own and any number of them merge into
+ * one draw. A NORMAL MAP is not, because a map is a material and a material
+ * is a draw call, so "different patterns on one ship" costs one group per
+ * pattern. Three is the number that buys the distinction the eye actually
+ * reads at map range: the broad plating, the trim that runs along it, and the
+ * structure bolted onto it. A fourth would be a draw nobody could name.
+ */
+export const ARMOUR_BANDS = 3;
+export type ArmourBand = 0 | 1 | 2;
+
+/** Which band each role draws in. Broad plating, then the trim that runs
+ *  along a hull, then what is bolted to the outside of it. */
+export const ROLE_BAND: Record<LiveryRole, ArmourBand> = {
+  hull: 0, bow: 0, stern: 0,
+  belt: 1, deck: 1, trim: 1,
+  underside: 2, decor: 2,
+};
+
+export interface LiveryDef {
+  /** Where each role sits relative to the PICKED swatch, round the eight.
+   *  A permutation, so every swatch in the palette lands on the ship. */
+  readonly offset: Record<LiveryRole, number>;
+  /** The finish each band wears, as a key in `FINISHES`. */
+  readonly finish: readonly [string, string, string];
+  /** Metalness and roughness per band. A drive bell and a painted panel are
+   *  not the same surface, and neither are a hull and the raw structure
+   *  welded to it. */
+  readonly pbr: readonly [
+    readonly [number, number], readonly [number, number], readonly [number, number]];
+}
+
+/**
+ * Each navy's scheme, which is its own description read back.
+ *
+ * Terran is a working navy: riveted plate with a corrugated deck and greebled
+ * structure, the deck light and the underside dark, the way a ship that is
+ * meant to be seen from above by its own tenders is painted. Karisen plates
+ * all four long faces and stacks its silhouette, so corrugation is the broad
+ * surface and composite is the trim. Rogue is battered everywhere and patched
+ * where it has been mended, and its accent is the one bright thing on it.
+ * Benefactor is ablative hex with composite trim, tight and engineered.
+ * Civil yards run grip deck with patched trim and painted plate on the racks,
+ * because a freighter is a hold that people walk about on.
+ *
+ * The offsets are permutations of nought to seven. That is the whole
+ * guarantee that a ship uses its entire palette: eight roles, eight distinct
+ * offsets, one swatch each.
+ */
+export const LIVERY: Record<FactionKey, LiveryDef> = {
+  terran: {
+    offset: { hull: 0, trim: 1, belt: 2, underside: 3, deck: 4, bow: 5, stern: 6, decor: 7 },
+    finish: ['plate', 'ribbed', 'greeble'],
+    pbr: [[0.30, 0.50], [0.38, 0.44], [0.48, 0.58]],
+  },
+  karisen: {
+    offset: { hull: 0, belt: 1, stern: 2, underside: 3, decor: 4, trim: 5, deck: 6, bow: 7 },
+    finish: ['ribbed', 'weave', 'plate'],
+    pbr: [[0.35, 0.45], [0.30, 0.52], [0.42, 0.48]],
+  },
+  rogue: {
+    offset: { hull: 0, bow: 1, underside: 2, deck: 3, stern: 4, decor: 5, belt: 6, trim: 7 },
+    finish: ['battered', 'cracked', 'tread'],
+    pbr: [[0.18, 0.72], [0.14, 0.78], [0.24, 0.66]],
+  },
+  benefactor: {
+    offset: { hull: 0, trim: 1, belt: 2, stern: 3, bow: 4, deck: 5, underside: 6, decor: 7 },
+    finish: ['hex', 'weave', 'plate'],
+    pbr: [[0.45, 0.30], [0.40, 0.36], [0.52, 0.34]],
+  },
+  civil: {
+    offset: { hull: 0, trim: 1, deck: 2, decor: 3, bow: 4, underside: 5, stern: 6, belt: 7 },
+    finish: ['tread', 'cracked', 'plate'],
+    pbr: [[0.15, 0.70], [0.12, 0.76], [0.22, 0.58]],
+  },
+};
+
+/**
+ * Where each role SITS on a hull, in fractions rather than in cells.
+ *
+ * Fractions because the same scheme has to land on a corvette and on a heavy
+ * cruiser, and on a section twice as deep as it is wide. All of it is read off
+ * the same normalised coordinates the shell already computes to decide how
+ * thick the plate is there, so a livery cannot move a single cell: it is a
+ * second answer about a cell that exists either way.
+ */
+const BOW_BAND = 0.09, STERN_BAND = 0.07;
+/** Half the height of the stripe that runs the length of a flank, as a
+ *  fraction of the half depth. Thin on purpose: a stripe as deep as the belt
+ *  is not a stripe, it is a second belt. */
+const TRIM_HALF = 0.14;
+/** Where the waist belt runs, along the length. Inside the bow and stern
+ *  bands by construction, so the three never argue about a cell. */
+const BELT_FROM = 0.30, BELT_TO = 0.68;
+
+/**
+ * What role a plate cell plays, from where it is on the hull.
+ *
+ * `t` runs 0 at the transom to 1 at the nose; `dx` and `dy` are the cell's
+ * offset from the centreline as fractions of the half beam and half depth at
+ * its own station, which is exactly what makes this work on any section.
+ * Ordered, and the order is the rule: the ends win over everything, then the
+ * deck and the belly, then the stripe, then the waist.
+ */
+export const roleOfCell = (t: number, dx: number, dy: number): LiveryRole => {
+  // The deck and the belly win over the ends, and that order is the rule
+  // rather than an accident of writing. Taken the other way round, a blunt
+  // bow put every cell of its forward ninth into one colour, deck and belly
+  // included, and a heavy cruiser came out with a painted nose cone instead
+  // of a flash on its cheeks.
+  if (Math.abs(dy) > Math.abs(dx)) return dy > 0 ? 'deck' : 'underside';
+  if (t < STERN_BAND) return 'stern';
+  if (t > 1 - BOW_BAND) return 'bow';
+  if (Math.abs(dy) < TRIM_HALF) return 'trim';
+  return t >= BELT_FROM && t <= BELT_TO ? 'belt' : 'hull';
+};
+
+export const liveryFor = (faction: string): LiveryDef =>
+  LIVERY[faction as FactionKey] ?? (LIVERY.terran as LiveryDef);
+
+/**
+ * The colour of one role on one ship, and the only place that is decided.
+ *
+ * The picked swatch is role `hull` by construction: the pick's own index is
+ * added to every offset, so the hull comes out exactly the colour the player
+ * chose and the rest of the scheme rotates with it. A design carrying a paint
+ * value that is not in its faction's palette (a hand edited record, or a
+ * faction renamed under a saved hull) falls back to slot zero rather than
+ * throwing, because a hull with an odd colour is still a hull.
+ */
+export function roleColour(faction: string, paint: number, role: LiveryRole): number {
+  const swatches = paintFor(faction).swatches;
+  const picked = swatches.indexOf(paint);
+  const at = (picked < 0 ? 0 : picked) + liveryFor(faction).offset[role];
+  return (swatches[at % swatches.length] as number) ?? paint;
+}
+
+/**
+ * What each band of plating is made of on this design.
+ *
+ * Band nought is the hull wide answer `finishesOf` already gives, so the
+ * finish a player picks in the yard still means the broad plating and nothing
+ * moved under them. The other two default to the navy's own livery and can be
+ * overridden per band, which is what lets a Terran hull painted in Karisen
+ * orange still read as a Terran.
+ */
+export function bandFinishes(d: {
+  faction: string; paint: number;
+  finish?: string; slotFinish?: (string | null)[]; bandFinish?: (string | null)[];
+}): readonly [string, string, string] {
+  const l = liveryFor(d.faction);
+  return [
+    finishesOf(d).armour,
+    d.bandFinish?.[1] || (l.finish[1] as string),
+    d.bandFinish?.[2] || (l.finish[2] as string),
+  ];
+}
+
 // ---------------------------------------------------------------- parts --
 
 /** What a socket will accept. A part never fits a socket of another kind. */
@@ -205,11 +400,13 @@ export interface ModuleDef {
    * Presentation only. A window cannot change an outcome and none of it
    * crosses the boundary.
    */
-  readonly window?: 'porthole' | 'panes' | 'strip' | 'bridge' | 'beacons' | 'hangar';
+  readonly window?: 'porthole' | 'panes' | 'strip' | 'bridge' | 'beacons' | 'hangar'
+    | 'cargo' | 'promenade' | 'louvre';
   /** How it is drawn. The client owns this and the core never sees it. */
   readonly art: 'bell' | 'nozzle' | 'block' | 'barbette' | 'beamgun' | 'cannon'
     | 'missilecell' | 'bridge' | 'pod' | 'strut'
-    | 'rcs' | 'barracks' | 'airlock' | 'clamp' | 'cargo';
+    | 'rcs' | 'barracks' | 'airlock' | 'clamp' | 'cargo'
+    | 'container' | 'tank' | 'hopper' | 'gallery' | 'drill';
   readonly colour: number;
 }
 
@@ -306,6 +503,48 @@ export const MODULES: readonly ModuleDef[] = [
   // day power exists.
   { id: 'STR-STRUT', name: 'Strut', cat: 'structure', fits: 'bay',
     size: [1, 1, 1], mass: 190, hull: 40, purpose: 'structure', art: 'strut', colour: 0x8494A8 },
+
+  // -------------------------------------------------- appended, always --
+  //
+  // A part's POSITION in this table is its index, and that index is what
+  // `partsOf` hands across the boundary to `design.rs`, which holds the same
+  // table in the same order. So a new part goes on the END, however tidily it
+  // would have grouped with the ones above it: slid in beside the cargo bay,
+  // these six renumbered the strut, and a hull carrying one would have been
+  // derived as though it carried something else.
+  // A gallery is a corridor with a view: no marines, no capacity, and the one
+  // room a warship carries purely so the crew can see out. It is what puts a
+  // long lit band down a flank instead of another row of portholes.
+  { id: 'UTL-OBS', name: 'Observation gallery', cat: 'utility', fits: 'bay',
+    size: [6, 3, 8], mass: 27360, hull: 5760, purpose: 'command', art: 'gallery',
+    window: 'strip', colour: 0x3FD97C },
+
+  // ------------------------------------------------------------- civil --
+  //
+  // What a hull carries when it is not carrying guns. Every one of these is a
+  // volume with a face a viewer can read at range: a container's doors, a
+  // tank's radiator slats, a liner's promenade. A civil ship drawn without
+  // them is a grey lozenge with an engine, which is exactly what the freighter
+  // was.
+  { id: 'UTL-CTR', name: 'Container', cat: 'utility', fits: 'bay',
+    size: [7, 6, 11], mass: 87780, hull: 18480, purpose: 'structure', art: 'container',
+    window: 'cargo', colour: 0x8494A8 },
+  { id: 'UTL-TNK', name: 'Pressure tank', cat: 'utility', fits: 'bay',
+    size: [8, 8, 12], mass: 145920, hull: 30720, purpose: 'structure', art: 'tank',
+    window: 'louvre', colour: 0x8494A8 },
+  { id: 'UTL-ORE', name: 'Ore hopper', cat: 'utility', fits: 'bay',
+    size: [9, 7, 12], mass: 143640, hull: 30240, purpose: 'structure', art: 'hopper',
+    window: 'louvre', colour: 0x8494A8 },
+  { id: 'UTL-PAX', name: 'Passenger deck', cat: 'utility', fits: 'bay',
+    size: [7, 5, 10], mass: 66500, hull: 14000, marines: 2, purpose: 'crew', art: 'gallery',
+    window: 'promenade', colour: 0xFFC93C },
+  // A cutting head on an arm, which is the one civil fitting that stands
+  // proud: it has to reach the rock. It goes on a gun ring because a ring is
+  // the frame's own answer to "something turns here", and a mining ship's
+  // whole shape is that arm swinging.
+  { id: 'UTL-DRL', name: 'Cutting head', cat: 'utility', fits: 'trunnion',
+    size: [5, 5, 9], mass: 42750, hull: 9000, purpose: 'structure', art: 'drill',
+    colour: 0xB0BDCB },
 ];
 
 export const moduleById = (id: string): ModuleDef | undefined =>
@@ -376,7 +615,29 @@ export interface Socket {
   /** Mirrored sockets are authored once and reflected about x. */
   readonly mirror?: boolean;
   readonly label: string;
+  /**
+   * Which way a mount on this socket rests, in quarter turns about the hull's
+   * up axis, before the player rotates it.
+   *
+   * A frame knows which way its own rings face and a placement does not: a
+   * ring on the port flank is a BROADSIDE mount, and a broadside gun resting
+   * dead ahead is a gun looking down the length of its own ship. Every stock
+   * turret on a flank ring was doing exactly that, and the arc scan agreed
+   * with the picture: nine of them could not see the way they were pointing at
+   * all, and two ventral rings on the Terran heavy cruiser were blocked in
+   * every direction there is.
+   *
+   * The player's `rot` is added to this rather than replacing it, so turning a
+   * mount still means turning it FROM where its ring puts it.
+   */
+  readonly facing?: number;
 }
+
+/** Where a mount actually points at rest: the ring's own facing plus whatever
+ *  the player turned it. One helper, because the rasteriser, the map and the
+ *  yard all have to agree or a barrel is drawn somewhere it does not fire. */
+export const spinOf = (sock: Socket | undefined, rot: number | undefined): number =>
+  (((sock?.facing ?? 0) + (rot ?? 0)) % 4 + 4) % 4;
 
 /**
  * How far out of the hull a socket's part is allowed to sit.
@@ -423,18 +684,29 @@ export type FactionKey = 'terran' | 'karisen' | 'rogue' | 'benefactor' | 'civil'
 /** Where a class sits on its navy's ladder. Authored rather than read off the
  *  name: a screen that grouped hulls by splitting their display names would
  *  break the first time a class was called something else. */
-export type TierKey = 'corvette' | 'frigate' | 'destroyer' | 'cruiser' | 'freighter';
+export type TierKey = 'corvette' | 'frigate' | 'destroyer' | 'cruiser'
+  | 'freighter' | 'lighter' | 'hauler' | 'boxship' | 'tanker' | 'miner' | 'liner';
 
 export const TIER_NAMES: Record<TierKey, string> = {
   corvette: 'Corvette', frigate: 'Frigate', destroyer: 'Destroyer',
-  cruiser: 'Heavy Cruiser', freighter: 'Freighter',
+  cruiser: 'Heavy Cruiser',
+  // The civil yards do not build a ladder, they build TRADES, and the tier is
+  // what a hull is for rather than how big it is. It has to be its own key per
+  // hull all the same: the class picker addresses a class by the pair
+  // (faction, tier) and takes the first match, so two civil hulls sharing one
+  // tier would leave the second unreachable from the shipyard with nothing
+  // saying so.
+  freighter: 'Freighter', lighter: 'Lighter', hauler: 'Hauler',
+  boxship: 'Container Ship', tanker: 'Tanker', miner: 'Mining Ship',
+  liner: 'Liner',
 };
 
 export const FACTION_ORDER: readonly FactionKey[] =
   ['terran', 'karisen', 'rogue', 'benefactor', 'civil'];
 
 export const TIER_ORDER: readonly TierKey[] =
-  ['corvette', 'frigate', 'destroyer', 'cruiser', 'freighter'];
+  ['corvette', 'frigate', 'destroyer', 'cruiser',
+    'lighter', 'freighter', 'hauler', 'boxship', 'tanker', 'miner', 'liner'];
 
 export interface FrameDef {
   readonly classKey: string;
@@ -559,12 +831,43 @@ const ribs = (profile: readonly Station[], zs: readonly number[]) =>
  * against its own profile, and a socket one cell outside the hull is a part
  * hanging in space with a pylon reaching back to its own ship.
  */
+/**
+ * The station a fraction of the way along a hull, in cells.
+ *
+ * A socket authored as `43` was authored against a profile that no longer
+ * exists: the sections are cut from one envelope per navy now, so a corvette's
+ * nose moved and its gun ring stayed where it was, hanging eight cells off the
+ * end of the ship. A fraction follows the hull.
+ */
+const zAt = (prof: readonly Station[], t: number): number => {
+  const a = Math.round((prof[0] as Station)[0]);
+  const b = Math.round((prof[prof.length - 1] as Station)[0]);
+  return Math.round(a + (b - a) * t);
+};
+
+/**
+ * A cell a given fraction out from the centreline, MIRRORED exactly.
+ *
+ * `CX` is 16 on a lattice of 32, which is a cell BOUNDARY rather than a cell:
+ * the plane the ship is symmetric about runs between cells 15 and 16, so cell
+ * 16's centre is half a cell to starboard and `round(CX + u*hw)` and
+ * `round(CX - u*hw)` do not land the same distance out. On the Benefactor
+ * frigate that put the port ring at 0.80 of the beam and the starboard one at
+ * 0.98, and the arc scan read it straight back: one gun 68 percent blocked and
+ * its twin 36. Mirroring the index rather than the arithmetic makes a pair a
+ * pair on every hull.
+ */
+const acrossFrom = (half: number, frac: number, n: number): number => {
+  const out = Math.round(half - 0.5 + Math.abs(frac) * n);
+  return frac >= 0 ? out : (2 * half - 1) - out;
+};
+
 const seatAt = (prof: readonly Station[], kind: SocketKind, id: string,
   label: string, z: number, u = 0, v = 0): Socket => {
   const [hw, hh] = hullAt(prof, z);
   return {
     id, kind, label,
-    at: [Math.round(CX + u * (hw as number)), Math.round(CY + v * (hh as number)), z],
+    at: [acrossFrom(CX, u, hw as number), acrossFrom(CY, v, hh as number), z],
   };
 };
 
@@ -728,6 +1031,285 @@ const suite = (prof: readonly Station[],
   return out;
 };
 
+
+/**
+ * What a navy BOLTS ON, which is the half of a silhouette a section cannot
+ * carry.
+ *
+ * A section says how a hull is proportioned and it stops there, so four navies
+ * cut from four sections are still four smooth lozenges. What tells a Terran
+ * from a Benefactor across a battlefield is the stuff standing off the skin:
+ * the stepped crown and the fluting down a Terran flank, the swept wings on a
+ * Benefactor, the rail that overruns a Karisen at both ends, the gantry welded
+ * across a Rogue's beam, and the rack rails a civil hull stacks its boxes on.
+ *
+ * Emitted as ONE CELL THICK SLABS PER STATION rather than as long boxes,
+ * because a box has one y and a hull does not: a crown authored as a single
+ * run from the waist to the bow either buries itself in the deck amidships or
+ * floats off it forward. Per station it follows the sheer exactly, and it
+ * costs a few hundred cells on a hull that already has thousands.
+ *
+ * It is ARMOUR, and it costs armour's mass, because that is what it is: a
+ * plate welded to the outside of a ship. `data.rs` is measured from the stock
+ * hulls rather than authored beside them, so the ladder absorbs it.
+ */
+/**
+ * The SKIN at a point, which is what decor has to be bolted to.
+ *
+ * A hull station is an ellipse, so its deck is only `hh` above the keel line
+ * on the centreline and drops away toward each flank. Decor laid at a constant
+ * height across the deck therefore floats at its outer end, and decor laid at
+ * a constant beam down a flank floats at its top and bottom. That is not a
+ * cosmetic problem: a cell touching nothing is not a piece of armour, and the
+ * first cut of this bolted four hundred of them onto a Terran frigate.
+ */
+const deckAt = (hw: number, hh: number, dx: number): number =>
+  hh * Math.sqrt(Math.max(0, 1 - (dx / Math.max(0.5, hw)) ** 2));
+const flankAt = (hw: number, hh: number, dy: number): number =>
+  hw * Math.sqrt(Math.max(0, 1 - (dy / Math.max(0.5, hh)) ** 2));
+
+/**
+ * What a navy BOLTS ON, which is the half of a silhouette a section cannot
+ * carry.
+ *
+ * A section says how a hull is proportioned and it stops there, so four navies
+ * cut from four sections are still four smooth lozenges. What tells a Terran
+ * from a Benefactor across a battlefield is the stuff standing off the skin:
+ * the stepped strakes and the fluting down a Terran flank, the swept wings on
+ * a Benefactor, the rail that overruns a Karisen at both ends, the gantry
+ * welded across a Rogue's beam, and the rack rails a civil hull stacks its
+ * boxes on.
+ *
+ * Emitted as ONE CELL THICK SLABS PER STATION rather than as long boxes,
+ * because a box has one y and a hull does not: a crown authored as a single
+ * run from the waist to the bow either buries itself in the deck amidships or
+ * floats off it forward. Per station it follows the sheer exactly, and every
+ * cell is placed against the SKIN at its own point (see `deckAt` above), so
+ * everything here is welded to the ship rather than near it.
+ *
+ * It is ARMOUR, and it costs armour's mass, because that is what it is: a
+ * plate welded to the outside of a ship. `data.rs` is measured from the stock
+ * hulls rather than authored beside them, so the ladder absorbs it.
+ *
+ * Nothing here may stand in front of a gun. A ring rests trained outboard on a
+ * flank and abeam on the centreline (`ringFacing`), and decor is laid clear of
+ * those lanes: the Terran's strakes leave the deck's centreline open and the
+ * Rogue's blisters sit abaft its rings. `tools/measure_fleet.mjs` is not what
+ * checks that; the arc scan is, and it reads zero mounts blocked ahead.
+ */
+const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
+  const out: Box[] = [];
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const len = Math.max(1, nose - aft);
+  /** One cell of decor, at a lattice position. */
+  const put = (x: number, y: number, z: number): void => {
+    const i = Math.round(x), j = Math.round(y), k = Math.round(z);
+    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return;
+    out.push([i, j, k, 1, 1, 1] as Box);
+  };
+  // The CELL the skin occupies, not the height the surface is at. A cell is a
+  // whole cell and the ellipse is continuous: a rail placed at "the deck plus
+  // one unit" lands a cell and a half above a deck whose top cell happens to
+  // start low, and a cell with a gap under it is a cell touching nothing.
+  const deckCell = (hw: number, hh: number, dx: number, sign: number): number =>
+    sign > 0
+      ? Math.floor(CY + deckAt(hw, hh, dx) - 0.5)
+      : (2 * CY - 1) - Math.floor(CY + deckAt(hw, hh, dx) - 0.5);
+  const flankCell = (hw: number, hh: number, dy: number, side: number): number =>
+    side > 0
+      ? Math.floor(CX + flankAt(hw, hh, dy) - 0.5)
+      : (2 * CX - 1) - Math.floor(CX + flankAt(hw, hh, dy) - 0.5);
+
+  /** A strip ON THE DECK, from one offset to another, `up` cells above it. */
+  const onDeck = (hw: number, hh: number, x0: number, x1: number,
+    up: number, z: number, sign = 1): void => {
+    const a = Math.round(Math.min(x0, x1)), b = Math.round(Math.max(x0, x1));
+    for (let x = a; x <= b; x++) {
+      put(x, deckCell(hw, hh, x + 0.5 - CX, sign) + sign * up, z);
+    }
+  };
+  /** A rib ON A FLANK, from one height to another, `proud` cells off it. */
+  const onFlank = (hw: number, hh: number, y0: number, y1: number,
+    proud: number, z: number, side: number): void => {
+    const a = Math.round(Math.min(y0, y1)), b = Math.round(Math.max(y0, y1));
+    for (let y = a; y <= b; y++) {
+      put(flankCell(hw, hh, y + 0.5 - CY, side) + side * proud, y, z);
+    }
+  };
+
+  for (let z = aft; z <= nose; z++) {
+    const t = (z - aft) / len;
+    const [hwRaw, hhRaw] = hullAt(prof, z);
+    const hw = hwRaw as number, hh = hhRaw as number;
+
+    if (faction === 'terran') {
+      // Stepped strakes down the deck, setting back twice toward the bow, and
+      // a CLEAR LANE between them. Three widths and two shoulders is what
+      // makes a shape read as deco rather than as a box; the lane is what
+      // stops it reading as a wall in front of a gun.
+      if (t > 0.16 && t < 0.86) {
+        const step = t < 0.42 ? 0 : t < 0.66 ? 1 : 2;
+        const outer = hw * (0.66 - step * 0.14);
+        const inner = hw * 0.28;
+        for (const side of [-1, 1]) {
+          onDeck(hw, hh, CX + side * inner, CX + side * outer, 1, z);
+          if (step === 0) {
+            onDeck(hw, hh, CX + side * inner,
+              CX + side * (inner + (outer - inner) * 0.6), 2, z);
+          }
+        }
+      }
+      // Fluting: a proud rib every fourth station, from the belt line up to
+      // the shoulder on both flanks. Vertical lines on a horizontal ship,
+      // which is the other half of the same language.
+      if (z % 4 === 0 && t > 0.12 && t < 0.80) {
+        for (const side of [-1, 1]) {
+          onFlank(hw, hh, CY - hh * 0.30, CY + hh * 0.46, 1, z, side);
+        }
+      }
+    } else if (faction === 'benefactor') {
+      // Wings: a plate sweeping out of each flank, widest just abaft the waist
+      // and gone by the bow, DROPPING as it goes out so it reads as swept
+      // rather than as a disc round the middle of the ship. Low on the body,
+      // because at the gun rings' own height a wing stands in front of two
+      // thirds of the broadside.
+      //
+      // The span is a fraction of the beam rather than a count of cells: at a
+      // fixed count a corvette wore a cruiser's wings, and the Benefactor is
+      // the narrowest section in the game.
+      if (t > 0.14 && t < 0.80) {
+        const s = (t - 0.14) / 0.66;
+        const span = hw * 0.70 * (1 - (2 * s - 1) * (2 * s - 1)) + 1;
+        const y0 = Math.round(CY - hh * 0.55);
+        for (const side of [-1, 1]) {
+          for (let n = 0; n <= Math.round(span); n++) {
+            // Each cell of the wing is placed against the skin at ITS OWN
+            // height, and the wing drops as it goes out, so the root cell of
+            // each course is welded on rather than the whole plate being hung
+            // off one station's beam.
+            const y = Math.round(y0 - n * 0.42);
+            const root = flankCell(hw, hh, y + 0.5 - CY, side);
+            // A staircase, filled. Stepping out one cell and down one cell
+            // leaves two cells meeting at an EDGE, and an edge is not a weld:
+            // the sweep came apart into a hundred loose blocks per hull.
+            const prev = Math.round(y0 - Math.max(0, n - 1) * 0.42);
+            for (let yy = y; yy <= prev; yy++) put(root + side * n, yy, z);
+            if (n < span * 0.5) put(root + side * n, prev + 1, z);
+          }
+        }
+      }
+      // And a dorsal fin aft, which is what stops the section reading as a
+      // wing with a body drawn on it.
+      if (t > 0.10 && t < 0.44) {
+        const h = Math.max(1, Math.round(3 * (1 - Math.abs(t - 0.27) / 0.17)));
+        for (let dy = 1; dy <= h; dy++) put(CX, deckCell(hw, hh, 0.5, 1) + dy, z);
+      }
+    } else if (faction === 'karisen') {
+      // The rail under the keel, overrunning the body at both ends. It is the
+      // one Karisen habit that survives at every rung, and it was frame until
+      // now, which is why it drew as a bare grey plank.
+      if (z >= aft - 3 && z <= nose + 3) {
+        const k = Math.max(aft, Math.min(nose, z));
+        const [khw, khh] = hullAt(prof, k);
+        for (let dx = -1; dx <= 1; dx++) {
+          put(CX + dx, deckCell(khw as number, khh as number, dx + 0.5, -1) - 1, z);
+        }
+      }
+      // Shoulder strakes: two ridges running the length of the upper flanks,
+      // which is what a stacked silhouette looks like from outside.
+      if (t > 0.08 && t < 0.90) {
+        for (const side of [-1, 1]) {
+          onFlank(hw, hh, CY + hh * 0.44, CY + hh * 0.60, 1, z, side);
+        }
+      }
+    } else if (faction === 'rogue') {
+      // The gantry: a beam welded straight across the beam amidships and
+      // standing well proud of it, which is where a boarding party goes over.
+      // Under the gun rings, because a beam at their height is a beam in front
+      // of them.
+      if (t > 0.34 && t < 0.52) {
+        const y = Math.round(CY - hh * 0.42);
+        const over = Math.max(2, Math.round(hw * 0.42));
+        const lo = flankCell(hw, hh, y + 0.5 - CY, -1) - over;
+        const hi = flankCell(hw, hh, y + 0.5 - CY, 1) + over;
+        for (let x = lo; x <= hi; x++) put(x, y, z);
+      }
+      // Blisters, welded on and NOT symmetric, because nothing on this ship
+      // was built at the same time as the rest of it. Both abaft the rings.
+      if (t > 0.16 && t < 0.30) {
+        for (let dy = -1; dy <= 1; dy++) onFlank(hw, hh, CY + dy, CY + dy, 1, z, -1);
+        for (let dy = -1; dy <= 1; dy++) onFlank(hw, hh, CY + dy, CY + dy, 2, z, -1);
+      }
+      if (t > 0.40 && t < 0.54) {
+        for (let dy = -1; dy <= 1; dy++) onFlank(hw, hh, CY + dy, CY + dy, 1, z, 1);
+        for (let dy = -1; dy <= 1; dy++) onFlank(hw, hh, CY + dy, CY + dy, 2, z, 1);
+      }
+    } else {
+      // Civil: rack rails. Two longitudinal rails down the deck and a hoop
+      // every sixth station, which is the frame a container sits in and the
+      // reason a freighter reads as cargo rather than as a smooth hull.
+      if (t > 0.10 && t < 0.88) {
+        for (const side of [-1, 1]) {
+          onDeck(hw, hh, CX + side * hw * 0.62, CX + side * hw * 0.62, 1, z);
+        }
+        if (z % 6 === 0) {
+          onDeck(hw, hh, CX - hw * 0.62, CX + hw * 0.62, 1, z);
+          for (const side of [-1, 1]) onFlank(hw, hh, CY, CY + hh * 0.5, 1, z, side);
+        }
+        if (z % 6 === 3) onDeck(hw, hh, CX - 1, CX + 1, 1, z, -1);
+      }
+    }
+  }
+  return out;
+};
+
+/**
+ * The decor a frame carries, worked out once and kept.
+ *
+ * A function of the navy and the profile rather than a field on every
+ * `FrameDef`, so a class added tomorrow gets its navy's habits for free and
+ * seventeen tables cannot drift about what a Terran looks like. Cached on the
+ * class key because `rasterise` runs on every slider pixel and this is a walk
+ * over every station of the hull.
+ */
+const decorCache = new Map<string, readonly Box[]>();
+export const decorOf = (frame: FrameDef): readonly Box[] => {
+  const had = decorCache.get(frame.classKey);
+  if (had) return had;
+  const made = decorFor(frame.faction, frame.profile);
+  decorCache.set(frame.classKey, made);
+  return made;
+};
+
+/**
+ * Cargo stations: holds in a RACK rather than in a line.
+ *
+ * A container is eleven cells long, so six of them nose to tail is sixty six
+ * cells on a hull that is fifty two: a civil ship stacks its cargo the way a
+ * real one does, four to a station, two abreast and two high, and marches the
+ * stations forward. The section is what allows it: the civil yards build the
+ * only hull in the game that is nearly square, and this is what that squareness
+ * is FOR.
+ */
+const rack = (prof: readonly Station[], count: number,
+  u = 0.44, v = 0.40): Socket[] => {
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const z0 = aft + 11, z1 = nose - 16;
+  const per = 4;
+  const stations = Math.max(1, Math.ceil(count / per));
+  const out: Socket[] = [];
+  for (let n = 0; n < count; n++) {
+    const k = Math.floor(n / per), slot = n % per;
+    const z = Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
+    const where = ['port upper', 'starboard upper', 'port lower', 'starboard lower'][slot];
+    out.push(seatAt(prof, 'bay', `h${n}`, `hold, ${where} ${k + 1}`,
+      z, slot % 2 === 0 ? -u : u, slot < 2 ? v : -v));
+  }
+  return out;
+};
+
 // ------------------------------------------------------- the sections --
 
 /**
@@ -793,7 +1375,7 @@ const NAVY_SECTION: Record<FactionKey, SectionDef> = {
       [0.83, 0.72, 0.74], [0.94, 0.42, 0.44], [1, 0.17, 0.19]],
   },
   rogue: {
-    cells: 44, halfBeam: 13, halfDepth: 5.2,
+    cells: 44, halfBeam: 12.4, halfDepth: 5.8,
     waist: [[0, 0.66, 0.82], [0.17, 0.95, 1], [0.42, 1, 1], [0.64, 0.92, 0.95],
       [0.83, 0.62, 0.72], [1, 0.24, 0.36]],
   },
@@ -824,14 +1406,21 @@ const NAVY_SECTION: Record<FactionKey, SectionDef> = {
  * and not a scale.
  */
 const FULLNESS: Record<TierKey, number> = {
-  corvette: 1.34, frigate: 1, destroyer: 0.86, cruiser: 0.72, freighter: 1,
+  corvette: 1.34, frigate: 1, destroyer: 0.86, cruiser: 0.72,
+  // The civil trades vary by what they carry rather than by rung, and the
+  // shape follows the cargo: a tanker is a bulge round a cylinder, a liner is
+  // fine because it is mostly people, a hopper ship is square because rock is.
+  freighter: 1, lighter: 1.12, hauler: 0.92, boxship: 0.80,
+  tanker: 0.70, miner: 0.95, liner: 1.06,
 };
 
 /** How much of its navy's length a rung actually has. Only the corvette is
  *  short: every other warship rung is the same profile at a bigger cell,
  *  which is what makes the ladder exact. */
 const REACHES: Record<TierKey, number> = {
-  corvette: 0.70, frigate: 1, destroyer: 1, cruiser: 1, freighter: 1,
+  corvette: 0.50, frigate: 1, destroyer: 1, cruiser: 1,
+  freighter: 1, lighter: 0.74, hauler: 1, boxship: 1.06,
+  tanker: 1, miner: 0.88, liner: 1.10,
 };
 
 /**
@@ -863,6 +1452,12 @@ const PROF_KARISEN = profileFor('karisen', 'frigate');
 const PROF_ROGUE = profileFor('rogue', 'frigate');
 const PROF_BENEFACTOR = profileFor('benefactor', 'frigate');
 const PROF_FREIGHTER = profileFor('civil', 'freighter');
+const PROF_LIGHTER = profileFor('civil', 'lighter');
+const PROF_HAULER = profileFor('civil', 'hauler');
+const PROF_BOXSHIP = profileFor('civil', 'boxship');
+const PROF_TANKER = profileFor('civil', 'tanker');
+const PROF_MINER = profileFor('civil', 'miner');
+const PROF_LINER = profileFor('civil', 'liner');
 
 const PROF_TERRAN_CV = profileFor('terran', 'corvette');
 const PROF_TERRAN_DD = profileFor('terran', 'destroyer');
@@ -884,7 +1479,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_frigate', name: 'Terran Frigate',
     faction: 'terran', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.6, massMax: 1.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN,
     spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
     sockets: [
@@ -894,9 +1489,9 @@ export const FRAMES: readonly FrameDef[] = [
       { id: 'd3', kind: 'drive', at: [CX - 5, CY + 3, 4], label: 'drive, port upper' },
       { id: 'd4', kind: 'drive', at: [CX, CY + 3, 4], label: 'drive, centre upper' },
       { id: 'd5', kind: 'drive', at: [CX + 5, CY + 3, 4], label: 'drive, starboard upper' },
-      { id: 'g0', kind: 'gun', at: [CX, CY + 4, 52], label: 'gun ring, nose' },
-      { id: 'g1', kind: 'gun', at: [CX - 8, CY + 2, 34], label: 'gun ring, port' },
-      { id: 'g2', kind: 'gun', at: [CX + 8, CY + 2, 34], label: 'gun ring, starboard' },
+      seatAt(PROF_TERRAN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN, 0.86), 0, 0.62),
+      seatAt(PROF_TERRAN, 'gun', 'g1', 'gun ring, port', zAt(PROF_TERRAN, 0.54), -0.72, 0.32),
+      seatAt(PROF_TERRAN, 'gun', 'g2', 'gun ring, starboard', zAt(PROF_TERRAN, 0.54), 0.72, 0.32),
       { id: 'r0', kind: 'retro', at: [CX - 7, CY, 50], label: 'retro, port' },
       { id: 'r1', kind: 'retro', at: [CX + 7, CY, 50], label: 'retro, starboard' },
       { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 48], label: 'rcs, port bow' },
@@ -925,7 +1520,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.8, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
@@ -936,10 +1531,12 @@ export const FRAMES: readonly FrameDef[] = [
       { id: 'd1', kind: 'drive', at: [CX, CY - 1, 5], label: 'drive, centre' },
       { id: 'd2', kind: 'drive', at: [CX + 6, CY - 1, 5], label: 'drive, starboard' },
       { id: 'd3', kind: 'drive', at: [CX, CY + 4, 5], label: 'drive, dorsal vernier' },
-      { id: 'g0', kind: 'gun', at: [CX, CY + 4, 50], label: 'gun ring, nose' },
-      { id: 'm0', kind: 'missile', at: [CX, CY - 6, 30], label: 'missile pad, ventral' },
-      { id: 's0', kind: 'gun', at: [CX - 9, CY - 3, 22], label: 'sponson, port' },
-      { id: 's1', kind: 'gun', at: [CX + 9, CY - 3, 22], label: 'sponson, starboard' },
+      seatAt(PROF_KARISEN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN, 0.82), 0, 0.6),
+      seatAt(PROF_KARISEN, 'missile', 'm0', 'missile pad, ventral',
+        zAt(PROF_KARISEN, 0.46), 0, -0.5),
+      seatAt(PROF_KARISEN, 'gun', 's0', 'sponson, port', zAt(PROF_KARISEN, 0.32), -0.78, -0.2),
+      seatAt(PROF_KARISEN, 'gun', 's1', 'sponson, starboard',
+        zAt(PROF_KARISEN, 0.32), 0.78, -0.2),
       { id: 'r0', kind: 'retro', at: [CX - 7, CY, 48], label: 'retro, port' },
       { id: 'r1', kind: 'retro', at: [CX + 7, CY, 48], label: 'retro, starboard' },
       { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 46], label: 'rcs, port bow' },
@@ -961,7 +1558,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_frigate', name: 'Rogue Frigate',
     faction: 'rogue', tier: 'frigate', rung: 'frigate',
-    radius: 3.2, massMax: 0.9, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
     profile: PROF_ROGUE,
@@ -971,8 +1568,8 @@ export const FRAMES: readonly FrameDef[] = [
       { id: 'd0', kind: 'drive', at: [CX - 6, CY, 11], label: 'drive, port' },
       { id: 'd1', kind: 'drive', at: [CX, CY, 11], label: 'drive, centre' },
       { id: 'd2', kind: 'drive', at: [CX + 6, CY, 11], label: 'drive, starboard' },
-      { id: 'g0', kind: 'gun', at: [CX - 6, CY + 3, 42], label: 'gun ring, port' },
-      { id: 'g1', kind: 'gun', at: [CX + 6, CY + 3, 42], label: 'gun ring, starboard' },
+      seatAt(PROF_ROGUE, 'gun', 'g0', 'gun ring, port', zAt(PROF_ROGUE, 0.74), -0.7, 0.4),
+      seatAt(PROF_ROGUE, 'gun', 'g1', 'gun ring, starboard', zAt(PROF_ROGUE, 0.74), 0.7, 0.4),
       { id: 'r0', kind: 'retro', at: [CX - 6, CY, 44], label: 'retro, port' },
       { id: 'r1', kind: 'retro', at: [CX + 6, CY, 44], label: 'retro, starboard' },
       { id: 'r2', kind: 'retro', at: [CX, CY + 5, 44], label: 'retro, dorsal' },
@@ -1013,7 +1610,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 1.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.5, massMax: 0.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -1024,11 +1621,16 @@ export const FRAMES: readonly FrameDef[] = [
       { id: 'd1', kind: 'drive', at: [CX + 6, CY - 3, 6], label: 'drive, starboard' },
       { id: 'd2', kind: 'drive', at: [CX - 6, CY - 3, 6], label: 'drive, port' },
       { id: 'd3', kind: 'drive', at: [CX, CY + 5, 6], label: 'drive, dorsal' },
-      { id: 'g0', kind: 'gun', at: [CX - 7, CY + 2, 46], label: 'gun ring, port' },
-      { id: 'g1', kind: 'gun', at: [CX + 7, CY + 2, 46], label: 'gun ring, starboard' },
-      { id: 'm0', kind: 'missile', at: [CX, CY - 6, 30], label: 'missile pad, ventral' },
-      { id: 'k0', kind: 'gun', at: [CX, CY - 9, 14], label: 'aft stack, ventral' },
-      { id: 'k1', kind: 'gun', at: [CX, CY + 8, 14], label: 'aft stack, dorsal' },
+      seatAt(PROF_BENEFACTOR, 'gun', 'g0', 'gun ring, port',
+        zAt(PROF_BENEFACTOR, 0.72), -0.82, 0.46),
+      seatAt(PROF_BENEFACTOR, 'gun', 'g1', 'gun ring, starboard',
+        zAt(PROF_BENEFACTOR, 0.72), 0.82, 0.46),
+      seatAt(PROF_BENEFACTOR, 'missile', 'm0', 'missile pad, ventral',
+        zAt(PROF_BENEFACTOR, 0.44), 0, -0.5),
+      seatAt(PROF_BENEFACTOR, 'gun', 'k0', 'aft stack, ventral',
+        zAt(PROF_BENEFACTOR, 0.20), 0, -0.62),
+      seatAt(PROF_BENEFACTOR, 'gun', 'k1', 'aft stack, dorsal',
+        zAt(PROF_BENEFACTOR, 0.20), 0, 0.62),
       { id: 'a0', kind: 'bay', at: [CX - 6, CY - 4, 34], label: 'collar, port' },
       { id: 'a1', kind: 'bay', at: [CX + 6, CY - 4, 34], label: 'collar, starboard' },
       { id: 'r0', kind: 'retro', at: [CX - 6, CY, 50], label: 'retro, port' },
@@ -1052,7 +1654,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'freighter', name: 'Freighter',
     faction: 'civil', tier: 'freighter', rung: 'escort',
-    radius: 4.5, massMax: 2.0, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.9, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
       ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
@@ -1094,13 +1696,13 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_corvette', name: 'Terran Corvette',
     faction: 'terran', tier: 'corvette', rung: 'frigate',
-    radius: 2.5, massMax: 0.55, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2, massMax: 0.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CV,
     spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
     sockets: [
       ...suite(PROF_TERRAN_CV, [[-0.5, -0.2], [0.5, -0.2]], 5, 2),
-      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', 43, 0, 0.45),
-      seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', 29, 0, 0.55),
+      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN_CV, 0.42), 0, 0.45),
+      seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', zAt(PROF_TERRAN_CV, 0.24), 0, 0.55),
     ],
     note: 'The frigate’s slab cut down to a bell, a nozzle and two rings. Short enough '
       + 'that the whole hull turns inside a frigate’s circle, and thin enough on '
@@ -1109,7 +1711,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.4, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.5, massMax: 2.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1132,7 +1734,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 5.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 5.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -1161,7 +1763,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_corvette', name: 'Karisen Corvette',
     faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.8, massMax: 0.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.4, massMax: 0.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CV,
     // The ventral rail overruns the body at both ends, which is the one
     // Karisen habit that survives at every rung.
@@ -1169,8 +1771,9 @@ export const FRAMES: readonly FrameDef[] = [
       ...ribs(PROF_KARISEN_CV, [18, 25, 32, 39, 46])],
     sockets: [
       ...suite(PROF_KARISEN_CV, [[-0.55, -0.1], [0, -0.1], [0.55, -0.1]], 4, 2),
-      seatAt(PROF_KARISEN_CV, 'gun', 'g0', 'gun ring, nose', 44, 0, 0.45),
-      seatAt(PROF_KARISEN_CV, 'missile', 'm0', 'missile pad, ventral', 30, 0, -0.6),
+      seatAt(PROF_KARISEN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN_CV, 0.44), 0, 0.45),
+      seatAt(PROF_KARISEN_CV, 'missile', 'm0', 'missile pad, ventral',
+        zAt(PROF_KARISEN_CV, 0.32), 0, -0.6),
     ],
     note: 'A needle with two overclocked bells, a vernier and one cell. Fastest hull in the game and the '
       + 'least able to take a hit: it is a ship for arriving with a missile already '
@@ -1179,7 +1782,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.7, massMax: 1.9, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -1197,7 +1800,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 8.0, massMax: 4.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -1230,7 +1833,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_corvette', name: 'Rogue Corvette',
     faction: 'rogue', tier: 'corvette', rung: 'frigate',
-    radius: 2.3, massMax: 0.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2, massMax: 0.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CV,
     // A cross beam through the keel, carrying the clamps and the collars as
     // one structure, exactly as the frigate does.
@@ -1238,7 +1841,7 @@ export const FRAMES: readonly FrameDef[] = [
       ...ribs(PROF_ROGUE_CV, [20, 26, 32, 38, 44])],
     sockets: [
       ...suite(PROF_ROGUE_CV, [[-0.5, 0], [0, 0], [0.5, 0]], 6, 2),
-      seatAt(PROF_ROGUE_CV, 'gun', 'g0', 'gun ring, nose', 39, 0, 0.4),
+      seatAt(PROF_ROGUE_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_ROGUE_CV, 0.42), 0, 0.4),
     ],
     note: 'A boarding launch: one gun, two overclocked bells and a hull wide enough '
       + 'to put '
@@ -1248,7 +1851,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.5, massMax: 1.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.5, massMax: 1.47, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -1265,7 +1868,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
     faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.7, massMax: 3.1, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.3, massMax: 2.8, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CA,
     spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
       [CX - 13, CY - 2, 34, 26, 4, 6] as const,
@@ -1291,14 +1894,16 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
     faction: 'benefactor', tier: 'corvette', rung: 'frigate',
-    radius: 2.4, massMax: 0.45, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 1.9, massMax: 0.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CV,
     spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
       ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
     sockets: [
       ...suite(PROF_BENEFACTOR_CV, [[0, -0.1], [-0.55, 0.3], [0.55, 0.3]], 5, 2),
-      seatAt(PROF_BENEFACTOR_CV, 'gun', 'g0', 'gun ring, nose', 42, 0, 0.4),
-      seatAt(PROF_BENEFACTOR_CV, 'missile', 'm0', 'missile pad, ventral', 28, 0, -0.55),
+      seatAt(PROF_BENEFACTOR_CV, 'gun', 'g0', 'gun ring, nose',
+        zAt(PROF_BENEFACTOR_CV, 0.42), 0, 0.4),
+      seatAt(PROF_BENEFACTOR_CV, 'missile', 'm0', 'missile pad, ventral',
+        zAt(PROF_BENEFACTOR_CV, 0.30), 0, -0.55),
     ],
     note: 'Deeper than it is wide, on a hull four metres long. One cannon and one '
       + 'cell, and belts thick enough that a corvette of anybody else’s cannot '
@@ -1307,7 +1912,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.7, massMax: 2.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.2, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -1315,8 +1920,8 @@ export const FRAMES: readonly FrameDef[] = [
       ...ribs(PROF_BENEFACTOR_DD, [11, 19, 27, 35, 43, 51])],
     sockets: [
       ...suite(PROF_BENEFACTOR_DD, [[0, -0.05], [-0.55, 0.28], [0.55, 0.28], [0, 0.55]], 11, 2),
-      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g0', 'gun ring, port', 38, -0.7, 0.24),
-      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g1', 'gun ring, starboard', 38, 0.7, 0.24),
+      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g0', 'gun ring, port', 38, -0.7, 0.52),
+      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g1', 'gun ring, starboard', 38, 0.7, 0.52),
       seatAt(PROF_BENEFACTOR_DD, 'gun', 'g2', 'gun ring, aft dorsal', 16, 0, 0.58),
       seatAt(PROF_BENEFACTOR_DD, 'missile', 'm0', 'missile pad, ventral', 28, 0, -0.6),
     ],
@@ -1327,23 +1932,129 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.9, massMax: 6.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7, massMax: 4.74, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
     sockets: [
       ...suite(PROF_BENEFACTOR_CA, [[0, -0.05], [-0.6, 0.25], [0.6, 0.25],
         [-0.35, 0.55], [0.35, 0.55]], 14, 4),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g0', 'gun ring, port forward', 42, -0.72, 0.22),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g1', 'gun ring, starboard forward', 42, 0.72, 0.22),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g2', 'gun ring, port aft', 22, -0.72, 0.22),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g3', 'gun ring, starboard aft', 22, 0.72, 0.22),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g0', 'gun ring, port forward', 42, -0.72, 0.52),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g1', 'gun ring, starboard forward', 42, 0.72, 0.52),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g2', 'gun ring, port aft', 22, -0.72, 0.52),
+      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g3', 'gun ring, starboard aft', 22, 0.72, 0.52),
       seatAt(PROF_BENEFACTOR_CA, 'missile', 'm0', 'missile pad, forward', 38, 0, -0.6),
       seatAt(PROF_BENEFACTOR_CA, 'missile', 'm1', 'missile pad, aft', 27, 0, -0.6),
     ],
     note: 'Twelve cells to the keel and the heaviest berth in the game. Four cannon, '
       + 'two cells and six layers of belt, on a hull that comes about at under two '
       + 'degrees a second. Whatever it is pointed at, it stays pointed at.',
+  },
+
+  // ------------------------------------------------------------- civil --
+  //
+  // Not a ladder. The four navies build the same ship four sizes; the civil
+  // yards build six different ships, and what a hull is FOR is its whole
+  // shape: a box ship is a rack with an engine, a tanker is a bulge round a
+  // cylinder, a liner is a hotel, and a mining ship is an arm with a hull
+  // behind it to hold the rock. None of them carries a gun ring, so none of
+  // them can be armed, which is the same rule the Freighter has always had
+  // written as geometry rather than as a convention.
+  {
+    classKey: 'civil_lighter', name: 'Lighter',
+    faction: 'civil', tier: 'lighter', rung: 'frigate',
+    radius: 2.5, massMax: 0.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_LIGHTER,
+    spine: [keel(CY, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],
+    sockets: [
+      ...suite(PROF_LIGHTER, [[-0.45, -0.1], [0.45, -0.1]], 5, 0),
+      ...rack(PROF_LIGHTER, 2),
+    ],
+    note: 'Two boxes and a bridge. The smallest thing anybody calls a ship: it '
+      + 'runs between a hull in orbit and a yard, and it has no reason to be '
+      + 'anywhere a shot is being fired.',
+  },
+  {
+    classKey: 'civil_hauler', name: 'Hauler',
+    faction: 'civil', tier: 'hauler', rung: 'escort',
+    radius: 5.3, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_HAULER,
+    spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
+      ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
+    sockets: [
+      ...suite(PROF_HAULER, [[-0.5, -0.15], [0, -0.15], [0.5, -0.15]], 7, 2),
+      ...rack(PROF_HAULER, 6),
+    ],
+    note: 'Six boxes on a rack, three tug bells and a berth for the crew who '
+      + 'ride with them. The hull most of everything anybody eats arrives on.',
+  },
+  {
+    classKey: 'civil_boxship', name: 'Container Ship',
+    faction: 'civil', tier: 'boxship', rung: 'cruiser',
+    radius: 7.1, massMax: 5.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_BOXSHIP,
+    spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
+      ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
+    sockets: [
+      ...suite(PROF_BOXSHIP, [[-0.55, -0.2], [0, -0.2], [0.55, -0.2],
+        [-0.3, 0.35], [0.3, 0.35]], 7, 2),
+      ...rack(PROF_BOXSHIP, 12),
+    ],
+    note: 'Twelve boxes in four tiers of three, and a bridge stuck on the front '
+      + 'of them because there was nowhere else to put it. Nothing about this '
+      + 'ship is for anything except the boxes.',
+  },
+  {
+    classKey: 'civil_tanker', name: 'Tanker',
+    faction: 'civil', tier: 'tanker', rung: 'cruiser',
+    radius: 6.8, massMax: 5.77, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_TANKER,
+    spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
+      ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
+    sockets: [
+      ...suite(PROF_TANKER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
+        [-0.28, 0.3], [0.28, 0.3]], 5, 0),
+      ...rack(PROF_TANKER, 6, 0.40, 0.34),
+    ],
+    note: 'Six pressure vessels with a walkway over the top of them and a hull '
+      + 'wrapped round the lot. The radiator slats down the flanks are what it '
+      + 'has instead of windows, because nobody lives in a tank.',
+  },
+  {
+    classKey: 'civil_miner', name: 'Mining Ship',
+    faction: 'civil', tier: 'miner', rung: 'escort',
+    radius: 4.4, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_MINER,
+    spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
+      ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
+    sockets: [
+      ...suite(PROF_MINER, [[-0.45, -0.15], [0.45, -0.15]], 5, 2),
+      ...rack(PROF_MINER, 4, 0.42, 0.30),
+      // Rings, but not gun rings: a cutting head is a thing that TURNS, and a
+      // ring is the frame's own answer to that. Nothing armed can go here,
+      // because the class carries no mounts and the core reads the class.
+      seatAt(PROF_MINER, 'gun', 'g0', 'boom ring, port', 44, -0.62, 0.1),
+      seatAt(PROF_MINER, 'gun', 'g1', 'boom ring, starboard', 44, 0.62, 0.1),
+    ],
+    note: 'Two cutting booms on rings at the bow and four hoppers behind them. '
+      + 'It works a rock rather than a fleet, and the only thing it can do to '
+      + 'a warship is be in the way.',
+  },
+  {
+    classKey: 'civil_liner', name: 'Liner',
+    faction: 'civil', tier: 'liner', rung: 'cruiser',
+    radius: 7.4, massMax: 5.28, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_LINER,
+    spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
+      ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
+    sockets: [
+      ...suite(PROF_LINER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
+        [-0.28, 0.28], [0.28, 0.28]], 13, 2),
+      ...rack(PROF_LINER, 2, 0.36, 0.42),
+    ],
+    note: 'Decks of people, lit from end to end. It is the one hull on the '
+      + 'field that is brighter than the sky behind it, and the only thing it '
+      + 'is carrying is passengers.',
   },
 ];
 
@@ -1456,18 +2167,74 @@ export const frameFor = (classKey: string): FrameDef => {
  * goes on its trunnion. A player cannot hang a beam on bare structure.
  */
 export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[] {
-  const out: Socket[] = [...frame.sockets];
+  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringFacing(frame, s) : s));
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
-    const base = frame.sockets.find(s => s.id === p.socket);
+    const base = out.find(s => s.id === p.socket);
     if (!base) continue;
+    // The gun goes on TOP of its barbette, and "top" is away from the hull
+    // rather than up. Always +2 in y put an under keel turret two cells
+    // further INSIDE its own ship: the barrel was in the plating, and the arc
+    // scan reported the whole sphere blocked, which is a mount that cannot
+    // fire in any direction and looks like one that can.
+    const [ox, oy] = outwardAt(frame.profile, base.at);
+    const [hw, hh] = hullAt(frame.profile, base.at[2] as number);
+    // ON the skin, not two cells nearer to it. A barbette is a drum SET INTO
+    // the plating and the gun sits on top of the drum, so the trunnion goes
+    // where the plating is: two cells out of a ring seated at six tenths of
+    // the beam is still inside the ship, and a barrel inside the ship is a
+    // barrel that cannot see out.
+    // Mirrored the same way a socket is, and for the same reason: rounded
+    // straight, the port turret came out a cell nearer its own plating than
+    // the starboard one, and the arc scan read that back as one gun blocked
+    // 68 percent and its twin 36.
+    const at: [number, number, number] = ox
+      ? [acrossFrom(CX, ox, (hw as number) + 1), base.at[1] as number, base.at[2] as number]
+      : [base.at[0] as number, acrossFrom(CY, oy, (hh as number) + 1), base.at[2] as number];
     out.push({
       id: `${base.id}/t`, kind: 'trunnion', label: `${base.label}, trunnion`,
-      at: [base.at[0], base.at[1] + 2, base.at[2]],
+      at,
+      ...(base.facing === undefined ? {} : { facing: base.facing }),
     });
   }
   return out;
 }
+
+/**
+ * Which face of the hull a socket sits on, as a unit step in x or y.
+ *
+ * The same test the shell uses to decide whether a cell is deck, belly or
+ * flank: whichever of the two normalised offsets is larger wins. One rule, so
+ * a ring that the plate calls a flank ring is a flank ring here too.
+ */
+const outwardAt = (
+  prof: readonly Station[], at: readonly [number, number, number],
+): readonly [number, number] => {
+  const [hw, hh] = hullAt(prof, at[2] as number);
+  const dx = ((at[0] as number) + 0.5 - CX) / Math.max(0.5, hw as number);
+  const dy = ((at[1] as number) + 0.5 - CY) / Math.max(0.5, hh as number);
+  if (Math.abs(dy) > Math.abs(dx)) return [0, dy >= 0 ? 1 : -1];
+  return [dx >= 0 ? 1 : -1, 0];
+};
+
+/** A gun ring's rest facing: outboard on a flank, straight ahead anywhere
+ *  else. A dorsal or ventral mount cannot be turned to point up or down (a
+ *  quarter turn is a YAW), and it does not need to be: once the barrel is
+ *  clear of the plating, ahead is clear. */
+const ringFacing = (frame: FrameDef, s: Socket): Socket => {
+  const [ox] = outwardAt(frame.profile, s.at);
+  if (ox) return { ...s, facing: ox > 0 ? 3 : 1 };
+  // A ring on the deck or the belly rests trained ABEAM rather than along the
+  // keel, and to opposite sides fore and aft. Resting fore and aft, a pair of
+  // centreline mounts look straight at each other: the Terran heavy cruiser's
+  // two ventral rings were each blocked in the direction they were pointing by
+  // the other one, which is what a superfiring position exists to solve and
+  // this lattice has no room for. Trained abeam, both see out.
+  const prof = frame.profile;
+  const mid = (Math.round((prof[0] as Station)[0])
+    + Math.round((prof[prof.length - 1] as Station)[0])) / 2;
+  return { ...s, facing: (s.at[2] as number) >= mid ? 1 : 3 };
+};
 
 // --------------------------------------------------------------- armour --
 
@@ -1561,6 +2328,15 @@ export interface Design {
    */
   slotFinish?: (string | null)[];
   /**
+   * A finish per ARMOUR BAND, overriding the navy's livery.
+   *
+   * Sparse and optional: an absent entry means the livery's own answer, and
+   * entry nought is ignored because the broad plating is what `finish` and
+   * `slotFinish` already name. A hull saved before bands existed therefore
+   * comes back wearing its navy's trim, which is what it would have worn.
+   */
+  bandFinish?: (string | null)[];
+  /**
    * What the FRAME and the fitted PARTS are made of.
    *
    * The two surfaces that are not armour and were never choosable: the frame
@@ -1612,6 +2388,13 @@ export interface Derived {
   readonly radius: number;
   /** The boxes turrets keep clear, in placement order. */
   readonly turrets: readonly TurretBox[];
+  /**
+   * Cells that were touching nothing and have been taken off.
+   *
+   * Zero on anything authored; above zero means a frame's decor, a pylon or a
+   * hand drawn stroke left a block hanging in space, which is not a ship.
+   */
+  readonly orphans: number;
   /** Cells inside a turret box that something else is standing in. Zero on
    *  anything this rasteriser built; above zero means a part was placed into
    *  one, or a design saved before the rule came in. */
@@ -1695,6 +2478,17 @@ export interface Raster {
   readonly grid: Uint8Array;
   /** One purpose code per cell, which is what colours it. */
   readonly purp: Uint8Array;
+  /**
+   * What livery role each ARMOUR cell plays, one based, zero for anything
+   * that is not armour.
+   *
+   * Beside the material rather than worked out again by every picture: the
+   * map, the yard, the schematic and the wound all have to agree about which
+   * patch of plating is the deck, and four answers to that is four ships.
+   * It is a pure function of the same inputs the grid is, so it needs nothing
+   * added to `rasterSig`.
+   */
+  readonly tone: Uint8Array;
   /** Which placement owns a cell, one based. Zero is frame or plate. */
   readonly own: Int16Array;
   readonly plateCells: number;
@@ -1710,6 +2504,13 @@ export interface Raster {
   readonly flushProud: number;
   /** The boxes turrets keep clear, in placement order. */
   readonly turrets: readonly TurretBox[];
+  /**
+   * Cells that were touching nothing and have been taken off.
+   *
+   * Zero on anything authored; above zero means a frame's decor, a pylon or a
+   * hand drawn stroke left a block hanging in space, which is not a ship.
+   */
+  readonly orphans: number;
   /** Cells inside a turret box that something else is standing in. Zero on
    *  anything this rasteriser built; above zero means a part was placed into
    *  one, or a design saved before the rule came in. */
@@ -1836,6 +2637,9 @@ export function rasterise(d: Design): Raster {
   // Which placement owns a cell, one based, so a click on the picture can name
   // the part it landed on. Zero is frame or plate.
   const own = new Int16Array(CELLS);
+  // Which livery role each armour cell plays. Written wherever plate is, and
+  // only there: a part or a bare frame member is not painted.
+  const tone = new Uint8Array(CELLS);
   const inBounds = (i: number, j: number, k: number) =>
     i >= 0 && j >= 0 && k >= 0 && i < NX && j < NY && k < NZ;
   /** Writes the cell if it is free. Returns whether it took it, because the
@@ -1851,10 +2655,32 @@ export function rasterise(d: Design): Raster {
 
   const STRUCT = purposeCode('structure');
 
+  /** Lay one cell of armour and say what it is FOR, in one call, because the
+   *  two were written in five places between them and a plate cell with no
+   *  role drew as role zero: a stern band the length of the ship. */
+  const skin = (i: number, j: number, k: number, role: LiveryRole): void => {
+    const n = idx3(i, j, k);
+    if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
+    else if (!set(i, j, k, Mat.Plate, STRUCT)) return;
+    tone[n] = roleCode(role);
+  };
+
   // --- the frame, which the player cannot edit --------------------------
+  //
+  // Clamped to the hull's own ends. A spine is authored as cell runs and the
+  // profiles are cut from a section now, so a run that fitted the silhouette
+  // it was drawn against can stand off the end of the one it has: every
+  // corvette's keel ran six cells past its own bow and stern, which made a
+  // hull half a frigate long measure two thirds of one and drew a bare grey
+  // spar out of the nose.
+  const spineA = Math.max(0, Math.round((prof[0] as Station)[0]));
+  const spineB = Math.min(NZ - 1, Math.round((prof[prof.length - 1] as Station)[0]));
   for (const [x, y, z, w, h, l] of frame.spine)
-    for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++)
-      set(Math.round(x) + i, Math.round(y) + j, Math.round(z) + k, Mat.Frame, STRUCT);
+    for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const pz = Math.round(z) + k;
+      if (pz < spineA || pz > spineB) continue;
+      set(Math.round(x) + i, Math.round(y) + j, pz, Mat.Frame, STRUCT);
+    }
 
   // --- every fitted part, on whole cells, carrying its purpose ----------
   const allSockets = socketsOf(frame, d.parts);
@@ -1881,11 +2707,12 @@ export function rasterise(d: Design): Raster {
     const sock = allSockets.find(k => k.id === p.socket);
     const m = moduleById(p.module);
     if (!sock || !m) continue;
-    const v = rotatedVoxels(m, p.rot ?? 0);
+    const spin = spinOf(sock, p.rot);
+    const v = rotatedVoxels(m, spin);
     const code = purposeCode(m.purpose);
     const seat = seatOf(frame, sock, v);
     // The PIVOT lands on the socket, not the box centre.
-    const pv = rotatedPivot(m, p.rot ?? 0);
+    const pv = rotatedPivot(m, spin);
     const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
@@ -2021,10 +2848,8 @@ export function rasterise(d: Design): Raster {
           const a = Math.max(0.5, hw - L), b = Math.max(0.5, hh - L);
           const ux = (i + 0.5 - CX) / a, uy = (j + 0.5 - CY) / b;
           if (ux * ux + uy * uy <= 1) continue;
-          const n = idx3(i, j, k);
-          if (reserved[n]) continue;
-          if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
-          else set(i, j, k, Mat.Plate, STRUCT);
+          if (reserved[idx3(i, j, k)]) continue;
+          skin(i, j, k, roleOfCell((k - z0) / Math.max(1, z1 - z0), dx, dy));
         }
       }
     }
@@ -2041,10 +2866,8 @@ export function rasterise(d: Design): Raster {
         for (let i = i0; i <= i1; i++) {
           const dx = (i + 0.5 - CX) / hw;
           if (dx * dx + dy * dy > 1) continue;
-          const n = idx3(i, j, k);
-          if (reserved[n]) continue;
-          if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
-          else set(i, j, k, Mat.Plate, STRUCT);
+          if (reserved[idx3(i, j, k)]) continue;
+          skin(i, j, k, roleOfCell((k - z0) / Math.max(1, z1 - z0), dx, dy));
         }
       }
     };
@@ -2070,7 +2893,9 @@ export function rasterise(d: Design): Raster {
       const dx = (i + 0.5 - CX) / (st[0] as number), dy = (j + 0.5 - CY) / (st[1] as number);
       const side: SectionKey = Math.abs(dy) > Math.abs(dx)
         ? (dy > 0 ? 'dorsal' : 'ventral') : band(k);
-      if ((sec[side] ?? 0) > 0) grid[n] = Mat.Skinned;
+      if ((sec[side] ?? 0) <= 0) continue;
+      grid[n] = Mat.Skinned;
+      tone[n] = roleCode(roleOfCell((k - z0) / Math.max(1, z1 - z0), dx, dy));
     }
   } else {
     // The exterior rebuilt from scratch: plate hugging what is actually
@@ -2095,9 +2920,26 @@ export function rasterise(d: Design): Raster {
           if (reserved[n]) break;
           const at = grid[n] as number;
           if (at && at !== Mat.Plate) break;
-          set(x, y, z, Mat.Plate, STRUCT);
+          const st = hullAt(prof, z);
+          skin(x, y, z, roleOfCell((z - z0) / Math.max(1, z1 - z0),
+            (x + 0.5 - CX) / (st[0] as number), (y + 0.5 - CY) / (st[1] as number)));
         }
       }
+    }
+  }
+
+  // --- what the navy bolts on -------------------------------------------
+  //
+  // After the shell, so a slab that overlaps the skin loses to the skin and
+  // the two cannot fight over a cell; before the pylons, so anything hanging
+  // off a wing still gets a spar back to the ship. It takes the `decor` role,
+  // which is what puts the palette's accent swatch on every hull: seven roles
+  // are places on a hull and this one is a thing added to it.
+  for (const [x, y, z, w, h, l] of decorOf(frame)) {
+    for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const px = Math.round(x) + i, py = Math.round(y) + j, pz = Math.round(z) + k;
+      if (!inBounds(px, py, pz) || reserved[idx3(px, py, pz)]) continue;
+      skin(px, py, pz, 'decor');
     }
   }
 
@@ -2124,7 +2966,10 @@ export function rasterise(d: Design): Raster {
       if (!inBounds(x, y, k)) break;
       if (grid[idx3(x, y, k)]) break;          // met the ship: attached
       if (reserved[idx3(x, y, k)]) break;      // met a turret, which is also the ship
-      set(x, y, k, Mat.Plate, STRUCT);
+      // A pylon is a strake rather than plating, and it wears the stripe: it
+      // is the one piece of armour that is structure a player can see, and
+      // painting it as hull made a spar read as a lump of the flank.
+      skin(x, y, k, 'trim');
       const vx = (x + 0.5 - CX) / hw, vy = (y + 0.5 - CY) / hh;
       if (vx * vx + vy * vy <= 1) break;       // reached the hull line
     }
@@ -2140,13 +2985,165 @@ export function rasterise(d: Design): Raster {
   for (const n of d.cut ?? []) {
     if (n < 0 || n >= CELLS) continue;
     const at = grid[n] as number;
-    if (at === Mat.Plate) { grid[n] = Mat.Empty; purp[n] = 0; }
-    else if (at === Mat.Skinned) grid[n] = Mat.Frame;
+    if (at === Mat.Plate) { grid[n] = Mat.Empty; purp[n] = 0; tone[n] = 0; }
+    else if (at === Mat.Skinned) { grid[n] = Mat.Frame; tone[n] = 0; }
   }
   for (const n of d.plate ?? []) {
     if (n < 0 || n >= CELLS || grid[n] || reserved[n]) continue;
     grid[n] = Mat.Plate;
     purp[n] = STRUCT;
+    // What a player drew takes the role of where they drew it, so a sponson
+    // grown off a flank comes out the colour of that flank rather than of
+    // whatever role happened to be numbered first.
+    const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+    const st = hullAt(prof, k);
+    tone[n] = roleCode(roleOfCell((k - z0) / Math.max(1, z1 - z0),
+      (i + 0.5 - CX) / (st[0] as number), (j + 0.5 - CY) / (st[1] as number)));
+  }
+
+  // --- nothing may float --------------------------------------------------
+  //
+  // A ship is ONE object. A cell touching nothing is not a piece of armour, it
+  // is a block hanging in space beside a hull, and every stock hull in the
+  // fleet had some: a Rogue corvette carried seventy, most of an attitude
+  // block that its own pylon had never reached.
+  //
+  // The pylon pass could not reach them because it starts at a part's
+  // OUTBOARD cell and steps inward, and its first step lands on another cell
+  // of the same part, which it reads as "met the ship". So the fix is here,
+  // where the pieces are actually known: flood fill, weld what can be welded,
+  // and take off only what is left.
+  //
+  // Six neighbours, not twenty six: two cells meeting at an edge are two cells
+  // touching at a line, which is not a weld.
+  const piecesOf = (): number[][] => {
+    const seen = new Uint8Array(CELLS);
+    const stack: number[] = [];
+    const all: number[][] = [];
+    for (let start = 0; start < CELLS; start++) {
+      if (!grid[start] || seen[start]) continue;
+      const piece: number[] = [];
+      seen[start] = 1;
+      stack.length = 0;
+      stack.push(start);
+      while (stack.length) {
+        const n = stack.pop() as number;
+        piece.push(n);
+        const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+        const push = (m: number) => { if (grid[m] && !seen[m]) { seen[m] = 1; stack.push(m); } };
+        if (i > 0) push(n - 1);
+        if (i < NX - 1) push(n + 1);
+        if (j > 0) push(n - NX);
+        if (j < NY - 1) push(n + NX);
+        if (k > 0) push(n - NX * NY);
+        if (k < NZ - 1) push(n + NX * NY);
+      }
+      all.push(piece);
+    }
+    return all;
+  };
+
+  let pieces = piecesOf();
+  if (pieces.length > 1) {
+    let main = 0;
+    for (let i = 1; i < pieces.length; i++) {
+      if ((pieces[i] as number[]).length > (pieces[main] as number[]).length) main = i;
+    }
+    // Weld each loose piece back with a spar, from whichever of its cells is
+    // nearest the hull line, walking toward the axis exactly the way the pylon
+    // pass does. It is a strake rather than plating, so it wears the stripe.
+    for (let pi = 0; pi < pieces.length; pi++) {
+      if (pi === main) continue;
+      let bestN = -1, bestD = Infinity;
+      for (const n of pieces[pi] as number[]) {
+        const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+        const st = hullAt(prof, k);
+        const ux = (i + 0.5 - CX) / Math.max(0.5, st[0] as number);
+        const uy = (j + 0.5 - CY) / Math.max(0.5, st[1] as number);
+        const d = ux * ux + uy * uy;
+        if (d < bestD) { bestD = d; bestN = n; }
+      }
+      if (bestN < 0) continue;
+      // Try EVERY cell of the piece, nearest the axis first, until one of them
+      // finds its way home. One cell is not enough: the nearest cell of a
+      // drive cluster has the rest of the cluster inboard of it, so the walk
+      // meets the piece itself on its first step and stops having welded
+      // nothing. That left the Rogue frigate's whole aft block loose.
+      const order = (pieces[pi] as number[]).slice().sort((a, b) => {
+        const ra = (i: number) => {
+          const x = i % NX, y = ((i / NX) | 0) % NY, k = (i / (NX * NY)) | 0;
+          const st = hullAt(prof, k);
+          const ux = (x + 0.5 - CX) / Math.max(0.5, st[0] as number);
+          const uy = (y + 0.5 - CY) / Math.max(0.5, st[1] as number);
+          return ux * ux + uy * uy;
+        };
+        return ra(a) - ra(b);
+      });
+      const here = new Set(pieces[pi] as number[]);
+      for (const from of order) {
+        let x = from % NX, y = ((from / NX) | 0) % NY;
+        const k = (from / (NX * NY)) | 0;
+        const st = hullAt(prof, k);
+        const hw = Math.max(0.5, st[0] as number), hh = Math.max(0.5, st[1] as number);
+        const spar: number[] = [];
+        let landed = false;
+        for (let step = 0; step < NX + NY; step++) {
+          const ux = (x + 0.5 - CX) / hw, uy = (y + 0.5 - CY) / hh;
+          if (Math.abs(ux) >= Math.abs(uy)) x += ux > 0 ? -1 : 1;
+          else y += uy > 0 ? -1 : 1;
+          if (!inBounds(x, y, k)) break;
+          const n = idx3(x, y, k);
+          if (reserved[n]) break;              // a turret's box is not a landing
+          if (grid[n]) { landed = !here.has(n); break; }
+          spar.push(n);
+        }
+        if (!landed) {
+          // Nothing inboard to meet, which happens when the piece is off the
+          // END of the hull: the profile has no beam out there, so walking
+          // toward the axis walks through empty space for ever. March along
+          // the KEEL toward the middle of the ship instead.
+          const mid = (Math.round((prof[0] as Station)[0])
+            + Math.round((prof[prof.length - 1] as Station)[0])) / 2;
+          const dz = k < mid ? 1 : -1;
+          spar.length = 0;
+          let z2 = k;
+          for (let step = 0; step < NZ; step++) {
+            z2 += dz;
+            if (!inBounds(from % NX, ((from / NX) | 0) % NY, z2)) break;
+            const n = idx3(from % NX, ((from / NX) | 0) % NY, z2);
+            if (reserved[n]) break;
+            if (grid[n]) { landed = !here.has(n); break; }
+            spar.push(n);
+          }
+          if (!landed) continue;
+        }
+        for (const n of spar) {
+          grid[n] = Mat.Plate;
+          purp[n] = STRUCT;
+          tone[n] = roleCode('trim');
+        }
+        break;
+      }
+    }
+    pieces = piecesOf();
+  }
+
+  let orphans = 0;
+  if (pieces.length > 1) {
+    let main = 0;
+    for (let i = 1; i < pieces.length; i++) {
+      if ((pieces[i] as number[]).length > (pieces[main] as number[]).length) main = i;
+    }
+    for (let pi = 0; pi < pieces.length; pi++) {
+      if (pi === main) continue;
+      for (const n of pieces[pi] as number[]) {
+        grid[n] = Mat.Empty;
+        purp[n] = 0;
+        tone[n] = 0;
+        own[n] = 0;
+        orphans++;
+      }
+    }
   }
 
   // --- what came out ------------------------------------------------------
@@ -2203,7 +3200,8 @@ export function rasterise(d: Design): Raster {
         }
   }
 
-  const raster: Raster = { grid, purp, own, plateCells, solidCells: cells.length / 3,
+  const raster: Raster = { grid, purp, own, tone, orphans,
+    plateCells, solidCells: cells.length / 3,
     enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
   return raster;
@@ -2479,7 +3477,7 @@ export function derive(d: Design): Derived {
     accelFwd: stats.accelFwd, accelRetro: stats.accelRetro, accelLat: stats.accelLat,
     maxSpeed: stats.maxSpeed, yaw: stats.yaw, pitch: stats.pitch, reachU: stats.reachU,
     marines: stats.marines, capacity: stats.capacity, boardingRange: stats.boardingRange,
-    turrets: raster.turrets, fouled: raster.fouled,
+    turrets: raster.turrets, fouled: raster.fouled, orphans: raster.orphans,
     mounts, belt, checks, legal: checks.every(c => c.ok), parts: stats.parts,
   };
 }
@@ -2821,6 +3819,88 @@ export const STOCK: readonly Design[] = [
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'), P('c3', 'UTL-CLM'),
   ], { beltFwd: 6, beltMid: 6, beltAft: 6, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
     'benefactor', 0x0E4423, 'hex', 0.45, 0.30),
+
+  // ------------------------------------------------------------- civil --
+  //
+  // Every one of these is a hull with no gun on it, which the core allows
+  // because the class carries no mounts (`design.rs`: the arms gate passes on
+  // an empty weapon table). What each carries instead is the thing that makes
+  // it readable at range: doors, radiator slats, a lit promenade.
+  stock('civil_lighter', [
+    P('d0', 'DRV-T'), P('d1', 'DRV-T'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'), P('p0', 'MAN-B'), P('p1', 'MAN-B'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-AIR'), P('b3', 'UTL-AIR'),
+    P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'),
+  ], { beltFwd: 2, beltMid: 2, beltAft: 2, dorsal: 2, ventral: 2, bow: 1, stern: 1 },
+    'civil', 0xD8E2EC, 'tread', 0.15, 0.70),
+
+  stock('civil_hauler', [
+    P('d0', 'DRV-T'), P('d1', 'DRV-T'), P('d2', 'DRV-T'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'), P('y2', 'MAN-B'), P('y3', 'MAN-B'),
+    P('p0', 'MAN-B'), P('p1', 'MAN-B'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'),
+    P('b3', 'UTL-OBS'), P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+    P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'), P('h2', 'UTL-CTR'),
+    P('h3', 'UTL-CTR'), P('h4', 'UTL-CTR'), P('h5', 'UTL-CTR'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'civil', 0xB9C6D4, 'tread', 0.15, 0.70),
+
+  stock('civil_boxship', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-T'), P('d4', 'DRV-T'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'),
+    P('b3', 'UTL-OBS'), P('b4', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('b6', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+    P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'), P('h2', 'UTL-CTR'), P('h3', 'UTL-CTR'),
+    P('h4', 'UTL-CTR'), P('h5', 'UTL-CTR'), P('h6', 'UTL-CTR'), P('h7', 'UTL-CTR'),
+    P('h8', 'UTL-CTR'), P('h9', 'UTL-CTR'), P('h10', 'UTL-CTR'), P('h11', 'UTL-CTR'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'civil', 0x8C949E, 'tread', 0.15, 0.70),
+
+  stock('civil_tanker', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-T'), P('d4', 'DRV-T'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'),
+    P('b3', 'UTL-AIR'), P('b4', 'UTL-AIR'),
+    P('h0', 'UTL-TNK'), P('h1', 'UTL-TNK'), P('h2', 'UTL-TNK'),
+    P('h3', 'UTL-TNK'), P('h4', 'UTL-TNK'), P('h5', 'UTL-TNK'),
+  ], { beltFwd: 4, beltMid: 4, beltAft: 4, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'civil', 0x4F4F4F, 'crate', 0.22, 0.62),
+
+  stock('civil_miner', [
+    P('d0', 'DRV-T'), P('d1', 'DRV-T'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-B'), P('y1', 'MAN-B'), P('y2', 'MAN-B'), P('y3', 'MAN-B'),
+    P('p0', 'MAN-B'), P('p1', 'MAN-B'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'UTL-DRL'), P('g1', 'WPN-BB1'), P('g1/t', 'UTL-DRL'),
+    P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'),
+    P('b3', 'UTL-AIR'), P('b4', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+    P('h0', 'UTL-ORE'), P('h1', 'UTL-ORE'), P('h2', 'UTL-ORE'), P('h3', 'UTL-ORE'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 2, ventral: 2, bow: 2, stern: 2 },
+    'civil', 0x6E7680, 'cracked', 0.18, 0.74),
+
+  stock('civil_liner', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-N'), P('d4', 'DRV-N'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'),
+    P('b1', 'UTL-PAX'), P('b2', 'UTL-PAX'), P('b3', 'UTL-PAX'), P('b4', 'UTL-PAX'),
+    P('b5', 'UTL-PAX'), P('b6', 'UTL-PAX'), P('b7', 'UTL-PAX'), P('b8', 'UTL-PAX'),
+    P('b9', 'UTL-OBS'), P('b10', 'UTL-OBS'),
+    P('b11', 'UTL-AIR'), P('b12', 'UTL-AIR'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
+    P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'),
+  ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
+    'civil', 0xF2F5F8, 'plate', 0.20, 0.48),
 ];
 
 export const stockFor = (classKey: string): Design => {
@@ -2836,6 +3916,7 @@ export const stockFor = (classKey: string): Design => {
     // field, so a field left out here goes missing between the table and the
     // map exactly as if it had never been set.
     ...(s.slotFinish ? { slotFinish: s.slotFinish.slice() } : {}),
+    ...(s.bandFinish ? { bandFinish: s.bandFinish.slice() } : {}),
     frameFinish: s.frameFinish ?? DEFAULT_FRAME_FINISH,
     partFinish: s.partFinish ?? DEFAULT_PART_FINISH,
     metal: s.metal ?? DEFAULT_METAL,
@@ -2923,21 +4004,26 @@ export function cellColour(mat: number, code: number, paint: number): number {
 }
 
 /**
- * What colour the armour is: the one that was picked.
+ * What colour a patch of armour is, from the role the rasteriser gave it.
  *
- * It used to spread all eight of a faction's swatches over the hull by
- * POSITION, as panels, an underside, a spine, a waist stripe, a nose flash and
- * a transom band. It made a handsome ship and it took the decision away: a
- * player picking a colour got a scheme built round it rather than the colour
- * they picked. Now the pick IS the hull, and the eight are eight things to
- * choose between rather than eight roles to be assigned.
+ * This spread the eight swatches over the hull by POSITION once before, and
+ * that was deleted for a good reason: a player picked a colour and got a
+ * scheme built round it rather than the colour they picked, so the pick was a
+ * seed rather than a decision. The reason it is back is that the pick is now
+ * role `hull` itself. Every other role is a fixed OFFSET from the picked
+ * swatch round the palette, so the broad plating is exactly the colour that
+ * was chosen, choosing the next swatch along really does repaint the whole
+ * ship, and the other seven are used rather than sitting in a picker unseen.
+ *
+ * A cell with no role is not armour and keeps the paint outright, which is
+ * what a hull rasterised before the tone channel existed comes back as.
  *
  * Everything that is not armour keeps its purpose colour, so a drive is still
  * orange and a gun still red on anybody's ship. That is the part a player must
  * be able to read on an unfamiliar hull, and it is not paint.
  */
-export function armourColour(primary: number): number {
-  return primary;
+export function armourColour(faction: string, paint: number, tone = 0): number {
+  return tone ? roleColour(faction, paint, roleAt(tone)) : paint;
 }
 
 export interface VoxelModel {
@@ -3204,6 +4290,92 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
         put(x, y, z, edges >= 2 ? Mat.Accent : Mat.Case);
       }
       for (let y = 1; y < sy - 1; y++) put(Math.round(cx), y, sz - 1, Mat.Glow);
+      break;
+    }
+    case 'container': {
+      // A box with corrugated flanks and a door on the forward face. The
+      // corrugation is every other column, which is what a normal map would
+      // do to a flat panel and is worth doing in CELLS here because at this
+      // size the ribs are the shape rather than a texture on it.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (!shell(x, y, z)) continue;
+        const rib = (x === 0 || x === sx - 1) && z % 2 === 0;
+        const rail = y === 0 || y === sy - 1;
+        put(x, y, z, rail ? Mat.Accent : rib ? Mat.Case : Mat.Machine);
+      }
+      // The doors, and the corner castings that say it is a container rather
+      // than a crate somebody welded up.
+      for (let y = 1; y < sy - 1; y++) for (let x = 1; x < sx - 1; x++)
+        put(x, y, sz - 1, x === Math.round(cx) ? Mat.Accent : Mat.Case);
+      for (const x of [0, sx - 1]) for (const y of [0, sy - 1]) for (const z of [0, sz - 1])
+        put(x, y, z, Mat.Glow);
+      break;
+    }
+    case 'tank': {
+      // A cylinder with domed ends and a saddle under it. Round, because a
+      // pressure vessel is the one thing on a ship that has to be.
+      const r = Math.min(sx, sy) / 2 - 0.15;
+      for (let z = 0; z < sz; z++) {
+        const t = Math.min(z, sz - 1 - z) / Math.max(1, sz * 0.22);
+        const rz = r * Math.min(1, 0.55 + 0.45 * Math.min(1, t));
+        for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+          const d = rad(x, y);
+          if (d > rz) continue;
+          // Hoops every fourth station, which is what a tank has and what
+          // stops a cylinder reading as a pipe.
+          put(x, y, z, d > rz - 1 ? (z % 4 === 0 ? Mat.Accent : Mat.Case) : Mat.Machine);
+        }
+      }
+      for (let z = 1; z < sz - 1; z++) put(Math.round(cx), 0, z, Mat.Accent);
+      put(Math.round(cx), sy - 1, Math.round(cz), Mat.Glow);
+      break;
+    }
+    case 'hopper': {
+      // A bin: wide and open at the top, tapering to a chute at the bottom.
+      // The taper is the whole read, because it says the contents fall out of
+      // the bottom rather than being carried out of a door.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        const up = y / Math.max(1, sy - 1);
+        const half = (sx / 2) * (0.34 + 0.66 * up);
+        if (Math.abs(x - cx) > half) continue;
+        const skinCell = Math.abs(x - cx) > half - 1 || z === 0 || z === sz - 1
+          || y === 0 || y === sy - 1;
+        if (!skinCell) continue;
+        put(x, y, z, y === sy - 1 ? Mat.Accent : Mat.Case);
+      }
+      // The chute, lit, because something is coming out of it.
+      for (let z = Math.round(sz * 0.3); z < Math.round(sz * 0.7); z++)
+        put(Math.round(cx), 0, z, Mat.Glow);
+      break;
+    }
+    case 'gallery': {
+      // A long low room whose outboard wall is glass. The frame is the part;
+      // the window is a hole cut in the PLATING over it, which is what
+      // `ModuleDef.window` means, so all this has to do is be a room with a
+      // face against the skin.
+      for (let z = 0; z < sz; z++) for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+        if (!shell(x, y, z)) continue;
+        put(x, y, z, y === sy - 1 || y === 0 ? Mat.Case : Mat.Machine);
+      }
+      for (let z = 1; z < sz - 1; z += 2) put(sx - 1, Math.round(cy), z, Mat.Glow);
+      break;
+    }
+    case 'drill': {
+      // An arm with a cutting head on the end: a boom back to the mount, a
+      // drum, and teeth. It reads along its own +z, which is the way every
+      // trunnion part is authored, so it points where the ring points.
+      for (let z = 0; z < Math.round(sz * 0.55); z++)
+        for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++)
+          if (rad(x, y) < Math.min(sx, sy) * 0.24) put(x, y, z, Mat.Case);
+      for (let z = Math.round(sz * 0.55); z < sz; z++) {
+        const t = (z - sz * 0.55) / Math.max(1, sz * 0.45);
+        const r = Math.min(sx, sy) / 2 * (1 - 0.35 * t);
+        for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
+          const d = rad(x, y);
+          if (d > r) continue;
+          put(x, y, z, z === sz - 1 ? Mat.Glow : d > r - 1 ? Mat.Accent : Mat.Machine);
+        }
+      }
       break;
     }
     case 'pod': {

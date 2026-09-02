@@ -33,7 +33,7 @@ import {
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
 import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
-import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, tintFar, tintHull, tintMix,
+import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, SURF_NAMES, tintFar, tintHull, tintMix,
   type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
 
@@ -2053,10 +2053,16 @@ export class View {
     ship: number; kind: string; metal: number; rough: number;
     finish: string; loaded: boolean; repeat: number; uv: boolean; env: boolean;
     /**
-     * Every surface the hull is drawn with, in `SURF_*` order: armour, frame
-     * and machinery. The fields above describe the ARMOUR, which is what they
-     * always described, so a check written against them still asks the same
-     * question; this is what says the other two arrived and loaded.
+     * Every surface the hull is drawn with, in `SURF_*` order: the three
+     * bands of plating, then the frame, then the machinery. The fields above
+     * describe band nought, which is the broad plating and is what they always
+     * described, so a check written against them still asks the same question;
+     * this is what says the rest arrived and loaded.
+     *
+     * Named from `SURF_NAMES` rather than from a list spelled here. This list
+     * was `['armour','frame','part']` when there were three surfaces, and a
+     * fourth would have been reported under the third's name: a trim band with
+     * a dead texture would have read as a healthy frame.
      */
     skins: Array<{ what: string; finish: string; loaded: boolean }>;
     /** The torn surfaces, when this hull has any: whether each has UVs and a
@@ -2069,7 +2075,7 @@ export class View {
       const mats = materialsOf(mesh);
       const m = mats[SURF_ARMOUR] as THREE.MeshStandardMaterial;
       const n = m.normalMap;
-      const skins = ['armour', 'frame', 'part'].map((what, i) => {
+      const skins = SURF_NAMES.map((what, i) => {
         const sm = mats[i];
         const si = sm?.normalMap?.image as { src?: string; width?: number } | undefined;
         return {

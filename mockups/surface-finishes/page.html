@@ -229,7 +229,8 @@ var HUE = { structure:0x8494A8, engine:0xFF7A18, gun:0xF03B3B, command:0x3FD97C 
 var FINISH = [
   ['smooth','Smooth'], ['plate','Riveted'], ['ribbed','Corrugated'],
   ['hex','Ablative'], ['cracked','Patched'], ['tread','Grip deck'],
-  ['greeble','Greebled'], ['weave','Composite'], ['battered','Battered']
+  ['greeble','Greebled'], ['weave','Composite'], ['battered','Battered'],
+  ['crate','Container']
 ];
 // Key, label, and how many lit patterns the texture holds side by side. A run
 // of cabins with the same panes lit in every one of them reads as a repeating
@@ -238,7 +239,8 @@ var FINISH = [
 // V patterns, one per cell, with no per cell attribute anywhere.
 var WINDOW = [
   ['porthole','Porthole',1], ['panes','Cabins',7], ['strip','Promenade',5],
-  ['bridge','Bridge',1], ['beacons','Beacons',1], ['hangar','Bay mouth',1]
+  ['bridge','Bridge',1], ['beacons','Beacons',1], ['hangar','Bay mouth',1],
+  ['cargo','Container',4], ['promenade','Liner deck',4], ['louvre','Radiator',1]
 ];
 var VARIANTS = {};
 WINDOW.forEach(function (w) { VARIANTS[w[0]] = w[2]; });
@@ -593,7 +595,7 @@ function stampNormal(finishKey, winKey) {
   return t;
 }
 
-// ---- stage 1: the nine finishes on plates ----
+// ---- stage 1: every finish, on plates ----
 function sheet() {
   var canvas = document.getElementById('cSheet');
   var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
@@ -613,6 +615,14 @@ function sheet() {
   var uv = plate.attributes.uv;
   for (var i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 3, uv.getY(i) * 3);
 
+  // The grid is computed rather than written down. It was three wide with the
+  // camera at z 34 and a comment saying 'the nine finishes', so a tenth fell
+  // off the bottom of the frame: the sheet has to fit whatever the generator
+  // produced, not whatever it produced the day this was drawn.
+  var cols = Math.ceil(Math.sqrt(FINISH.length));
+  var rows = Math.ceil(FINISH.length / cols);
+  cam.position.set(0, 0, 12.0 * Math.max(cols, rows * 1.06));
+  cam.lookAt(0, 0, 0);
   FINISH.forEach(function (f, n) {
     var mat = new THREE.MeshPhongMaterial({
       color: 0x7d8fa4, shininess: 34, specular: 0x40536a,
@@ -620,7 +630,8 @@ function sheet() {
     });
     if (mat.normalMap) mat.normalScale.set(1, 1);
     var m = new THREE.Mesh(plate, mat);
-    m.position.set((n % 3 - 1) * 7.2, (1 - Math.floor(n / 3)) * 7.2, 0);
+    m.position.set((n % cols - (cols - 1) / 2) * 7.2,
+      ((rows - 1) / 2 - Math.floor(n / cols)) * 7.2, 0);
     scene.add(m);
     var s = document.createElement('span');
     s.textContent = f[1];

@@ -277,6 +277,33 @@ def f_battered() -> list:
     return field(h)
 
 
+
+def f_crate() -> list:
+    """Deep vertical corrugation between a top and a bottom rail.
+
+    A shipping container, which is the one surface a civil hull is mostly made
+    of. `ribbed` is a structural rib and this is not the same thing: a
+    container's corrugation is deeper, squarer, and stops dead at a rail top
+    and bottom, and that stop is most of what makes the shape read as a box
+    rather than as a panel.
+    """
+    grime = value_noise(19, 0xC2A7)
+
+    def h(x, y):
+        rail = 0.0
+        # The two rails, flat and proud, with a chamfer into the corrugation.
+        if y < 0.11:
+            rail = smoothstep(0.11, 0.085, y)
+        elif y > 0.89:
+            rail = smoothstep(0.89, 0.915, y)
+        # A square wave along x, chamfered, so the normal map has a face to
+        # catch a light on rather than one hard edge.
+        w = tri(x * 8.0)
+        corr = smoothstep(0.30, 0.44, w) * 0.72
+        v = 0.30 + 0.62 * rail + corr * (1.0 - rail)
+        return v + 0.035 * (grime(x * 3.0, y * 3.0) - 0.5)
+    return field(h)
+
 ARMOUR = [
     ("smooth",   "Smooth",       "No finish. Bare plate, and the off state.",              f_smooth,   0.0),
     ("plate",    "Riveted",      "Panel seams with rivets. The default a warship wants.",  f_plate,   34.0),
@@ -287,6 +314,7 @@ ARMOUR = [
     ("greeble",  "Greebled",     "Kit bashed boxes. Scale, the way a model maker sells it.", f_greeble, 26.0),
     ("weave",    "Composite",    "Woven strips, over and under.",                          f_weave,   24.0),
     ("battered", "Battered",     "Dents and gouges. Hard use, before a shot lands.",        f_battered, 26.0),
+    ("crate",    "Container",    "Deep corrugation between two rails. A box, not a panel.", f_crate,   32.0),
 ]
 
 
@@ -532,6 +560,112 @@ def w_hangar(v=0):
     return height, emission, glass
 
 
+
+def w_cargo(v=0):
+    """A container door: two leaves, a centre seam, latch rods and a placard.
+
+    Not a window at all in the sense the others are, and that is the point. A
+    civil hull is mostly boxes, and what tells a viewer they are boxes is the
+    DOOR on the end of one: a seam down the middle, four vertical rods, and a
+    lit placard where the manifest goes. The placard is the only part that
+    emits, so a rack of these reads as cargo with one light on it rather than
+    as a wall of windows.
+    """
+    lit = pane_lights(1, 0x3A11D + v * 7919)[0]
+    rods = (0.24, 0.40, 0.60, 0.76)
+    # Which corner the placard sits in, so a stack of containers is not a
+    # stack of one container.
+    px = 0.14 + 0.52 * ((v % 2))
+    py = 0.60 if (v // 2) % 2 == 0 else 0.24
+
+    def door(x, y):
+        return 0.08 < x < 0.92 and 0.10 < y < 0.90
+
+    def height(x, y):
+        if not door(x, y):
+            return 0.86
+        inset = min(x - 0.08, 0.92 - x, y - 0.10, 0.90 - y)
+        v0 = 0.86 - smoothstep(0.0, 0.030, inset) * 0.50
+        # The seam down the middle, cut into both leaves.
+        v0 -= smoothstep(0.020, 0.0, abs(x - 0.5)) * 0.34
+        # Latch rods, standing proud.
+        for r in rods:
+            v0 += smoothstep(0.016, 0.008, abs(x - r)) * 0.30
+        # The placard plate.
+        if px < x < px + 0.20 and py < y < py + 0.14:
+            v0 = 0.72
+        return v0
+
+    def emission(x, y):
+        if not (px < x < px + 0.20 and py < y < py + 0.14):
+            return (0.0, 0.0, 0.0)
+        inset = min(x - px, px + 0.20 - x, y - py, py + 0.14 - y)
+        k = smoothstep(0.0, 0.018, inset)
+        return tuple(c * lit * (0.30 + 0.70 * k) for c in lerp3(DEEP, AMBER, k))
+
+    def glass(x, y):
+        if not (px < x < px + 0.20 and py < y < py + 0.14):
+            return 0.0
+        inset = min(x - px, px + 0.20 - x, y - py, py + 0.14 - y)
+        return smoothstep(0.0, 0.010, inset)
+    return height, emission, glass
+
+
+def w_promenade(v=0):
+    """A passenger deck: one long band of glass, close mullioned, warm.
+
+    `strip` is four panes across a corridor. This is a liner's promenade, so it
+    is twice as many and twice as tall, and almost all of it is lit: what makes
+    a passenger ship read as one from across a battlefield is that every deck
+    is on when a warship beside it is dark.
+    """
+    n = 8
+    lit = pane_lights(n, 0x7DE41 + v * 7919)
+    spec = []
+    for i in range(n):
+        x0 = 0.06 + i * (0.88 / n)
+        # A liner is lit: three quarters of a dim pane is still a lit deck.
+        spec.append((x0 + 0.010, 0.30, x0 + 0.88 / n - 0.010, 0.70,
+                     0.55 + 0.45 * lit[i]))
+    height, emission, glass = _panes(spec)
+    return height, lambda x, y: emission(x, y, WARM, DEEP), glass
+
+
+def w_louvre(v=0):
+    """A radiator face: horizontal slats over a hot gap.
+
+    A tank and a reactor housing are not rooms and should not wear panes, but
+    a blank wall on a civil hull is the thing that made a freighter read as a
+    grey brick. Slats give the surface a direction and the gaps between them
+    glow, which is what a heat exchanger looks like from outside.
+    """
+    n = 7
+
+    def slat(y):
+        return tri(y * n)
+
+    def height(x, y):
+        if not (0.10 < x < 0.90 and 0.08 < y < 0.92):
+            return 0.80
+        t = slat(y)
+        return 0.30 + 0.55 * smoothstep(0.28, 0.46, t)
+
+    def emission(x, y):
+        if not (0.10 < x < 0.90 and 0.08 < y < 0.92):
+            return (0.0, 0.0, 0.0)
+        t = slat(y)
+        k = smoothstep(0.30, 0.06, t)
+        if k <= 0.0:
+            return (0.0, 0.0, 0.0)
+        edge = smoothstep(0.10, 0.16, x) * smoothstep(0.90, 0.84, x)
+        return tuple(c * 0.55 * k * edge for c in lerp3(DEEP, AMBER, k))
+
+    def glass(x, y):
+        if not (0.10 < x < 0.90 and 0.08 < y < 0.92):
+            return 0.0
+        return smoothstep(0.30, 0.10, slat(y))
+    return height, emission, glass
+
 # The last number is how many VARIANTS the decal carries, side by side in one
 # texture.
 #
@@ -551,6 +685,9 @@ WINDOWS = [
     ("bridge",   "Bridge",    "A canted viewport, lit by instruments.",                   w_bridge,   1),
     ("beacons",  "Beacons",   "Running lights. Reads as crewed at map range.",            w_beacons,  1),
     ("hangar",   "Bay mouth", "A recessed opening, lit from the deck inside.",            w_hangar,   1),
+    ("cargo",    "Container", "Door leaves, latch rods and a lit manifest placard.",       w_cargo,    4),
+    ("promenade", "Liner deck", "Eight panes of a passenger promenade, mostly lit.",       w_promenade, 4),
+    ("louvre",   "Radiator",  "Slats over a hot gap. What a tank wears instead of panes.", w_louvre,   1),
 ]
 
 WINDOW_STRENGTH = 26.0

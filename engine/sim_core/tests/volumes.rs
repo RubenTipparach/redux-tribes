@@ -171,6 +171,18 @@ fn every_warship_can_board_a_hull_it_is_touching() {
     let mut unreachable = Vec::new();
     for a in ALL_CLASSES {
         let ca = ship_class(a);
+        // An UNARMED hull is exempt, and by its own table rather than by name.
+        // The rule this checks is about a warship: a ship whose gun can reach
+        // a hull it is touching and whose marines cannot is a ship with a
+        // boarding range that is a decoration. A freighter, a tanker or a
+        // liner carries no gun and no boarding gear, so the base reach is the
+        // whole of what it has and it is not supposed to reach anybody.
+        //
+        // It used to name the Freighter outright, which passed for exactly as
+        // long as the Freighter was the only civil hull in the game.
+        if ca.weapons.is_empty() {
+            continue;
+        }
         for b in ALL_CLASSES {
             if a == b {
                 continue;
@@ -187,6 +199,6 @@ fn every_warship_can_board_a_hull_it_is_touching() {
         v.dedup();
         v
     };
-    assert_eq!(offenders, vec!["freighter"],
-        "a class other than the Freighter cannot board a hull it is touching: {unreachable:?}");
+    assert!(offenders.is_empty(),
+        "an armed class cannot board a hull it is touching: {unreachable:?}");
 }

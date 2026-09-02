@@ -269,7 +269,7 @@ export function buildWound(
   const colourOf = (n: number): number => {
     const mat = grid[n] as number;
     return mat === Mat.Plate || mat === Mat.Skinned
-      ? armourColour(design.paint)
+      ? armourColour(design.faction, design.paint, raster.tone[n] as number)
       : cellColour(mat, purp[n] as number, design.paint);
   };
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;

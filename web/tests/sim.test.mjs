@@ -438,7 +438,12 @@ test('class and mount metadata cross intact', () => {
   const m = sim.match();
   m.start('0000000000000001', 0);
   const terran = m.classInfo(0);
-  assert.equal(terran.hull, 300);
+  // Measured rather than authored: `tools/measure_fleet.mjs --sync` writes
+  // every class's table entry from what `derive(stockFor(key))` produces, and
+  // `--check` fails if the two part. The literal here is only a spot check
+  // that a number crossed the boundary at all; the fleet wide agreement is
+  // the test below it.
+  assert.ok(Math.abs(terran.hull - 295.882) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
@@ -755,6 +760,48 @@ test('a hull is meshed by the voxel rule, so it has an inside', async () => {
 // language can catch a disagreement, because every one of them is just a list,
 // so this is the only thing standing between a renumbered class and a desync
 // that reads as two clients disagreeing about physics.
+test('every class spawns the ship its own stock hull derives', async () => {
+  // CLAUDE.md's rule, checked rather than asserted in prose: "the stock spawn
+  // and the stock design are the same ship". A class's table entry in
+  // `data.rs` is what `derive(stockFor(key))` produces, so a hull a scenario
+  // seats flies like the hull a briefing fields. Nothing compared the two
+  // until this: `sim.test.mjs` only pinned the two GATES (radius and the
+  // berth), which are deliberately not the derived numbers, so the hull, the
+  // whole flight envelope, the marines, the capacity and the boarding range
+  // could all drift with every suite still green.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, derive, useCore } = design;
+  const typ = await build({
+    entryPoints: [resolve(root, 'src/sim/types.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { CLASS_KEYS } = await import('data:text/javascript;base64,'
+    + Buffer.from(typ.outputFiles[0].text).toString('base64'));
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+
+  const m = sim.match();
+  const near = (a, b, what) =>
+    assert.ok(Math.abs(a - b) <= Math.max(Math.abs(b), 1) * 2e-4,
+      `${what}: class table ${a} against the stock hull's ${b}`);
+  for (let i = 0; i < CLASS_KEYS.length; i++) {
+    const key = CLASS_KEYS[i];
+    const want = derive(stockFor(key));
+    const got = m.classInfo(i);
+    near(got.hull, want.hull, `${key} hull`);
+    near(got.flight.yawRate, want.yaw, `${key} yaw`);
+    near(got.flight.pitchRate, want.pitch, `${key} pitch`);
+    near(got.flight.accelFwd, want.accelFwd, `${key} accel fwd`);
+    near(got.flight.accelRetro, want.accelRetro, `${key} accel retro`);
+    near(got.flight.accelLat, want.accelLat, `${key} accel lat`);
+    near(got.flight.maxSpeed, want.maxSpeed, `${key} max speed`);
+  }
+});
+
 test('the client and the core name the same classes in the same order', async () => {
   const dsn = await build({
     entryPoints: [resolve(root, 'src/app/design.ts')],
