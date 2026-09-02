@@ -123,6 +123,8 @@
   // the reactor's ceiling, and both of them short of the bay and the drives.
   // Mirrors `hull_subs` in `engine/sim_core/src/data.rs`.
   const FRIGATE_RADIUS = 3.5;
+  /** And the freighter's, which the civil volumes were authored against. */
+  const FREIGHTER_RADIUS = 4.5;
   function hullSubsystems(radius, armorBlock, hpScale) {
     // f32 throughout, because the core is f32 throughout. The reference
     // dividing in f64 and the thing it references dividing in f32 agree at
@@ -142,6 +144,26 @@
       { id: "rcs",     type: "rcs",      hp: m(60, h),  blockPct: 40,         offset: { x: 0, y: m(-0.55, s), z: m(1.5, s) },   half: { x: m(0.6, s), y: m(0.25, s), z: m(0.7, s) } },
       { id: "weapons", type: "weapon",   hp: m(80, h),  blockPct: 50,         offset: { x: 0, y: m(0.5, s), z: m(1.1, s) },     half: { x: m(0.55, s), y: m(0.3, s), z: m(0.8, s) } },
       { id: "reactor", type: "reactor",  hp: m(90, h),  blockPct: 45,         offset: { x: 0, y: 0, z: m(-0.6, s) },      half: { x: m(0.45, s), y: m(0.4, s), z: m(0.6, s) } },
+    ];
+  }
+
+
+  /**
+   * The CIVIL layout: three volumes, sized to the hull they are inside.
+   *
+   * No weapon bay, because a civil hull has no mounts to lose. Scaled off the
+   * FREIGHTER's radius rather than the frigate's, because these offsets were
+   * authored on the freighter: against 3.5 the engines reached 1.17 times the
+   * hull they sit in, which is a drive bay hanging out through the stern.
+   */
+  function civilSubsystems(radius, hpScale) {
+    const f = Math.fround;
+    const m = (a, b) => f(f(a) * b);
+    const s = f(radius / FREIGHTER_RADIUS), h = f(hpScale);
+    return [
+      { id: "engines", type: "thruster", hp: m(100, h), blockPct: 60, offset: { x: 0, y: 0, z: m(-3.3, s) },  half: { x: m(0.9, s), y: m(0.7, s), z: m(0.8, s) } },
+      { id: "rcs",     type: "rcs",      hp: m(60, h),  blockPct: 40, offset: { x: 0, y: m(-1.2, s), z: m(2.0, s) }, half: { x: m(0.9, s), y: m(0.4, s), z: m(1.1, s) } },
+      { id: "reactor", type: "reactor",  hp: m(120, h), blockPct: 45, offset: { x: 0, y: 0, z: m(-1.0, s) },  half: { x: m(0.8, s), y: m(0.7, s), z: m(1.0, s) } },
     ];
   }
 
@@ -199,11 +221,7 @@
       thrusterRange: 30, boardingRange: 10, marines: 15, marinesMax: 50, boardingCapacity: 8,
       // No weapon bay, because the hull has no mounts to lose. A volume whose
       // loss changes nothing teaches a player the wrong lesson.
-      subsystems: () => [
-        { id: "engines", type: "thruster", hp: 100, blockPct: 60, offset: { x: 0, y: 0, z: -3.3 },  half: { x: 0.9, y: 0.7, z: 0.8 } },
-        { id: "rcs",     type: "rcs",      hp: 60,  blockPct: 40, offset: { x: 0, y: -1.2, z: 2.0 }, half: { x: 0.9, y: 0.4, z: 1.1 } },
-        { id: "reactor", type: "reactor",  hp: 120, blockPct: 45, offset: { x: 0, y: 0, z: -1.0 },  half: { x: 0.8, y: 0.7, z: 1.0 } },
-      ],
+      subsystems: () => civilSubsystems(4.9, 1),
       weapons: [],
     },
     terran_corvette: {
@@ -351,6 +369,48 @@
         { key: "missile", mount: { x: 0, y: -0.68, z: 1.36 } },
         { key: "missile", mount: { x: 0, y: -0.68, z: -2.14 } },
       ],
+    },
+    civil_lighter: {
+      name: "Lighter", hull: 260, radius: 3.0, mass: 1.1,
+      flight: flight({ yawRate: 3.0, pitchRate: 1.8, accelFwd: 0.60, accelRetro: 0.24, accelLat: 0.14, maxSpeed: 6 }),
+      thrusterRange: 30, boardingRange: 10, marines: 5, marinesMax: 20, boardingCapacity: 4,
+      subsystems: () => civilSubsystems(3.0, 0.8),
+      weapons: [],
+    },
+    civil_hauler: {
+      name: "Hauler", hull: 780, radius: 4.6, mass: 2.6,
+      flight: flight({ yawRate: 2.4, pitchRate: 1.4, accelFwd: 0.45, accelRetro: 0.18, accelLat: 0.10, maxSpeed: 5 }),
+      thrusterRange: 30, boardingRange: 15, marines: 10, marinesMax: 40, boardingCapacity: 6,
+      subsystems: () => civilSubsystems(4.6, 1.4),
+      weapons: [],
+    },
+    civil_boxship: {
+      name: "Container Ship", hull: 1700, radius: 7.0, mass: 5.6,
+      flight: flight({ yawRate: 1.6, pitchRate: 1.0, accelFwd: 0.32, accelRetro: 0.13, accelLat: 0.07, maxSpeed: 5 }),
+      thrusterRange: 30, boardingRange: 20, marines: 10, marinesMax: 40, boardingCapacity: 6,
+      subsystems: () => civilSubsystems(7.0, 2.4),
+      weapons: [],
+    },
+    civil_tanker: {
+      name: "Tanker", hull: 1800, radius: 7.2, mass: 6.0,
+      flight: flight({ yawRate: 1.5, pitchRate: 0.9, accelFwd: 0.30, accelRetro: 0.12, accelLat: 0.07, maxSpeed: 5 }),
+      thrusterRange: 30, boardingRange: 20, marines: 10, marinesMax: 40, boardingCapacity: 4,
+      subsystems: () => civilSubsystems(7.2, 2.6),
+      weapons: [],
+    },
+    civil_miner: {
+      name: "Mining Ship", hull: 720, radius: 4.4, mass: 2.5,
+      flight: flight({ yawRate: 2.2, pitchRate: 1.3, accelFwd: 0.42, accelRetro: 0.20, accelLat: 0.11, maxSpeed: 5 }),
+      thrusterRange: 30, boardingRange: 15, marines: 10, marinesMax: 40, boardingCapacity: 6,
+      subsystems: () => civilSubsystems(4.4, 1.5),
+      weapons: [],
+    },
+    civil_liner: {
+      name: "Liner", hull: 1500, radius: 7.4, mass: 5.2,
+      flight: flight({ yawRate: 1.9, pitchRate: 1.2, accelFwd: 0.40, accelRetro: 0.15, accelLat: 0.09, maxSpeed: 6.5 }),
+      thrusterRange: 30, boardingRange: 20, marines: 16, marinesMax: 60, boardingCapacity: 6,
+      subsystems: () => civilSubsystems(7.4, 2.2),
+      weapons: [],
     },
   };
 

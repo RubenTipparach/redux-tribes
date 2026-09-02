@@ -31,6 +31,7 @@ import {
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
   DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
+  ARMOUR_BANDS, ROLE_BAND, bandFinishes, roleAt, roleCode, seatedFacing,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
   type FrameDef,
   faceBasis, facingOf, isUpright,
@@ -40,10 +41,19 @@ import {
 /** What the plate is doing: solid, see through, or off. */
 type PlateView = 'on' | 'ghost' | 'off';
 
-/** The three materials a hull is drawn with: machinery, plate, ghosted plate. */
+/**
+ * What a hull is drawn with in here: machinery, one material per BAND of
+ * plating, and the ghosted shell.
+ *
+ * The plate is three rather than one for the reason `hull.ts` gives: colour is
+ * free and a normal map is a draw call, so a ship whose deck is corrugated
+ * over riveted flanks costs one material per pattern. The yard has to pay it
+ * too, or a player designs on one surface and flies another, which is the
+ * divergence GUIDELINES 5.1 is about.
+ */
 interface HullSurfaces {
   part: THREE.MeshStandardMaterial;
-  plate: THREE.MeshStandardMaterial;
+  plate: THREE.MeshStandardMaterial[];
   ghost: THREE.MeshStandardMaterial;
 }
 
@@ -293,6 +303,9 @@ export class Designer {
       finish: typeof d.finish === 'string' ? d.finish : DEFAULT_FINISH,
       // Same reason, one field further on: the per slot surfaces and the two
       // interior ones are part of the record, and Save writes this back.
+      ...(Array.isArray(d.bandFinish)
+        ? { bandFinish: d.bandFinish.map(k => (typeof k === 'string' ? k : null)) }
+        : {}),
       ...(Array.isArray(d.slotFinish)
         ? { slotFinish: d.slotFinish.map(k => (typeof k === 'string' ? k : null)) }
         : {}),
@@ -479,7 +492,7 @@ export class Designer {
       // armour panel are not the same surface, and painting the plate's rivets
       // onto a reactor made a ship one material with parts drawn on it.
       part.normalMap = partMap();
-      const plate = base();
+      const plate = Array.from({ length: ARMOUR_BANDS }, base);
       const ghost = base();
       ghost.transparent = true;
       ghost.opacity = 0.3;
@@ -490,10 +503,17 @@ export class Designer {
     // The picked SLOT's surface, through the same resolver the map uses, so
     // the hull a player is looking at in here is the hull that gets fielded.
     const surf = finishesOf(design);
-    const finish = finishMap(surf.armour);
-    for (const m of [s.plate, s.ghost]) {
-      if (m.normalMap !== finish) { m.normalMap = finish; m.needsUpdate = true; }
-    }
+    const bands = bandFinishes(design);
+    bands.forEach((key, b) => {
+      const m = s.plate[b] as THREE.MeshStandardMaterial;
+      const map = finishMap(key);
+      if (m.normalMap !== map) { m.normalMap = map; m.needsUpdate = true; }
+    });
+    // The ghost is the broad plating's finish. It is one translucent shell
+    // standing in for the whole skin, so it takes the surface most of that
+    // skin is: three ghosts would be three transparent draws over each other.
+    const finish = finishMap(bands[0] as string);
+    if (s.ghost.normalMap !== finish) { s.ghost.normalMap = finish; s.ghost.needsUpdate = true; }
     const partFinish = finishMap(surf.part);
     if (s.part.normalMap !== partFinish) {
       s.part.normalMap = partFinish;
@@ -529,7 +549,7 @@ export class Designer {
 
     const frame = frameFor(this.#design.classKey);
     const cell = RUNG[frame.rung];
-    const { grid, purp, own } = rasterise(this.#design);
+    const { grid, purp, own, tone } = rasterise(this.#design);
     const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
     // The hull's own shape, read once per station rather than per cell: it is
@@ -556,10 +576,16 @@ export class Designer {
     // see through and not writing depth. Only the OUTER surface: four courses
     // of translucent plate stacked on themselves is mush, which is why the
     // toggle used to be on or off and nothing in between.
+    // A cell a PART owns is not armour, whatever material it is drawn with, so
+    // the toggle leaves it alone: a container on the deck is painted in the
+    // ship's livery and drawn as plate, and turning the plating off should not
+    // take the cargo off with it. Same rule as `bareGrid`, which is the map's
+    // half of this.
     const solidView = this.#plate === 'on'
       ? grid.map(m => (m === Mat.Skinned ? Mat.Plate : m)) as Uint8Array
-      : grid.map(m => (m === Mat.Plate ? Mat.Empty
-        : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
+      : grid.map((m, n) => ((own[n] as number) > 0 ? m
+        : m === Mat.Plate ? Mat.Empty
+          : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
     const isPlate = (m: number) => m === Mat.Plate || m === Mat.Skinned;
 
     // Which placements are guns, and where each one turns. A turret is drawn
@@ -580,13 +606,17 @@ export class Designer {
       group.position.copy(pivot);
       rigOf.set(n, this.#rigs.length);
       rigCells.push([]); rigCols.push([]);
-      this.#rigs.push({ group, gun: g, pivot, face: faceBasis(facingOf(p)),
+      this.#rigs.push({ group, gun: g, pivot,
+        face: faceBasis(seatedFacing(frame, sock, p)),
         label: `${m.name}, ${sock.label}`, bears: false, yaw: 0, pitch: 0 });
       this.#hull.add(group);
     });
 
     const solid: number[] = [], solidCol: number[] = [];
-    const skin: number[] = [], skinCol: number[] = [];
+    // One list per band of plating, because each band is its own material and
+    // an instanced draw takes one.
+    const skin: number[][] = Array.from({ length: ARMOUR_BANDS }, () => []);
+    const skinCol: number[][] = Array.from({ length: ARMOUR_BANDS }, () => []);
     const shown = (n: number) => solidView[n] as number;
     for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
       const n = idx(i, j, k);
@@ -598,8 +628,10 @@ export class Designer {
         k > 0 && shown(idx(i, j, k - 1)) && k < NZ - 1 && shown(idx(i, j, k + 1));
       if (hidden) continue;
       if (mat === Mat.Plate) {
-        skin.push(i, j, k);
-        skinCol.push(armourColour(this.#design.paint));
+        const band = ROLE_BAND[roleAt(tone[n] as number)];
+        (skin[band] as number[]).push(i, j, k);
+        (skinCol[band] as number[]).push(
+          armourColour(this.#design.faction, this.#design.paint, tone[n] as number));
       } else {
         const rig = rigOf.get((own[n] as number) - 1);
         const col = cellColour(mat, purp[n] as number, this.#design.paint);
@@ -625,12 +657,12 @@ export class Designer {
           k === 0 || !grid[n - NX * NY] || k === NZ - 1 || !grid[n + NX * NY];
         if (!open) continue;
         ghost.push(i, j, k);
-        ghostCol.push(armourColour(this.#design.paint));
+        ghostCol.push(armourColour(this.#design.faction, this.#design.paint, tone[n] as number));
       }
     }
 
     let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
-    for (const list of [solid, skin, ghost, ...rigCells]) {
+    for (const list of [solid, ...skin, ghost, ...rigCells]) {
       for (let q = 0; q < list.length; q += 3) {
         const x = list[q] as number, y = list[q + 1] as number, z = list[q + 2] as number;
         if (x < loX) loX = x; if (x > hiX) hiX = x;
@@ -658,12 +690,19 @@ export class Designer {
       }
     }
 
-    this.#voxelCount = solid.length / 3 + skin.length / 3 + ghost.length / 3
+    const skinCells = skin.reduce((a, c) => a + c.length / 3, 0);
+    this.#voxelCount = solid.length / 3 + skinCells + ghost.length / 3
       + rigCells.reduce((a, c) => a + c.length / 3, 0);
-    // Every distinct colour the armour actually came out. One entry, and it is
-    // the one that was picked: that is the whole rule now, and a set is what
-    // can prove it rather than a sample of the first cell.
-    this.#armourTones = [...new Set(skinCol.length ? skinCol : ghostCol)];
+    // Every distinct colour the armour actually came out.
+    //
+    // It used to be exactly one, and the rule it proved was that the pick IS
+    // the hull. The rule now is that the pick is role `hull` and the rest of
+    // the palette turns with it, so this is the set that shows the whole
+    // livery landed: sorted, because a set of colours in raster order is a
+    // list that changes when a cell does and a harness comparing two hulls
+    // wants to compare schemes rather than orderings.
+    const laid = skinCells ? skinCol.flat() : ghostCol;
+    this.#armourTones = [...new Set(laid)].sort((a, b) => a - b);
     // FNV-1a over the occupancy grid. It exists so the harness can OBSERVE
     // that a rotation moved cells; nothing reads it back into the editor.
     let hsh = 0x811c9dc5;
@@ -675,7 +714,7 @@ export class Designer {
     const hist: Record<number, number> = {};
     for (let n = 0; n < grid.length; n++)
       if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
-    this.#hist = { ...hist, solid: solid.length / 3, skin: skin.length / 3,
+    this.#hist = { ...hist, solid: solid.length / 3, skin: skinCells,
       ghost: ghost.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
@@ -713,11 +752,12 @@ export class Designer {
 
     place(solid, surf.part,
       q => solidCol[q] as number);
-    // The plate over it, in the faction's whole scheme rather than one colour:
-    // panels, an underside, a dorsal spine, a waist stripe, a nose flash and a
-    // transom band, all eight swatches on the hull at once.
-    place(skin, surf.plate,
-      q => skinCol[q] as number);
+    // The plate over it, in the navy's whole scheme rather than one colour: a
+    // deck, an underside, a waist belt, a flank stripe, a bow flash and a
+    // transom band, every swatch in the palette on the hull at once, and one
+    // draw per band so each wears its own normal map.
+    skin.forEach((cells, b) => place(cells, surf.plate[b] as THREE.MeshStandardMaterial,
+      q => (skinCol[b] as number[])[q] as number));
     // Ghosted armour draws last and never into the depth buffer, so what is
     // under it stays readable rather than fighting it. It is not pickable:
     // a click through the ghost should reach the part you can see.
@@ -1727,7 +1767,7 @@ export class Designer {
     const cv = $<HTMLCanvasElement>('dzSliceCanvas');
     const ctx = cv.getContext('2d');
     if (!ctx) return;
-    const { grid, purp } = rasterise(this.#design);
+    const { grid, purp, tone } = rasterise(this.#design);
     const [za, zb] = this.#slabZ();
     // The slab is drawn as one picture: a cell shows if ANY z in the slab has
     // it, taking the material of the first that does. Drawing on it writes the
@@ -1747,6 +1787,15 @@ export class Designer {
       for (let z = za; z <= zb; z++) {
         const n = cellIndex(i, j, z);
         if (grid[n]) return purp[n] as number;
+      }
+      return 0;
+    };
+    /** The livery role of the first filled cell in the slab, so the slice is
+     *  painted the same colours the model beside it is. */
+    const toneIn = (i: number, j: number): number => {
+      for (let z = za; z <= zb; z++) {
+        const n = cellIndex(i, j, z);
+        if (grid[n]) return tone[n] as number;
       }
       return 0;
     };
@@ -1787,7 +1836,7 @@ export class Designer {
       const mat = inSlab(i, j);
       if (!mat) continue;
       const col = mat === Mat.Plate || mat === Mat.Skinned
-        ? armourColour(this.#design.paint)
+        ? armourColour(this.#design.faction, this.#design.paint, toneIn(i, j))
         : cellColour(mat, purpIn(i, j), this.#design.paint);
       ctx.fillStyle = `#${col.toString(16).padStart(6, '0')}`;
       // y grows upward on the ship and downward on a canvas.
@@ -2169,6 +2218,17 @@ export class Designer {
     h += row('extent', `${d.extent[0]} x ${d.extent[1]} x ${d.extent[2]} cells`);
     h += row('plate cells', String(d.plateCells));
     h += '</div>';
+    // A ship is ONE object, and a player who draws a plate that reaches
+    // nothing has drawn a block floating beside their hull. The pencil already
+    // refuses a stroke that touches nothing; this is what says so about the
+    // whole design, including cells a later edit stranded, and it is a note
+    // rather than a gate because the rasteriser has already taken them off:
+    // the picture is never invalid, and this is what happened to make it so.
+    if (d.orphans > 0) {
+      h += `<p class="dznote">${d.orphans} cell${d.orphans === 1 ? '' : 's'} `
+        + 'reached nothing and came off. Armour has to be welded to the ship: '
+        + 'a piece touching it only at an edge is a piece touching nothing.</p>';
+    }
 
     h += '<div class="dzgrp">Flight</div><div class="dzrows">';
     h += row('accel forward', `${d.accelFwd.toFixed(2)} u/s2`, d.accelFwd === 0);
@@ -2432,8 +2492,10 @@ export class Designer {
        * whose file failed to load. The map answers the same question about the
        * same design through `ftDebug.surfaces()`.
        */
-      surfaces: (['plate', 'part'] as const).map(what => {
-        const m = this.#surfaces?.[what];
+      surfaces: [
+        ...(this.#surfaces?.plate ?? []).map((m, b) => ({ what: `plate${b}`, m })),
+        { what: 'part', m: this.#surfaces?.part },
+      ].map(({ what, m }) => {
         const img = m?.normalMap?.image as { src?: string; width?: number } | undefined;
         return {
           what,
@@ -2503,10 +2565,17 @@ export class Designer {
       depth: this.#depth,
       drawSaid: this.#drawSaid,
       armourTones: [...this.#armourTones],
+      /** What the BROAD PLATING came out, as against the whole scheme. It is
+       *  the picked swatch by construction (the livery makes the pick role
+       *  `hull`), and that is the half of the rule a set of eight colours
+       *  cannot show: the set is the same set whichever swatch is picked. */
+      hullTone: armourColour(this.#design.faction, this.#design.paint,
+        roleCode('hull')),
       enclosedOutside: rasterise(this.#design).enclosedOutside,
       flushProud: rasterise(this.#design).flushProud,
       turrets: rasterise(this.#design).turrets.map(t => ({ ...t })),
       fouled: rasterise(this.#design).fouled,
+      orphans: rasterise(this.#design).orphans,
       /** One cell's material. Observation only: the harness uses it to aim a
        *  gesture at a cell it can describe, rather than at a pixel it hopes
        *  about. Nothing in the editor reads it back. */

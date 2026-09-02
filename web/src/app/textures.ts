@@ -100,8 +100,27 @@ export function partMap(): THREE.Texture | null { return finishMap(PART_FINISH);
  * Mirrors the counts in `tools/make_surface_textures.py`, and has to: the
  * offset per cell is 1/N of the image, so a wrong N samples across a seam.
  */
+/**
+ * Which FACES of a hull a decal may appear on.
+ *
+ * A window is a hole in the plating over a room, and most rooms present the
+ * same face whichever side you look at them from: a cabin is a cabin from
+ * abeam and from above. Two are not like that. A container's doors are on its
+ * END, and a radiator's slats run down a FLANK, so tiling either over every
+ * exposed face of the module turns a box into a wall of doors: a container
+ * ship came out wearing a thousand of them, one per cell, each the size of a
+ * hand.
+ *
+ * 'ends' means a face whose normal runs along the hull, 'sides' one whose
+ * normal runs across or up it. Anything unlisted goes anywhere.
+ */
+export const WINDOW_FACE: Readonly<Record<string, 'ends' | 'sides'>> = {
+  cargo: 'ends', hangar: 'ends', louvre: 'sides',
+};
+
 export const WINDOW_VARIANTS: Readonly<Record<string, number>> = {
   porthole: 1, panes: 7, strip: 5, bridge: 1, beacons: 1, hangar: 1,
+  cargo: 4, promenade: 4, louvre: 1,
 };
 
 /**

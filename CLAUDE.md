@@ -111,9 +111,19 @@ All four must pass before a push:
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
 cd engine/sim_core && cargo test            # 96, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 73, the wasm boundary, the addresses and the facings
+npm --prefix web test                       # 79, the wasm boundary, the addresses and the facings
 npm --prefix server test                    # 13, the lobby and the lockstep API
+
+node tools/measure_fleet.mjs --check        # the class table against the fleet
 ```
+
+`measure_fleet.mjs --check` is the fifth, and it is not a unit test: it
+rasterises every stock hull, asks the core what each derives, and fails if
+`data.rs` disagrees. CLAUDE.md has always said that table is measured rather
+than guessed; seventeen classes were, once, by hand, and twenty three cannot
+be. `--sync` writes it, and it writes each class's VOLUME radius too, because
+`hull_subs` took a radius argument that nothing linked to the class and the
+Rogue frigate's engines cleared its own plating by five hundredths of a unit.
 
 `npm --prefix server test` builds first on purpose. It used to run straight
 against `dist/`, so a change to the server could pass a suite that had never
@@ -333,10 +343,12 @@ id MEANS stays with the app, the same division that keeps it from knowing the
 screen list. Picking a class in the editor pushes that address, so browsing the
 classes is a trail you can walk back.
 
-## Four navies, four rungs each, and one list that says so
+## Four navies with a ladder each, seven civil trades, and one list
 
-The fleet is a LADDER: corvette, frigate, destroyer, heavy cruiser for Terran,
-Karisen, Rogue and Benefactor, plus the civil freighter. Seventeen classes.
+The fleet is a LADDER for the navies: corvette, frigate, destroyer, heavy
+cruiser for Terran, Karisen, Rogue and Benefactor. The civil yards do not build
+a ladder, they build TRADES: freighter, lighter, hauler, container ship,
+tanker, mining ship and liner. Twenty three classes.
 
 **A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
 every hull; what changes is what one cell is worth in the world, and `RUNG`
@@ -344,14 +356,59 @@ authors four of those. A corvette is a SHORT profile at the frigate's cell; a
 destroyer is the escort cell and a heavy cruiser the cruiser cell, and since
 `design.rs` scales plate by the CUBE of the cell, the same cells cost a cruiser
 eight times a frigate's mass and give it eight times the hull. The ladder is
-therefore mostly a consequence of one number rather than of seventeen tables.
+therefore mostly a consequence of one number rather than of twenty three
+tables.
+
+That rule is now OBEYED rather than merely written down. Seventeen profiles
+were seventeen hand tables and each rung had been drawn a little longer as well
+as scaled, so the ladder came out at 1.55 and 2.15 times the frigate instead of
+1.5 and 2. A navy authors ONE envelope (`NAVY_SECTION`) and every warship rung
+is that envelope at its own cell, so the world size ladder is exactly the rung
+ratio by construction. What still separates a rung is where the volume SITS:
+`FULLNESS` is an exponent on the longitudinal distribution, so a heavy cruiser
+carries its waist further fore and aft and a corvette is a needle, and neither
+can change the ladder, because one raised to any power is one.
+
+Measured, and this is the command that measures it:
+
+```
+node tools/measure_fleet.mjs                  # the table, with the ladder column
+node tools/fleet_shots.mjs --ladder terran    # the same claim as a picture
+```
+
+corvette 0.50, frigate 1, destroyer 1.45 to 1.52, cruiser 1.93 to 2.07. The
+picture is the one that answers "are they actually bigger", because the
+shipyard FRAMES each hull to fill the view: a corvette and a heavy cruiser come
+out the same size on screen and the screen cannot answer the question at all.
+`--ladder` crops each shot to the hull and rescales it by the hull's own
+measured length, so what is left is the ladder rather than the camera.
 
 **Each navy is distinct in its SECTION, and it holds at every rung.** Terran is
-wide and flat, Karisen long and near round with a keel rail that overruns the
-body, Rogue short and very broad on a cross beam, Benefactor deeper than it is
-wide. Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
+wide and flat, Karisen long and near round, Rogue short and very broad,
+Benefactor deeper than it is wide, civil nearly square because a container is.
+Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
 missile cells and keeps two beams forever, Rogue adds berths and clamps and
 almost no guns, Benefactor adds belt and calibre and gets slower at every step.
+
+**A section alone is not a silhouette, so each navy BOLTS something on.** Four
+navies cut from four sections are still four smooth lozenges. `decorFor` is
+what makes a Terran a Terran across a battlefield: stepped strakes and vertical
+fluting on the deck and flanks, wings swept off a Benefactor's keel line, a
+rail overrunning a Karisen at both ends, a gantry welded across a Rogue's beam,
+rack rails a civil hull stacks its boxes on. Three rules hold it together:
+
+- **It is a function of the navy and the profile**, not a field on a frame, so
+  a class added tomorrow gets its navy's habits for free and twenty three
+  tables cannot drift about what a Terran looks like.
+- **Every cell is placed against the SKIN at its own point.** A hull station is
+  an ellipse, so a rail laid at a constant height above the keel line floats at
+  its outer end and a rib laid at a constant beam floats at its top and bottom.
+  `deckAt` and `flankAt` are the surface; `deckCell` and `flankCell` are the
+  CELL, and it is the cell that matters, because a cell with a gap under it is
+  a cell touching nothing.
+- **Nothing may stand in front of a gun.** The Terran's strakes leave the
+  deck's centreline open and the Rogue's blisters sit abaft its rings, and what
+  says so is the arc scan rather than a comment.
 
 **The stock spawn and the stock design are the same ship.** A class's `hull`,
 `radius`, `mass`, flight envelope, marines, capacity and boarding range in
@@ -674,6 +731,12 @@ either side of the commit, for twelve classes with their subsystem and mount
 tables, `ft_class_count`, `ft_ship_mount`, the wider ship record and the class
 index refusal. CI shipped that source at 161302, which is the figure to quote.
 
+The civil yards cost **2018 bytes**: 163043 against 165061 on the SAME
+compiler either side of the commit, for six more classes, six more parts on
+both sides of the boundary, and `civil_subs`. CI shipped that source at
+163438. Cheap for six ships, and the reason is the reason the fleet was cheap:
+a class is a row in a table, not a branch in a resolver.
+
 Attribute growth to the change that caused it, not to the branch it landed on.
 Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
 either side of the commit. Reading it off the shipped figure instead would have
@@ -936,6 +999,23 @@ only while the barrel is actually moving: a settled mount costs nothing. Meshes
 of their own would cost nothing while moving either, and would mean the carve
 had to know which of four buffers a quad lives in, which is a hole in a hull
 waiting to land in the wrong one.
+
+**A turret stands on a FACE, and its base points at the core.** A barbette is
+a drum with a ring at one end and a base at the other, and every one of them
+was drawn +y up whatever face it stood on: under the keel the ring pointed
+INTO the ship, and on a flank neither end was against the plating at all, so
+the drum hung off the side by its rim and the gun above it was bolted to the
+hull rather than to its own base. Thirty of the fleet's forty seven were
+seated that way, and the suites were blind to it because a mount's cells were
+counted and never looked at. `mountRoll` rolls a gun onto its face, from the
+same `outwardAt` the plating uses, and `ringSeat` sets the ring flush in the
+skin rather than three courses under it. The traverse follows through
+`mountQuat`, which is `roll * aim * roll'`: a conjugation, because the cells
+are laid already rolled and multiplying the roll in again lays a broadside gun
+in the deck. Both gates stay in the SHIP's frame; only the two angles the
+barrel is drawn at are the mount's own. It is checked by reading the CELLS:
+the ring is the lit course, and its mean position along the outward axis has
+to be outboard of the drum's own.
 
 **Hovering names what is under the pointer**, because the picture IS the grid: a
 raycast gives a triangle, two triangles are a quad, `cellOf` says which lattice
@@ -1238,6 +1318,24 @@ picture nobody can see them in.
 
 ## A window is a hole in the PLATING, not a part
 
+**And it looks THROUGH the plating, not one cell into it.** A belt is three to
+five courses thick, so a room behind it is three to five cells inside the skin
+and a rule that looked exactly one cell inward found a room only where the
+armour happened to be one cell deep. Measured over the fleet it was finding
+almost nothing: a Terran corvette carried a bridge and drew no viewport at all,
+and a container ship with twelve boxes in it showed six door panels.
+`WINDOW_DEPTH` is five courses, and every cell crossed has to be plating, so a
+window still means "a room immediately behind this skin" rather than "a room
+somewhere along this line". Counts went from single digits to hundreds.
+
+**Two decals are face specific, and `WINDOW_FACE` is what says so.** A
+container's doors are on its END and a radiator's slats run down a FLANK, so
+tiling either over every exposed face of the module turns a box into a wall of
+doors: a container ship came out wearing a thousand of them, one per cell, each
+the size of a hand. It wears eleven now, which is about one per container,
+which is what a container has.
+
+
 Authored on the module (`ModuleDef.window`) and derived onto the skin: the
 plate cell whose inner neighbour belongs to a bridge wears the bridge viewport,
 one over a barracks wears cabin panes, one over a clamp wears running lights.
@@ -1280,6 +1378,100 @@ So: a leading slash, and PROVE it rather than asserting it.
 finish's file name and whether that file has pixels, and the playthrough fails
 if a bound finish has none. Putting `./` back flips `loaded` to false on every
 hull, which is how the guard was checked.
+
+## A hull is a LIVERY, not a colour
+
+A ship used to be one paint value and one normal map from transom to nose, and
+seventeen ships drawn that way are seventeen ships told apart by hue: the other
+seven swatches in every palette sat in a picker nobody could see the effect of.
+
+A hull is eight ROLES now, in `LIVERY_ROLES`: the broad plating, the deck, the
+belly, the waist belt, a bow flash, a transom band, a stripe down each flank
+and whatever the navy bolted on. `roleOfCell` decides which from the same
+normalised coordinates the shell already uses to decide how thick the plate is
+there, so a livery cannot move a single cell: it is a second answer about a
+cell that exists either way, written into `Raster.tone` beside the material.
+
+**This is a RETURN, and the objection that deleted it the first time is
+answered rather than stepped round.** Positional livery existed once and was
+removed because a player picked a colour and got a scheme built round it: the
+pick was a seed rather than a decision. What is different is that the pick is
+role `hull` ITSELF. Every other role is a fixed OFFSET from the picked swatch
+round the palette, so the broad plating is exactly the colour that was chosen,
+picking the next swatch along really does repaint the whole ship, and because
+the offsets are a PERMUTATION of nought to seven, every swatch in the palette
+lands somewhere. `shipyard.mjs` checks both halves: eight tones on the hull,
+and the picked one among them on the broad plating.
+
+**Three normal maps, not one, and three is where it stops.** A colour is free,
+because a vertex carries its own and any number of them merge into one draw. A
+normal map is a material and a material is a DRAW CALL, so "different patterns
+on one ship" costs one group per pattern. `ARMOUR_BANDS` is three: the broad
+plating, the trim that runs along it, and the structure bolted to it. A fourth
+would be a draw nobody could name.
+
+That makes five surfaces on a hull, and `SURF_NAMES` is what reports them.
+`view.ts` used to spell the list `['armour', 'frame', 'part']`, which was right
+for exactly as long as there were three: a fourth would have been reported
+under the third's name, so a trim band whose texture never loaded would have
+read as a healthy frame.
+
+## Nothing may float, and everything did
+
+A ship is ONE object. A cell touching nothing is not a piece of armour, it is a
+block hanging in space beside a hull, and every stock hull in the fleet had
+some: seventy of them on a Rogue corvette, most of an attitude block that its
+own pylon had never reached.
+
+The pylon pass could not reach them, and the reason is worth keeping. It starts
+at a part's OUTBOARD cell and steps inward, and its first step lands on another
+cell of the same part, which it reads as "met the ship". So the fix is at the
+end of `rasterise`, where the pieces are actually known: flood fill on SIX
+neighbours (two cells meeting at an edge are two cells touching at a line,
+which is not a weld), weld each loose piece back with a spar, and take off only
+what will not weld.
+
+The weld tries every cell of the piece, nearest the axis first, because the
+nearest cell of a drive cluster has the rest of the cluster inboard of it and
+the walk meets the piece itself on its first step. When no cell finds anything
+inboard, the piece is off the END of the hull, where the profile has no beam to
+walk toward: it marches along the keel instead.
+
+What comes off is COUNTED and reported, in `Raster.orphans` and on the yard's
+readout, because a player who draws a plate that reaches nothing should be told
+rather than tidied up after.
+
+## A turret has to be able to see out
+
+Three separate things had a mount pointing into its own ship, and the arc scan
+had been saying so all along without anybody reading it.
+
+**A trunnion went two cells UP from its ring**, whatever face the ring was on.
+On a dorsal ring that is out; on a VENTRAL ring it is two cells further into
+the ship, and two mounts on the Terran heavy cruiser scanned as blocked in
+every direction there is. A gun goes on top of its barbette and "top" is away
+from the hull, so the trunnion is seated on the SKIN, on the face `outwardAt`
+says the ring is on.
+
+**A ring has a REST FACING**, and the frame knows it where a placement cannot.
+A ring on the port flank is a broadside mount, and a broadside gun resting dead
+ahead is a gun looking down the length of its own ship. `ringFacing` rests a
+flank mount trained outboard and a centreline mount ABEAM, to opposite sides
+fore and aft, because a pair of centreline mounts resting fore and aft look
+straight at each other. The player's `rot` is added to it rather than replacing
+it, so turning a mount still means turning it FROM where its ring puts it.
+
+**Mirrored sockets were not mirrored.** `CX` is 16 on a lattice of 32, which is
+a cell BOUNDARY rather than a cell: the plane a ship is symmetric about runs
+between cells 15 and 16, so `round(CX + u*hw)` and `round(CX - u*hw)` do not
+land the same distance out. The Benefactor frigate's port ring sat at 0.80 of
+the beam and its starboard twin at 0.98, and the scan read it straight back as
+one gun 68 percent blocked and the other 36. `acrossFrom` mirrors the INDEX
+rather than the arithmetic.
+
+Measured across the fleet afterwards: every mount sits at 30 to 53 percent
+blocked, which is its own hull and nothing else, and not one is blocked in the
+direction it rests.
 
 ## A class wears its own surface
 

@@ -28,11 +28,12 @@
  */
 
 import * as THREE from 'three';
-import { finishMap, WINDOW_VARIANTS } from './textures.js';
+import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
-  armourColour, bareGrid, cellColour, faceBasis, facingOf, finishesOf, frameFor, moduleById,
-  rasterise, rasterSig, socketsOf, type Design,
+  ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
+  finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
+  socketsOf, type Design,
 } from './design.js';
 import type { MountFace } from './turret.js';
 
@@ -45,19 +46,45 @@ import type { MountFace } from './turret.js';
  * Three lists in the same order rather than three lookups.
  */
 /**
- * The three surfaces a hull is drawn with, and the order a material array for
- * one must be in.
+ * The surfaces a hull is drawn with, and the order a material array for one
+ * must be in.
  *
- * Armour, frame and machinery are three materials because they are three
+ * Armour, frame and machinery were three materials because they are three
  * things: an armour panel, the structure under it and a drive bell do not
  * wear the same finish, and drawing all three in the plating's was a ship
- * that looked like one material with parts painted on it. The geometry is
- * grouped in this order, so `mesh.material[SURF_FRAME]` is the frame's.
+ * that looked like one material with parts painted on it.
+ *
+ * The armour is now THREE of them rather than one, for the same reason one
+ * step down. A colour is free, because a vertex carries its own and any
+ * number of them merge into one draw; a normal map is a material and a
+ * material is a draw call. So a ship that wants its deck corrugated over
+ * riveted flanks with greebled structure bolted on has to pay for three, and
+ * three is where it stops: `ARMOUR_BANDS` in `design.ts` says why, and the
+ * roles that map onto them are authored there too.
+ *
+ * The geometry is grouped in this order, so `mesh.material[SURF_FRAME]` is
+ * still the frame's and `SURF_ARMOUR + band` is one band of plating.
  */
 export const SURF_ARMOUR = 0;
-export const SURF_FRAME = 1;
-export const SURF_PART = 2;
-export const SURF_COUNT = 3;
+export const SURF_FRAME = ARMOUR_BANDS;
+export const SURF_PART = ARMOUR_BANDS + 1;
+export const SURF_COUNT = ARMOUR_BANDS + 2;
+
+/** What each surface is called, for anything that reports them. One list, so
+ *  a screen cannot label the second band 'frame' because it counted wrong. */
+/**
+ * How far through the plating a window looks for its room, in cells.
+ *
+ * A player may lay fifteen courses, and fifteen courses of armour over a
+ * barracks is a barracks nobody has a window onto: past about five the room is
+ * not "behind the skin" in any sense a viewport could mean, and a decal that
+ * appeared through a foot of belt would be a hole in the armour that the
+ * armour does not have.
+ */
+const WINDOW_DEPTH = 5;
+
+export const SURF_NAMES: readonly string[] =
+  ['plate', 'trim', 'structure', 'frame', 'part'];
 
 export interface HullRig {
   /** The weapon key, for naming it. */
@@ -70,9 +97,10 @@ export interface HullRig {
    * The facing the design bolted it on at, as a rotation from the mount's
    * frame into the ship's.
    *
-   * Not an angle. A mount can be yawed, pitched and rolled, so its rest is an
-   * orientation rather than a number, and a scalar could only ever describe
-   * the one axis this used to have.
+   * Not an angle. A mount can be yawed, pitched and rolled, and it is also
+   * SEATED on whichever hull face its ring is on, so its rest is an
+   * orientation rather than a number: a scalar could only ever describe the
+   * one axis this used to have.
    */
   readonly face: MountFace;
 }
@@ -234,6 +262,8 @@ export interface Tintable {
  */
 export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
   const f = finishesOf(d);
+  const bands = bandFinishes(d);
+  const livery = liveryFor(d.faction);
   const common = {
     vertexColors: true,
     // A dark hull under one key light is a slow gradient in a narrow range,
@@ -242,12 +272,20 @@ export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
     dithering: true,
   } as const;
   const mats: THREE.MeshStandardMaterial[] = [];
-  mats[SURF_ARMOUR] = new THREE.MeshStandardMaterial({
-    ...common,
-    metalness: d.metal ?? DEFAULT_METAL,
-    roughness: d.rough ?? DEFAULT_ROUGH,
-    normalMap: finishMap(f.armour),
-  });
+  // Band nought is the broad plating and it keeps the DESIGN's own metalness
+  // and roughness, because that pair is what a player sets and it has always
+  // meant "what is this hull made of". The other two take the livery's, which
+  // is what makes a corrugated trim read as a different material rather than
+  // as the same paint with a different bump on it.
+  for (let b = 0; b < ARMOUR_BANDS; b++) {
+    const pbr = livery.pbr[b] as readonly [number, number];
+    mats[SURF_ARMOUR + b] = new THREE.MeshStandardMaterial({
+      ...common,
+      metalness: b === 0 ? d.metal ?? DEFAULT_METAL : pbr[0],
+      roughness: b === 0 ? d.rough ?? DEFAULT_ROUGH : pbr[1],
+      normalMap: finishMap(bands[b] as string),
+    });
+  }
   mats[SURF_FRAME] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.45, roughness: 0.70, normalMap: finishMap(f.frame),
   });
@@ -294,8 +332,8 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   const frame = frameFor(d.classKey);
   const cell = RUNG[frame.rung];
   const raster = rasterise(d);
-  const purp = raster.purp, own = raster.own;
-  const grid = bare ? bareGrid(raster.grid) : raster.grid;
+  const purp = raster.purp, own = raster.own, tone = raster.tone;
+  const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
   // The guns, and which placement each one is, so the quads that belong to a
@@ -319,7 +357,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         ((sock.at[1] as number) - NY / 2) * cell,
         ((sock.at[2] as number) - NZ / 2) * cell,
       ],
-      face: faceBasis(facingOf(p)),
+      face: faceBasis(seatedFacing(frame, sock, p)),
     });
   });
 
@@ -347,7 +385,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const n = idx(i, j, k);
     const mat = grid[n] as number;
     return mat === Mat.Plate || mat === Mat.Skinned
-      ? armourColour(d.paint)
+      ? armourColour(d.faction, d.paint, tone[n] as number)
       : cellColour(mat, purp[n] as number, d.paint);
   };
 
@@ -407,13 +445,37 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const n = idx(i, j, k);
     const mat = grid[n] as number;
     if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
-    // One step in, against the face's own normal.
-    const bi = i - dx, bj = j - dy, bk = k - dz;
-    if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
-    const owner = own[idx(bi, bj, bk)] as number;
-    if (owner <= 0) return null;
-    const part = d.parts[owner - 1];
-    return (part ? moduleById(part.module)?.window : undefined) ?? null;
+    // Through the PLATING, not one step in.
+    //
+    // A belt is three to five courses thick and a room behind it is therefore
+    // three to five cells inside the skin, so a rule that looked exactly one
+    // cell inward found a room only where the armour happened to be one cell
+    // thick. Measured over the fleet it was finding almost nothing: a Terran
+    // corvette carried a bridge and drew no viewport at all, and a container
+    // ship with twelve boxes in it showed six door panels.
+    //
+    // Every cell crossed has to be plating. The moment the march meets
+    // anything else it is inside the ship and whatever it met is the answer,
+    // so a window still means "a room immediately behind this skin" rather
+    // than "a room somewhere along this line".
+    for (let step = 1; step <= WINDOW_DEPTH; step++) {
+      const bi = i - dx * step, bj = j - dy * step, bk = k - dz * step;
+      if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
+      const m = idx(bi, bj, bk);
+      const owner = own[m] as number;
+      if (owner > 0) {
+        const part = d.parts[owner - 1];
+        const key = (part ? moduleById(part.module)?.window : undefined) ?? null;
+        if (!key) return null;
+        const face = WINDOW_FACE[key];
+        if (face === 'ends' && dz === 0) return null;
+        if (face === 'sides' && dz !== 0) return null;
+        return key;
+      }
+      const inner = grid[m] as number;
+      if (inner !== Mat.Plate && inner !== Mat.Skinned) return null;
+    }
+    return null;
   };
   /** Every window face found, by decal kind: cell, and which way it looks. */
   const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
@@ -560,8 +622,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   // cannot leave two of them disagreeing, which three buffers filled in three
   // places eventually would.
   const surfaceOf = (q: number): number => {
-    const mat = grid[cellOf[q] as number] as number;
-    if (mat === Mat.Plate || mat === Mat.Skinned) return SURF_ARMOUR;
+    const n = cellOf[q] as number;
+    const mat = grid[n] as number;
+    if (mat === Mat.Plate || mat === Mat.Skinned) {
+      return SURF_ARMOUR + ROLE_BAND[roleAt(tone[n] as number)];
+    }
     return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
   };
   const order = cellOf.map((_, q) => q);
@@ -653,7 +718,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const variants = WINDOW_VARIANTS[key] ?? 1;
     const wPos: number[] = [], wNrm: number[] = [], wUv: number[] = [], wCol: number[] = [];
     const wCell: number[] = [];
-    const plate = new THREE.Color(armourColour(d.paint));
+    // The frame round a pane is the plating it is cut into, so a window on
+    // the deck is framed in the deck's colour and one on the flank in the
+    // flank's. One colour for every window would have put a hull coloured
+    // border round a viewport in the middle of a differently painted panel.
+    const plate = new THREE.Color();
     for (const f of faces) {
       const dir = DIRS[f.dir] as (typeof DIRS)[number];
       const axis = dir.axis;
@@ -679,6 +748,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
           ((at[1] as number) - NY / 2) * cell,
           ((at[2] as number) - NZ / 2) * cell);
         wNrm.push(dir.n[0] as number, dir.n[1] as number, dir.n[2] as number);
+        plate.setHex(armourColour(d.faction, d.paint, tone[f.cell] as number));
         wCol.push(plate.r, plate.g, plate.b);
         // The decal's own up is the HULL's up, the same swap the finish makes
         // on the x faces, or a viewport lies on its side down one flank.

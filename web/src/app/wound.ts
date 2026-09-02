@@ -281,13 +281,13 @@ export function buildWound(
   // against the plated grid while the picture has its plate off would put
   // torn edges where the armour used to be and leave the frame behind them
   // untouched: two answers about one ship.
-  const grid = bare ? bareGrid(raster.grid) : raster.grid;
+  const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
   // What a cell is made of, so the inside of a hull is drawn as the parts that
   // are in it. Same answer `hull.ts` gives the outside, asked the same way.
   const colourOf = (n: number): number => {
     const mat = grid[n] as number;
     return mat === Mat.Plate || mat === Mat.Skinned
-      ? armourColour(design.paint)
+      ? armourColour(design.faction, design.paint, raster.tone[n] as number)
       : cellColour(mat, purp[n] as number, design.paint);
   };
   const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;

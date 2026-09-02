@@ -438,7 +438,12 @@ test('class and mount metadata cross intact', () => {
   const m = sim.match();
   m.start('0000000000000001', 0);
   const terran = m.classInfo(0);
-  assert.equal(terran.hull, 300);
+  // Measured rather than authored: `tools/measure_fleet.mjs --sync` writes
+  // every class's table entry from what `derive(stockFor(key))` produces, and
+  // `--check` fails if the two part. The literal here is only a spot check
+  // that a number crossed the boundary at all; the fleet wide agreement is
+  // the test below it.
+  assert.ok(Math.abs(terran.hull - 296.936) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
@@ -755,6 +760,251 @@ test('a hull is meshed by the voxel rule, so it has an inside', async () => {
 // language can catch a disagreement, because every one of them is just a list,
 // so this is the only thing standing between a renumbered class and a desync
 // that reads as two clients disagreeing about physics.
+test('every stock hull has windows, and they are cut where a room is', async () => {
+  // "More windows" is a thing a person says about a picture, and this is the
+  // number under it. A window is a hole in the PLATING over a room, so the
+  // count is a property of the mesher and the fits together, and it was
+  // single digits on hulls that carried a bridge: the rule looked exactly one
+  // cell inward and a belt is three to five courses thick, so it found a room
+  // only where the armour happened to be one cell deep. A Terran corvette drew
+  // no viewport at all.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { hullMesh } = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, moduleById, useCore } = design;
+  useCore(() => null);
+
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const h = hullMesh(d);
+    const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // Twenty is not a taste: below that a hull reads as unlit at map range,
+    // which is what every one of them did.
+    assert.ok(faces >= 20,
+      `${f.classKey}: ${faces} window faces, so the hull reads as unlit`);
+    // And every decal drawn is one a part on this ship actually wears. A key
+    // with no module behind it would be a texture bound to nothing, and
+    // `windowMap` answers null for an unknown one without saying so.
+    const worn = new Set(d.parts.map(p => moduleById(p.module)?.window).filter(Boolean));
+    for (const w of h.windows) {
+      assert.ok(worn.has(w.key),
+        `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);
+    }
+  }
+});
+
+test('no stock mount is blocked in the direction it rests', async () => {
+  // The rule the user of a shipyard would state as "nothing should be standing
+  // in front of a gun", checked the only way it can be: by scanning the hull.
+  //
+  // Three separate things had a mount pointing into its own ship and every
+  // suite passed throughout, because a blocked arc is not a number any of them
+  // read. The trunnion went two cells UP from its ring whatever face the ring
+  // was on, so a ventral turret was pushed further inside its own hull and two
+  // mounts on the Terran heavy cruiser scanned as blocked in every direction
+  // there is; a flank ring rested dead ahead, which is a broadside gun looking
+  // down the length of its own ship; and a navy's decor could be laid straight
+  // across a mount's line of rest.
+  //
+  // So: for every stock hull, take each mount's rest direction (the ring's own
+  // facing plus whatever the placement turned it) and ask the scanned mask
+  // whether the hull is in the way there.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, seatedFacing,
+    faceBasis, useCore, useArcDirs } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
+
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const masks = arcMasks(d);
+    const socks = socketsOf(f, d.parts);
+    let mount = 0;
+    for (const p of d.parts) {
+      if (!moduleById(p.module)?.weapon) continue;
+      const mask = masks[mount++];
+      const sock = socks.find(k => k.id === p.socket);
+      // Straight ahead on the MOUNT, carried into the ship's frame by the
+      // facing it was actually seated and turned at. The mask is scanned in
+      // the ship's frame, so the rest direction has to arrive there: asked in
+      // the mount's own, a broadside gun resting outboard would be tested for
+      // a direction down the length of its own hull.
+      //
+      // `faceBasis` is row major and its columns are the images of the axes,
+      // so the image of the mount's +z is (f[2], f[5], f[8]).
+      const b = faceBasis(seatedFacing(f, sock, p));
+      assert.equal(arcBlocked(mask, b[2], b[5], b[8]), false,
+        `${f.classKey}: ${p.socket} rests pointing into its own ship`);
+    }
+  }
+});
+
+test('every stock turret stands on its hull face, ring outboard', async () => {
+  // The rule a player states as "the base has to be bolted to something, and
+  // it cannot be upside down unless it is under the keel".
+  //
+  // A barbette is a drum with a toothed ring at one end and a flat base at the
+  // other, and every one of them was drawn with that ring pointing +y whatever
+  // face it stood on. Under the keel that put the ring INSIDE the ship and the
+  // base out at vacuum; on a flank neither end was against the plating at all
+  // and the drum hung off the side by its rim. Thirty of the fleet's forty
+  // seven were seated that way, and no suite could see it, because a mount's
+  // cells were only ever counted rather than looked at.
+  //
+  // So it is read off the rasterised cells rather than off the code that lays
+  // them: the ring is the lit course, and its mean position along the outward
+  // axis must be OUTBOARD of the drum's own. Zero would be a drum lying on its
+  // side; negative is one upside down.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, Mat,
+    useCore, useArcDirs } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
+
+  const NX = 32, NY = 32, NZ = 64;
+  const at = (i, j, k) => i + j * NX + k * NX * NY;
+  const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  let seen = 0;
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const r = rasterise(d);
+    const socks = socketsOf(f, d.parts);
+    d.parts.forEach((p, pi) => {
+      if (moduleById(p.module)?.art !== 'barbette') return;
+      const sock = socks.find(k => k.id === p.socket);
+      if (!sock) return;
+      const [ox, oy] = outwardAt(f.profile, sock.at);
+      const axis = ox ? 0 : 1, dir = ox || oy;
+      let n = 0, ring = 0, sumRing = 0, sumAll = 0, touching = 0;
+      for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const q = at(i, j, k);
+        if (r.own[q] !== pi + 1) continue;
+        const c = [i, j, k];
+        n++; sumAll += c[axis];
+        if (r.grid[q] === Mat.Glow || r.grid[q] === Mat.Accent) { ring++; sumRing += c[axis]; }
+        for (const [a, b, e] of N6) {
+          const x = i + a, y = j + b, z = k + e;
+          if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) continue;
+          if (r.grid[at(x, y, z)] && r.own[at(x, y, z)] !== pi + 1) { touching++; break; }
+        }
+      }
+      seen++;
+      assert.ok(n > 0, `${f.classKey}: ${p.socket} barbette got no cells`);
+      assert.ok(ring > 0, `${f.classKey}: ${p.socket} barbette has no ring`);
+      assert.ok(touching > 0, `${f.classKey}: ${p.socket} barbette touches nothing`);
+      const out = (sumRing / ring - sumAll / n) * dir;
+      assert.ok(out > 0.2,
+        `${f.classKey}: ${p.socket} ring sits ${out.toFixed(2)} outboard of its own drum`);
+    });
+  }
+  assert.ok(seen >= 40, `only ${seen} barbettes walked`);
+});
+
+test('every livery uses its whole palette, and the pick is the plating', async () => {
+  // The two halves of the rule, and only one of them is visible in a picture.
+  //
+  // A livery is a permutation: role `hull` is the picked swatch and the other
+  // seven are fixed offsets round the palette from it. That is what guarantees
+  // all eight land on every ship whichever swatch is chosen, and it is a
+  // property of a table rather than of a render, so it belongs here rather
+  // than in a browser. `shipyard.mjs` checks the cells actually come out that
+  // way; this checks the scheme could not have come out any other way.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { LIVERY, LIVERY_ROLES, FACTION_PAINT, roleColour, ARMOUR_BANDS, ROLE_BAND } = design;
+
+  for (const { key, swatches } of FACTION_PAINT) {
+    const livery = LIVERY[key];
+    assert.ok(livery, `${key} has no livery`);
+    assert.equal(swatches.length, 8, `${key} does not carry eight swatches`);
+    const offsets = LIVERY_ROLES.map(r => livery.offset[r]);
+    assert.equal(offsets[LIVERY_ROLES.indexOf('hull')], 0,
+      `${key}: the broad plating is not the picked swatch`);
+    assert.deepEqual([...offsets].sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7],
+      `${key}: the offsets are not a permutation, so a swatch goes unused`);
+    // From EVERY pick, not just the first: a rotation of a cycle is still a
+    // cycle, and this is what says so rather than assuming it.
+    for (const pick of swatches) {
+      const laid = LIVERY_ROLES.map(r => roleColour(key, pick, r));
+      assert.equal(new Set(laid).size, 8,
+        `${key} at 0x${pick.toString(16)}: ${new Set(laid).size} of 8 swatches on the hull`);
+      assert.equal(roleColour(key, pick, 'hull'), pick,
+        `${key} at 0x${pick.toString(16)}: the plating is not the colour picked`);
+    }
+    // Every band has at least one role, or a hull pays for a draw call and
+    // draws nothing with it.
+    const used = new Set(LIVERY_ROLES.map(r => ROLE_BAND[r]));
+    assert.equal(used.size, ARMOUR_BANDS, `${key}: ${used.size} of ${ARMOUR_BANDS} bands used`);
+    assert.equal(new Set(livery.finish).size >= 2, true,
+      `${key}: every band wears the same finish, so the bands are not banded`);
+  }
+});
+
+test('every class spawns the ship its own stock hull derives', async () => {
+  // CLAUDE.md's rule, checked rather than asserted in prose: "the stock spawn
+  // and the stock design are the same ship". A class's table entry in
+  // `data.rs` is what `derive(stockFor(key))` produces, so a hull a scenario
+  // seats flies like the hull a briefing fields. Nothing compared the two
+  // until this: `sim.test.mjs` only pinned the two GATES (radius and the
+  // berth), which are deliberately not the derived numbers, so the hull, the
+  // whole flight envelope, the marines, the capacity and the boarding range
+  // could all drift with every suite still green.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, derive, useCore } = design;
+  const typ = await build({
+    entryPoints: [resolve(root, 'src/sim/types.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { CLASS_KEYS } = await import('data:text/javascript;base64,'
+    + Buffer.from(typ.outputFiles[0].text).toString('base64'));
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+
+  const m = sim.match();
+  const near = (a, b, what) =>
+    assert.ok(Math.abs(a - b) <= Math.max(Math.abs(b), 1) * 2e-4,
+      `${what}: class table ${a} against the stock hull's ${b}`);
+  for (let i = 0; i < CLASS_KEYS.length; i++) {
+    const key = CLASS_KEYS[i];
+    const want = derive(stockFor(key));
+    const got = m.classInfo(i);
+    near(got.hull, want.hull, `${key} hull`);
+    near(got.flight.yawRate, want.yaw, `${key} yaw`);
+    near(got.flight.pitchRate, want.pitch, `${key} pitch`);
+    near(got.flight.accelFwd, want.accelFwd, `${key} accel fwd`);
+    near(got.flight.accelRetro, want.accelRetro, `${key} accel retro`);
+    near(got.flight.accelLat, want.accelLat, `${key} accel lat`);
+    near(got.flight.maxSpeed, want.maxSpeed, `${key} max speed`);
+  }
+});
+
 test('the client and the core name the same classes in the same order', async () => {
   const dsn = await build({
     entryPoints: [resolve(root, 'src/app/design.ts')],

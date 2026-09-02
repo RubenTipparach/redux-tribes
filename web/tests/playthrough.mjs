@@ -313,6 +313,25 @@ async function checkHullsWearTheirFinish(page) {
     console.log('\nFAIL: a hull has no UVs, so a normal map has nothing to sample along');
     process.exit(1);
   }
+  // Every surface, not just the first. The fields above describe the broad
+  // plating, which is what they always described; a hull is drawn with five
+  // materials now (three bands of armour, the frame, the machinery) and a
+  // band whose texture never loaded would have passed every check above it,
+  // exactly the way the ember atlas and all nine finishes once shipped dead.
+  const skins = surf.flatMap(s => s.skins.map(k => ({ ship: s.ship, ...k })));
+  const deadSkin = skins.filter(k => k.finish !== 'none' && !k.loaded);
+  if (deadSkin.length) {
+    console.log(`\nFAIL: ship ${deadSkin[0].ship}'s ${deadSkin[0].what} surface has`
+      + ` ${deadSkin[0].finish} bound with no pixels in it`);
+    process.exit(1);
+  }
+  const bands = new Set(skins.filter(k => k.finish !== 'none').map(k => k.finish));
+  if (bands.size < 2) {
+    console.log(`\nFAIL: every surface on a hull wears the same finish (${[...bands]}),`
+      + ' so the bands are not banded');
+    process.exit(1);
+  }
+  log(`${skins.length} surfaces over ${surf.length} hulls, ${bands.size} distinct finishes`);
   if (!surf[0].env) {
     console.log('\nFAIL: no environment map, so every metal on the map renders black');
     process.exit(1);

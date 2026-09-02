@@ -245,6 +245,16 @@ The plate toggle has three states, because enclosing the mounts made two states 
 
 **A turret turns on its MOUNT.** Every part used to be placed with its box centre on its socket, which put half a ten cell barrel behind the barbette and swung it through the hull when the part was turned: the outline a player selected was visibly off its own base. `pivotOf()` gives a gun a pivot inside its housing, a few cells up from the breech, and the raster lands the PIVOT on the socket rather than the centre. `rotatedPivot()` carries it through the quarter turns so a turned gun still sits on its ring.
 
+**A mount stands on a FACE, and its base points at the core.** A barbette is a drum with a toothed ring at one end and a flat base at the other, and the base bolts to something. Every one of them used to be laid +y up whatever face it stood on, so under the keel the ring pointed into the ship and the base out at vacuum, and on a flank neither end was against the plating at all: the drum hung off the side by its rim, with the gun above it bolted to the hull rather than to its own base. Thirty of the fleet's forty seven were seated that way. `mountRoll()` is quarter turns about the keel taking a part's own +y onto the face its socket sits on, read from the same `outwardAt()` the plating uses to tell a deck from a flank, so a ring the shell calls a flank ring is a flank ring here too. Guns only: a drive bell points along the keel whatever it is bolted to, a thruster block is a piece of the skin rather than a thing standing on it, and a magazine is inside the ship where there is no face to stand on.
+
+`ringSeat()` then puts the ring in the plating rather than under it. Frames author a ring at a fraction of the beam, which on a flank left the whole drum three courses beneath the skin; the drum is three courses thick, so its ring lands flush when its centre sits one course in, and the trunnion goes one course further out, on top of the ring rather than a gap away from it.
+
+Checked by reading the CELLS rather than the code that lays them (`sim.test.mjs`): the ring is the lit course, and its mean position along the outward axis must be outboard of the drum's own. Zero would be a drum lying on its side; negative is one upside down.
+
+**A flank ring rests along the keel**, forward of midships pointing forward and abaft it pointing aft, because abeam is straight up its own barbette once the axis is outboard. Measured over every hull: a flank mount forward of midships has its fore arc clear and its aft arc blocked, and one abaft has it the other way round. The Karisen sponson is the fleet's single exception, amidships on a near round section behind a rail that overruns the body at both ends, so it looks into its own ship both ways; it carries a quarter turn in its own stock fit, where an exception belongs, and the suite guards it.
+
+**The traverse follows the roll, and one function writes it.** `mountQuat()` is `roll * aim * roll'`, a conjugation rather than a rotation, because the cells were laid already rolled: multiplying the roll in without taking it out again rolls a broadside gun a second time and lays it in the deck. The map rewrites quads and the yard turns a group, and both ask for the same quaternion. Both gates stay in the SHIP's frame, where the arc is authored and the hull mask was scanned; only the two angles the barrel is drawn at are the mount's own.
+
 **The authored arc is now the same for every weapon:** all round in yaw, and everything above ten degrees under the mount in pitch. Beams, cannons and launchers all traverse freely, so what a weapon can reach is no longer a per weapon number at all. The pairs it replaced (beam h -110 to 110 and v -60 to 60, projectile h -90 to 90) are gone from `data.rs`. What limits a mount now is the ship it is bolted to, and that is scanned rather than declared.
 
 **The hull's own shadow is scanned, once per design.** A ray per direction, on a 64 by 32 grid of yaw and pitch, cast from each gun's socket through the voxels the player drew and out the other side; a direction that meets solid metal that is not the gun's own is a bit set in that mount's mask. The mask crosses with the design (`ft_hull_mount`) and `Sim::bears` reads it before every shot, so the arc a turret has is the arc its own ship leaves it. The stock frigates come out between 35 and 88 percent blocked, and the 88 is a real finding rather than a bug: the Karisen's aft sponson is seated two cells inside its own flank, and a turret in a pit cannot fire along the deck it is sunk into. That number is on the Stats panel now, per mount, so it can be seen and moved.
@@ -261,7 +271,7 @@ The designer draws the arcs and works nothing out from them. Whether a shot is l
 
 **They hang on the ship's nose, not on the mount**, because that is what the core measures: `arc_test_3d` (math.rs) takes the SHIP's quaternion, and `sim_core` has no per mount rotation at all. The scanned mask is read in the same frame, so a hole in a turret's arc turns with the hull rather than pointing at a fixed compass bearing. Drawing the wedge off the turret's rest facing would be a second opinion about a rule. What Facing sets is the model's rest pose, and that is what the readout says.
 
-**Pitch is now a true elevation, and this is a change to the CORE.** The archive's `TargetArcTest3D` measured pitch as `atan2(y, z)`, which is not an elevation: as a target comes abeam, `z` goes to zero and that angle runs to 90 degrees however level the target is, so a 60 degree mount refused everything on its own beam. A beam turret with a 220 degree horizontal arc could not fire at anything square off the nose. It is `atan2(y, sqrt(x*x + z*z))` in both implementations now, Rust and the JS reference, changed together so they cannot drift, with a test in `tests/turn.rs` pinning the four corners of the behaviour. A mount has two axes, yaw and pitch; roll does not enter it. `sqrt` is the one transcendental the sim path allows, because IEEE-754 specifies it exactly.
+**Pitch is now a true elevation, and this is a change to the CORE.** The archive's `TargetArcTest3D` measured pitch as `atan2(y, z)`, which is not an elevation: as a target comes abeam, `z` goes to zero and that angle runs to 90 degrees however level the target is, so a 60 degree mount refused everything on its own beam. A beam turret with a 220 degree horizontal arc could not fire at anything square off the nose. It is `atan2(y, sqrt(x*x + z*z))` in both implementations now, Rust and the JS reference, changed together so they cannot drift, with a test in `tests/turn.rs` pinning the four corners of the behaviour. A mount has two axes, yaw and pitch; roll does not enter the ARC. (What `mountRoll()` adds is a fixed quarter turn seating the mount on its hull face, which is where the barrel is drawn from, not a third axis it can aim on.) `sqrt` is the one transcendental the sim path allows, because IEEE-754 specifies it exactly.
 
 **A turret's default position is straight ahead on its own mount.** The rest facing a player sets in 90 degree steps is baked into the cells, so zero in the turret group's frame IS that direction, and a turret with nothing in arc returns to it rather than straining at its stop. That is also what makes bearing readable at a glance: the ones that can reach the target are the ones that moved.
 
@@ -489,7 +499,7 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 
 **And the camera frames the ship, not the lattice.** It solves the eight corners of the hull's own box against BOTH field of view angles: a corner at offset `c` sits at depth `D + c.fwd`, so it is in frame when `D >= |c.right| / tanH - c.fwd`, and the answer is the largest of those sixteen bounds. Two earlier versions were worse and each in an instructive way: framing the longest axis against the vertical angle alone ignores that on a portrait phone the HORIZONTAL angle is the one cropping, and fitting the bounding sphere gives away everything between a 6 x 1.3 unit ship and the sphere around it. It also looks at the hull's own centre rather than the middle of a 32x32x64 lattice the ship sits in one corner of.
 
-**CHECKED IN A BROWSER, not by reading the CSS.** `node web/tests/shipyard.mjs` drives the real screen at 1280x900, 390x844 and 390x560: no horizontal scroll, every control's centre hits that control and not something over it, all five classes legal out of the box and above 70% of their berth, the picked swatch on each hull and a different pick repainting it, every enclosed mount inside the hull, both exteriors, the plate toggle cycling on/ghost/off with ghost drawing skin over structure, a tap naming what it hit, a selection outlining it, a turret that turns 90 degrees and moves cells, and gunnery: the arcs toggle cycling, turrets that swing on a target, never past their own arc, and at least one bearing. It has found five defects nothing else could: a chip row reused from the on-canvas overlay was absolutely positioned over the mode buttons and swallowed every tap; the header ran Close from 333 to 408 in a 390 pixel viewport on a bar with overflow hidden, leaving no way out of the screen; the pick card at full width sat on top of the plate toggle and swallowed every tap on it; at 390x560 the wrapped class chip row ate most of a 150 pixel canvas band, so a tap at its centre hit nothing at all; and the trunnion sockets were never listed, so the stock ships carried guns nobody could reach.
+**CHECKED IN A BROWSER, not by reading the CSS.** `node web/tests/shipyard.mjs` drives the real screen at 1280x900, 390x844 and 390x560: no horizontal scroll, every control's centre hits that control and not something over it, all twenty three classes reachable from the picker and legal out of the box and above 70% of their berth, the whole palette on each hull with the picked swatch among it and a different pick repainting the broad plating, every enclosed mount inside the hull, both exteriors, the plate toggle cycling on/ghost/off with ghost drawing skin over structure, a tap naming what it hit, a selection outlining it, a turret that turns 90 degrees and moves cells, and gunnery: the arcs toggle cycling, turrets that swing on a target, never past their own arc, and at least one bearing. It has found five defects nothing else could: a chip row reused from the on-canvas overlay was absolutely positioned over the mode buttons and swallowed every tap; the header ran Close from 333 to 408 in a 390 pixel viewport on a bar with overflow hidden, leaving no way out of the screen; the pick card at full width sat on top of the plate toggle and swallowed every tap on it; at 390x560 the wrapped class chip row ate most of a 150 pixel canvas band, so a tap at its centre hit nothing at all; and the trunnion sockets were never listed, so the stock ships carried guns nobody could reach.
 
 **Deliberately NOT offered:** a free-placement voxel brush at anchor resolution, a way to move a hardpoint, a way to edit a part's stats, and any tool that writes an operation log instead of cells.
 
@@ -543,12 +553,28 @@ All four are CLIENT tools emitting macro-cell writes. The core receives the resu
 - **What consumes designs?** DESIGN.md:211 has the Fleet panel doing repair only, DESIGN.md:216 has `ShipUpgradeType` as an enum with seven zero-byte placeholder files, Starport and Inventory are header stubs (DESIGN.md:247), and 'shipyard' appears only as a Hit-and-Run target. Without something that consumes a design - fleet points, a hull-class unlock ladder, salvage that yields parts - a player spends forty minutes producing a sidegrade to a ship they already own, and the mass budget is a puzzle constraint with no stakes rather than a currency. This decides whether the designer is a feature or a toy, and it wants deciding before slice 4, not after.
 
 
-## The fleet filled in: four navies, four rungs
+## The fleet filled in: four navies, four rungs, seven civil trades
 
 Shipped after the first cut. Corvette, frigate, destroyer and heavy cruiser for
-Terran, Karisen, Rogue and Benefactor, plus the civil Freighter. **Seventeen
-classes.** The `cruiser` rung is now flown; `capital` is still authored and
-still unused.
+Terran, Karisen, Rogue and Benefactor, and the civil yards' seven trades:
+Freighter, Lighter, Hauler, Container Ship, Tanker, Mining Ship and Liner.
+**Twenty three classes.** The `cruiser` rung is now flown; `capital` is still
+authored and still unused.
+
+The civil hulls are TRADES rather than a ladder, and each is its own `TierKey`
+for a reason that is not taxonomy: the shipyard's class picker addresses a
+class by the pair (faction, tier) and takes the first match, so two civil hulls
+sharing one tier would leave the second unreachable from the screen with
+nothing saying so. None of them carries a mount, which is what makes the arms
+gate pass on a hull with no gun ring anywhere.
+
+The ladder is EXACT now, and measured rather than asserted: `node
+tools/measure_fleet.mjs` prints the world size of every stock hull against its
+own navy's frigate, and it reads corvette 0.50, frigate 1, destroyer 1.45 to
+1.52, heavy cruiser 1.93 to 2.07. `node tools/fleet_shots.mjs --ladder terran`
+is the same claim as a picture, cropped to each hull and rescaled by its
+measured length, because the shipyard frames every hull to fill the view and
+therefore cannot show a size difference at all.
 
 **A rung is a cell size.** Every hull is the same 32x32x64 lattice and what
 changes is what one cell is worth: `frigate` 7/64, `escort` 10.5/64, `cruiser`
@@ -557,7 +583,7 @@ plate for fewer cells; a destroyer and a heavy cruiser are full length profiles
 at bigger cells, and since `design.rs` scales plate by the CUBE of the cell,
 the same cell count costs a cruiser eight times a frigate's mass and gives it
 eight times the hull. Almost the whole ladder falls out of that one number
-rather than out of seventeen hand tuned tables.
+rather than out of twenty three hand tuned tables.
 
 **Each navy's section is its signature and it holds at every rung.** Terran
 wide and flat on a raised dorsal spine, Karisen long and near round with a keel
