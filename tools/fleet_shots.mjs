@@ -18,6 +18,7 @@
  *   node tools/fleet_shots.mjs --only terran_cruiser # one hull
  *   node tools/fleet_shots.mjs --bare                # armour off, the frame
  *   node tools/fleet_shots.mjs --ladder terran       # the rungs, to one scale
+ *   node tools/fleet_shots.mjs --map                 # the FIELD, not the yard
  *
  * `--ladder` is the one that answers "are they actually bigger". The shipyard
  * FRAMES each hull to fill the view, so a corvette and a heavy cruiser come
@@ -50,6 +51,7 @@ const OUT = arg('out', '/tmp/fleet-shots');
 const ONLY = arg('only', null);
 const BARE = has('bare');
 const LADDER = arg('ladder', null);
+const MAP = has('map');
 const WIDE = has('mobile') ? { width: 390, height: 844 } : { width: 1100, height: 760 };
 
 mkdirSync(OUT, { recursive: true });
@@ -188,7 +190,41 @@ async function ladder(faction) {
   await sheet.close();
 }
 
-if (LADDER) {
+/**
+ * The battlefield, which is the picture the yard cannot take.
+ *
+ * The shipyard lights a hull from a studio rig with no sky and no environment,
+ * on purpose and for a measured reason. The map has a baked nebula, three
+ * lights and bloom, and it is where a player actually looks at a ship: a
+ * livery that reads in the yard and washes out on the field is a livery that
+ * does not work.
+ */
+async function battlefield() {
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  await page.click('#bPractice');
+  await page.waitForSelector('#briefing:not(.hidden)', { timeout: 15000 });
+  await page.click('#briefGo');
+  await page.waitForFunction(
+    () => document.getElementById('lobby').classList.contains('hidden'), null, { timeout: 30000 });
+  await frames(60);
+  // Onto a hull, so the shot is of a ship rather than of a starfield with
+  // four specks in it. Second press is the one that goes and looks.
+  const at = await page.evaluate(() => window.ftDebug.screenOf(0));
+  if (at) {
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(400);
+    await page.mouse.click(at.x, at.y);
+  }
+  await frames(90);
+  const png = await page.screenshot();
+  writeFileSync(`${OUT}/map.png`, png);
+  console.log(`  map.png  ${(png.length / 1024).toFixed(0)} kB`);
+}
+
+if (MAP) {
+  await battlefield();
+} else if (LADDER) {
   await ladder(LADDER);
 } else {
   for (const key of classes) {

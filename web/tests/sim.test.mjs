@@ -760,6 +760,48 @@ test('a hull is meshed by the voxel rule, so it has an inside', async () => {
 // language can catch a disagreement, because every one of them is just a list,
 // so this is the only thing standing between a renumbered class and a desync
 // that reads as two clients disagreeing about physics.
+test('every stock hull has windows, and they are cut where a room is', async () => {
+  // "More windows" is a thing a person says about a picture, and this is the
+  // number under it. A window is a hole in the PLATING over a room, so the
+  // count is a property of the mesher and the fits together, and it was
+  // single digits on hulls that carried a bridge: the rule looked exactly one
+  // cell inward and a belt is three to five courses thick, so it found a room
+  // only where the armour happened to be one cell deep. A Terran corvette drew
+  // no viewport at all.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { hullMesh } = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, moduleById, useCore } = design;
+  useCore(() => null);
+
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const h = hullMesh(d);
+    const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // Twenty is not a taste: below that a hull reads as unlit at map range,
+    // which is what every one of them did.
+    assert.ok(faces >= 20,
+      `${f.classKey}: ${faces} window faces, so the hull reads as unlit`);
+    // And every decal drawn is one a part on this ship actually wears. A key
+    // with no module behind it would be a texture bound to nothing, and
+    // `windowMap` answers null for an unknown one without saying so.
+    const worn = new Set(d.parts.map(p => moduleById(p.module)?.window).filter(Boolean));
+    for (const w of h.windows) {
+      assert.ok(worn.has(w.key),
+        `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);
+    }
+  }
+});
+
 test('no stock mount is blocked in the direction it rests', async () => {
   // The rule the user of a shipyard would state as "nothing should be standing
   // in front of a gun", checked the only way it can be: by scanning the hull.
