@@ -314,6 +314,10 @@ export function skyDome(cube: THREE.CubeTexture): THREE.Mesh {
   // that drew after the fleet, would be a black screen or a wiped one.
   mesh.frustumCulled = false;
   mesh.renderOrder = -1000;
+  // Carried on the camera, which is what makes a cube of half extent one a
+  // sky at all. Flagged rather than moved by name, so there is one list of
+  // the things that ride the eye.
+  mesh.userData.atInfinity = true;
   return mesh;
 }
 
@@ -566,5 +570,15 @@ export function starfield(preset: SkyPreset, radius = 4500): THREE.Points {
   points.renderOrder = -20;
   points.userData.pickable = false;
   points.userData.stars = pos.length / 3;
+  // A star has a DIRECTION and no position, so it rides on the camera: the
+  // renderer copies the eye onto anything carrying this flag every frame.
+  //
+  // Without it this shell of points sits at the world origin while the sky
+  // cube travels with the eye, and the two come apart the moment the camera
+  // translates. A pan of 200 units against a radius of 4500 slides a star
+  // about two and a half degrees across the nebula behind it, which is
+  // exactly what tells an eye it is looking at a mesh rather than at a sky:
+  // stars are not supposed to have parallax at any distance a ship can move.
+  points.userData.atInfinity = true;
   return points;
 }

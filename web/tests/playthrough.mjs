@@ -386,6 +386,153 @@ async function checkTheFieldIsDressed() {
     + `${st.backdrop.planets} planet(s) and ${st.backdrop.stars} stars, `
     + `post is ${st.post.quality}`
     + `${st.post.stoodDown ? ` (${st.post.stoodDown})` : ''}`);
+
+  await checkTheSkyIsABackdrop();
+  await checkTheEventsRailIsOptional();
+}
+
+/**
+ * The events rail is off until it is asked for, and asking brings it back.
+ *
+ * It is the one panel here that never takes an action, so it is the one to
+ * make optional. On a desktop that is a header button and 290px of map; on a
+ * phone it was already a bottom sheet behind a tab.
+ *
+ * Judged by HIT TESTING the middle of the rail rather than by its rectangle.
+ * A sheet stays `display:block` and rides off screen on a transform, and in
+ * landscape the closed one parks behind the 54px tab rail, so both "is it
+ * displayed" and "does its box touch the viewport" answer yes on a rail
+ * nobody can see. Three readings in a row said the rail was open when it was
+ * not, each for a different reason, which is the argument for asking the
+ * question the player's eye asks.
+ */
+async function checkTheEventsRailIsOptional() {
+  const read = () => page.evaluate(() => {
+    const el = document.getElementById('right');
+    const r = el.getBoundingClientRect();
+    const drawn = getComputedStyle(el).display !== 'none' && r.width > 0 && r.height > 0;
+    const cx = Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2));
+    const cy = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
+    const top = drawn ? document.elementFromPoint(cx, cy) : null;
+    const btn = document.getElementById('bLog');
+    const tab = document.getElementById('tLog');
+    const seen = (e) => {
+      if (!e) return false;
+      const b = e.getBoundingClientRect();
+      return getComputedStyle(e).display !== 'none' && b.width > 0 && b.height > 0;
+    };
+    return {
+      shows: !!(drawn && top && (el === top || el.contains(top))),
+      canvas: Math.round(document.getElementById('cv').getBoundingClientRect().width),
+      btn: seen(btn), tab: seen(tab),
+    };
+  });
+
+  const off = await read();
+  if (off.shows) {
+    console.log('\nFAIL: the events rail is on screen before anybody asked for it');
+    process.exit(1);
+  }
+  // Exactly one control offers it, and it is the one this size has room for.
+  const ctrl = off.btn ? '#bLog' : '#tLog';
+  if (off.btn === off.tab) {
+    console.log(`\nFAIL: the events rail is offered by ${off.btn ? 'both' : 'neither'} `
+      + 'the header button and the tab');
+    process.exit(1);
+  }
+
+  await page.click(ctrl);
+  await page.waitForTimeout(500);
+  const on = await read();
+  if (!on.shows) {
+    console.log(`\nFAIL: ${ctrl} did not bring the events rail on screen`);
+    process.exit(1);
+  }
+  await page.click(ctrl);
+  await page.waitForTimeout(500);
+  const back = await read();
+  if (back.shows) {
+    console.log(`\nFAIL: ${ctrl} would not put the events rail away again`);
+    process.exit(1);
+  }
+  if (back.canvas !== off.canvas) {
+    console.log(`\nFAIL: the map came back ${back.canvas}px wide, not the ${off.canvas}px `
+      + 'it started at');
+    process.exit(1);
+  }
+  log(`the events rail is optional: off to start with, ${ctrl} shows it `
+    + `(map ${off.canvas} to ${on.canvas}px) and puts it away again`);
+}
+
+/**
+ * The sky does not slide when the camera moves.
+ *
+ * A star field draws identically whether it is a backdrop or a shell of points
+ * the fleet flies around inside, so the count above cannot tell them apart.
+ * What tells them apart is PARALLAX: move the eye a long way and ask whether a
+ * fixed star is still in the same place on screen.
+ *
+ * It was not. The sky cube was carried on the camera by name and the stars
+ * were left at the world origin, so every pan dragged them across the nebula.
+ */
+async function checkTheSkyIsABackdrop() {
+  const read = () => page.evaluate(() => window.ftDebug.backdrop());
+  const before = await read();
+  if (!before.carried) {
+    console.log('\nFAIL: nothing rides the camera, so the sky is a mesh in the world');
+    process.exit(1);
+  }
+  if (!before.star) {
+    console.log('\nFAIL: no star to measure, so parallax cannot be asked about');
+    process.exit(1);
+  }
+
+  // Move the eye a long way, through the controls rather than by writing
+  // state, and wait for it to have ARRIVED, since the camera eases.
+  //
+  // Pan, with the middle button, which is the one gesture that is always the
+  // camera and never an order. A pan slides the focus and leaves yaw and pitch
+  // alone, so the eye TRANSLATES without turning: the exact move a backdrop is
+  // supposed to be indifferent to.
+  const box = await page.locator('#cv').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down({ button: 'middle' });
+  for (let n = 1; n <= 10; n++) await page.mouse.move(cx - n * 22, cy - n * 8);
+  await page.mouse.up({ button: 'middle' });
+  for (let n = 0; n < 60; n++) {
+    await page.waitForTimeout(120);
+    const a = (await read()).eye;
+    await page.waitForTimeout(120);
+    const b = (await read()).eye;
+    if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 0.01) break;
+  }
+  const after = await read();
+
+  const flew = Math.hypot(
+    after.eye[0] - before.eye[0], after.eye[1] - before.eye[1], after.eye[2] - before.eye[2]);
+  if (flew < 1) {
+    console.log(`\nFAIL: the camera only moved ${flew.toFixed(2)} u, `
+      + 'so this proves nothing about parallax');
+    process.exit(1);
+  }
+  // Judged on the BEARING to the star, not on where it landed on screen. A
+  // backdrop is a set of directions, so the bearing has to hold however far
+  // the eye moves and whichever way it ends up pointing; screen position also
+  // swings with every turn, and a check written on it would be asking two
+  // questions at once and reporting the answer to the wrong one.
+  const dot = before.star.dir[0] * after.star.dir[0]
+    + before.star.dir[1] * after.star.dir[1]
+    + before.star.dir[2] * after.star.dir[2];
+  const swung = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+  if (swung > 0.05) {
+    console.log(`\nFAIL: the camera flew ${flew.toFixed(1)} u and the bearing to a fixed `
+      + `star moved ${swung.toFixed(2)} degrees with it, so the star field is a mesh in `
+      + `the world rather than a backdrop`);
+    process.exit(1);
+  }
+  log(`the sky is a backdrop: ${after.carried} pieces ride the eye, and the bearing to a `
+    + `fixed star held to ${swung.toFixed(3)} degrees while the camera flew ${flew.toFixed(1)} u`);
 }
 
 /**

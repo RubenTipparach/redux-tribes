@@ -177,6 +177,22 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
 
   const sunDir = sunDirection(b);
 
+  // The sun is a DIRECTION, not a place. The key light that borrows it is a
+  // directional light, which has no position at all, so a sprite pinned in
+  // world space drifts away from the light it is supposed to be: pan 200
+  // units and the bright dot moves about 13 degrees while the lit side of
+  // every hull stays exactly where it was. Since those two are meant to be
+  // one fact, the sun rides on the camera like the sky and the stars do.
+  //
+  // The planets do NOT. They are bodies at a distance rather than lights at
+  // infinity, and sliding them against each other under a moving camera is
+  // most of what tells you how far away they are.
+  const far = new THREE.Group();
+  far.userData.atInfinity = true;
+  far.userData.pickable = false;
+  far.frustumCulled = false;
+  group.add(far);
+
   // ------------------------------------------------------------- the sun --
   const glow = glowTexture();
   const sun = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -194,7 +210,7 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
   sun.scale.setScalar(FAR_BAND * 0.38);
   sun.renderOrder = -9;
   sun.userData.pickable = false;
-  group.add(sun);
+  far.add(sun);
 
   // A second, much wider and fainter pass. One sprite gives a hard edged
   // blob; two at different scales give the bloom something to catch and read
@@ -205,7 +221,7 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
   halo.scale.setScalar(FAR_BAND * 1.1);
   halo.renderOrder = -10;
   halo.userData.pickable = false;
-  group.add(halo);
+  far.add(halo);
 
   // ---------------------------------------------------------- the planets --
   for (const p of b.planets) {

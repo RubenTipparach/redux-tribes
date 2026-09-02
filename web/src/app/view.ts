@@ -1039,6 +1039,8 @@ export class View {
   #sky: THREE.CubeTexture | null = null;
   /** The mesh that DRAWS that sky, so it can be dithered on the way out. */
   #skyDome: THREE.Mesh | null = null;
+  /** Everything that rides the eye: whatever a build marked `atInfinity`. */
+  #carried: THREE.Object3D[] = [];
   #backdrop: THREE.Group | null = null;
   /** The stars, as points rather than as pixels in the sky texture. Held so
    *  the shimmer has a uniform to drive and a launch can replace them. */
@@ -1442,10 +1444,28 @@ export class View {
       this.#focus.z + this.#dist * cp * Math.cos(this.#yaw),
     );
     this.#camera.lookAt(this.#focus);
-    // The sky travels with the eye. A cube of half extent one centred on the
-    // camera covers every direction and stays clear of the near plane, so
-    // there is no far away sphere to keep the fleet inside of.
-    this.#skyDome?.position.copy(this.#camera.position);
+    this.#carry();
+  }
+
+  /**
+   * Put everything at infinity back under the eye.
+   *
+   * A backdrop is a set of DIRECTIONS. The sky cube, the stars and the sun
+   * have no position in the world, so they travel with the camera and show no
+   * parallax however far a match ranges: that is the whole difference between
+   * a sky and a very large mesh the fleet happens to be inside.
+   *
+   * The stars used to be the mesh. They sat on a shell at the world origin
+   * while the sky cube was carried on the eye by name, so a camera that
+   * translated slid them across the nebula behind them, and a shot that
+   * chased a ship across the field dragged the whole star field with it.
+   *
+   * One flag and one loop rather than a line per object, because the failure
+   * is silent: a new piece of scenery that forgets to be moved simply looks
+   * slightly wrong, and nothing anywhere says it was supposed to be moved.
+   */
+  #carry(): void {
+    for (const o of this.#carried) o.position.copy(this.#camera.position);
   }
 
   // -------------------------------------------------------------- input --
@@ -3398,6 +3418,19 @@ export class View {
     this.#backdrop = buildBackdrop(dressing);
     this.#scene.add(this.#backdrop);
 
+    // Collect the things that ride the eye, once, rather than walking the
+    // scene every frame. Gathered by FLAG and not by name: the sky, the stars
+    // and the sun already have nothing else in common, and the next piece of
+    // far scenery should not need a line here to be carried.
+    this.#carried = [];
+    for (const root of [this.#skyDome, this.#stars, this.#backdrop]) {
+      root?.traverse(o => { if (o.userData.atInfinity) this.#carried.push(o); });
+    }
+    // Put them under the eye now rather than at the next camera move: a match
+    // that opens without touching the camera would otherwise draw its first
+    // frames with the sky at the origin.
+    this.#carry();
+
     // One sun, one key. The lit side of a ship and the bright dot behind it
     // agree because they are the same number read twice.
     const dir = sunDirection(dressing);
@@ -3427,17 +3460,32 @@ export class View {
     sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null;
     planets: number;
     stars: number;
+    /** How many objects ride the eye, and where a named star lands on screen.
+     *  A backdrop is only a backdrop if these do not move when the camera
+     *  does, and NDC is the only way to say that from outside. */
+    carried: number;
+    eye: [number, number, number];
+    star: { ndc: [number, number]; dir: [number, number, number] } | null;
   } {
-    if (!this.#backdrop) return { pieces: 0, sun: null, planets: 0, stars: this.#starCount() };
+    const at = this.#camera.position;
+    const eye: [number, number, number] =
+      [+at.x.toFixed(2), +at.y.toFixed(2), +at.z.toFixed(2)];
+    if (!this.#backdrop) {
+      return { pieces: 0, sun: null, planets: 0, stars: this.#starCount(),
+        carried: this.#carried.length, eye, star: this.#starAt() };
+    }
     let sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null = null;
     let planets = 0;
     let pieces = 0;
     const v = new THREE.Vector3();
-    for (const o of this.#backdrop.children) {
+    // `traverse` rather than `children`: the sun and its halo hang off a
+    // sub group now, because they ride the camera and the planets do not.
+    this.#backdrop.traverse(o => {
+      if (o === this.#backdrop) return;
       pieces++;
       if ((o as THREE.Sprite).isSprite) {
         // The first sprite is the sun proper; the second is its halo.
-        if (sun) continue;
+        if (sun) return;
         v.setFromMatrixPosition(o.matrixWorld);
         // Behind the camera projects to the same place as in front of it, so
         // the sign of the view space z is what tells them apart.
@@ -3451,8 +3499,36 @@ export class View {
       } else if ((o as THREE.Mesh).isMesh) {
         planets++;
       }
-    }
-    return { pieces, sun, planets, stars: this.#starCount() };
+    });
+    return { pieces, sun, planets, stars: this.#starCount(),
+      carried: this.#carried.length, eye, star: this.#starAt() };
+  }
+
+  /**
+   * Star zero: which way it lies from the eye, and where that lands on screen.
+   *
+   * One star rather than a count, because a count cannot tell a backdrop from
+   * a mesh: the field draws either way. Where a fixed star SITS as the camera
+   * moves is the whole question, and the same star every time is what makes
+   * two readings comparable.
+   *
+   * `dir` is the one to judge on. A backdrop is a set of directions, so the
+   * bearing to a star must not change when the eye moves, and that is true
+   * however the camera is POINTING. Screen position is not: it swings with
+   * every turn, so a check written on it has to hold the camera still and one
+   * written on this does not.
+   */
+  #starAt(): { ndc: [number, number]; dir: [number, number, number] } | null {
+    const pos = this.#stars?.geometry.getAttribute('position');
+    if (!this.#stars || !pos || !pos.count) return null;
+    const w = new THREE.Vector3(pos.getX(0), pos.getY(0), pos.getZ(0))
+      .applyMatrix4(this.#stars.matrixWorld);
+    const dir = w.clone().sub(this.#camera.position).normalize();
+    const v = w.project(this.#camera);
+    return {
+      ndc: [+v.x.toFixed(4), +v.y.toFixed(4)],
+      dir: [+dir.x.toFixed(5), +dir.y.toFixed(5), +dir.z.toFixed(5)],
+    };
   }
 
   /** Which post path is running, and why, for the harness to read. */
