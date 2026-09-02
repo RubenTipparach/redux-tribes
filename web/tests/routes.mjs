@@ -63,11 +63,24 @@ async function settle() {
 }
 
 /** Everything about the match that a resume has to reproduce. Ships by their
- *  own numbers, because "same turn" alone would pass on a match restarted. */
+ *  own numbers, because "same turn" alone would pass on a match restarted, and
+ *  the CELLS off each hull, because the numbers alone came back right on ships
+ *  drawn factory fresh: cells coming off are the client's and the core replay
+ *  does not put them back.
+ *
+ *  Only the hulls that actually LOST cells, and sorted by id. A carve record is
+ *  made lazily and damage is not the only thing that makes one: asking where a
+ *  shot met a hull needs the same cells, so a ship can hold an empty record for
+ *  having been shot AT and missed. Comparing the bare records failed on exactly
+ *  that, with 220 cells off ship 0 on both sides and one empty row present on
+ *  one of them, which is a difference in what the client happened to touch
+ *  rather than in what came back. */
 const matchState = () => page.evaluate(() => ({
   turn: Number(document.getElementById('hTurn').textContent),
   ships: window.ftDebug.ships().map(s => Object.keys(s).sort()
     .filter(k => typeof s[k] === 'number').map(k => `${k}=${s[k].toFixed(3)}`).join(',')),
+  carved: window.ftDebug.damage().carved
+    .filter(([, cells]) => cells > 0).sort((a, b) => a[0] - b[0]),
   lobbyUp: !document.getElementById('lobby').classList.contains('hidden'),
 }));
 
@@ -89,13 +102,21 @@ const gamePath = path();
 if (!/^\/play\/[a-z0-9]+$/.test(gamePath)) fail(`starting a game left the address at ${gamePath}`);
 else ok(`a new game gets an address of its own: ${gamePath}`);
 
-for (let n = 0; n < 2; n++) {
+// Two turns is the least that makes "the same match came back" mean anything.
+// It runs on past that until something has actually been shot off a hull,
+// because the carve is the half of a resume the core does not replay, and a
+// check with nothing to compare would pass on a game that lost all of it.
+let before = null;
+for (let n = 0; n < 6; n++) {
   await page.click('#bEnd');
   await page.waitForTimeout(500);
   await settle();
+  before = await matchState();
+  if (n >= 1 && before.carved.length) break;
 }
-const before = await matchState();
 if (before.turn < 2) fail(`played two turns and the header says turn ${before.turn}`);
+const cellsOff = before.carved.reduce((a, [, cells]) => a + cells, 0);
+if (!cellsOff) fail('nobody was hit in six turns, so a resume has no damage to lose');
 
 // ---------------------------------------------------------------- a reload --
 
@@ -106,8 +127,22 @@ else if (after.turn !== before.turn) {
   fail(`the game came back on turn ${after.turn} rather than ${before.turn}`);
 } else if (JSON.stringify(after.ships) !== JSON.stringify(before.ships)) {
   fail('the game came back on the right turn with different ships in it');
+} else if (JSON.stringify(after.carved) !== JSON.stringify(before.carved)) {
+  // Two ways this goes wrong and they look nothing alike. Nothing at all means
+  // the scars were never applied: the core replays the state, the cells are the
+  // client's, and only a playback ever put them on, so a resumed game came up
+  // whole and only showed its damage once you pressed Review. A DIFFERENT
+  // number means they were applied from the wrong poses: a hit is placed on the
+  // hull using the pose that hull held at its tick, and `match.poses` answers
+  // for whatever turn the core last resolved, so walking four turns of records
+  // at turn four puts turn one's hits wherever turn four's flight happened to
+  // be. 1131 became 1289 that way, which is a wrong picture rather than a
+  // missing one.
+  fail(`the game came back with different damage: ${JSON.stringify(before.carved)} `
+    + `became ${JSON.stringify(after.carved)}`);
 } else {
-  ok(`a reload resumes the same match: turn ${after.turn}, ${after.ships.length} hulls identical`);
+  ok(`a reload resumes the same match: turn ${after.turn}, ${after.ships.length} hulls `
+    + `identical, ${cellsOff} cells still off them`);
 }
 
 // The lobby offers it back, for a player who lost the address too.

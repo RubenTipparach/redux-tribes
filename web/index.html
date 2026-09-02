@@ -34,10 +34,20 @@ body { margin:0; background:var(--ground); color:var(--ink);
 /* minmax(0,1fr) rather than 1fr on both axes: a bare 1fr track carries an
    automatic min-content minimum, so one wide child (the fire slot strip) can
    inflate its row and push the rest of the layout off a phone screen. */
-#app { display:grid; grid-template-columns: 250px minmax(0,1fr) 290px;
+/* Two columns, not three. The events rail is a panel you ASK for: it is a
+   read only account of a turn that already happened, so it is the one thing
+   here that is never needed to take an action, and 290px of a desktop is a
+   lot to spend on it by default. `logon` is what the header toggle sets, and
+   on a phone the rail was already a sheet behind a tab. */
+#app { display:grid; grid-template-columns: 250px minmax(0,1fr);
   grid-template-rows: 46px minmax(0,1fr) 78px; height:100vh; height:100dvh; min-width:0; }
+#app.logon { grid-template-columns: 250px minmax(0,1fr) 290px; }
+#right { display:none; }
+#app.logon > #right { display:block; }
 
-header { grid-column:1/4; display:flex; align-items:center; gap:16px; padding:0 14px;
+/* `1/-1` rather than `1/4`: the column count changes with the toggle now, and
+   a header pinned to a track that is not there stops spanning the row. */
+header { grid-column:1/-1; display:flex; align-items:center; gap:16px; padding:0 14px;
   background:var(--panel2); border-bottom:1px solid var(--line);
   -webkit-user-select:none; user-select:none; }
 header h1 { font-family:Michroma,"Rajdhani",sans-serif; font-size:13px; font-weight:400;
@@ -73,7 +83,10 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:1px; }
   -webkit-user-select:none; user-select:none; }
 #cv.rotating { cursor:none; }
 
-footer { grid-column:1/4; display:flex; align-items:center; gap:12px; padding:0 14px;
+/* `1/-1` for the same reason the header is: the toggle changes how many
+   columns exist, and a footer pinned to track 4 stops spanning the row the
+   moment there are only two. */
+footer { grid-column:1/-1; display:flex; align-items:center; gap:12px; padding:0 14px;
   background:var(--panel2); border-top:1px solid var(--line); position:relative;
   -webkit-user-select:none; user-select:none; }
 /* The scrubber and the seconds it scrubs through, stacked and sharing a width.
@@ -495,6 +508,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
      you cannot tap by position. */
   #timeline { flex:1 1 100%; }
 
+  /* On a phone the rail is a bottom sheet behind its own tab, which is
+     already off until it is asked for, so the desktop toggle must not also
+     be able to hide it: a tab that opened nothing would be a dead control.
+     The header button goes instead, because the tab already does that job and
+     a 390px header has no room to say it twice. */
+  #left, #right, #app.logon > #right { display:block; }
+  #bLog { display:none; }
   #left, #right { position:fixed; left:0; right:0; top:auto;
     bottom:calc(var(--tabh) + var(--safe));
     height:var(--sheeth); z-index:7; border:0; border-top:1px solid var(--line);
@@ -866,8 +886,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzsaid { font-size:11px; color:var(--muted); padding:6px 12px 0; min-height:0; }
 .dzsaid:empty { display:none; }
 .dzsaid.bad { color:var(--red); }
-.dzturn { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
-.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
+/* Three of these stack now, one per axis, so the labels get a width and the
+   rows a tighter margin: unaligned buttons over three lines read as three
+   different controls rather than one control with three axes. */
+.dzturn { display:flex; align-items:center; gap:6px; margin:3px 0; }
+.dzturn:last-of-type { margin-bottom:8px; }
+.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase;
+  min-width:42px; }
 .dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
 .dzturn b { font-size:12px; color:var(--cyan); min-width:34px; }
 #dzPick { position:absolute; left:9px; bottom:26px; z-index:4;
@@ -1423,6 +1448,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <span class="stat diag">seed <b id="hSeed">-</b></span>
     <span class="hgap"></span>
     <span class="stat" id="hPhase">PLANNING</span>
+    <button id="bLog" aria-pressed="false" title="Show the event log">Events</button>
     <button id="bEnd" class="primary">End Turn</button>
   </header>
 

@@ -314,6 +314,10 @@ export function skyDome(cube: THREE.CubeTexture): THREE.Mesh {
   // that drew after the fleet, would be a black screen or a wiped one.
   mesh.frustumCulled = false;
   mesh.renderOrder = -1000;
+  // Carried on the camera, which is what makes a cube of half extent one a
+  // sky at all. Flagged rather than moved by name, so there is one list of
+  // the things that ride the eye.
+  mesh.userData.atInfinity = true;
   return mesh;
 }
 
@@ -539,10 +543,25 @@ export function starfield(preset: SkyPreset, radius = 4500): THREE.Points {
     },
     transparent: true,
     depthWrite: false,
-    // Drawn before everything and not depth tested, so the scenery in front of
-    // them covers them by drawing later. The planets do not write depth, so a
-    // depth test would let stars through them.
-    depthTest: false,
+    // DEPTH TESTED, and the reason is worth having written down, because the
+    // first cut of this was the opposite and its comment explained a scheme
+    // that three.js does not implement.
+    //
+    // It said: drawn before everything and not depth tested, so the scenery in
+    // front covers them by drawing later. That is exactly how `skyDome` works
+    // and it works there because the dome is OPAQUE. Three sorts into two
+    // lists, opaque and transparent, and it draws every opaque object before
+    // any transparent one. A star field needs additive blending, which needs
+    // `transparent: true`, which puts it in the second list: `renderOrder: -20`
+    // then only orders it against other TRANSPARENT objects, and it is drawn
+    // after every hull on the map no matter how negative that number goes.
+    // With no depth test, that is a star painted over the ship in front of it,
+    // which is what a player saw: a fleet with the sky showing through it.
+    //
+    // So the stars test depth like anything else in the second list. They sit
+    // at 4500 units, well inside the 6000 unit far plane, so a hull at fifty
+    // units rejects them and the sky behind it does not.
+    depthTest: true,
     blending: THREE.AdditiveBlending,
   });
 
@@ -551,5 +570,15 @@ export function starfield(preset: SkyPreset, radius = 4500): THREE.Points {
   points.renderOrder = -20;
   points.userData.pickable = false;
   points.userData.stars = pos.length / 3;
+  // A star has a DIRECTION and no position, so it rides on the camera: the
+  // renderer copies the eye onto anything carrying this flag every frame.
+  //
+  // Without it this shell of points sits at the world origin while the sky
+  // cube travels with the eye, and the two come apart the moment the camera
+  // translates. A pan of 200 units against a radius of 4500 slides a star
+  // about two and a half degrees across the nebula behind it, which is
+  // exactly what tells an eye it is looking at a mesh rather than at a sky:
+  // stars are not supposed to have parallax at any distance a ship can move.
+  points.userData.atInfinity = true;
   return points;
 }

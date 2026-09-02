@@ -32,7 +32,9 @@ import {
   DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
-import { AT_REST, blockedShell, easeAngle, mountQuat, turretGoal } from './turret.js';
+import {
+  AT_REST, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
+} from './turret.js';
 import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, SURF_NAMES, tintFar, tintHull, tintMix,
   type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
@@ -104,6 +106,16 @@ function materialsOf(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
   return (Array.isArray(m) ? m : [m]) as THREE.MeshStandardMaterial[];
 }
 
+/**
+ * How much of its own colour a torn interior throws back as light.
+ *
+ * Not a full self lit surface: at 1.0 the inside of a hull is a flat cutout
+ * with no shading at all, and the point is that it reads as machinery in a
+ * hole rather than as a sticker over one. Enough to be legible in a shadow
+ * that nothing in this scene can reach.
+ */
+const INTERIOR_LIGHT = 0.55;
+
 const HULL_METAL = DEFAULT_METAL;
 const HULL_ROUGH = DEFAULT_ROUGH;
 
@@ -143,9 +155,8 @@ interface Debris {
 interface Rig {
   readonly quads: number[];
   readonly pivot: THREE.Vector3;
-  readonly rest: number;
-  /** Quarter turns about the keel that seated this mount on its face. */
-  readonly roll: number;
+  /** How the design bolted it on, as a rotation from mount to ship. */
+  readonly face: MountFace;
   readonly key: string;
   readonly mask: Uint32Array | undefined;
   yaw: number;
@@ -178,6 +189,8 @@ interface Carved {
   /** The faces the hit opened, drawn as machinery rather than as plate. */
   woundInner: THREE.Mesh | null;
   woundGlow: THREE.Mesh | null;
+  /** The char on the plating around a hole, over the hull's own paint. */
+  woundScorch: THREE.Mesh | null;
   /** How many cells the wound was built for, so it rebuilds on change only. */
   woundFor: number;
   /** And how hot it was last painted, so a cold wound costs nothing. */
@@ -460,7 +473,7 @@ export class View {
     const c: Carved = {
       hull, design, geo, born: new Map(),
       cells: new Map(), wound: null, woundSkin: null, woundInner: null,
-      woundGlow: null, woundFor: -1,
+      woundGlow: null, woundScorch: null, woundFor: -1,
       woundHeat: -1, upTo: -1,
     };
     this.#carved.set(id, c);
@@ -486,7 +499,7 @@ export class View {
 
   /** Take the torn edges off the scene and give their buffers back. */
   #dropWound(c: Carved): void {
-    for (const m of [c.woundSkin, c.woundInner, c.woundGlow]) {
+    for (const m of [c.woundSkin, c.woundInner, c.woundGlow, c.woundScorch]) {
       if (!m) continue;
       m.removeFromParent();
       (m.material as THREE.Material).dispose();
@@ -498,6 +511,7 @@ export class View {
     c.woundSkin = null;
     c.woundInner = null;
     c.woundGlow = null;
+    c.woundScorch = null;
     c.woundFor = -1;
     c.woundHeat = -1;
   }
@@ -733,10 +747,33 @@ export class View {
         // The face a hit OPENED is the inside of the ship, which is machinery
         // and frame rather than plating, so it wears what machinery wears: the
         // same material the schematic gives the same faces.
-        const inner = new THREE.Mesh(w.inner, new THREE.MeshStandardMaterial({
+        //
+        // And it CARRIES ITS OWN LIGHT. Every lamp in this scene is outside the
+        // hull, so a face looking into a ship is lit by nothing at all: the
+        // machinery was drawn, in the right place, in its own colours, and came
+        // out black. Against a black sky that is indistinguishable from a hole
+        // with nothing behind it, which is what it was reported as. A ship's
+        // inside is lit from inside, the same reason its windows are, so the
+        // vertex colour is added to the emissive term as well as the diffuse
+        // one: it reads at a glance and still shades with the surface it is on.
+        const innerMat = new THREE.MeshStandardMaterial({
           vertexColors: true, normalMap: finishMap(surf.part),
           metalness: 0.55, roughness: 0.62,
           side: THREE.DoubleSide, dithering: true,
+        });
+        innerMat.onBeforeCompile = (sh) => {
+          sh.fragmentShader = sh.fragmentShader.replace(
+            '#include <emissivemap_fragment>',
+            '#include <emissivemap_fragment>\n'
+            + `  totalEmissiveRadiance += vColor.rgb * ${INTERIOR_LIGHT.toFixed(2)};`);
+        };
+        const inner = new THREE.Mesh(w.inner, innerMat);
+        // The burn on the plating outside, over the paint rather than instead
+        // of it: unlit like the glow, because soot is not a surface that takes
+        // a highlight, and no depth write because it sits exactly on the plate.
+        const scorch = new THREE.Mesh(w.scorch, new THREE.MeshBasicMaterial({
+          vertexColors: true, map: ember(),
+          transparent: true, depthWrite: false,
         }));
         // Unlit, so the colour IS the light coming off it. A lit material
         // would need a lamp inside the ship to read as burning. The map is the
@@ -755,14 +792,17 @@ export class View {
         skin.frustumCulled = false;
         inner.frustumCulled = false;
         glow.frustumCulled = false;
-        mesh.add(skin, inner, glow);
+        scorch.frustumCulled = false;
+        mesh.add(skin, inner, glow, scorch);
         c.woundSkin = skin;
         c.woundInner = inner;
         c.woundGlow = glow;
+        c.woundScorch = scorch;
       } else {
         keepSkin.geometry = w.skin;
         keepGlow.geometry = w.glow;
         if (c.woundInner) c.woundInner.geometry = w.inner;
+        if (c.woundScorch) c.woundScorch.geometry = w.scorch;
       }
       // The plate fragments are the hull's own paint, so they wear the hull's
       // own wash: two materials disagreeing about whose ship this is would
@@ -924,6 +964,10 @@ export class View {
   /** Whether there is an envelope to show at all; how much of it is seen is
    *  the camera's business. */
   #shellShown = false;
+  /** Held down by a harness for one measurement. The frame loop decides the
+   *  shell's visibility every frame, so a plain `visible = false` would be
+   *  undone before the next screenshot. */
+  #reachHidden = false;
   #shellLines: THREE.LineSegments;
   /** The outline of where a click actually becomes a move order. */
   #planeShape: THREE.LineSegments;
@@ -995,6 +1039,8 @@ export class View {
   #sky: THREE.CubeTexture | null = null;
   /** The mesh that DRAWS that sky, so it can be dithered on the way out. */
   #skyDome: THREE.Mesh | null = null;
+  /** Everything that rides the eye: whatever a build marked `atInfinity`. */
+  #carried: THREE.Object3D[] = [];
   #backdrop: THREE.Group | null = null;
   /** The stars, as points rather than as pixels in the sky texture. Held so
    *  the shimmer has a uniform to drive and a launch can replace them. */
@@ -1339,8 +1385,9 @@ export class View {
     // most of it and the face almost none.
     if (mat.uniforms.strength) mat.uniforms.strength.value = near;
     (this.#shellLines.material as THREE.LineBasicMaterial).opacity = 0.5 * near;
-    this.#shell.visible = this.#shellShown && near > 0;
-    this.#shellLines.visible = this.#shellShown && near > 0;
+    const show = this.#shellShown && near > 0 && !this.#reachHidden;
+    this.#shell.visible = show;
+    this.#shellLines.visible = show;
   }
 
   /**
@@ -1397,10 +1444,28 @@ export class View {
       this.#focus.z + this.#dist * cp * Math.cos(this.#yaw),
     );
     this.#camera.lookAt(this.#focus);
-    // The sky travels with the eye. A cube of half extent one centred on the
-    // camera covers every direction and stays clear of the near plane, so
-    // there is no far away sphere to keep the fleet inside of.
-    this.#skyDome?.position.copy(this.#camera.position);
+    this.#carry();
+  }
+
+  /**
+   * Put everything at infinity back under the eye.
+   *
+   * A backdrop is a set of DIRECTIONS. The sky cube, the stars and the sun
+   * have no position in the world, so they travel with the camera and show no
+   * parallax however far a match ranges: that is the whole difference between
+   * a sky and a very large mesh the fleet happens to be inside.
+   *
+   * The stars used to be the mesh. They sat on a shell at the world origin
+   * while the sky cube was carried on the eye by name, so a camera that
+   * translated slid them across the nebula behind them, and a shot that
+   * chased a ship across the field dragged the whole star field with it.
+   *
+   * One flag and one loop rather than a line per object, because the failure
+   * is silent: a new piece of scenery that forgets to be moved simply looks
+   * slightly wrong, and nothing anywhere says it was supposed to be moved.
+   */
+  #carry(): void {
+    for (const o of this.#carried) o.position.copy(this.#camera.position);
   }
 
   // -------------------------------------------------------------- input --
@@ -1774,7 +1839,7 @@ export class View {
           const world = r.pivot.clone().applyQuaternion(q).add(at);
           const dir = new THREE.Vector3(aim.x, aim.y, aim.z).sub(world).applyQuaternion(inv);
           const gun = gunByKey(r.key);
-          if (gun) goal = turretGoal(dir, r.rest, gun, r.mask, r.roll);
+          if (gun) goal = turretGoal(dir, r.face, gun, r.mask);
         }
         r.bears = goal.bears;
         r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
@@ -1798,15 +1863,14 @@ export class View {
     const a = src.array as Float32Array, b = dst.array as Float32Array;
     const an = srcN.array as Float32Array, bn = dstN.array as Float32Array;
     const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
     const p = new THREE.Vector3();
     for (const r of rigs) {
       r.drawnYaw = r.yaw;
       r.drawnPitch = r.pitch;
-      // The cells were laid already rolled onto their face, so what is applied
-      // here is the traverse alone, about whichever axis that roll put the
-      // mount on. `mountQuat` is the one place that composition is written.
-      m.makeRotationFromQuaternion(mountQuat(r.yaw, r.pitch, r.roll, q));
+      // The quads were rasterised with the facing already in them, so the pose
+      // has to take it off, aim, and put it back. `poseMatrix` is that, and it
+      // is the shipyard's too: one turret rule, drawn twice.
+      poseMatrix(m, r.face, r.yaw, r.pitch);
       for (const q of r.quads) {
         // A quad the hull has already lost stays lost: the wound collapsed its
         // four vertices onto one point, and rewriting them from the original
@@ -1836,8 +1900,7 @@ export class View {
     const rigs: Rig[] = hull.rigs.map((g, n) => ({
       quads: [],
       pivot: new THREE.Vector3(g.pivot[0], g.pivot[1], g.pivot[2]),
-      rest: g.rest,
-      roll: g.roll,
+      face: g.face,
       key: g.key,
       mask: masks[n],
       yaw: 0, pitch: 0, bears: false, drawnYaw: 0, drawnPitch: 0,
@@ -2028,9 +2091,18 @@ export class View {
     dist: number; shell: boolean; shellOpacity: number;
     follow: number; focus: { x: number; y: number; z: number };
     locked: boolean; goalDist: number;
+    yaw: number; pitch: number; goalYaw: number; goalPitch: number;
   } {
     return {
       dist: +this.#dist.toFixed(2),
+      /** The angles as well as the distance, because a pose is only
+       *  reproducible if all three are in it. Both the drawn value and the
+       *  goal, since a camera on its way somewhere is not where it is going
+       *  and a report of one of them alone cannot say which. */
+      yaw: +this.#yaw.toFixed(4),
+      pitch: +this.#pitch.toFixed(4),
+      goalYaw: +this.#goalYaw.toFixed(4),
+      goalPitch: +this.#goalPitch.toFixed(4),
       shell: this.#shell.visible,
       shellOpacity: +(((this.#shell.material as THREE.ShaderMaterial)
         .uniforms.strength?.value as number | undefined) ?? 0).toFixed(4),
@@ -2128,6 +2200,33 @@ export class View {
    *  them. Observation only: nothing in the console turns this off. */
   hullsVisible(on: boolean): void {
     for (const m of this.#hulls.values()) m.visible = on;
+  }
+
+  /**
+   * Hide the star field, so a harness can ask whether a star reaches a pixel
+   * a hull is standing on.
+   *
+   * That question cannot be answered by reading the material. Whether a star
+   * lands on a ship is decided by which of three's two render lists the field
+   * is sorted into, in what order that list is walked and what the depth
+   * buffer holds by then, and none of those are in the file that sets
+   * `depthTest`. Turning the field off and looking at the same pixels is the
+   * measurement. Observation only, like `hullsVisible`.
+   */
+  starsVisible(on: boolean): void {
+    if (this.#stars) this.#stars.visible = on;
+  }
+
+  /**
+   * Hide the movement envelope and its contours, so a harness can weigh a
+   * frame with the overlay against the same frame without it.
+   *
+   * It comes back on by itself the next time the shell is refreshed, which is
+   * every frame the camera moves, so this is a switch for one measurement
+   * rather than a setting. Observation only.
+   */
+  reachVisible(on: boolean): void {
+    this.#reachHidden = !on;
   }
 
   setShips(ships: ShipState[]): void {
@@ -3325,6 +3424,19 @@ export class View {
     this.#backdrop = buildBackdrop(dressing);
     this.#scene.add(this.#backdrop);
 
+    // Collect the things that ride the eye, once, rather than walking the
+    // scene every frame. Gathered by FLAG and not by name: the sky, the stars
+    // and the sun already have nothing else in common, and the next piece of
+    // far scenery should not need a line here to be carried.
+    this.#carried = [];
+    for (const root of [this.#skyDome, this.#stars, this.#backdrop]) {
+      root?.traverse(o => { if (o.userData.atInfinity) this.#carried.push(o); });
+    }
+    // Put them under the eye now rather than at the next camera move: a match
+    // that opens without touching the camera would otherwise draw its first
+    // frames with the sky at the origin.
+    this.#carry();
+
     // One sun, one key. The lit side of a ship and the bright dot behind it
     // agree because they are the same number read twice.
     const dir = sunDirection(dressing);
@@ -3354,17 +3466,32 @@ export class View {
     sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null;
     planets: number;
     stars: number;
+    /** How many objects ride the eye, and where a named star lands on screen.
+     *  A backdrop is only a backdrop if these do not move when the camera
+     *  does, and NDC is the only way to say that from outside. */
+    carried: number;
+    eye: [number, number, number];
+    star: { ndc: [number, number]; dir: [number, number, number] } | null;
   } {
-    if (!this.#backdrop) return { pieces: 0, sun: null, planets: 0, stars: this.#starCount() };
+    const at = this.#camera.position;
+    const eye: [number, number, number] =
+      [+at.x.toFixed(2), +at.y.toFixed(2), +at.z.toFixed(2)];
+    if (!this.#backdrop) {
+      return { pieces: 0, sun: null, planets: 0, stars: this.#starCount(),
+        carried: this.#carried.length, eye, star: this.#starAt() };
+    }
     let sun: { onScreen: boolean; ndc: [number, number]; behind: boolean } | null = null;
     let planets = 0;
     let pieces = 0;
     const v = new THREE.Vector3();
-    for (const o of this.#backdrop.children) {
+    // `traverse` rather than `children`: the sun and its halo hang off a
+    // sub group now, because they ride the camera and the planets do not.
+    this.#backdrop.traverse(o => {
+      if (o === this.#backdrop) return;
       pieces++;
       if ((o as THREE.Sprite).isSprite) {
         // The first sprite is the sun proper; the second is its halo.
-        if (sun) continue;
+        if (sun) return;
         v.setFromMatrixPosition(o.matrixWorld);
         // Behind the camera projects to the same place as in front of it, so
         // the sign of the view space z is what tells them apart.
@@ -3378,8 +3505,36 @@ export class View {
       } else if ((o as THREE.Mesh).isMesh) {
         planets++;
       }
-    }
-    return { pieces, sun, planets, stars: this.#starCount() };
+    });
+    return { pieces, sun, planets, stars: this.#starCount(),
+      carried: this.#carried.length, eye, star: this.#starAt() };
+  }
+
+  /**
+   * Star zero: which way it lies from the eye, and where that lands on screen.
+   *
+   * One star rather than a count, because a count cannot tell a backdrop from
+   * a mesh: the field draws either way. Where a fixed star SITS as the camera
+   * moves is the whole question, and the same star every time is what makes
+   * two readings comparable.
+   *
+   * `dir` is the one to judge on. A backdrop is a set of directions, so the
+   * bearing to a star must not change when the eye moves, and that is true
+   * however the camera is POINTING. Screen position is not: it swings with
+   * every turn, so a check written on it has to hold the camera still and one
+   * written on this does not.
+   */
+  #starAt(): { ndc: [number, number]; dir: [number, number, number] } | null {
+    const pos = this.#stars?.geometry.getAttribute('position');
+    if (!this.#stars || !pos || !pos.count) return null;
+    const w = new THREE.Vector3(pos.getX(0), pos.getY(0), pos.getZ(0))
+      .applyMatrix4(this.#stars.matrixWorld);
+    const dir = w.clone().sub(this.#camera.position).normalize();
+    const v = w.project(this.#camera);
+    return {
+      ndc: [+v.x.toFixed(4), +v.y.toFixed(4)],
+      dir: [+dir.x.toFixed(5), +dir.y.toFixed(5), +dir.z.toFixed(5)],
+    };
   }
 
   /** Which post path is running, and why, for the harness to read. */

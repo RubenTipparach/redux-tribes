@@ -81,8 +81,15 @@ export function heatOf(diedAt: number, tick: number): number {
  * across the map, which is the opposite of what a wound is for. A crust does
  * not un-char itself: the floor is what stays once the embers are gone, and
  * only the last sliver above it is the fire's own light fading out.
+ *
+ * The floor is a THIRD, not four fifths. At 0.82 a cooled wound was 82 percent
+ * near black char laid over the machinery it had just uncovered, so the hole
+ * read as a void with nothing drawn in it: "the interior is missing" and "the
+ * interior is buried under its own soot" look the same from outside, and only
+ * one of them is true. A third is enough that the edge still reads as burnt,
+ * and little enough that the drive bay behind it is the thing you see.
  */
-const COLD_CRUST = 0.82;
+const COLD_CRUST = 0.34;
 function crustAlpha(heat: number): number {
   return COLD_CRUST + heat * (1 - COLD_CRUST);
 }
@@ -151,6 +158,17 @@ export interface Wound {
   /** Which dead cell each glow VERTEX belongs to, so cooling is a repaint
    *  rather than a rebuild. */
   readonly glowCell: Int32Array;
+  /**
+   * The burn on the hull AROUND a hole, as a layer over the plating.
+   *
+   * A shot that takes cells out of a flank does not leave the plate beside it
+   * factory fresh, and that is what it looked like: the survivors of a partly
+   * eaten quad were rebuilt in the hull's own colour, so the edge of every
+   * wound was a clean cut through clean paint. This is the smoke and char over
+   * the cells the fire reached but did not take, drawn on the ember map like
+   * the glow inside is, so both halves of a burn come off one texture.
+   */
+  readonly scorch: THREE.BufferGeometry;
   /** Where smoke comes out, at most one per exposed face. */
   readonly vents: readonly Vent[];
   /** Which greedy quads are gone entirely, so the skin can collapse them. */
@@ -287,6 +305,7 @@ export function buildWound(
   const sPos: number[] = [], sNrm: number[] = [], sCol: number[] = [], sUv: number[] = [];
   const iPos: number[] = [], iNrm: number[] = [], iCol: number[] = [], iUv: number[] = [];
   const gPos: number[] = [], gNrm: number[] = [], gCol: number[] = [], gUv: number[] = [];
+  const kPos: number[] = [], kNrm: number[] = [], kCol: number[] = [], kUv: number[] = [];
   const glowCell: number[] = [];
   const vents: Vent[] = [];
   const exposed = { plate: 0, part: 0 };
@@ -328,6 +347,53 @@ export function buildWound(
         sCol.push(r, g, b);
       }
       faceUV([nx, ny, nz] as const, sUv);
+    }
+  }
+
+  // ---- the burn on the plating around it ----
+  //
+  // Two rings out from every dead cell, over cells that are still there. The
+  // near ring is nearly all soot and the far one is a smudge, which is what
+  // stops a wound reading as a clean hole punched through fresh paint.
+  const CHAR: readonly [number, number, number] = [0.09, 0.075, 0.07];
+  const RING_ALPHA = [0.78, 0.34];
+  const scorched = new Map<number, number>();
+  let ring: number[] = [...dead.keys()];
+  for (let step = 0; step < RING_ALPHA.length; step++) {
+    const next: number[] = [];
+    for (const c of ring) {
+      const i = c % NX, j = ((c / NX) | 0) % NY, k = (c / (NX * NY)) | 0;
+      for (const d of NEIGHBOURS) {
+        const ni = i + (d[0] as number), nj = j + (d[1] as number), nk = k + (d[2] as number);
+        if (!solid(ni, nj, nk)) continue;
+        const n = idx(ni, nj, nk);
+        if (dead.has(n) || scorched.has(n)) continue;
+        scorched.set(n, RING_ALPHA[step] as number);
+        next.push(n);
+      }
+    }
+    ring = next;
+  }
+  // One quad per EXPOSED face of a scorched cell, by the same voxel rule the
+  // hull is meshed with: a burn shows on whatever of that cell you can see,
+  // which is the outside of the plating and the new edge of the hole alike.
+  for (const [c, alpha] of scorched) {
+    const i = c % NX, j = ((c / NX) | 0) % NY, k = (c / (NX * NY)) | 0;
+    const [u0, v0] = tileUV(c);
+    for (const d of NEIGHBOURS) {
+      const ni = i + (d[0] as number), nj = j + (d[1] as number), nk = k + (d[2] as number);
+      if (solid(ni, nj, nk) && !dead.has(idx(ni, nj, nk))) continue;
+      let corner = 0;
+      for (const [ax, ay, az] of faceCorners(i, j, k, d)) {
+        world(ax, ay, az, kPos);
+        kNrm.push(d[0] as number, d[1] as number, d[2] as number);
+        kCol.push(CHAR[0], CHAR[1], CHAR[2], alpha);
+        const cu = CORNER_UV[corner] as readonly [number, number];
+        kUv.push(
+          u0 + ATLAS_PAD + (cu[0] as number) * (ATLAS_STEP - 2 * ATLAS_PAD),
+          v0 + ATLAS_PAD + (cu[1] as number) * (ATLAS_STEP - 2 * ATLAS_PAD));
+        corner++;
+      }
     }
   }
 
@@ -400,6 +466,7 @@ export function buildWound(
   return {
     skin: quadGeometry(sPos, sNrm, sCol, sUv),
     inner: quadGeometry(iPos, iNrm, iCol, iUv),
+    scorch: quadGeometry(kPos, kNrm, kCol, kUv, 4),
     glow: quadGeometry(gPos, gNrm, gCol, gUv, 4),
     glowCell: new Int32Array(glowCell),
     vents,

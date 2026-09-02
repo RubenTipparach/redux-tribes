@@ -477,11 +477,25 @@ function start(): void {
     const orders = new Map<number, PlannedOrder>();
     for (const [ship, o] of Object.entries(body)) orders.set(Number(ship), o as PlannedOrder);
     match.resolveWith(orders);
-    void n;
+    // Work out where this turn's hits LANDED while it is still the turn the
+    // core is holding, and not afterwards.
+    //
+    // A hit event carries a world point, and turning it into a place on a hull
+    // needs the pose that hull held at that tick. `match.poses` reads the pose
+    // track of whatever turn the core has resolved most recently, so asking it
+    // about turn one while the core sits at turn four answers with turn four's
+    // flight. Live that never came up, because each turn's record is walked
+    // during its own playback; a resume walks four turns before drawing
+    // anything. Priming here is a memo per record, so the pass after the loop
+    // finds every one of them already solved.
+    carveHits(match.history[n]);
   }
   if (launch.resume?.length) {
     readShips();
     view.setShips(ships);
+    // And the hulls come back MARKED. Everything above this line is the core's
+    // to replay; the holes in the plating are not, so they are put on here.
+    showDamageAsOfNow();
     selected = ships.find(mine)?.id ?? -1;
     view.setSelection(selected);
     view.fit();
@@ -2377,7 +2391,11 @@ canvas.addEventListener('dblclick', ev => {
   const s = ships.find(x => x.id === id);
   if (!s) return;
   view.focusOn(s);
-  setInspect(true);
+  // Focus only. The data panel is a MODE, and opening it on the way in put six
+  // labelled boxes over the hull you had just gone in to look at: the gesture
+  // that means "let me see this ship" was also the gesture that covered it.
+  // The button beside it is how the mode is entered, and it appears as soon as
+  // the camera is close enough for the labels to mean anything.
   draw();
 });
 
@@ -2396,6 +2414,51 @@ const onWheel = (ev: WheelEvent) => {
 };
 canvas.addEventListener('wheel', onWheel, { passive: false });
 $('inspect').addEventListener('wheel', onWheel, { passive: false });
+
+/**
+ * C reports the camera, because a picture of a bug is not a repro of one.
+ *
+ * A render defect that only appears "at certain angles" is a defect nobody can
+ * chase from a screenshot: the pose that produced it is the missing half of
+ * the report, and it is the half a person cannot read off their own screen.
+ * The reach shell's black patch went that way, and this is the answer to it.
+ *
+ * It reports the whole pose (both angles, the distance and the focus, drawn
+ * value and goal alike), the match it is a pose OF, and the things about the
+ * machine that decide whether a shader misbehaves on it: the viewport, the
+ * pixel ratio and which post path is running. To the console AND to the
+ * clipboard, because the point is to be pasted somewhere.
+ *
+ * Deliberately outside the planning keys below, which give up as soon as no
+ * ship is selected: where the camera is has nothing to do with whose turn it
+ * is. Ctrl and Cmd are let through untouched so copy still copies, and a key
+ * pressed into a text box is a letter rather than a command.
+ */
+function cameraReport(): string {
+  const st = view.cameraState();
+  const line = JSON.stringify({
+    camera: st,
+    match: { scenario: launch.scenario, kind: launch.kind, side: launch.side,
+             turn: match.turn, tick: playTick, hash: match.hash },
+    screen: { w: innerWidth, h: innerHeight, dpr: +(devicePixelRatio || 1).toFixed(2),
+              canvas: `${canvas.clientWidth}x${canvas.clientHeight}` },
+    render: view.postState(),
+    at: location.pathname,
+  });
+  console.log('camera report', line);
+  navigator.clipboard?.writeText(line).catch(() => {});
+  flash(`Camera: yaw ${st.yaw.toFixed(2)} pitch ${st.pitch.toFixed(2)} `
+    + `dist ${st.dist.toFixed(1)}. Copied, and in the console.`);
+  return line;
+}
+
+addEventListener('keydown', ev => {
+  if (ev.key.toLowerCase() !== 'c' || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const t = ev.target as HTMLElement | null;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  cameraReport();
+  ev.preventDefault();
+});
 
 addEventListener('keydown', ev => {
   const s = selectedShip();
@@ -2825,6 +2888,21 @@ sheet('tShips', 'left');
 sheet('tLog', 'right');
 $('tFit').onclick = () => view.fit();
 
+// The events rail on a DESKTOP, where there is no tab bar and the rail was a
+// permanent third column. It is the one panel here that never takes an action:
+// a read only account of a turn that has already happened. So it is off until
+// it is asked for, and the 290px goes to the map.
+//
+// The canvas needs no telling. `view.resize()` runs every frame and reads the
+// element it is actually drawn into, so a column that appears or goes is
+// picked up on the next one.
+const logBtn = $('bLog');
+logBtn.onclick = () => {
+  const on = $('app').classList.toggle('logon');
+  logBtn.classList.toggle('on', on);
+  logBtn.setAttribute('aria-pressed', String(on));
+};
+
 // ------------------------------------------------------------ playback --
 
 /** The turn whose track and events are on screen: the one being watched in
@@ -2880,6 +2958,32 @@ function showTick(tick: number): void {
   const shown = Math.min(TICKS_PER_TURN, tick);
   scrub.value = String(shown);
   $('hSec').textContent = (shown / 60).toFixed(1);
+}
+
+/**
+ * Put the scars of every resolved turn onto the hulls, without playing them.
+ *
+ * Cells coming off a hull are the CLIENT's. They follow the damage rather than
+ * deciding it, which is why none of it is hashed and none of it crosses the
+ * boundary, and the price of that is exactly this: the core replaying a match
+ * does not put them back, because the core has never heard of them.
+ *
+ * `showTick` was the only thing that ever applied them and it runs during a
+ * PLAYBACK, so a resumed game came up with the right hull numbers on factory
+ * fresh ships: 840 cells off a frigate before a reload, none after, and 124 of
+ * 300 hull on both sides of it. The save had lost nothing and nothing had
+ * drawn it. Pressing Review then played a turn and the holes appeared, which is
+ * what made it look like the damage arrived with the panel.
+ *
+ * Applied at the far end of the last resolved turn, which is where a live
+ * playback leaves it: every hit has landed and nothing is in the air, since a
+ * chunk is a function of (tick - hit.tick) and these fell turns ago.
+ */
+function showDamageAsOfNow(): void {
+  const end = shownIndex();
+  if (end < 0) return;
+  view.setDamage(carveHistory(),
+    end * TICKS_PER_TURN + TICKS_PER_TURN + tailFor(match.history[end]?.events ?? []));
 }
 
 /**
@@ -3406,6 +3510,14 @@ Object.defineProperty(window, 'ftDebug', {
     /** What the hulls cost to draw, and a switch to weigh it against. */
     hullQuads: () => view.hullQuads(),
     hullsVisible: (on: boolean) => view.hullsVisible(on),
+    /** Hide the star field, so a harness can check that no star reaches a
+     *  pixel a hull is standing on. */
+    starsVisible: (on: boolean) => view.starsVisible(on),
+    /** Hide the movement envelope for one measurement, so a harness can weigh
+     *  a frame with the overlay against the same frame without it. */
+    reachVisible: (on: boolean) => view.reachVisible(on),
+    /** The same report the C key writes, for a phone, which has no C. */
+    cameraReport: () => cameraReport(),
     /** Who is in the match and what they are flying. */
     ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull,
       /** What this ship's CLASS has, so a harness can say whether a hull is

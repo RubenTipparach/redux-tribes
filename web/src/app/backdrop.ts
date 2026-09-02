@@ -155,9 +155,17 @@ function glowTexture(): THREE.Texture {
  * Returns a group to add to the scene. The caller owns it and disposes it on
  * the next launch: a backdrop belongs to a match, not to the renderer.
  *
- * `renderOrder` and `depthWrite` keep it behind everything: these objects are
- * hundreds of units out, but a planet 240 units across at 500 units would
- * still happily z-fight with a reach shell if it wrote depth.
+ * `renderOrder` keeps it behind everything: these objects are hundreds of
+ * units out and are drawn first so that the fleet lands on top of them.
+ *
+ * The BODIES write depth, and that is a change from the first cut, which
+ * withheld it for fear of z-fighting a reach shell. A fight needs two surfaces
+ * at nearly the same depth and there are none here: the whole engagement lives
+ * inside 200 units and the nearest planet is at 250. What withholding it did
+ * cost was real. Nothing could ever be occluded BY a planet, so the star field
+ * shone through every one of them, and two planets that overlapped were
+ * ordered by whichever happened to be drawn second rather than by which was in
+ * front.
  */
 export function buildBackdrop(b: Backdrop): THREE.Group {
   const group = new THREE.Group();
@@ -168,6 +176,22 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
   group.userData.pickable = false;
 
   const sunDir = sunDirection(b);
+
+  // The sun is a DIRECTION, not a place. The key light that borrows it is a
+  // directional light, which has no position at all, so a sprite pinned in
+  // world space drifts away from the light it is supposed to be: pan 200
+  // units and the bright dot moves about 13 degrees while the lit side of
+  // every hull stays exactly where it was. Since those two are meant to be
+  // one fact, the sun rides on the camera like the sky and the stars do.
+  //
+  // The planets do NOT. They are bodies at a distance rather than lights at
+  // infinity, and sliding them against each other under a moving camera is
+  // most of what tells you how far away they are.
+  const far = new THREE.Group();
+  far.userData.atInfinity = true;
+  far.userData.pickable = false;
+  far.frustumCulled = false;
+  group.add(far);
 
   // ------------------------------------------------------------- the sun --
   const glow = glowTexture();
@@ -186,7 +210,7 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
   sun.scale.setScalar(FAR_BAND * 0.38);
   sun.renderOrder = -9;
   sun.userData.pickable = false;
-  group.add(sun);
+  far.add(sun);
 
   // A second, much wider and fainter pass. One sprite gives a hard edged
   // blob; two at different scales give the bloom something to catch and read
@@ -197,7 +221,7 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
   halo.scale.setScalar(FAR_BAND * 1.1);
   halo.renderOrder = -10;
   halo.userData.pickable = false;
-  group.add(halo);
+  far.add(halo);
 
   // ---------------------------------------------------------- the planets --
   for (const p of b.planets) {
@@ -227,7 +251,9 @@ export function buildBackdrop(b: Backdrop): THREE.Group {
       new THREE.MeshLambertMaterial({
         color: p.color,
         emissive: p.shade,
-        depthWrite: false,
+        // A body is solid, so it occludes: the stars behind it are 4500 units
+        // out and have to be stopped by something.
+        depthWrite: true,
         // A planet is a very slow gradient across a very dark range, which is
         // the same thing the nebula is and it bands the same way: the shading
         // crawls, the output byte holds, and the terminator comes out as a

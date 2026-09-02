@@ -824,8 +824,8 @@ test('no stock mount is blocked in the direction it rests', async () => {
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, spinOf, mountRoll,
-    useCore, useArcDirs } = design;
+  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, seatedFacing,
+    faceBasis, useCore, useArcDirs } = design;
   useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
   useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 
@@ -838,16 +838,16 @@ test('no stock mount is blocked in the direction it rests', async () => {
       if (!moduleById(p.module)?.weapon) continue;
       const mask = masks[mount++];
       const sock = socks.find(k => k.id === p.socket);
-      const spin = spinOf(sock, p.rot);
-      // Quarter turns about the mount's own up axis, from the nose, and then
-      // the roll that put that axis on the hull face this gun is bolted to.
-      // The mask is scanned in the SHIP's frame, so the rest direction has to
-      // arrive there: read without the roll, a broadside gun resting forward
-      // was asked about a direction it does not point in.
-      const a = (-spin * Math.PI) / 2;
-      let x = Math.sin(a), y = 0;
-      for (let n = mountRoll(f, sock); n > 0; n--) { const nx = -y; y = x; x = nx; }
-      assert.equal(arcBlocked(mask, x, y, Math.cos(a)), false,
+      // Straight ahead on the MOUNT, carried into the ship's frame by the
+      // facing it was actually seated and turned at. The mask is scanned in
+      // the ship's frame, so the rest direction has to arrive there: asked in
+      // the mount's own, a broadside gun resting outboard would be tested for
+      // a direction down the length of its own hull.
+      //
+      // `faceBasis` is row major and its columns are the images of the axes,
+      // so the image of the mount's +z is (f[2], f[5], f[8]).
+      const b = faceBasis(seatedFacing(f, sock, p));
+      assert.equal(arcBlocked(mask, b[2], b[5], b[8]), false,
         `${f.classKey}: ${p.socket} rests pointing into its own ship`);
     }
   }

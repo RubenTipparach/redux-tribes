@@ -114,6 +114,8 @@ for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
   await page.waitForTimeout(2000);
   if (attempt === 1) await checkNothingIsBuried();
   if (attempt === 1) await checkTheFieldIsDressed();
+  if (attempt === 1) await checkStarsStayBehindTheFleet();
+  if (attempt === 1) await checkTheEnvelopeNeverBlacksAPixelOut();
   if (attempt === 1) await checkHullsAreShips(page);
   if (attempt === 1) await checkFleetChips();
   if (attempt === 1) await checkSchematic();
@@ -403,6 +405,350 @@ async function checkTheFieldIsDressed() {
     + `${st.backdrop.planets} planet(s) and ${st.backdrop.stars} stars, `
     + `post is ${st.post.quality}`
     + `${st.post.stoodDown ? ` (${st.post.stoodDown})` : ''}`);
+
+  await checkTheSkyIsABackdrop();
+  await checkTheEventsRailIsOptional();
+}
+
+/**
+ * The events rail is off until it is asked for, and asking brings it back.
+ *
+ * It is the one panel here that never takes an action, so it is the one to
+ * make optional. On a desktop that is a header button and 290px of map; on a
+ * phone it was already a bottom sheet behind a tab.
+ *
+ * Judged by HIT TESTING the middle of the rail rather than by its rectangle.
+ * A sheet stays `display:block` and rides off screen on a transform, and in
+ * landscape the closed one parks behind the 54px tab rail, so both "is it
+ * displayed" and "does its box touch the viewport" answer yes on a rail
+ * nobody can see. Three readings in a row said the rail was open when it was
+ * not, each for a different reason, which is the argument for asking the
+ * question the player's eye asks.
+ */
+async function checkTheEventsRailIsOptional() {
+  const read = () => page.evaluate(() => {
+    const el = document.getElementById('right');
+    const r = el.getBoundingClientRect();
+    const drawn = getComputedStyle(el).display !== 'none' && r.width > 0 && r.height > 0;
+    const cx = Math.min(innerWidth - 1, Math.max(0, r.left + r.width / 2));
+    const cy = Math.min(innerHeight - 1, Math.max(0, r.top + r.height / 2));
+    const top = drawn ? document.elementFromPoint(cx, cy) : null;
+    const btn = document.getElementById('bLog');
+    const tab = document.getElementById('tLog');
+    const seen = (e) => {
+      if (!e) return false;
+      const b = e.getBoundingClientRect();
+      return getComputedStyle(e).display !== 'none' && b.width > 0 && b.height > 0;
+    };
+    return {
+      shows: !!(drawn && top && (el === top || el.contains(top))),
+      canvas: Math.round(document.getElementById('cv').getBoundingClientRect().width),
+      btn: seen(btn), tab: seen(tab),
+    };
+  });
+
+  const off = await read();
+  if (off.shows) {
+    console.log('\nFAIL: the events rail is on screen before anybody asked for it');
+    process.exit(1);
+  }
+  // Exactly one control offers it, and it is the one this size has room for.
+  const ctrl = off.btn ? '#bLog' : '#tLog';
+  if (off.btn === off.tab) {
+    console.log(`\nFAIL: the events rail is offered by ${off.btn ? 'both' : 'neither'} `
+      + 'the header button and the tab');
+    process.exit(1);
+  }
+
+  await page.click(ctrl);
+  await page.waitForTimeout(500);
+  const on = await read();
+  if (!on.shows) {
+    console.log(`\nFAIL: ${ctrl} did not bring the events rail on screen`);
+    process.exit(1);
+  }
+  await page.click(ctrl);
+  await page.waitForTimeout(500);
+  const back = await read();
+  if (back.shows) {
+    console.log(`\nFAIL: ${ctrl} would not put the events rail away again`);
+    process.exit(1);
+  }
+  if (back.canvas !== off.canvas) {
+    console.log(`\nFAIL: the map came back ${back.canvas}px wide, not the ${off.canvas}px `
+      + 'it started at');
+    process.exit(1);
+  }
+  log(`the events rail is optional: off to start with, ${ctrl} shows it `
+    + `(map ${off.canvas} to ${on.canvas}px) and puts it away again`);
+}
+
+/**
+ * The sky does not slide when the camera moves.
+ *
+ * A star field draws identically whether it is a backdrop or a shell of points
+ * the fleet flies around inside, so the count above cannot tell them apart.
+ * What tells them apart is PARALLAX: move the eye a long way and ask whether a
+ * fixed star is still in the same place on screen.
+ *
+ * It was not. The sky cube was carried on the camera by name and the stars
+ * were left at the world origin, so every pan dragged them across the nebula.
+ */
+async function checkTheSkyIsABackdrop() {
+  const read = () => page.evaluate(() => window.ftDebug.backdrop());
+  const before = await read();
+  if (!before.carried) {
+    console.log('\nFAIL: nothing rides the camera, so the sky is a mesh in the world');
+    process.exit(1);
+  }
+  if (!before.star) {
+    console.log('\nFAIL: no star to measure, so parallax cannot be asked about');
+    process.exit(1);
+  }
+
+  // Move the eye a long way, through the controls rather than by writing
+  // state, and wait for it to have ARRIVED, since the camera eases.
+  //
+  // Pan, with the middle button, which is the one gesture that is always the
+  // camera and never an order. A pan slides the focus and leaves yaw and pitch
+  // alone, so the eye TRANSLATES without turning: the exact move a backdrop is
+  // supposed to be indifferent to.
+  const box = await page.locator('#cv').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down({ button: 'middle' });
+  for (let n = 1; n <= 10; n++) await page.mouse.move(cx - n * 22, cy - n * 8);
+  await page.mouse.up({ button: 'middle' });
+  for (let n = 0; n < 60; n++) {
+    await page.waitForTimeout(120);
+    const a = (await read()).eye;
+    await page.waitForTimeout(120);
+    const b = (await read()).eye;
+    if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 0.01) break;
+  }
+  const after = await read();
+
+  const flew = Math.hypot(
+    after.eye[0] - before.eye[0], after.eye[1] - before.eye[1], after.eye[2] - before.eye[2]);
+  if (flew < 1) {
+    console.log(`\nFAIL: the camera only moved ${flew.toFixed(2)} u, `
+      + 'so this proves nothing about parallax');
+    process.exit(1);
+  }
+  // Judged on the BEARING to the star, not on where it landed on screen. A
+  // backdrop is a set of directions, so the bearing has to hold however far
+  // the eye moves and whichever way it ends up pointing; screen position also
+  // swings with every turn, and a check written on it would be asking two
+  // questions at once and reporting the answer to the wrong one.
+  const dot = before.star.dir[0] * after.star.dir[0]
+    + before.star.dir[1] * after.star.dir[1]
+    + before.star.dir[2] * after.star.dir[2];
+  const swung = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+  if (swung > 0.05) {
+    console.log(`\nFAIL: the camera flew ${flew.toFixed(1)} u and the bearing to a fixed `
+      + `star moved ${swung.toFixed(2)} degrees with it, so the star field is a mesh in `
+      + `the world rather than a backdrop`);
+    process.exit(1);
+  }
+  log(`the sky is a backdrop: ${after.carried} pieces ride the eye, and the bearing to a `
+    + `fixed star held to ${swung.toFixed(3)} degrees while the camera flew ${flew.toFixed(1)} u`);
+}
+
+/**
+ * No star may reach a pixel a hull is standing on.
+ *
+ * This cannot be answered by reading the material. Whether a star lands on a
+ * ship is decided by which of three's two render lists the field is sorted
+ * into, in what order that list is walked and what the depth buffer holds by
+ * then, and none of that is written in the file that sets `depthTest`. The
+ * first cut of the star field had a comment describing a scheme three.js does
+ * not implement (drawn first, so the scenery covers it) and shipped a fleet
+ * with the sky showing through it, past every suite here.
+ *
+ * So it is measured. Three frames of the same still world: without the hulls,
+ * with them, and with them but without the stars. The first pair gives the
+ * hull SILHOUETTE, eroded so an antialiased edge cannot vote. The second pair
+ * has to be identical inside it, because a star that is correctly occluded
+ * contributes nothing there and turning it off changes nothing.
+ *
+ * Bloom is stood down for the three frames, since a star just outside a hull
+ * legitimately bleeds across the edge and that is the blur doing its job
+ * rather than a depth failure.
+ */
+async function checkStarsStayBehindTheFleet() {
+  const before = (await page.evaluate(() => window.ftDebug.post())).quality;
+  await page.evaluate(() => window.ftDebug.forceQuality('plain'));
+
+  // GO AND STAND ON A HULL FIRST, and this is not tidiness. The first cut of
+  // this check measured from the fleet view, where a frigate is 650 px of a
+  // 700000 px canvas: 7181 stars over the whole sky then land on that target
+  // a few percent of the time, so putting the defect back left the check
+  // GREEN. A check whose subject is smaller than its noise floor tests
+  // nothing. Centred and zoomed all the way in, the same hull is tens of
+  // thousands of pixels and a star cannot miss it.
+  await sheet(false);
+  await tap('#cCentre');
+  await zoomIn(45);
+  await page.waitForTimeout(400);
+
+  const clip = await page.locator('#cv').boundingBox();
+  const shot = async () => (await page.screenshot({ clip })).toString('base64');
+
+  await page.evaluate(() => window.ftDebug.hullsVisible(false));
+  await page.waitForTimeout(320);
+  const bare = await shot();
+  await page.evaluate(() => window.ftDebug.hullsVisible(true));
+  await page.waitForTimeout(320);
+  const full = await shot();
+  await page.evaluate(() => window.ftDebug.starsVisible(false));
+  await page.waitForTimeout(320);
+  const noStars = await shot();
+  await page.evaluate(() => window.ftDebug.starsVisible(true));
+  await page.evaluate(q => window.ftDebug.forceQuality(q), before === 'bloom' ? 'bloom' : 'plain');
+  await zoomOut();
+
+  const verdict = await page.evaluate(async ([a, b, c]) => {
+    const load = (b64) => new Promise(r => {
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width = img.width; cv.height = img.height;
+        const g = cv.getContext('2d');
+        g.drawImage(img, 0, 0);
+        r({ d: g.getImageData(0, 0, img.width, img.height).data, w: img.width, h: img.height });
+      };
+      img.src = 'data:image/png;base64,' + b64;
+    });
+    const A = await load(a), B = await load(b), C = await load(c);
+    const w = A.w, h = A.h;
+    const diff = (p, q, i) => Math.max(
+      Math.abs(p[i] - q[i]), Math.abs(p[i + 1] - q[i + 1]), Math.abs(p[i + 2] - q[i + 2]));
+
+    // The silhouette: where putting the hulls back changed the picture.
+    const hull = new Uint8Array(w * h);
+    for (let i = 0, n = 0; n < w * h; i += 4, n++) if (diff(A.d, B.d, i) > 10) hull[n] = 1;
+    // Eroded by two, so an antialiased edge and the pixel beside it are out.
+    let mask = hull;
+    for (let pass = 0; pass < 2; pass++) {
+      const next = new Uint8Array(w * h);
+      for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+        const n = y * w + x;
+        if (mask[n] && mask[n - 1] && mask[n + 1] && mask[n - w] && mask[n + w]) next[n] = 1;
+      }
+      mask = next;
+    }
+    let area = 0, lit = 0, worst = 0, at = null;
+    for (let n = 0; n < w * h; n++) {
+      if (!mask[n]) continue;
+      area++;
+      const d = diff(B.d, C.d, n * 4);
+      if (d > 12) { lit++; if (d > worst) { worst = d; at = [n % w, (n / w) | 0]; } }
+    }
+    return { area, lit, worst, at, w, h };
+  }, [bare, full, noStars]);
+
+  // A mask smaller than the noise floor would pass whatever the stars did, and
+  // once did: 650 px is a target 7181 stars can miss. Ten thousand is what
+  // being nose to nose with a frigate gives, and nothing can miss that.
+  if (verdict.area < 10000) {
+    console.log(`\nFAIL: only ${verdict.area} px of hull to test the stars against, `
+      + 'so this check proves nothing');
+    process.exit(1);
+  }
+  if (verdict.lit > 0) {
+    console.log(`\nFAIL: ${verdict.lit} of ${verdict.area} hull px change when the stars `
+      + `go out, worst by ${verdict.worst}/255 at ${verdict.at?.join(',')}: `
+      + 'the star field is drawing over the fleet');
+    process.exit(1);
+  }
+  log(`stars stay behind the fleet: ${verdict.area} px of hull silhouette, `
+    + 'none of it lit by a star');
+}
+
+/**
+ * The movement envelope may never black a pixel OUT.
+ *
+ * The shell and its contours are both additive, so in the FRAMEBUFFER they can
+ * only add: the blend is src.rgb * src.a + dst and every term is non negative.
+ * The one way to break that is a NaN. A NaN alpha takes the DESTINATION with
+ * it, the sum is written as zero, and the shell has deleted the sky and the
+ * ships behind it: that is the "black patches at certain angles" this was
+ * written for, where pow() was handed a base a hair below zero by two nearly
+ * parallel unit vectors, and bloom then spread the poison into a hard edged
+ * block by blurring it at five scales.
+ *
+ * The invariant is stated as "no lit pixel goes black" rather than as "no
+ * pixel gets darker", and the difference matters. The first cut of this check
+ * said the stronger thing and went red on 316 px at up to 192/255, none of
+ * which was a defect: tone mapping sits between the blend and the canvas, and
+ * NeutralToneMapping desaturates a highlight, so a pixel that gains green has
+ * its red SCALED DOWN by newPeak/peak on the way out. Additive is only
+ * monotonic where the addition happens, and that is not where a screenshot is
+ * taken. Going black is not something a tone mapper does to a lit pixel, so it
+ * separates the two cleanly.
+ *
+ * It will not catch that particular NaN HERE. These harnesses run on
+ * SwiftShader, which gives pow() of a negative base a defined answer, so the
+ * defect only ever showed on a real driver. The check earns its place anyway:
+ * it costs two frames and it goes red on any machine that does break it,
+ * rather than on none.
+ */
+async function checkTheEnvelopeNeverBlacksAPixelOut() {
+  if (!(await page.evaluate(() => window.ftDebug.camera().shell))) {
+    console.log('\nFAIL: no movement envelope is up, so this check proves nothing');
+    process.exit(1);
+  }
+  const clip = await page.locator('#cv').boundingBox();
+  const shot = async () => (await page.screenshot({ clip })).toString('base64');
+
+  const withIt = await shot();
+  await page.evaluate(() => window.ftDebug.reachVisible(false));
+  await page.waitForTimeout(320);
+  const without = await shot();
+  await page.evaluate(() => window.ftDebug.reachVisible(true));
+  await page.waitForTimeout(200);
+
+  const verdict = await page.evaluate(async ([a, b]) => {
+    const load = (b64) => new Promise(r => {
+      const img = new Image();
+      img.onload = () => {
+        const cv = document.createElement('canvas');
+        cv.width = img.width; cv.height = img.height;
+        const g = cv.getContext('2d');
+        g.drawImage(img, 0, 0);
+        r({ d: g.getImageData(0, 0, img.width, img.height).data, w: img.width });
+      };
+      img.src = 'data:image/png;base64,' + b64;
+    });
+    const A = await load(a), B = await load(b);
+    const luma = (d, i) => 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    let blacked = 0, lit = 0, at = null, was = 0;
+    for (let i = 0; i < A.d.length; i += 4) {
+      const bare = luma(B.d, i);
+      // Near black WITH the overlay, clearly lit without it. Nothing an
+      // additive draw or a tone mapper does to a lit pixel puts it here.
+      if (A.d[i] + A.d[i + 1] + A.d[i + 2] < 8 && bare > 40) {
+        blacked++;
+        if (bare > was) { was = Math.round(bare); at = [(i / 4) % A.w, ((i / 4) / A.w) | 0]; }
+      }
+      if (luma(A.d, i) - bare > 2) lit++;
+    }
+    return { blacked, was, at, lit, px: A.d.length / 4 };
+  }, [withIt, without]);
+
+  // An overlay that drew nothing at all would pass trivially.
+  if (verdict.lit < 200) {
+    console.log(`\nFAIL: the envelope lit only ${verdict.lit} px, so it is not being drawn `
+      + 'and this check proves nothing');
+    process.exit(1);
+  }
+  if (verdict.blacked > 0) {
+    console.log(`\nFAIL: the movement envelope blacks out ${verdict.blacked} px that are `
+      + `lit without it, one of them at luma ${verdict.was} at ${verdict.at?.join(',')}: an additive overlay cannot `
+      + 'subtract, so the shader is emitting a NaN and taking the pixels behind it out');
+    process.exit(1);
+  }
+  log(`the envelope never blacks a pixel out: ${verdict.lit} px lit, none extinguished`);
 }
 
 async function checkNothingIsBuried() {
@@ -869,20 +1215,36 @@ async function checkLookingAtShips() {
     return;
   }
 
-  // A double click goes there: centred AND closed, so the inspector is offered
-  // when it arrives.
+  // A double click goes there, and does NOT open the data panel: going in to
+  // look at a hull used to cover it with six labelled boxes, so the gesture
+  // that means "show me this ship" was also the one that hid it. The panel is
+  // a mode, entered by the button, which appears once the camera is close
+  // enough for the labels to mean anything.
   const before = await page.evaluate(() => window.ftDebug.camera().dist);
   await page.mouse.dblclick(at.x, at.y);
   await page.waitForTimeout(900);
   const after = await page.evaluate(() => window.ftDebug.camera().dist);
   if (!(after < before - 1)) fail(`double clicked a hull and the camera stayed at ${after}`);
+  if (await page.evaluate(() => window.ftDebug.inspect().ship) >= 0) {
+    fail('double clicking a hull opened the ship data over the hull it went to look at');
+  }
+  if (await page.evaluate(() => document.getElementById('bInspect').classList.contains('hidden'))) {
+    fail('the camera is on a hull and the ship data button is not offered');
+  }
+  log(`double click focuses without opening the panel: `
+    + `${before.toFixed(0)} u to ${after.toFixed(0)} u`);
+
+  // And the button still opens it, with the arcs that go with it.
+  await page.click('#bInspect');
+  await page.waitForTimeout(400);
   if (await page.evaluate(() => window.ftDebug.inspect().ship) < 0) {
-    fail('double clicked a hull and the ship data did not come up with it');
+    fail('the ship data button did not open the panel');
   }
   const allArcs = await page.evaluate(() => window.ftDebug.arcs());
   if (allArcs < 1) fail('ship data is up and no firing arc is drawn');
-  log(`double click focuses: ${before.toFixed(0)} u to ${after.toFixed(0)} u, `
-    + `${allArcs} firing arcs drawn`);
+  log(`the button opens it: ${allArcs} firing arcs drawn`);
+  await page.click('#bInspect');
+  await page.waitForTimeout(300);
 
   // A plain click on the hull names it and leaves the plan alone.
   const planBefore = JSON.stringify(await page.evaluate(() => window.ftDebug.order()?.target ?? null));

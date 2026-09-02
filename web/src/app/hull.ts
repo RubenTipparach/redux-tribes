@@ -31,10 +31,11 @@ import * as THREE from 'three';
 import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
-  ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, finishesOf,
-  frameFor, liveryFor, moduleById, mountRoll, rasterise, rasterSig, roleAt, spinOf,
+  ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
+  finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
+import type { MountFace } from './turret.js';
 
 /**
  * One gun on a hull, as the map needs it: where it turns and which quads turn
@@ -92,11 +93,16 @@ export interface HullRig {
   readonly part: number;
   /** The socket it turns on, in ship units. */
   readonly pivot: readonly [number, number, number];
-  /** The rest facing the design gave it, in radians about the up axis. */
-  readonly rest: number;
-  /** Quarter turns about the keel that put this mount on its hull face, so
-   *  the traverse is about the mount's own axis rather than the ship's up. */
-  readonly roll: number;
+  /**
+   * The facing the design bolted it on at, as a rotation from the mount's
+   * frame into the ship's.
+   *
+   * Not an angle. A mount can be yawed, pitched and rolled, and it is also
+   * SEATED on whichever hull face its ring is on, so its rest is an
+   * orientation rather than a number: a scalar could only ever describe the
+   * one axis this used to have.
+   */
+  readonly face: MountFace;
 }
 
 export interface HullMesh {
@@ -351,8 +357,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         ((sock.at[1] as number) - NY / 2) * cell,
         ((sock.at[2] as number) - NZ / 2) * cell,
       ],
-      rest: -spinOf(sock, p.rot) * Math.PI / 2,
-      roll: mountRoll(frame, sock),
+      face: faceBasis(seatedFacing(frame, sock, p)),
     });
   });
 
