@@ -140,6 +140,25 @@ await page.waitForTimeout(800);
 if (path() !== '/ship') fail(`opening the shipyard left the address at ${path()}`);
 else ok('the shipyard is /ship');
 
+// Thicken a belt before saving, so the design is NOT the stock hull.
+//
+// It used to save the stock ship unedited, and that told the two apart for as
+// long as a class's numbers were authored by hand near the stock hull's rather
+// than measured from it. They are measured now (`measure_fleet.mjs --sync`),
+// which is what CLAUDE.md has always claimed and what makes a hull fielded
+// from the briefing fly like the one a scenario seats: an unedited design
+// derives EXACTLY the class hull, and "is this ship flying a design" then has
+// nothing to read. One slider is the smallest edit that gives it something.
+await page.click('#dzTabArmour');
+await page.waitForTimeout(300);
+const belt = page.locator('#dzArmour input[type=range]').first();
+await belt.evaluate((el) => {
+  el.value = String(Math.min(15, Number(el.value) + 3));
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page.waitForTimeout(600);
+
 const name = `Route ${Date.now().toString(36)}`;
 await page.click('#dzSave');
 await page.waitForTimeout(300);

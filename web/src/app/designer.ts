@@ -539,10 +539,16 @@ export class Designer {
     // see through and not writing depth. Only the OUTER surface: four courses
     // of translucent plate stacked on themselves is mush, which is why the
     // toggle used to be on or off and nothing in between.
+    // A cell a PART owns is not armour, whatever material it is drawn with, so
+    // the toggle leaves it alone: a container on the deck is painted in the
+    // ship's livery and drawn as plate, and turning the plating off should not
+    // take the cargo off with it. Same rule as `bareGrid`, which is the map's
+    // half of this.
     const solidView = this.#plate === 'on'
       ? grid.map(m => (m === Mat.Skinned ? Mat.Plate : m)) as Uint8Array
-      : grid.map(m => (m === Mat.Plate ? Mat.Empty
-        : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
+      : grid.map((m, n) => ((own[n] as number) > 0 ? m
+        : m === Mat.Plate ? Mat.Empty
+          : m === Mat.Skinned ? Mat.Frame : m)) as Uint8Array;
     const isPlate = (m: number) => m === Mat.Plate || m === Mat.Skinned;
 
     // Which placements are guns, and where each one turns. A turret is drawn

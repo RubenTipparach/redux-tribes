@@ -112,6 +112,7 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'greeble', name: 'Greebled' },
   { key: 'weave', name: 'Composite' },
   { key: 'battered', name: 'Battered' },
+  { key: 'crate', name: 'Container' },
 ];
 
 export const DEFAULT_FINISH = 'plate';
