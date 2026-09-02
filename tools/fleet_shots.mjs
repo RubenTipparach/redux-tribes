@@ -181,12 +181,38 @@ async function ladder(faction) {
     // them.
     const png = await page.locator('#dzCanvas').screenshot();
     const row = rows.find((r) => r.key === key);
-    shots.push({ key, length: row ? row.length : 1,
+    shots.push({ key, length: row ? row.length : 1, cell: row ? row.cell : 0,
       url: 'data:image/png;base64,' + png.toString('base64') });
     console.log(`  ${key}  ${row ? row.length.toFixed(2) : '?'} u`);
   }
   const longest = Math.max(...shots.map((s) => s.length));
   const WIDEST = 820;
+  /**
+   * Pixels per WORLD UNIT, the same for every row.
+   *
+   * Each hull is drawn at `WIDEST * length / longest`, so this is constant down
+   * the sheet, which is what lets one reference square be a ruler rather than a
+   * decoration: a box of this many pixels is one unit on every row.
+   */
+  const PPU = WIDEST / longest;
+  /** One unit, as a box tiled with THAT CLASS's own voxel.
+   *
+   *  The hulls alone cannot answer "are the voxels the same size", because the
+   *  sheet normalises them to their own lengths and a bigger ship drawn from
+   *  bigger blocks looks the same as a bigger ship with more of them. The grid
+   *  inside this box is the answer: same outer square everywhere, and the
+   *  squares inside it are four times coarser on a cruiser than on a frigate. */
+  const cube = (cell) => {
+    const side = Math.max(8, PPU);
+    const vox = Math.max(1, cell * PPU);
+    return `<div style="width:${side.toFixed(1)}px;height:${side.toFixed(1)}px;`
+      + 'border:1px solid #6ea8d8;box-sizing:border-box;'
+      + `background-image:repeating-linear-gradient(to right,#6ea8d855 0 1px,transparent 1px ${vox.toFixed(2)}px),`
+      + `repeating-linear-gradient(to bottom,#6ea8d855 0 1px,transparent 1px ${vox.toFixed(2)}px)"></div>`
+      + `<div style="font-size:10px;opacity:.75;margin-top:3px">1 u</div>`
+      + `<div style="font-size:10px;opacity:.55">voxel ${cell.toFixed(4)}</div>`
+      + `<div style="font-size:10px;opacity:.55">${(1 / cell).toFixed(1)} per u</div>`;
+  };
   // One page, laid out and photographed, because compositing PNGs in Node
   // means a decoder and a rasteriser this repository has no reason to carry.
   // The CROP happens here too, on a decoded PNG rather than on a live WebGL
@@ -195,10 +221,18 @@ async function ladder(faction) {
   const html = `<body style="margin:0;background:#080b10;font:13px system-ui;color:#c8d4e2">
     <div style="padding:14px 18px 8px;font-size:14px;letter-spacing:.10em;text-transform:uppercase">
       ${faction} &middot; every rung to one scale</div>
+    <div style="padding:0 18px 10px;font-size:11px;opacity:.7;max-width:900px">
+      Every hull is cropped to itself and rescaled by its MEASURED length, so the
+      picture is the ladder rather than the camera. The blue box on each row is
+      one world unit at that same scale, tiled with that class's own voxel: same
+      box everywhere, and the grid inside it is what says whether a voxel is the
+      same size from rung to rung.</div>
     ${shots.map((s) => `<div style="display:flex;align-items:center;gap:16px;padding:10px 18px">
       <div style="width:170px;text-align:right;opacity:.85">${s.key}<br>
         <b style="font-size:15px">${s.length.toFixed(2)} u</b>
         <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span></div>
+      <div style="width:${Math.max(8, PPU).toFixed(0)}px;flex:0 0 auto;text-align:left">
+        ${cube(s.cell)}</div>
       <canvas data-src="${s.url}" data-w="${Math.round(WIDEST * (s.length / longest))}"
         style="display:block"></canvas>
     </div>`).join('')}
