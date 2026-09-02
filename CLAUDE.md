@@ -729,6 +729,12 @@ either side of the commit, for twelve classes with their subsystem and mount
 tables, `ft_class_count`, `ft_ship_mount`, the wider ship record and the class
 index refusal. CI shipped that source at 161302, which is the figure to quote.
 
+The civil yards cost **2018 bytes**: 163043 against 165061 on the SAME
+compiler either side of the commit, for six more classes, six more parts on
+both sides of the boundary, and `civil_subs`. CI shipped that source at
+163438. Cheap for six ships, and the reason is the reason the fleet was cheap:
+a class is a row in a table, not a branch in a resolver.
+
 Attribute growth to the change that caused it, not to the branch it landed on.
 Roll cost 1886 bytes, measured as 132721 against 134607 on the SAME compiler
 either side of the commit. Reading it off the shipped figure instead would have
