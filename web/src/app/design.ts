@@ -1804,7 +1804,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.6, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.6, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1827,7 +1827,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.3, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.4, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -1893,7 +1893,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 4.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -1944,7 +1944,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.7, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.5, massMax: 1.47, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -2260,7 +2260,8 @@ export const frameFor = (classKey: string): FrameDef => {
  * goes on its trunnion. A player cannot hang a beam on bare structure.
  */
 export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[] {
-  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s) : s));
+  const rings = frame.sockets.filter(s => s.kind === 'gun');
+  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s, rings) : s));
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
     const base = out.find(s => s.id === p.socket);
@@ -2308,13 +2309,13 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
  * The face is taken before the move and the rest facing after it, so a ring
  * that slides out along its own face keeps that face.
  */
-const ringSeat = (frame: FrameDef, s: Socket): Socket => {
+const ringSeat = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
   const [ox, oy] = outwardAt(frame.profile, s.at);
   const [hw, hh] = hullAt(frame.profile, s.at[2] as number);
   const at: [number, number, number] = ox
     ? [acrossFrom(CX, ox, (hw as number) - 1), s.at[1] as number, s.at[2] as number]
     : [s.at[0] as number, acrossFrom(CY, oy, (hh as number) - 1), s.at[2] as number];
-  return ringFacing(frame, { ...s, at });
+  return ringFacing(frame, { ...s, at }, rings);
 };
 
 /**
@@ -2338,13 +2339,32 @@ export const outwardAt = (
  * A gun ring's rest facing, which is a traverse about the mount's OWN axis
  * and therefore reads differently on a deck than on a flank.
  *
- * A ring on the deck or the belly traverses in the horizontal plane, and it
- * rests trained ABEAM rather than along the keel, to opposite sides fore and
- * aft. Resting fore and aft, a pair of centreline mounts look straight at each
- * other: the Terran heavy cruiser's two ventral rings were each blocked in the
- * direction they were pointing by the other one, which is what a superfiring
- * position exists to solve and this lattice has no room for. Trained abeam,
- * both see out.
+ * A ring on the deck or the belly traverses in the horizontal plane, so it
+ * CAN rest along the keel, and along the keel is what a gun is for: a bow
+ * chaser resting broadside is a main battery pointing at nothing anybody was
+ * aiming at. So a centreline ring rests forward if it is forward of midships
+ * and aft if it is abaft, exactly as a flank ring does.
+ *
+ * ABEAM is for the WAIST, and that is the whole of the distinction. What a
+ * centreline ring can rest along is decided by how near an END of the hull it
+ * is, not by which half it is in: a ring in the bow has a clear run ahead of
+ * it and one on the transom has a clear run astern, while a ring amidships
+ * has most of its own ship in both directions and abeam is the only way it
+ * sees anything at all.
+ *
+ * Two cuts of this got it wrong in opposite directions, and the arc scan
+ * caught both. Resting every centreline ring abeam applied the heavy
+ * cruiser's fix to hulls with nothing to fix: the Terran frigate carries one
+ * dorsal ring at 0.85 of its length, with nothing in front of it, and it
+ * rested broadside. Resting them all along the keel by which half they sat in
+ * then pointed the Terran destroyer's ventral ring, at 0.46, straight down
+ * twenty six cells of its own hull, because "abaft midships" was true of it
+ * by a single cell.
+ *
+ * A pair on the same face is still a pair, and still goes abeam whatever band
+ * it is in: the cruiser's two ventral rings resting fore and aft looked
+ * straight at each other, which is what a superfiring position exists to
+ * solve and this lattice has no room for.
  *
  * A ring on a FLANK has its axis outboard, since that is the way its base
  * bolts down, so its traverse is the vertical plane along the hull and abeam
@@ -2354,14 +2374,33 @@ export const outwardAt = (
  * sides. Pointing outboard was right while every mount was drawn +y up and is
  * a barrel in the deck now.
  */
-const ringFacing = (frame: FrameDef, s: Socket): Socket => {
-  const [ox] = outwardAt(frame.profile, s.at);
+/** How near an end a centreline ring has to be to rest along the keel. A
+ *  ring outside these bands is in the waist, where the ship is in the way
+ *  both ways and abeam is the only clear rest. */
+const BOW_RING = 0.70, STERN_RING = 0.25;
+
+const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
   const prof = frame.profile;
-  const mid = (Math.round((prof[0] as Station)[0])
-    + Math.round((prof[prof.length - 1] as Station)[0])) / 2;
-  const fwd = (s.at[2] as number) >= mid;
+  const [ox, oy] = outwardAt(prof, s.at);
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const t = ((s.at[2] as number) - aft) / Math.max(1, nose - aft);
+  const fwd = t >= 0.5;
+  // A flank ring's traverse is the vertical plane along the hull, so abeam is
+  // straight up its own barbette and not a rest at all: it takes the nearer
+  // end whatever band it is in.
   if (ox) return { ...s, facing: fwd ? 0 : 2 };
-  return { ...s, facing: fwd ? 1 : 3 };
+  const nearEnd = t >= BOW_RING || t <= STERN_RING;
+  // Another ring on the SAME face, ahead of this one if it would rest forward
+  // or astern of it if aft. Same face because a dorsal gun and a ventral one
+  // are on opposite sides of the ship and neither is in the other's line: the
+  // cruiser's clash was two rings on one belly.
+  const paired = rings.some(r => r.id !== s.id
+    && outwardAt(prof, r.at)[0] === 0 && outwardAt(prof, r.at)[1] === oy
+    && (fwd ? (r.at[2] as number) > (s.at[2] as number)
+      : (r.at[2] as number) < (s.at[2] as number)));
+  if (!nearEnd || paired) return { ...s, facing: fwd ? 1 : 3 };
+  return { ...s, facing: fwd ? 0 : 2 };
 };
 
 // --------------------------------------------------------------- armour --

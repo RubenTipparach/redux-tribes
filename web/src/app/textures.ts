@@ -197,6 +197,10 @@ export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
     roughness: 0.35,
     dithering: true,
   });
+  // Named so a harness can count the panes a screen actually DREW. The defect
+  // worth catching is a hull whose rooms all carry windows and a screen that
+  // draws none of them, and only the mesh can answer that.
+  mat.name = `window:${key}`;
   windowMats.set(key, mat);
   return mat;
 }

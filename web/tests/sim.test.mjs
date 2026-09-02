@@ -443,7 +443,7 @@ test('class and mount metadata cross intact', () => {
   // `--check` fails if the two part. The literal here is only a spot check
   // that a number crossed the boundary at all; the fleet wide agreement is
   // the test below it.
-  assert.ok(Math.abs(terran.hull - 296.936) < 0.01, `terran hull ${terran.hull}`);
+  assert.ok(Math.abs(terran.hull - 297.718) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 

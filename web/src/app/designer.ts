@@ -18,10 +18,13 @@ import * as drafts from './drafts.js';
 // The same loaders the map uses, so the yard cannot spell a path its own way
 // and cannot drift onto a different surface than the thing being designed will
 // fly with.
-import { finishMap, partMap } from './textures.js';
+import { finishMap, partMap, windowMaterial } from './textures.js';
 import {
   AT_REST, blockedPct, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
 } from './turret.js';
+// The map's own mesher, asked ONLY for its windows: where a window goes is a
+// fact about the design, and two answers to it would be two ships.
+import { hullMesh } from './hull.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -763,6 +766,28 @@ export class Designer {
     // a click through the ghost should reach the part you can see.
     place(ghost, surf.ghost,
       q => ghostCol[q] as number, false);
+    // The windows, which the yard drew none of until now.
+    //
+    // A player who fits a bridge should SEE the viewport appear, and three of
+    // the four screens that draw this hull already did: the map, the ship
+    // detail modal and the fleet chip all go through `hullMesh`, and the yard
+    // built its own boxes and never asked. That is the divergence CLAUDE.md's
+    // "three pictures of one hull, one surface" is about, and a second
+    // derivation here would be the same defect with extra steps: where a
+    // window goes is one question, so it is asked once. `hullMesh` is cached
+    // on the raster signature, so an edit that does not move a cell costs
+    // nothing and one that does pays a single surface pass.
+    //
+    // Neither the geometry nor the material goes through `#geo`/`#mat`: both
+    // are owned by those caches, and disposing one here would leave the next
+    // caller holding a released buffer.
+    if (this.#plate !== 'off') {
+      for (const w of hullMesh(this.#design).windows) {
+        const wm = windowMaterial(w.key);
+        if (wm) this.#hull.add(new THREE.Mesh(w.geo, wm));
+      }
+    }
+
     // Every gun in its own group, drawn about its pivot so a rotation of the
     // group is a rotation of the turret on its mount.
     this.#rigs.forEach((r, n) => {
@@ -2565,6 +2590,26 @@ export class Designer {
       depth: this.#depth,
       drawSaid: this.#drawSaid,
       armourTones: [...this.#armourTones],
+      /**
+       * Window panes actually DRAWN in the yard, by decal, and the quads each
+       * came to.
+       *
+       * Counted off the meshes rather than off the design, because the defect
+       * this exists to catch is exactly a hull whose rooms all have windows
+       * and a screen that draws none of them: asking the design would have
+       * reported healthy numbers throughout.
+       */
+      windows: (() => {
+        const by: Record<string, number> = {};
+        for (const o of this.#hull.children) {
+          const m = o as THREE.Mesh;
+          const key = (m.material as THREE.Material | undefined)?.name;
+          if (!m.isMesh || !key?.startsWith('window:')) continue;
+          const n = (m.geometry.getIndex()?.count ?? 0) / 6;
+          by[key.slice(7)] = (by[key.slice(7)] ?? 0) + n;
+        }
+        return by;
+      })(),
       /** What the BROAD PLATING came out, as against the whole scheme. It is
        *  the picked swatch by construction (the livery makes the pick role
        *  `hull`), and that is the half of the rule a set of eight colours
