@@ -477,11 +477,25 @@ function start(): void {
     const orders = new Map<number, PlannedOrder>();
     for (const [ship, o] of Object.entries(body)) orders.set(Number(ship), o as PlannedOrder);
     match.resolveWith(orders);
-    void n;
+    // Work out where this turn's hits LANDED while it is still the turn the
+    // core is holding, and not afterwards.
+    //
+    // A hit event carries a world point, and turning it into a place on a hull
+    // needs the pose that hull held at that tick. `match.poses` reads the pose
+    // track of whatever turn the core has resolved most recently, so asking it
+    // about turn one while the core sits at turn four answers with turn four's
+    // flight. Live that never came up, because each turn's record is walked
+    // during its own playback; a resume walks four turns before drawing
+    // anything. Priming here is a memo per record, so the pass after the loop
+    // finds every one of them already solved.
+    carveHits(match.history[n]);
   }
   if (launch.resume?.length) {
     readShips();
     view.setShips(ships);
+    // And the hulls come back MARKED. Everything above this line is the core's
+    // to replay; the holes in the plating are not, so they are put on here.
+    showDamageAsOfNow();
     selected = ships.find(mine)?.id ?? -1;
     view.setSelection(selected);
     view.fit();
@@ -2944,6 +2958,32 @@ function showTick(tick: number): void {
   const shown = Math.min(TICKS_PER_TURN, tick);
   scrub.value = String(shown);
   $('hSec').textContent = (shown / 60).toFixed(1);
+}
+
+/**
+ * Put the scars of every resolved turn onto the hulls, without playing them.
+ *
+ * Cells coming off a hull are the CLIENT's. They follow the damage rather than
+ * deciding it, which is why none of it is hashed and none of it crosses the
+ * boundary, and the price of that is exactly this: the core replaying a match
+ * does not put them back, because the core has never heard of them.
+ *
+ * `showTick` was the only thing that ever applied them and it runs during a
+ * PLAYBACK, so a resumed game came up with the right hull numbers on factory
+ * fresh ships: 840 cells off a frigate before a reload, none after, and 124 of
+ * 300 hull on both sides of it. The save had lost nothing and nothing had
+ * drawn it. Pressing Review then played a turn and the holes appeared, which is
+ * what made it look like the damage arrived with the panel.
+ *
+ * Applied at the far end of the last resolved turn, which is where a live
+ * playback leaves it: every hit has landed and nothing is in the air, since a
+ * chunk is a function of (tick - hit.tick) and these fell turns ago.
+ */
+function showDamageAsOfNow(): void {
+  const end = shownIndex();
+  if (end < 0) return;
+  view.setDamage(carveHistory(),
+    end * TICKS_PER_TURN + TICKS_PER_TURN + tailFor(match.history[end]?.events ?? []));
 }
 
 /**
