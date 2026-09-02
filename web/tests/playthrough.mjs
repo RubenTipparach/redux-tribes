@@ -384,6 +384,73 @@ async function checkTheFieldIsDressed() {
     + `${st.backdrop.planets} planet(s) and ${st.backdrop.stars} stars, `
     + `post is ${st.post.quality}`
     + `${st.post.stoodDown ? ` (${st.post.stoodDown})` : ''}`);
+
+  await checkTheSkyIsABackdrop();
+}
+
+/**
+ * The sky does not slide when the camera moves.
+ *
+ * A star field draws identically whether it is a backdrop or a shell of points
+ * the fleet flies around inside, so the count above cannot tell them apart.
+ * What tells them apart is PARALLAX: move the eye a long way and ask whether a
+ * fixed star is still in the same place on screen.
+ *
+ * It was not. The sky cube was carried on the camera by name and the stars
+ * were left at the world origin, so every pan dragged them across the nebula.
+ */
+async function checkTheSkyIsABackdrop() {
+  const read = () => page.evaluate(() => window.ftDebug.backdrop());
+  const before = await read();
+  if (!before.carried) {
+    console.log('\nFAIL: nothing rides the camera, so the sky is a mesh in the world');
+    process.exit(1);
+  }
+  if (!before.star) {
+    console.log('\nFAIL: no star to measure, so parallax cannot be asked about');
+    process.exit(1);
+  }
+
+  // Move the eye a long way, through the controls rather than by writing
+  // state: focusing a hull is what a player does and it translates the camera
+  // across the field. Wait for the camera to have ARRIVED, since it eases.
+  const chip = page.locator('#hostiles .chip').first();
+  if (await chip.count()) { await chip.click().catch(() => {}); }
+  await page.waitForTimeout(300);
+  if (await chip.count()) { await chip.click().catch(() => {}); }
+  for (let n = 0; n < 60; n++) {
+    await page.waitForTimeout(120);
+    const a = (await read()).eye;
+    await page.waitForTimeout(120);
+    const b = (await read()).eye;
+    if (Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) < 0.01) break;
+  }
+  const after = await read();
+
+  const flew = Math.hypot(
+    after.eye[0] - before.eye[0], after.eye[1] - before.eye[1], after.eye[2] - before.eye[2]);
+  if (flew < 1) {
+    console.log(`\nFAIL: the camera only moved ${flew.toFixed(2)} u, `
+      + 'so this proves nothing about parallax');
+    process.exit(1);
+  }
+  // Judged on the BEARING to the star, not on where it landed on screen. A
+  // backdrop is a set of directions, so the bearing has to hold however far
+  // the eye moves and whichever way it ends up pointing; screen position also
+  // swings with every turn, and a check written on it would be asking two
+  // questions at once and reporting the answer to the wrong one.
+  const dot = before.star.dir[0] * after.star.dir[0]
+    + before.star.dir[1] * after.star.dir[1]
+    + before.star.dir[2] * after.star.dir[2];
+  const swung = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+  if (swung > 0.05) {
+    console.log(`\nFAIL: the camera flew ${flew.toFixed(1)} u and the bearing to a fixed `
+      + `star moved ${swung.toFixed(2)} degrees with it, so the star field is a mesh in `
+      + `the world rather than a backdrop`);
+    process.exit(1);
+  }
+  log(`the sky is a backdrop: ${after.carried} pieces ride the eye, and the bearing to a `
+    + `fixed star held to ${swung.toFixed(3)} degrees while the camera flew ${flew.toFixed(1)} u`);
 }
 
 async function checkNothingIsBuried() {
