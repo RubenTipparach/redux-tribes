@@ -32,7 +32,7 @@ import {
   DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
-import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
+import { AT_REST, blockedShell, easeAngle, mountQuat, turretGoal } from './turret.js';
 import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, SURF_NAMES, tintFar, tintHull, tintMix,
   type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
@@ -144,6 +144,8 @@ interface Rig {
   readonly quads: number[];
   readonly pivot: THREE.Vector3;
   readonly rest: number;
+  /** Quarter turns about the keel that seated this mount on its face. */
+  readonly roll: number;
   readonly key: string;
   readonly mask: Uint32Array | undefined;
   yaw: number;
@@ -1772,7 +1774,7 @@ export class View {
           const world = r.pivot.clone().applyQuaternion(q).add(at);
           const dir = new THREE.Vector3(aim.x, aim.y, aim.z).sub(world).applyQuaternion(inv);
           const gun = gunByKey(r.key);
-          if (gun) goal = turretGoal(dir, r.rest, gun, r.mask);
+          if (gun) goal = turretGoal(dir, r.rest, gun, r.mask, r.roll);
         }
         r.bears = goal.bears;
         r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
@@ -1796,13 +1798,15 @@ export class View {
     const a = src.array as Float32Array, b = dst.array as Float32Array;
     const an = srcN.array as Float32Array, bn = dstN.array as Float32Array;
     const m = new THREE.Matrix4();
-    const e = new THREE.Euler(0, 0, 0, 'YXZ');
+    const q = new THREE.Quaternion();
     const p = new THREE.Vector3();
     for (const r of rigs) {
       r.drawnYaw = r.yaw;
       r.drawnPitch = r.pitch;
-      e.set(r.pitch, r.yaw, 0);
-      m.makeRotationFromEuler(e);
+      // The cells were laid already rolled onto their face, so what is applied
+      // here is the traverse alone, about whichever axis that roll put the
+      // mount on. `mountQuat` is the one place that composition is written.
+      m.makeRotationFromQuaternion(mountQuat(r.yaw, r.pitch, r.roll, q));
       for (const q of r.quads) {
         // A quad the hull has already lost stays lost: the wound collapsed its
         // four vertices onto one point, and rewriting them from the original
@@ -1833,6 +1837,7 @@ export class View {
       quads: [],
       pivot: new THREE.Vector3(g.pivot[0], g.pivot[1], g.pivot[2]),
       rest: g.rest,
+      roll: g.roll,
       key: g.key,
       mask: masks[n],
       yaw: 0, pitch: 0, bears: false, drawnYaw: 0, drawnPitch: 0,

@@ -16,6 +16,8 @@
  * the hull.
  */
 
+import * as THREE from 'three';
+
 import { allRound, arcBlocked, ARC_PITCH, ARC_YAW, type GunDef } from './design.js';
 
 /** How fast a mount traverses, in radians a second. */
@@ -33,6 +35,30 @@ export interface TurretGoal {
   /** Whether it can actually bear: both gates passed. */
   readonly bears: boolean;
 }
+
+/**
+ * The same direction seen from a mount rolled onto its hull face.
+ *
+ * A mount's base bolts to the plating, so its up axis is the face's outward
+ * normal rather than the ship's own up, and its traverse is about THAT. Both
+ * gates are asked in the ship's frame, where the arc is authored and where the
+ * hull mask was scanned; only the two angles the barrel is drawn at are the
+ * mount's own, so this turn happens after the gates and before the angles.
+ *
+ * `roll` is quarter turns about the keel, (x, y) -> (-y, x), matching the turn
+ * the cells took: this is its inverse, since the question is what the ship's
+ * direction looks like from inside the mount.
+ */
+const unroll = (
+  d: { x: number; y: number; z: number }, roll: number,
+): { x: number; y: number; z: number } => {
+  let { x, y } = d;
+  for (let n = ((roll % 4) + 4) % 4; n > 0; n--) {
+    const nx = y, ny = -x;
+    x = nx; y = ny;
+  }
+  return { x, y, z: d.z };
+};
 
 /** Straight ahead on the mount, which is where one with nothing to do sits. */
 export const AT_REST: TurretGoal = { yaw: 0, pitch: 0, bears: false };
@@ -54,6 +80,7 @@ export function turretGoal(
   rest: number,
   gun: GunDef,
   mask?: Uint32Array,
+  roll = 0,
 ): TurretGoal {
   const len = Math.hypot(dir.x, dir.y, dir.z);
   if (len < 1e-6) return AT_REST;
@@ -61,13 +88,49 @@ export function turretGoal(
   const v = (Math.atan2(dir.y, Math.hypot(dir.x, dir.z)) * 180) / Math.PI;
   const inside = (x: number, a: readonly [number, number]) => allRound(a)
     || (x >= Math.min(a[0], a[1]) && x <= Math.max(a[0], a[1]));
-  // The authored arc, then the hull's own shadow. A turret that swung happily
-  // onto a target through its own engine block would be the picture promising
-  // a shot the match then refuses.
+  // The authored arc, then the hull's own shadow, both in the SHIP's frame
+  // because that is the frame both were written in. A turret that swung
+  // happily onto a target through its own engine block would be the picture
+  // promising a shot the match then refuses.
   const bears = inside(h, gun.arcH) && inside(v, gun.arcV)
     && !(mask && arcBlocked(mask, dir.x, dir.y, dir.z));
   if (!bears) return AT_REST;
-  return { yaw: (h * Math.PI) / 180 - rest, pitch: (-v * Math.PI) / 180, bears: true };
+  // And the angles in the MOUNT's frame, which is the ship's rolled onto the
+  // face this gun is bolted to.
+  const d = roll ? unroll(dir, roll) : dir;
+  const mh = Math.atan2(d.x, d.z);
+  const mv = Math.atan2(d.y, Math.hypot(d.x, d.z));
+  return { yaw: mh - rest, pitch: -mv, bears: true };
+}
+
+const Z = new THREE.Vector3(0, 0, 1);
+const qRoll = new THREE.Quaternion();
+const qBack = new THREE.Quaternion();
+const qAim = new THREE.Quaternion();
+const eAim = new THREE.Euler(0, 0, 0, 'YXZ');
+
+/**
+ * How far a mount's cells have turned from where they were laid.
+ *
+ * The rasteriser already rolled them onto their hull face, so a mount at rest
+ * is the identity and this is the TRAVERSE alone. That makes it a conjugation
+ * rather than a rotation: `roll * aim * roll'` turns about the mount's own
+ * axis wherever that axis has been put, and multiplying the roll in without
+ * taking it out again would roll a broadside gun a second time and lay it in
+ * the deck.
+ *
+ * One function, because the map rewrites quads and the yard turns a group, and
+ * two spellings of one rotation drift the first time either is touched.
+ */
+export function mountQuat(yaw: number, pitch: number, roll: number,
+  out = new THREE.Quaternion()): THREE.Quaternion {
+  eAim.set(pitch, yaw, 0);
+  out.setFromEuler(eAim);
+  const r = ((roll % 4) + 4) % 4;
+  if (!r) return out;
+  qRoll.setFromAxisAngle(Z, (r * Math.PI) / 2);
+  qBack.copy(qRoll).invert();
+  return out.copy(qRoll).multiply(qAim.setFromEuler(eAim)).multiply(qBack);
 }
 
 /**

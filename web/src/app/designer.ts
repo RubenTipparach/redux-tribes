@@ -19,7 +19,7 @@ import * as drafts from './drafts.js';
 // and cannot drift onto a different surface than the thing being designed will
 // fly with.
 import { finishMap, partMap } from './textures.js';
-import { AT_REST, blockedPct, blockedShell, easeAngle, turretGoal } from './turret.js';
+import { AT_REST, blockedPct, blockedShell, easeAngle, mountQuat, turretGoal } from './turret.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -29,7 +29,7 @@ import {
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
   DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
-  ARMOUR_BANDS, ROLE_BAND, bandFinishes, roleAt, roleCode, spinOf,
+  ARMOUR_BANDS, ROLE_BAND, bandFinishes, mountRoll, roleAt, roleCode, spinOf,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
   type FrameDef,
 } from './design.js';
@@ -88,6 +88,8 @@ interface Rig {
   readonly pivot: THREE.Vector3;
   /** The rest facing the player set, in radians about the up axis. */
   readonly rest: number;
+  /** Quarter turns about the keel that seated this mount on its face. */
+  readonly roll: number;
   readonly label: string;
   /** Whether the target was inside this turret's arc on the last frame. */
   bears: boolean;
@@ -571,6 +573,7 @@ export class Designer {
       rigOf.set(n, this.#rigs.length);
       rigCells.push([]); rigCols.push([]);
       this.#rigs.push({ group, gun: g, pivot, rest: -spinOf(sock, p.rot) * Math.PI / 2,
+        roll: mountRoll(frame, sock),
         label: `${m.name}, ${sock.label}`, bears: false, yaw: 0, pitch: 0 });
       this.#hull.add(group);
     });
@@ -1072,13 +1075,14 @@ export class Designer {
       // frame IS that direction.
       const n = this.#rigs.indexOf(r);
       const goal = this.#showTarget
-        ? turretGoal(this.#target.clone().sub(r.pivot), r.rest, r.gun, this.#masks[n])
+        ? turretGoal(this.#target.clone().sub(r.pivot), r.rest, r.gun, this.#masks[n], r.roll)
         : AT_REST;
       r.bears = goal.bears;
       r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
       r.pitch = easeAngle(r.pitch, goal.pitch, dt);
-      r.group.rotation.y = r.yaw;
-      r.group.rotation.x = r.pitch;
+      // The cells are already rolled onto their face, so the group carries the
+      // traverse alone, about the axis that roll put the mount on.
+      mountQuat(r.yaw, r.pitch, r.roll, r.group.quaternion);
 
       const sight = this.#arcs.getObjectByName(`sight${this.#rigs.indexOf(r)}`);
       if (sight) {
@@ -2384,10 +2388,14 @@ export class Designer {
       plate: this.#plate,
       arcs: this.#showArcs,
       target: this.#showTarget,
+      // The mount's OWN two angles rather than the group's Euler. A mount
+      // rolled onto a flank turns about an axis that is not the ship's up, so
+      // reading the group's y back would report a traverse as a mixture of
+      // three numbers and a harness would call a turret that swung stationary.
       rigs: this.#rigs.map(r => ({ label: r.label, key: r.gun.key,
-        arcH: r.gun.arcH, arcV: r.gun.arcV, bears: r.bears,
-        yaw: +(r.group.rotation.y * 180 / Math.PI).toFixed(1),
-        pitch: +(r.group.rotation.x * 180 / Math.PI).toFixed(1) })),
+        arcH: r.gun.arcH, arcV: r.gun.arcV, bears: r.bears, roll: r.roll,
+        yaw: +(r.yaw * 180 / Math.PI).toFixed(1),
+        pitch: +(r.pitch * 180 / Math.PI).toFixed(1) })),
       bearing: this.#rigs.filter(r => r.bears).length,
       // The scan, so the harness can wait for it and read what it found
       // without ever being able to drive it.

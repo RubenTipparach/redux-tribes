@@ -32,7 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, finishesOf,
-  frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, spinOf,
+  frameFor, liveryFor, moduleById, mountRoll, rasterise, rasterSig, roleAt, spinOf,
   socketsOf, type Design,
 } from './design.js';
 
@@ -94,6 +94,9 @@ export interface HullRig {
   readonly pivot: readonly [number, number, number];
   /** The rest facing the design gave it, in radians about the up axis. */
   readonly rest: number;
+  /** Quarter turns about the keel that put this mount on its hull face, so
+   *  the traverse is about the mount's own axis rather than the ship's up. */
+  readonly roll: number;
 }
 
 export interface HullMesh {
@@ -349,6 +352,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         ((sock.at[2] as number) - NZ / 2) * cell,
       ],
       rest: -spinOf(sock, p.rot) * Math.PI / 2,
+      roll: mountRoll(frame, sock),
     });
   });
 

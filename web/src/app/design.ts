@@ -657,6 +657,35 @@ export const spinOf = (sock: Socket | undefined, rot: number | undefined): numbe
   (((sock?.facing ?? 0) + (rot ?? 0)) % 4 + 4) % 4;
 
 /**
+ * Which way is UP for a mount: quarter turns about the keel axis that take a
+ * part's own +y onto the hull face it stands on.
+ *
+ * A turret is a drum with a toothed ring on one end and a flat base on the
+ * other, and the base BOLTS TO SOMETHING. Drawn always +y up, a mount under
+ * the keel had its ring pointing into its own ship and its base out at
+ * vacuum, and one on a flank had neither end against the plating at all: it
+ * hung off the side by its rim. Nine of the fleet's fifty two rings were on a
+ * flank and another dozen under the keel, so most of the fleet's guns were
+ * bolted to nothing.
+ *
+ * So a mount is rolled onto its face, and its base always points at the core.
+ * The turn is about +z, which is the keel, because a hull face here is either
+ * a flank or a deck: (x, y) -> (-y, x) a quarter at a time, so one quarter
+ * puts +y outboard to port and three put it to starboard.
+ *
+ * Only guns roll. A drive bell and a retro point along the keel whatever they
+ * are bolted to, a thruster block is a piece of the skin rather than a thing
+ * standing on it, and a magazine is inside the ship where there is no face to
+ * stand on.
+ */
+export const mountRoll = (frame: FrameDef, sock: Socket | undefined): number => {
+  if (!sock || (sock.kind !== 'gun' && sock.kind !== 'trunnion')) return 0;
+  const [ox, oy] = outwardAt(frame.profile, sock.at);
+  if (ox) return ox > 0 ? 3 : 1;
+  return oy >= 0 ? 0 : 2;
+};
+
+/**
  * How far out of the hull a socket's part is allowed to sit.
  *
  * - **proud**: standing off the hull, where the frame put it. A drive has to
@@ -1557,7 +1586,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.8, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.7, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
@@ -1647,7 +1676,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 0.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.5, massMax: 0.92, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -1748,7 +1777,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.5, massMax: 2.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.6, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1771,7 +1800,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.3, massMax: 5.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -1800,7 +1829,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_corvette', name: 'Karisen Corvette',
     faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.4, massMax: 0.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.4, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CV,
     // The ventral rail overruns the body at both ends, which is the one
     // Karisen habit that survives at every rung.
@@ -1888,7 +1917,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.5, massMax: 1.47, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.7, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -1905,7 +1934,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
     faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.3, massMax: 2.8, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.3, massMax: 2.88, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CA,
     spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
       [CX - 13, CY - 2, 34, 26, 4, 6] as const,
@@ -1949,7 +1978,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.2, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.2, massMax: 2.35, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -1969,7 +1998,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7, massMax: 4.74, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7, massMax: 4.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
@@ -2060,7 +2089,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_miner', name: 'Mining Ship',
     faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.5, massMax: 2.38, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.5, massMax: 2.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_MINER,
     spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
       ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
@@ -2204,7 +2233,7 @@ export const frameFor = (classKey: string): FrameDef => {
  * goes on its trunnion. A player cannot hang a beam on bare structure.
  */
 export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[] {
-  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringFacing(frame, s) : s));
+  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s) : s));
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
     const base = out.find(s => s.id === p.socket);
@@ -2238,13 +2267,37 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
 }
 
 /**
+ * A gun ring, moved out to the plating it is set into.
+ *
+ * A barbette is a drum SET INTO the skin: its toothed ring is flush with the
+ * plating and its body is inside, which is the only way its base has anything
+ * to bolt to. Frames author a ring at a fraction of the beam, and on a flank
+ * that fraction put the whole drum three courses UNDER the plating with the
+ * gun sitting on the skin above it, bolted to the hull rather than to its own
+ * base. The drum is three courses thick, so its ring lands on the skin when
+ * its centre sits one course in; the trunnion then goes one course further
+ * out, which is on top of the ring rather than a gap away from it.
+ *
+ * The face is taken before the move and the rest facing after it, so a ring
+ * that slides out along its own face keeps that face.
+ */
+const ringSeat = (frame: FrameDef, s: Socket): Socket => {
+  const [ox, oy] = outwardAt(frame.profile, s.at);
+  const [hw, hh] = hullAt(frame.profile, s.at[2] as number);
+  const at: [number, number, number] = ox
+    ? [acrossFrom(CX, ox, (hw as number) - 1), s.at[1] as number, s.at[2] as number]
+    : [s.at[0] as number, acrossFrom(CY, oy, (hh as number) - 1), s.at[2] as number];
+  return ringFacing(frame, { ...s, at });
+};
+
+/**
  * Which face of the hull a socket sits on, as a unit step in x or y.
  *
  * The same test the shell uses to decide whether a cell is deck, belly or
  * flank: whichever of the two normalised offsets is larger wins. One rule, so
  * a ring that the plate calls a flank ring is a flank ring here too.
  */
-const outwardAt = (
+export const outwardAt = (
   prof: readonly Station[], at: readonly [number, number, number],
 ): readonly [number, number] => {
   const [hw, hh] = hullAt(prof, at[2] as number);
@@ -2254,23 +2307,34 @@ const outwardAt = (
   return [dx >= 0 ? 1 : -1, 0];
 };
 
-/** A gun ring's rest facing: outboard on a flank, straight ahead anywhere
- *  else. A dorsal or ventral mount cannot be turned to point up or down (a
- *  quarter turn is a YAW), and it does not need to be: once the barrel is
- *  clear of the plating, ahead is clear. */
+/**
+ * A gun ring's rest facing, which is a traverse about the mount's OWN axis
+ * and therefore reads differently on a deck than on a flank.
+ *
+ * A ring on the deck or the belly traverses in the horizontal plane, and it
+ * rests trained ABEAM rather than along the keel, to opposite sides fore and
+ * aft. Resting fore and aft, a pair of centreline mounts look straight at each
+ * other: the Terran heavy cruiser's two ventral rings were each blocked in the
+ * direction they were pointing by the other one, which is what a superfiring
+ * position exists to solve and this lattice has no room for. Trained abeam,
+ * both see out.
+ *
+ * A ring on a FLANK has its axis outboard, since that is the way its base
+ * bolts down, so its traverse is the vertical plane along the hull and abeam
+ * is where it cannot rest at all: abeam is straight up its own barbette. It
+ * rests along the keel instead, forward on a ring forward of midships and aft
+ * on one abaft, for the same reason the deck pair are trained to opposite
+ * sides. Pointing outboard was right while every mount was drawn +y up and is
+ * a barrel in the deck now.
+ */
 const ringFacing = (frame: FrameDef, s: Socket): Socket => {
   const [ox] = outwardAt(frame.profile, s.at);
-  if (ox) return { ...s, facing: ox > 0 ? 3 : 1 };
-  // A ring on the deck or the belly rests trained ABEAM rather than along the
-  // keel, and to opposite sides fore and aft. Resting fore and aft, a pair of
-  // centreline mounts look straight at each other: the Terran heavy cruiser's
-  // two ventral rings were each blocked in the direction they were pointing by
-  // the other one, which is what a superfiring position exists to solve and
-  // this lattice has no room for. Trained abeam, both see out.
   const prof = frame.profile;
   const mid = (Math.round((prof[0] as Station)[0])
     + Math.round((prof[prof.length - 1] as Station)[0])) / 2;
-  return { ...s, facing: (s.at[2] as number) >= mid ? 1 : 3 };
+  const fwd = (s.at[2] as number) >= mid;
+  if (ox) return { ...s, facing: fwd ? 0 : 2 };
+  return { ...s, facing: fwd ? 1 : 3 };
 };
 
 // --------------------------------------------------------------- armour --
@@ -2750,11 +2814,14 @@ export function rasterise(d: Design): Raster {
     const m = moduleById(p.module);
     if (!sock || !m) continue;
     const spin = spinOf(sock, p.rot);
-    const v = rotatedVoxels(m, spin);
+    // Rolled onto the face it stands on, so the base is against the plating
+    // and the ring is the end pointing at vacuum.
+    const roll = mountRoll(frame, sock);
+    const v = rotatedVoxels(m, spin, roll);
     const code = purposeCode(m.purpose);
     const seat = seatOf(frame, sock, v);
     // The PIVOT lands on the socket, not the box centre.
-    const pv = rotatedPivot(m, spin);
+    const pv = rotatedPivot(m, spin, roll);
     const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
@@ -3590,7 +3657,8 @@ function stock(classKey: string, parts: Placement[], sections: Partial<Sections>
     armour: 'wrapped', faction, paint, finish, metal, rough };
 }
 
-const P = (socket: string, module: string): Placement => ({ socket, module });
+const P = (socket: string, module: string, rot?: number): Placement =>
+  (rot === undefined ? { socket, module } : { socket, module, rot });
 
 export const STOCK: readonly Design[] = [
   // Six light nozzles in a three by two block, the archived transom exactly.
@@ -3618,7 +3686,14 @@ export const STOCK: readonly Design[] = [
     P('r0', 'RET-C'), P('r1', 'RET-C'),
     P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('p0', 'MAN-P'), P('p1', 'MAN-P'),
     P('b0', 'UTL-BRG'), P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b4', 'UTL-BAR'),
-    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1'),
+    // The one mount on the fleet whose rest a rule cannot pick. A flank ring
+    // rests along the keel, forward of midships pointing forward and abaft it
+    // pointing aft, and on every other hull one of those is clear. This
+    // sponson sits amidships on a section that is nearly round and behind a
+    // keel rail that overruns the body at both ends, so it looks into its own
+    // ship BOTH ways: fore blocked, aft blocked, up and down clear. Turned a
+    // quarter, it rests trained up and over the deck.
+    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1', 1),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
     'karisen', 0xFA6A0A, 'ribbed', 0.35, 0.45),
@@ -4106,16 +4181,30 @@ export function pivotOf(m: ModuleDef): readonly [number, number, number] {
   return [cx, cy, (sz - 1) / 2];
 }
 
-/** The same pivot in the coordinates of the model turned `rot` quarter turns. */
-export function rotatedPivot(m: ModuleDef, rot: number): readonly [number, number, number] {
+/**
+ * The same pivot in the coordinates of the model turned `rot` quarter turns
+ * about its own up axis and then `roll` quarter turns onto its hull face.
+ *
+ * The two turns in that order, always: the traverse is about the mount's OWN
+ * axis, and the roll is what puts that axis on the face. Rolling first would
+ * make a broadside gun's traverse a pitch.
+ */
+export function rotatedPivot(m: ModuleDef, rot: number,
+  roll = 0): readonly [number, number, number] {
   const r = ((rot % 4) + 4) % 4;
   let [px, py, pz] = pivotOf(m);
-  let [sx, , sz] = m.size;
+  let [sx, sy, sz] = m.size;
   for (let n = 0; n < r; n++) {
     // The same map the cells take: (x, z) -> (sz - 1 - z, x).
     const nx = (sz as number) - 1 - pz, nz = px;
     px = nx; pz = nz;
     const t = sx; sx = sz; sz = t;
+  }
+  for (let n = 0; n < (((roll % 4) + 4) % 4); n++) {
+    // And the roll: (x, y) -> (sy - 1 - y, x), a quarter about the keel.
+    const nx = (sy as number) - 1 - py, ny = px;
+    px = nx; py = ny;
+    const t = sx; sx = sy; sy = t;
   }
   return [px, py, pz];
 }
@@ -4130,21 +4219,34 @@ const rotCache = new Map<string, VoxelModel>();
  * on the grid: it stays one cell per cell, so it still cannot z fight with the
  * plate beside it or float a fraction of a cell off its ring.
  */
-export function rotatedVoxels(m: ModuleDef, rot: number): VoxelModel {
+export function rotatedVoxels(m: ModuleDef, rot: number, roll = 0): VoxelModel {
   const r = ((rot % 4) + 4) % 4;
-  if (r === 0) return voxelsOf(m);
-  const key = m.id + '/' + r;
+  const l = ((roll % 4) + 4) % 4;
+  if (r === 0 && l === 0) return voxelsOf(m);
+  const key = m.id + '/' + r + '/' + l;
   const hit = rotCache.get(key);
   if (hit) return hit;
   let cur = voxelsOf(m);
   for (let n = 0; n < r; n++) {
-    // (x, z) -> (sz - 1 - z, x): one quarter turn, exact on integers.
+    // (x, z) -> (sz - 1 - z, x): one quarter turn about up, exact on integers.
     const sx = cur.sz, sy = cur.sy, sz = cur.sx;
     const data = new Uint8Array(sx * sy * sz);
     for (let z = 0; z < cur.sz; z++) for (let y = 0; y < cur.sy; y++) for (let x = 0; x < cur.sx; x++) {
       const v = cur.data[x + y * cur.sx + z * cur.sx * cur.sy] as number;
       if (!v) continue;
       data[(cur.sz - 1 - z) + y * sx + x * sx * sy] = v;
+    }
+    cur = { sx, sy, sz, data, filled: cur.filled };
+  }
+  for (let n = 0; n < l; n++) {
+    // (x, y) -> (sy - 1 - y, x): one quarter turn about the keel, which is
+    // what lays a mount's base on the face it stands on.
+    const sx = cur.sy, sy = cur.sx, sz = cur.sz;
+    const data = new Uint8Array(sx * sy * sz);
+    for (let z = 0; z < cur.sz; z++) for (let y = 0; y < cur.sy; y++) for (let x = 0; x < cur.sx; x++) {
+      const v = cur.data[x + y * cur.sx + z * cur.sx * cur.sy] as number;
+      if (!v) continue;
+      data[(cur.sy - 1 - y) + x * sx + z * sx * sy] = v;
     }
     cur = { sx, sy, sz, data, filled: cur.filled };
   }

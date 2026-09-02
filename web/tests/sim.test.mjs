@@ -443,7 +443,7 @@ test('class and mount metadata cross intact', () => {
   // `--check` fails if the two part. The literal here is only a spot check
   // that a number crossed the boundary at all; the fleet wide agreement is
   // the test below it.
-  assert.ok(Math.abs(terran.hull - 295.882) < 0.01, `terran hull ${terran.hull}`);
+  assert.ok(Math.abs(terran.hull - 296.936) < 0.01, `terran hull ${terran.hull}`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
@@ -824,8 +824,8 @@ test('no stock mount is blocked in the direction it rests', async () => {
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, spinOf, useCore,
-    useArcDirs } = design;
+  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, spinOf, mountRoll,
+    useCore, useArcDirs } = design;
   useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
   useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 
@@ -837,13 +837,86 @@ test('no stock mount is blocked in the direction it rests', async () => {
     for (const p of d.parts) {
       if (!moduleById(p.module)?.weapon) continue;
       const mask = masks[mount++];
-      const spin = spinOf(socks.find(k => k.id === p.socket), p.rot);
-      // Quarter turns about the hull's up axis, from the nose.
+      const sock = socks.find(k => k.id === p.socket);
+      const spin = spinOf(sock, p.rot);
+      // Quarter turns about the mount's own up axis, from the nose, and then
+      // the roll that put that axis on the hull face this gun is bolted to.
+      // The mask is scanned in the SHIP's frame, so the rest direction has to
+      // arrive there: read without the roll, a broadside gun resting forward
+      // was asked about a direction it does not point in.
       const a = (-spin * Math.PI) / 2;
-      assert.equal(arcBlocked(mask, Math.sin(a), 0, Math.cos(a)), false,
+      let x = Math.sin(a), y = 0;
+      for (let n = mountRoll(f, sock); n > 0; n--) { const nx = -y; y = x; x = nx; }
+      assert.equal(arcBlocked(mask, x, y, Math.cos(a)), false,
         `${f.classKey}: ${p.socket} rests pointing into its own ship`);
     }
   }
+});
+
+test('every stock turret stands on its hull face, ring outboard', async () => {
+  // The rule a player states as "the base has to be bolted to something, and
+  // it cannot be upside down unless it is under the keel".
+  //
+  // A barbette is a drum with a toothed ring at one end and a flat base at the
+  // other, and every one of them was drawn with that ring pointing +y whatever
+  // face it stood on. Under the keel that put the ring INSIDE the ship and the
+  // base out at vacuum; on a flank neither end was against the plating at all
+  // and the drum hung off the side by its rim. Thirty of the fleet's forty
+  // seven were seated that way, and no suite could see it, because a mount's
+  // cells were only ever counted rather than looked at.
+  //
+  // So it is read off the rasterised cells rather than off the code that lays
+  // them: the ring is the lit course, and its mean position along the outward
+  // axis must be OUTBOARD of the drum's own. Zero would be a drum lying on its
+  // side; negative is one upside down.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, Mat,
+    useCore, useArcDirs } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
+
+  const NX = 32, NY = 32, NZ = 64;
+  const at = (i, j, k) => i + j * NX + k * NX * NY;
+  const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  let seen = 0;
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const r = rasterise(d);
+    const socks = socketsOf(f, d.parts);
+    d.parts.forEach((p, pi) => {
+      if (moduleById(p.module)?.art !== 'barbette') return;
+      const sock = socks.find(k => k.id === p.socket);
+      if (!sock) return;
+      const [ox, oy] = outwardAt(f.profile, sock.at);
+      const axis = ox ? 0 : 1, dir = ox || oy;
+      let n = 0, ring = 0, sumRing = 0, sumAll = 0, touching = 0;
+      for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+        const q = at(i, j, k);
+        if (r.own[q] !== pi + 1) continue;
+        const c = [i, j, k];
+        n++; sumAll += c[axis];
+        if (r.grid[q] === Mat.Glow || r.grid[q] === Mat.Accent) { ring++; sumRing += c[axis]; }
+        for (const [a, b, e] of N6) {
+          const x = i + a, y = j + b, z = k + e;
+          if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) continue;
+          if (r.grid[at(x, y, z)] && r.own[at(x, y, z)] !== pi + 1) { touching++; break; }
+        }
+      }
+      seen++;
+      assert.ok(n > 0, `${f.classKey}: ${p.socket} barbette got no cells`);
+      assert.ok(ring > 0, `${f.classKey}: ${p.socket} barbette has no ring`);
+      assert.ok(touching > 0, `${f.classKey}: ${p.socket} barbette touches nothing`);
+      const out = (sumRing / ring - sumAll / n) * dir;
+      assert.ok(out > 0.2,
+        `${f.classKey}: ${p.socket} ring sits ${out.toFixed(2)} outboard of its own drum`);
+    });
+  }
+  assert.ok(seen >= 40, `only ${seen} barbettes walked`);
 });
 
 test('every livery uses its whole palette, and the pick is the plating', async () => {
