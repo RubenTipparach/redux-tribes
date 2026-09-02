@@ -591,6 +591,66 @@ const pairX = (prof: readonly Station[], kind: SocketKind, a: string, b: string,
  * Cells are claimed first come first served, so a bay seated inside another
  * one is not an error anywhere: it is simply a part that never appears.
  */
+/**
+ * Where a gun ring sits, as a fraction of the half extent it is seated on.
+ *
+ * Authored at about eight tenths on every class, which is what puts a turret
+ * on the SKIN rather than inside the ship. Named here because it is the line
+ * everything else has to stay inboard of.
+ */
+const RING_AT = 0.78;
+
+/**
+ * How much room a turret's swept box needs, in CELLS, beyond the ring itself.
+ *
+ * A turret is four or five cells across and it TURNS, so the box it sweeps is
+ * wider than the gun; a berth is another five. Ten cells of clearance is those
+ * two half widths plus a cell, and it is in cells rather than in a fraction
+ * because a turret is the same size at every rung: the same fraction of a
+ * cruiser's beam is nearly twice as many cells as it is of a corvette's, which
+ * is exactly how four heavy cruisers came to seat their barracks inside their
+ * own gun rings and read as illegal hulls nobody could field.
+ */
+const RING_CLEAR = 6;
+
+/**
+ * How far outboard the plumbing may sit on a hull with this half extent.
+ *
+ * Solved rather than picked: the outboard edge of a berth has to stop short of
+ * the inboard edge of a gun's box, so what is left of the ring's own fraction
+ * once the clearance comes out of it is all the room there is. On a wide hull
+ * that is about a third of the beam; on a narrow one it is nothing at all, and
+ * nothing at all is the right answer rather than a bug, because a hull six
+ * cells to the skin cannot carry berths abreast under its own guns whatever
+ * number is written here.
+ */
+const inboardOf = (half: number): number =>
+  Math.max(0, Math.min(0.46, RING_AT - RING_CLEAR / Math.max(1, half)));
+
+/** Below this a lane is not a lane: the two berths in it would overlap each
+ *  other rather than the guns, which is the same part missing for a different
+ *  reason. */
+const LANE_MIN = 0.18;
+
+/**
+ * How a navy stacks its berths, decided by its own SECTION.
+ *
+ * Three answers, and which one a hull gets is arithmetic rather than habit:
+ * abreast where there is beam to spare outboard of the gun rings, stacked one
+ * over the other where the hull is deep and narrow, and single file down the
+ * keel where it is neither. The Benefactor is the ship that made this
+ * necessary: paired abreast, its berths sat inside its own gun rings on every
+ * rung above a frigate and the stock hull read as illegal.
+ */
+const laneOf = (prof: readonly Station[], z: number):
+  { axis: 'x' | 'y' | 'z'; at: number } => {
+  const [hw, hh] = hullAt(prof, z);
+  const u = inboardOf(hw as number), v = inboardOf(hh as number);
+  if (u >= LANE_MIN && u >= v) return { axis: 'x', at: u };
+  if (v >= LANE_MIN) return { axis: 'y', at: v };
+  return { axis: 'z', at: 0 };
+};
+
 const suite = (prof: readonly Station[],
   drives: ReadonlyArray<readonly [number, number]>,
   bays: number, clamps: number, bayV = 0.05,
@@ -631,9 +691,21 @@ const suite = (prof: readonly Station[],
     const z = bayZ
       ? (bayZ[Math.min(k, bayZ.length - 1)] as number)
       : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
-    const port = (n - 1) % 2 === 0;
-    out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${port ? 'port' : 'starboard'} ${k + 1}`,
-      z, port ? -0.46 : 0.46, bayV));
+    const first = (n - 1) % 2 === 0;
+    const lane = laneOf(prof, z);
+    if (lane.axis === 'x') {
+      out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${first ? 'port' : 'starboard'} ${k + 1}`,
+        z, first ? -lane.at : lane.at, bayV));
+    } else if (lane.axis === 'y') {
+      out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${first ? 'upper' : 'lower'} ${k + 1}`,
+        z, 0, first ? lane.at : -lane.at));
+    } else {
+      // No lane either way, so the pair goes fore and aft of the station
+      // instead of abreast of it. A berth is seven cells long, so four clear
+      // of the station is the least that keeps two of them apart.
+      out.push(seatAt(prof, 'bay', `b${n}`, `bay, keel ${n}`,
+        z + (first ? -4 : 4), 0, bayV));
+    }
   }
 
   // Clamps go on the QUARTER, aft of the bays and aft of anything a missile
@@ -643,67 +715,170 @@ const suite = (prof: readonly Station[],
     const k = Math.floor(n / 2);
     const z = aft + 8 + k * 9;
     const port = n % 2 === 0;
-    out.push(seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'port' : 'starboard'} ${k + 1}`,
-      z, port ? -0.80 : 0.80, -0.34));
+    const lane = laneOf(prof, z);
+    out.push(lane.axis === 'x'
+      ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'port' : 'starboard'} ${k + 1}`,
+        z, port ? -lane.at : lane.at, -0.42)
+      : lane.axis === 'y'
+        ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'upper' : 'lower'} ${k + 1}`,
+          z, 0, port ? lane.at : -lane.at)
+        : seatAt(prof, 'clamp', `c${n}`, `clamp, keel ${n + 1}`,
+          z + (port ? -4 : 4), 0, -0.42));
   }
   return out;
 };
 
-// The five hull profiles. Half beam and half depth at a handful of stations,
-// read off the archived silhouettes: the Terran's slab waist, the Karisen's
-// long thin body, the Rogue's short wide one, the Benefactor's deep section,
-// and the Freighter's parallel middle body.
-const PROF_TERRAN: readonly Station[] = [
-  [4, 8, 5], [10, 10, 6], [24, 11, 6.5], [38, 10, 6], [50, 7, 4.5], [58, 3, 2]];
-const PROF_KARISEN: readonly Station[] = [
-  [4, 9, 5], [12, 11, 5.5], [28, 11, 6], [42, 9, 5], [52, 6, 3.5], [58, 2.5, 2]];
-const PROF_ROGUE: readonly Station[] = [
-  [9, 8, 5], [18, 12, 6.5], [30, 12, 7], [40, 9, 5.5], [48, 5, 3.5], [52, 2.5, 2]];
-const PROF_BENEFACTOR: readonly Station[] = [
-  [4, 7, 8], [18, 8, 10], [32, 8, 9], [46, 7, 7], [54, 4, 4], [58, 2, 2]];
-const PROF_FREIGHTER: readonly Station[] = [
-  [8, 6, 5], [16, 8, 7], [30, 8, 7], [42, 7, 6], [50, 4, 3.5], [54, 2, 1.5]];
+// ------------------------------------------------------- the sections --
 
-// The twelve that fill the ladder in. A faction's SECTION is its signature and
-// it holds at every rung: Terran wide and flat, Karisen long and round, Rogue
-// short and very broad, Benefactor deeper than it is wide. A corvette is short
-// at the frigate's cell size; a destroyer and a heavy cruiser are the same
-// lattice at the escort and cruiser rungs, which is what makes a cruiser cost
-// eight times a frigate's plate for the same cells (design.rs scales it by the
-// cube of the cell).
-const PROF_TERRAN_CV: readonly Station[] = [
-  [12, 6, 4], [18, 8, 5], [28, 8.5, 5], [38, 7, 4], [46, 4, 2.5], [50, 2, 1.5]];
-const PROF_TERRAN_DD: readonly Station[] = [
-  [3, 8, 5], [10, 11, 6], [22, 12, 6.5], [36, 12, 6.5], [48, 9, 5], [56, 4, 2.5],
-  [60, 2, 1.5]];
-const PROF_TERRAN_CA: readonly Station[] = [
-  [2, 8.5, 5], [9, 11.5, 6], [20, 12.5, 6.5], [34, 12.5, 6.5], [46, 10.5, 5.5],
-  [55, 6, 3.5], [61, 2.5, 1.5]];
+/**
+ * A navy's SECTION, authored once and cut into a whole ladder.
+ *
+ * The seventeen profiles used to be seventeen hand written tables, and they
+ * drifted the way seventeen hand written tables do. Two things went wrong and
+ * only one of them was visible.
+ *
+ * The visible one: every hull came out the same lozenge. A Terran was 2.41
+ * wide by 1.53 deep and a Benefactor 2.19 by 2.19, which is "wide and flat"
+ * against "deeper than it is wide" written down as almost the same number, so
+ * the four navies could only be told apart by their paint. A section has to be
+ * a RATIO a player can see at a glance, and 1.6 against 1.0 is not one.
+ *
+ * The invisible one: CLAUDE.md says "a rung is a cell size, not a longer
+ * profile", and the tables did not obey it. Each rung was drawn a little
+ * longer as well as scaled, so the ladder came out at 1.55 and 2.15 times the
+ * frigate instead of 1.5 and 2. Nothing said so, because nothing measured it:
+ * `tools/measure_fleet.mjs` prints that column now.
+ *
+ * So a faction authors ONE envelope and the ladder is cut from it. The z
+ * extent and the maximum half beam and half depth are the same at every
+ * warship rung, which makes the world size ladder EXACTLY the rung ratio:
+ * a destroyer is one and a half times its frigate and a heavy cruiser twice
+ * it, in all three dimensions, by construction rather than by tuning.
+ */
+interface SectionDef {
+  /** Length in CELLS, the same at every warship rung of this navy. */
+  readonly cells: number;
+  /** Half beam and half depth at the waist, in cells. The whole of what makes
+   *  a navy recognisable from ahead. */
+  readonly halfBeam: number;
+  readonly halfDepth: number;
+  /**
+   * The longitudinal distribution: (t, beam, depth) with t running 0 at the
+   * transom to 1 at the nose, and the two fractions of the waist above.
+   *
+   * Fractions rather than cells so a tier can redistribute fullness without
+   * touching the envelope: see `FULLNESS`.
+   */
+  readonly waist: ReadonlyArray<readonly [number, number, number]>;
+}
 
-const PROF_KARISEN_CV: readonly Station[] = [
-  [12, 5, 4], [18, 6.5, 4.5], [28, 7, 4.5], [38, 6, 4], [46, 3.5, 2.5], [52, 1.5, 1.5]];
-const PROF_KARISEN_DD: readonly Station[] = [
-  [2, 6, 4.5], [10, 8.5, 5.5], [24, 9.5, 6], [40, 9, 5.5], [52, 6.5, 4], [59, 3, 2],
-  [62, 1.5, 1]];
-const PROF_KARISEN_CA: readonly Station[] = [
-  [1, 6.5, 5], [9, 9, 6], [24, 10.5, 6.5], [42, 10, 6], [54, 7, 4.5], [60, 3.5, 2.5],
-  [63, 1.5, 1]];
+/**
+ * The four navies and the civil yards, from ahead.
+ *
+ * Terran is a wide flat slab, Karisen is nearly circular and the longest hull
+ * at every rung, Rogue is the shortest and by far the broadest, Benefactor is
+ * the only section that is taller than it is wide, and a civil hull is a box
+ * with a parallel middle body because it is a container rack with an engine
+ * behind it.
+ */
+const NAVY_SECTION: Record<FactionKey, SectionDef> = {
+  terran: {
+    cells: 54, halfBeam: 12, halfDepth: 6.2,
+    waist: [[0, 0.72, 0.84], [0.13, 0.93, 0.98], [0.36, 1, 1], [0.60, 1, 1],
+      [0.80, 0.82, 0.86], [0.93, 0.46, 0.52], [1, 0.20, 0.28]],
+  },
+  karisen: {
+    cells: 60, halfBeam: 8, halfDepth: 7.4,
+    waist: [[0, 0.70, 0.72], [0.15, 0.93, 0.94], [0.40, 1, 1], [0.64, 0.96, 0.97],
+      [0.83, 0.72, 0.74], [0.94, 0.42, 0.44], [1, 0.17, 0.19]],
+  },
+  rogue: {
+    cells: 44, halfBeam: 13, halfDepth: 5.2,
+    waist: [[0, 0.66, 0.82], [0.17, 0.95, 1], [0.42, 1, 1], [0.64, 0.92, 0.95],
+      [0.83, 0.62, 0.72], [1, 0.24, 0.36]],
+  },
+  benefactor: {
+    cells: 52, halfBeam: 6.8, halfDepth: 11,
+    waist: [[0, 0.76, 0.64], [0.17, 0.95, 0.92], [0.42, 1, 1], [0.64, 0.98, 0.95],
+      [0.83, 0.74, 0.66], [0.93, 0.46, 0.40], [1, 0.20, 0.17]],
+  },
+  civil: {
+    cells: 52, halfBeam: 8.5, halfDepth: 8,
+    waist: [[0, 0.74, 0.76], [0.13, 1, 1], [0.70, 1, 1], [0.85, 0.80, 0.82],
+      [0.94, 0.48, 0.50], [1, 0.20, 0.22]],
+  },
+};
 
-const PROF_ROGUE_CV: readonly Station[] = [
-  [14, 7, 4], [20, 10, 5], [30, 10.5, 5.5], [38, 8, 4.5], [44, 4.5, 3], [48, 2.5, 2]];
-const PROF_ROGUE_DD: readonly Station[] = [
-  [8, 8, 5], [16, 12, 6.5], [28, 12.5, 7], [38, 10.5, 6.5], [46, 6.5, 4.5], [52, 3, 2]];
-const PROF_ROGUE_CA: readonly Station[] = [
-  [6, 9, 5.5], [14, 13, 7], [26, 13.5, 7.5], [38, 12, 7], [47, 7, 5], [54, 3, 2]];
+/**
+ * How FULL a rung's body is, as an exponent on the distribution.
+ *
+ * The envelope is fixed, so a tier cannot be distinguished by being bigger:
+ * that is the rung's job and the rung does it exactly. What is left is where
+ * the volume SITS. An exponent under one pulls every fraction toward 1, which
+ * carries the waist further fore and aft and blunts the ends: a heavy cruiser
+ * is a slab with a stub bow. Over one does the opposite, and a corvette comes
+ * out as a needle.
+ *
+ * It cannot change the ladder, because 1 raised to any power is 1 and the
+ * waist is where the maximum is. That is the whole reason it is an exponent
+ * and not a scale.
+ */
+const FULLNESS: Record<TierKey, number> = {
+  corvette: 1.34, frigate: 1, destroyer: 0.86, cruiser: 0.72, freighter: 1,
+};
 
-const PROF_BENEFACTOR_CV: readonly Station[] = [
-  [12, 5, 5.5], [18, 6, 7], [28, 6, 6.5], [38, 5.5, 5.5], [46, 3.5, 3.5], [50, 2, 2]];
-const PROF_BENEFACTOR_DD: readonly Station[] = [
-  [3, 7, 7.5], [12, 8.5, 10.5], [26, 9, 10], [40, 8.5, 9], [50, 6, 6], [57, 3, 3],
-  [60, 1.5, 1.5]];
-const PROF_BENEFACTOR_CA: readonly Station[] = [
-  [2, 8, 8.5], [11, 9.5, 12], [24, 10, 12], [40, 9.5, 10.5], [51, 7, 7], [58, 3.5, 3.5],
-  [62, 1.5, 1.5]];
+/** How much of its navy's length a rung actually has. Only the corvette is
+ *  short: every other warship rung is the same profile at a bigger cell,
+ *  which is what makes the ladder exact. */
+const REACHES: Record<TierKey, number> = {
+  corvette: 0.70, frigate: 1, destroyer: 1, cruiser: 1, freighter: 1,
+};
+
+/**
+ * One navy's section, cut to one rung, as the stations the rest of the file
+ * already understands.
+ *
+ * Centred in the lattice rather than laid from a fixed transom, so a long
+ * navy and a short one both have their overhangs: the drives are seated one
+ * cell forward of the transom and a heavy bell is seven cells long, so a hull
+ * that started at z 0 would push its own engines out of the world.
+ */
+const profileFor = (faction: FactionKey, tier: TierKey): readonly Station[] => {
+  const s = NAVY_SECTION[faction];
+  const e = FULLNESS[tier];
+  const cells = Math.round(s.cells * REACHES[tier]);
+  const aft = Math.max(2, Math.round((NZ - cells) / 2));
+  return s.waist.map(([t, w, h]) => [
+    Math.round(aft + t * cells),
+    +(s.halfBeam * Math.pow(w, e)).toFixed(3),
+    +(s.halfDepth * Math.pow(h, e)).toFixed(3),
+  ] as Station);
+};
+
+// The seventeen profiles, all of them cut from five sections. The names are
+// what `FRAMES` and every socket below already ask for, so a navy's shape is
+// edited in ONE place and the whole ladder follows.
+const PROF_TERRAN = profileFor('terran', 'frigate');
+const PROF_KARISEN = profileFor('karisen', 'frigate');
+const PROF_ROGUE = profileFor('rogue', 'frigate');
+const PROF_BENEFACTOR = profileFor('benefactor', 'frigate');
+const PROF_FREIGHTER = profileFor('civil', 'freighter');
+
+const PROF_TERRAN_CV = profileFor('terran', 'corvette');
+const PROF_TERRAN_DD = profileFor('terran', 'destroyer');
+const PROF_TERRAN_CA = profileFor('terran', 'cruiser');
+
+const PROF_KARISEN_CV = profileFor('karisen', 'corvette');
+const PROF_KARISEN_DD = profileFor('karisen', 'destroyer');
+const PROF_KARISEN_CA = profileFor('karisen', 'cruiser');
+
+const PROF_ROGUE_CV = profileFor('rogue', 'corvette');
+const PROF_ROGUE_DD = profileFor('rogue', 'destroyer');
+const PROF_ROGUE_CA = profileFor('rogue', 'cruiser');
+
+const PROF_BENEFACTOR_CV = profileFor('benefactor', 'corvette');
+const PROF_BENEFACTOR_DD = profileFor('benefactor', 'destroyer');
+const PROF_BENEFACTOR_CA = profileFor('benefactor', 'cruiser');
 
 export const FRAMES: readonly FrameDef[] = [
   {
@@ -1012,8 +1187,8 @@ export const FRAMES: readonly FrameDef[] = [
       ...suite(PROF_KARISEN_DD, [[-0.6, -0.12], [0, -0.12], [0.6, -0.12], [0, 0.5]], 8, 2, 0.5),
       seatAt(PROF_KARISEN_DD, 'gun', 'g0', 'gun ring, nose', 51, 0, 0.42),
       seatAt(PROF_KARISEN_DD, 'gun', 'g1', 'gun ring, aft dorsal', 16, 0, 0.58),
-      seatAt(PROF_KARISEN_DD, 'missile', 'm0', 'missile pad, port', 26, -0.42, -0.78),
-      seatAt(PROF_KARISEN_DD, 'missile', 'm1', 'missile pad, starboard', 26, 0.42, -0.78),
+      seatAt(PROF_KARISEN_DD, 'missile', 'm0', 'missile pad, forward', 31, 0, -0.5),
+      seatAt(PROF_KARISEN_DD, 'missile', 'm1', 'missile pad, aft', 22, 0, -0.5),
     ],
     note: 'Sixty cells of hull and nine of beam: the longest thin thing at its rung. '
       + 'A pair of ventral cells under a rail that runs past both ends of the body, '
@@ -1032,10 +1207,14 @@ export const FRAMES: readonly FrameDef[] = [
       seatAt(PROF_KARISEN_CA, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
       seatAt(PROF_KARISEN_CA, 'gun', 'g1', 'gun ring, aft dorsal', 14, 0, 0.58),
       // Three pairs down the rail, evenly, because that is what the rail is.
-      seatAt(PROF_KARISEN_CA, 'missile', 'm0', 'missile pad, port forward', 40, -0.44, -0.78),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm1', 'missile pad, starboard forward', 40, 0.44, -0.78),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm2', 'missile pad, port aft', 24, -0.44, -0.78),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm3', 'missile pad, starboard aft', 24, 0.44, -0.78),
+      // Four cells in a ROW down the keel rather than two abreast twice. A
+      // Karisen is the narrowest hull at its rung and a cell is five cells
+      // across: paired, the pair was pulled inboard until the two boxes met
+      // over the centreline and each stood in the other's sweep.
+      seatAt(PROF_KARISEN_CA, 'missile', 'm0', 'missile pad, first', 43, 0, -0.5),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm1', 'missile pad, second', 35, 0, -0.5),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm2', 'missile pad, third', 27, 0, -0.5),
+      seatAt(PROF_KARISEN_CA, 'missile', 'm3', 'missile pad, fourth', 19, 0, -0.5),
     ],
     note: 'The arsenal: four cells in two pairs along a keel rail longer than the '
       + 'ship, and still only the two beams every Karisen carries. The berths are up '
@@ -1583,6 +1762,11 @@ let rasterCache: { sig: string; raster: Raster } | null = null;
  * six cells: past that the part is not near its socket any more and the honest
  * answer is that the frame is full.
  */
+/** What a cell inside a turret's sweep costs the nudge, against one cell of
+ *  another part. Bigger than any part's cell count, so a legal seat always
+ *  beats an illegal one however cramped it is. */
+const FOUL_COST = 4096;
+
 const NUDGE: ReadonlyArray<readonly [number, number, number]> = (() => {
   const out: Array<readonly [number, number, number]> = [];
   for (let dz = -6; dz <= 6; dz++) for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
@@ -1717,7 +1901,16 @@ export function rasterise(d: Design): Raster {
         if (!inBounds(x, y, z)) { lost++; continue; }
         const n = idx3(x, y, z);
         const at = grid[n] as number;
-        if ((at && at !== Mat.Frame) || reserved[n]) lost++;
+        // A cell inside a turret's box costs far more than a cell another
+        // part is already standing in, because the two are not the same kind
+        // of bad. Standing in another part loses this part some cells and
+        // nothing else; standing in a sweep makes the WHOLE HULL illegal, and
+        // a stock hull nobody can field is not a lesser fault than a berth
+        // that came out a little small. Weighted equally, the nudge took the
+        // nearest free hole whichever it was, and four heavy cruisers seated
+        // a barracks inside their own gun rings.
+        if (reserved[n]) lost += FOUL_COST;
+        else if (at && at !== Mat.Frame) lost++;
       }
       return lost;
     };
