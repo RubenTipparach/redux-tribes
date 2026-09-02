@@ -111,7 +111,7 @@ All four must pass before a push:
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
 cd engine/sim_core && cargo test            # 96, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 64, the wasm boundary and the addresses
+npm --prefix web test                       # 68, the wasm boundary and the addresses
 npm --prefix server test                    # 13, the lobby and the lockstep API
 
 node tools/measure_fleet.mjs --check        # the class table against the fleet
@@ -920,6 +920,23 @@ only while the barrel is actually moving: a settled mount costs nothing. Meshes
 of their own would cost nothing while moving either, and would mean the carve
 had to know which of four buffers a quad lives in, which is a hole in a hull
 waiting to land in the wrong one.
+
+**A turret stands on a FACE, and its base points at the core.** A barbette is
+a drum with a ring at one end and a base at the other, and every one of them
+was drawn +y up whatever face it stood on: under the keel the ring pointed
+INTO the ship, and on a flank neither end was against the plating at all, so
+the drum hung off the side by its rim and the gun above it was bolted to the
+hull rather than to its own base. Thirty of the fleet's forty seven were
+seated that way, and the suites were blind to it because a mount's cells were
+counted and never looked at. `mountRoll` rolls a gun onto its face, from the
+same `outwardAt` the plating uses, and `ringSeat` sets the ring flush in the
+skin rather than three courses under it. The traverse follows through
+`mountQuat`, which is `roll * aim * roll'`: a conjugation, because the cells
+are laid already rolled and multiplying the roll in again lays a broadside gun
+in the deck. Both gates stay in the SHIP's frame; only the two angles the
+barrel is drawn at are the mount's own. It is checked by reading the CELLS:
+the ring is the lit course, and its mean position along the outward axis has
+to be outboard of the drum's own.
 
 **Hovering names what is under the pointer**, because the picture IS the grid: a
 raycast gives a triangle, two triangles are a quad, `cellOf` says which lattice

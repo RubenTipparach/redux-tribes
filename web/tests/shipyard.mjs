@@ -383,8 +383,21 @@ async function checkTurrets(page) {
   if (over.length) fail(`a turret swung past its arc: ${over.join('; ')}`);
   else ok('no turret swings past its own arc');
 
-  if (!a.bearing && !b.bearing) fail('no turret ever bore on the target');
-  else ok(`turrets bearing on the target: ${a.bearing} then ${b.bearing} of ${a.rigs.length}`);
+  // Bearing, watched over a whole LAP rather than sampled twice.
+  //
+  // Two point samples of an orbit is a coin toss: the target takes about seven
+  // seconds a lap and whether a given instant has anything in arc depends on
+  // where in the lap it lands, so this read "0 then 1 of 3" on one machine and
+  // "0 then 0" on the same commit under load. The lap is driven by frames, not
+  // by the wall clock, and the delta is clamped at 0.1 s, so eighty frames is
+  // at least one full lap however slowly the machine draws them.
+  let bore = Math.max(a.bearing, b.bearing);
+  for (let n = 0; n < 16 && !bore; n++) {
+    await frames(page, 6);
+    bore = Math.max(bore, (await page.evaluate(() => window.ftDebug.designer().bearing)));
+  }
+  if (!bore) fail('no turret bore on the target across a whole lap of its orbit');
+  else ok(`turrets bearing on the target: ${bore} of ${a.rigs.length} at once`);
 
   await page.click('#dzArcs');
   await page.click('#dzTrack');
@@ -499,12 +512,25 @@ async function checkArcScan(page) {
   const bare = await settled();
   if (!bare) fail('the arc scan never settled after the plate came off');
   else {
+    // Every mount opens or stays where it is, and the ship as a whole opens by
+    // a real margin. Not "every one of them opens": a mount whose own barbette
+    // is the thing standing in its way is barely helped by taking the plating
+    // off, and that is the correct answer rather than a defect. The Terran's
+    // port gun sits on a drum three courses thick in its own inboard
+    // direction, so the armour behind it was never what it could not see
+    // through. Requiring all three to move made the suite report a hull whose
+    // arcs had got BETTER (29 percent blocked to 25.8) as a regression.
+    const worse = bare.blocked.filter((b, n) => b > plated.blocked[n] + 0.5).length;
+    const total = plated.blocked.reduce((x, y) => x + y, 0)
+      - bare.blocked.reduce((x, y) => x + y, 0);
     const widened = bare.blocked.filter((b, n) => b < plated.blocked[n] - 0.5).length;
-    if (widened !== bare.blocked.length) {
-      fail(`the plate coming off freed only ${widened} of ${bare.blocked.length} turrets: `
+    if (worse || total < 2) {
+      fail(`the plate coming off freed only ${widened} of ${bare.blocked.length} turrets `
+        + `(${worse} got worse, ${total.toFixed(1)} points in all): `
         + `${plated.blocked.join(', ')} to ${bare.blocked.join(', ')}`);
     } else {
-      ok(`taking the plate off opens every arc: ${plated.blocked.map(b => b.toFixed(0)).join('/')}`
+      ok(`taking the plate off opens ${widened} of ${bare.blocked.length} arcs and none closes, `
+        + `${total.toFixed(1)} points in all: ${plated.blocked.map(b => b.toFixed(0)).join('/')}`
         + ` to ${bare.blocked.map(b => b.toFixed(0)).join('/')} percent blocked`);
     }
   }
