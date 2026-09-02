@@ -358,18 +358,26 @@ export function bandFinishes(d: {
 // ---------------------------------------------------------------- parts --
 
 /** What a socket will accept. A part never fits a socket of another kind. */
-export type SocketKind =
-  | 'drive' | 'retro' | 'rcs' | 'gun' | 'trunnion' | 'missile' | 'bay' | 'clamp'
-  /**
-   * A cargo station ON the hull rather than inside it.
-   *
-   * A container ship whose containers are enclosed bays is a grey slab with
-   * the cargo invisible inside it, which is what the first cut of the civil
-   * fleet came out as. A box is carried on deck, in tiers, and it is the boxes
-   * that make the ship read as a merchantman at all: this is the one socket
-   * kind whose whole point is that the part STANDS OUT.
-   */
-  | 'rack';
+/**
+ * Every kind of station a frame can carry.
+ *
+ * A runtime list with the type read OFF it, rather than a union beside an
+ * array somebody has to remember to extend twice. The architect reads untrusted
+ * JSON and has to be able to ask "is this a kind this build has", and the only
+ * way that answer stays true is if there is one list to ask.
+ *
+ * `rack` is a cargo station ON the hull rather than inside it. A container ship
+ * whose containers are enclosed bays is a grey slab with the cargo invisible
+ * inside it, which is what the first cut of the civil fleet came out as. A box
+ * is carried on deck, in tiers, and it is the boxes that make the ship read as
+ * a merchantman at all: this is the one socket kind whose whole point is that
+ * the part STANDS OUT.
+ */
+export const SOCKET_KINDS = [
+  'drive', 'retro', 'rcs', 'gun', 'trunnion', 'missile', 'bay', 'clamp', 'rack',
+] as const;
+
+export type SocketKind = typeof SOCKET_KINDS[number];
 
 export interface ModuleDef {
   readonly id: string;
@@ -2243,10 +2251,45 @@ export function seatOf(frame: FrameDef, sock: Socket,
 
 const seated = new Map<string, FrameDef>();
 
+/**
+ * A frame the ARCHITECT is editing, standing in for the authored one.
+ *
+ * The architect is an authoring tool, not a second way to field a ship: what a
+ * class derives is in the core's table and that table is hashed into the match
+ * state, so a frame edited here and flown there would be one seat playing a
+ * different ship from the other. It previews and it EXPORTS; the edit reaches
+ * a match by going back into this file and through `measure_fleet.mjs --sync`,
+ * which is the same road every stock number already travels.
+ *
+ * So this is deliberately one frame at a time, set on the way into the screen
+ * and cleared on the way out, rather than a store the rest of the app reads.
+ */
+let override: FrameDef | null = null;
+/** Bumped on every change, because `rasterSig` keys a cache on the CLASS and
+ *  two different frames under one class key would otherwise share a raster. */
+let overrideGen = 0;
+
+/** Put a frame in front of its authored one, or `null` to take it away. */
+export function setFrameOverride(f: FrameDef | null): void {
+  override = f;
+  overrideGen++;
+  seated.clear();
+}
+
+/** Which class is being overridden, if any. For the signature and for screens
+ *  that have to say so out loud. */
+export function frameOverride(): FrameDef | null { return override; }
+export function frameGen(): number { return overrideGen; }
+
+/** The frame as this build authored it, whatever the architect is showing. */
+export const stockFrameFor = (classKey: string): FrameDef =>
+  FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+
 export const frameFor = (classKey: string): FrameDef => {
+  if (override && override.classKey === classKey) return override;
   const hit = seated.get(classKey);
   if (hit) return hit;
-  const f = FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+  const f = stockFrameFor(classKey);
   seated.set(classKey, f);
   return f;
 };
@@ -2729,7 +2772,11 @@ export const DRAWN_MAX = 20000;
 /** A design's identity for caching. Paint is not in it: the raster does not
  *  depend on it, and anything that draws colour keys on this plus the paint. */
 export const rasterSig = (d: Design): string =>
-  d.classKey + '|' + d.armour + '|'
+  // The override generation first, because the rest of this describes the
+  // DESIGN and a frame edited under the same class key would otherwise be
+  // handed the previous frame's raster out of the cache.
+  (override ? `f${overrideGen}|` : '')
+  + d.classKey + '|' + d.armour + '|'
   + d.parts.map(p => p.socket + ':' + p.module + ':' + facingKey(facingOf(p)))
     .sort().join(',') + '|'
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'

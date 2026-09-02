@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
+import { Architect } from './app/architect.js';
 import {
   arcMasks, gunByKey, mountsOf, partAtCell, partsOf, PURPOSE, rasterise,
   stockFor, useArcDirs, useCore, type Design,
@@ -3565,6 +3566,10 @@ Object.defineProperty(window, 'ftDebug', {
     canPlan,
     /** The shipyard, read only. */
     designer: () => (designer.visible ? designer.debug() : null),
+    /** The architect's own state. Separate from the designer's because the
+     *  claim worth checking is that the two DISAGREE: the frame on screen is
+     *  an edit and the class is still what this build authored. */
+    architect: () => architect.debug(),
     /** The schematic modal: what it is describing, or null when it is down. */
     /** The schematic modal: what it is describing, what its armour is doing,
      *  and which cell and turret the pointer is on. */
@@ -3597,6 +3602,12 @@ const designer = new Designer(() => {
   else if (!lobby.visible) lobby.show();
 });
 $('bShipyard').onclick = () => { route.go({ kind: 'ship' }); };
+
+// The architect: the same yard editing the FRAME rather than a fit. It is a
+// mode of the designer, so this owns only the address and the way in.
+const architect = new Architect(designer);
+architect.onWhere(classKey => { route.go({ kind: 'architect', classKey }); });
+$('bArchitect').onclick = () => { route.go({ kind: 'architect' }); };
 
 // The seam between the shipyard and the library. The editor knows nothing
 // about the network and the lobby knows nothing about hulls; this is the one
@@ -3704,7 +3715,12 @@ async function showRoute(r: route.Route): Promise<void> {
   if (key === shownRoute) return;
   shownRoute = key;
 
-  if (r.kind !== 'ship') designer.hide();
+  // Leaving the architect CLEARS the frame override, and that is the whole
+  // safety property of the screen: an override left standing would follow the
+  // player into the shipyard and into a match, where the hull they can see and
+  // the hull the core spawns would be two different ships.
+  if (r.kind !== 'architect' && architect.open) architect.hide();
+  if (r.kind !== 'ship' && r.kind !== 'architect') designer.hide();
   if (r.kind !== 'play' && r.kind !== 'room') {
     // Leaving a game: the match stays in the module, but the screen over it
     // goes, and the lobby is the thing behind it.
@@ -3767,6 +3783,18 @@ async function showRoute(r: route.Route): Promise<void> {
         route.go({ kind: 'ship' }, { replace: true });
         designer.show();
       }
+      lobby.show();
+      return;
+    }
+    case 'architect': {
+      // No class named: the lobby's own list of them. A picker screen with one
+      // job would be a third place that knows the class list, and the yard's
+      // chips already are one.
+      if (!r.classKey || classIndexOf(r.classKey) < 0) {
+        route.go({ kind: 'architect', classKey: CLASS_KEYS[0] as string }, { replace: true });
+        return;
+      }
+      architect.show(r.classKey);
       lobby.show();
       return;
     }

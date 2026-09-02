@@ -544,6 +544,52 @@ if (!/^\/room\/.+/.test(roomPath)) {
 
 // ------------------------------------------------------------------ Back --
 
+// --- the architect ---------------------------------------------------------
+//
+// The three things a route has to actually do, on the newest one. Plus the one
+// property that is this screen's alone: an edited frame must not follow the
+// player out of it. The architect puts an override in front of the authored
+// frame so the canvas can draw the edit, and what a class DERIVES is in the
+// core's table and hashed into a match, so an override still standing after
+// the screen closes is a hull the player can see and a hull the core spawns
+// being two different ships.
+await boot('/architect/terran_frigate');
+if (path() !== '/architect/terran_frigate') {
+  fail(`the architect did not land on its own address: ${path()}`);
+} else {
+  const a = await page.evaluate(() => window.ftDebug?.architect?.());
+  if (!a || a.classKey !== 'terran_frigate') fail('the architect opened on nothing');
+  else ok(`a reload lands back on the architect: ${a.sockets.length} stations`);
+}
+
+// An edit, then out, then back in: a frame is work in progress and the draft
+// is filed under the class key, the same rule the shipyard's drafts follow.
+await page.evaluate(() => [...document.querySelectorAll('#dzArchList button')]
+  .find(x => x.textContent.includes('drive'))?.click());
+await page.waitForTimeout(300);
+await page.click('#dzArchZUp');
+await page.waitForTimeout(700);
+const nudged = await page.evaluate(() => window.ftDebug.architect());
+if (!nudged?.edited) fail('a nudge did not change the frame');
+else if (nudged.live !== nudged.sockets.length) {
+  fail(`the edit is not what frameFor answers: ${nudged.live} vs ${nudged.sockets.length}`);
+} else ok('a station moves, and frameFor answers with the edit');
+
+// Out to the shipyard. The override has to be gone: same class, same screen,
+// and the hull must be the one this build authored.
+await page.goto(BASE + '/ship/terran_frigate', { waitUntil: 'networkidle' });
+await page.waitForTimeout(1200);
+const leftArch = await page.evaluate(() => window.ftDebug.architect());
+if (leftArch !== null) fail('the architect is still open on another screen');
+else ok('leaving the architect closes it and clears the frame it was showing');
+
+// A dead id falls back AND rewrites, the same as every other route.
+await page.goto(BASE + '/architect/not_a_class', { waitUntil: 'networkidle' });
+await page.waitForTimeout(900);
+if (path() === '/architect/not_a_class') {
+  fail('an architect address naming no class kept its address');
+} else ok(`a class that does not exist rewrites itself to ${path()}`);
+
 await boot('/');
 await page.click('#bShipyard');
 await page.waitForTimeout(700);

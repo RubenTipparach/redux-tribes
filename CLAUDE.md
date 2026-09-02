@@ -259,8 +259,8 @@ A practice match had no id and no record: it lived in the wasm module and died
 with the tab. Two things fix that, and they are the same idea twice.
 
 **Every screen has an address.** `/`, `/play/<gameId>`, `/room/<roomId>`,
-`/ship` and `/ship/<designId>`. `route.ts` parses and formats, and knows
-nothing about screens: what a route MEANS is the app's business, and a router
+`/ship`, `/ship/<designId>` and `/architect/<classKey>`. `route.ts` parses and
+formats, and knows nothing about screens: what a route MEANS is the app's business, and a router
 that showed panels would be a second place that knows the screen list. Real
 paths rather than a hash, because the server already answers anything that is
 not an API route with the app shell.
@@ -282,6 +282,47 @@ The shelf orders by a `seq` stamp rather than by `updatedMs`. Two games started
 in the same millisecond tie, and a tie makes the sort fall back to enumeration
 order, which is insertion order and therefore OLDEST first: the shelf then kept
 the twelve oldest games and dropped the one just started.
+
+## The architect edits the frame; the yard fits parts to it
+
+Two screens, one canvas. The shipyard fits parts to a frame. The **architect**
+(`/architect/<classKey>`) is the layer under it, where the frame ITSELF is
+edited: where the drives sit, where the gun rings are, which stations a class
+even has. Those are authored numbers in `design.ts` and they are wrong often
+enough to be worth a screen.
+
+**It is an authoring tool, and that is a safety property rather than a
+limitation.** What a class derives is in the core's own table, and that table
+is hashed into the match state, so a frame edited here and flown there would be
+one seat playing a different ship from the other: a desync with no message on
+it. So the architect previews and EXPORTS, and an edit reaches a match the way
+every stock number already does, by going back into `design.ts` and through
+`measure_fleet.mjs --sync`.
+
+What makes that true is `setFrameOverride`, which is deliberately ONE frame at
+a time, set on the way into the screen and cleared on the way out. Leaving
+clears it, and `routes.mjs` and `shipyard.mjs` both check that it did, because
+an override left standing would follow a player into the yard and into a match.
+It is folded into `rasterSig` too: that cache is keyed on the CLASS, so two
+different frames under one class key would otherwise share a raster.
+
+**It is a MODE of the shipyard rather than a screen of its own.** The canvas,
+the orbit, the picking, the derive readout and a rail that becomes a bottom
+sheet at 390px all already exist and all already work; a second screen would be
+a second copy of every one of them, and the copy is the one that stops working
+on a phone. The first layout of the rail proved the point: laid out whole, the
+file row sat under twenty nine scrolling stations and was off the screen at
+both phone sizes, which is the briefing's own defect a second time.
+
+**Both resources are files.** `frames.ts` reads and writes JSON for a frame and
+for a design, with a format stamp and a reader that refuses what it does not
+understand rather than half loading it. An imported file is UNTRUSTED input
+even when a player wrote it: a socket at z of 9000 or a kind this build has
+never heard of has to come back as a message rather than as a lattice write off
+the end of an array. A frame file is laid OVER the authored class rather than
+replacing it, so a file cannot invent a hull shape or move a class onto another
+navy's ladder; the profile and the spine are not editable for the same reason
+the ladder is one number rather than twenty three tables.
 
 ## A persisted resource gets a URL, always
 

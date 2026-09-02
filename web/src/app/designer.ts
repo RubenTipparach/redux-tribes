@@ -25,6 +25,7 @@ import {
 // The map's own mesher, asked ONLY for its windows: where a window goes is a
 // fact about the design, and two answers to it would be two ships.
 import { hullMesh } from './hull.js';
+import { designFromJson, designToJson } from './frames.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -179,7 +180,9 @@ export class Designer {
   #design: Design = stockFor('terran_frigate');
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
-  #tab: 'parts' | 'armour' | 'stats' = 'parts';
+  #tab: 'parts' | 'armour' | 'stats' | 'frame' = 'parts';
+  /** Architect mode: the same canvas editing the FRAME rather than a fit. */
+  #arch = false;
   /**
    * Which draft slot this hull's unsaved work belongs in, which is the same
    * string the URL carries: a design id for a saved hull, a class key for one
@@ -381,6 +384,66 @@ export class Designer {
 
   /** Move the draft slot, for when a hull acquires an id by being saved. */
   setDraftKey(key: string): void { this.#draftKey = key; }
+
+  /**
+   * The architect: the same yard, editing the FRAME rather than a fit.
+   *
+   * A mode rather than a second screen, because everything the architect needs
+   * is already here and correct: the canvas, the orbit, the picking, the
+   * derive readout, and a rail that is a bottom sheet on a phone. A second
+   * screen would be a second copy of all of that, and the copy is the one that
+   * would stop working at 390 px.
+   */
+  setArchitect(on: boolean): void {
+    this.#arch = on;
+    $('designer').classList.toggle('arch', on);
+    $('dzTitle').textContent = on ? 'Ship Architect' : 'Shipyard';
+    // Land on a pane that exists in this mode. Staying on Parts in the
+    // architect would show the fitting rail with its tab hidden, which is a
+    // pane a player cannot leave.
+    if (on && (this.#tab === 'parts' || this.#tab === 'armour')) this.#tab = 'frame';
+    if (!on && this.#tab === 'frame') this.#tab = 'parts';
+    // Open the sheet on the way in. Collapsed is right for the yard, where the
+    // model is the thing being edited and the rail is the tool; here the RAIL
+    // is the tool and the editor both, so arriving with it shut is arriving at
+    // a screen with no controls on it.
+    if (on) {
+      $('designer').classList.remove('wide');
+      $('dzGrow').innerHTML = '\u25B2';
+    }
+    this.#syncTabs();
+  }
+
+  get architect(): boolean { return this.#arch; }
+
+  /**
+   * Rebuild the hull from its FRAME, throwing away the fit on screen.
+   *
+   * `newDesign` is idempotent on the class it is already showing, which is
+   * right for browsing and wrong here: the architect changes the frame UNDER
+   * one class key, so what it wants back is a different ship at the same
+   * address and the early return would hand it the old one. It skips the
+   * design draft too, because a draft is a FIT and what just moved is the
+   * thing being fitted to.
+   */
+  reseed(classKey: string): void {
+    this.#design = stockFor(classKey);
+    this.#slot = { designId: null, name: '', mine: false };
+    this.#draftKey = classKey;
+    this.#syncDrawSets();
+    this.#note = null;
+    this.#syncSaveButton();
+    if (this.#renderer) this.#refresh();
+  }
+
+  /** Which station is selected, and a way to say so from the rail. The model
+   *  and the list are one selection: picking in either has to light both, or
+   *  a player nudges a socket that is not the one they can see outlined. */
+  get socket(): string | null { return this.#socket; }
+  selectSocket(id: string | null): void {
+    this.#socket = id;
+    if (this.#renderer) this.#refresh();
+  }
 
   /** Told when an unsaved hull's class changes, so whoever owns the address
    *  can point it at that stock ship. The designer does not own the router. */
@@ -2393,13 +2456,49 @@ export class Designer {
       this.#syncDrawSets();
       this.#refresh();
     };
+    // A hull as a FILE. The library needs a server and an account; this needs
+    // neither, which is what makes it the way to keep a design, send one, or
+    // put one back after a rebuild.
+    $('dzExport').onclick = () => {
+      const name = $<HTMLInputElement>('dzSaveName')?.value.trim()
+        || this.#slot.name || this.#design.classKey;
+      const url = URL.createObjectURL(new Blob([designToJson(this.#design, name)],
+        { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name.replace(/[^A-Za-z0-9_-]+/g, '-').toLowerCase()}.ship.json`;
+      a.click();
+      // Revoked on a later turn: revoking before the browser has begun the
+      // download cancels it.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      this.#said(`exported ${a.download}`);
+    };
+    $('dzImport').onclick = () => { $<HTMLInputElement>('dzDesignPick').click(); };
+    $<HTMLInputElement>('dzDesignPick').onchange = ev => {
+      const input = ev.target as HTMLInputElement;
+      const file = input.files?.[0];
+      // Cleared so the same file chosen twice fires again: `change` does not
+      // when the value is unchanged, and re-importing after an edit is the
+      // obvious thing to try.
+      input.value = '';
+      if (!file) return;
+      void file.text().then(text => {
+        const { design, name, why } = designFromJson(text);
+        if (!design) { this.#said(why ?? 'could not read that file', true); return; }
+        // Loaded as a NEW hull rather than over the row that happens to be
+        // open: a file is somebody's ship, not an edit to yours, and saving it
+        // should make a design rather than quietly rewrite one.
+        this.loadDesign(design, { designId: null, name: name ?? '', mine: true });
+        this.#said(`loaded ${name ?? 'a hull'} from ${file.name}`);
+      });
+    };
     // Take the plate off and leave the frame and its parts standing. The mode
     // is left alone: this zeroes whichever exterior is being edited.
     $('dzBare').onclick = () => {
       for (const k of SECTIONS) this.#design.sections[k] = 0;
       this.#refresh();
     };
-    const tab = (id: string, which: 'parts' | 'armour' | 'stats') => {
+    const tab = (id: string, which: 'parts' | 'armour' | 'stats' | 'frame') => {
       $(id).onclick = () => {
         this.#tab = which;
         // A tab tapped while the sheet is collapsed opens it, because
@@ -2410,6 +2509,7 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
+    tab('dzTabFrame', 'frame');
     this.#bindSlice();
     this.#syncSaveButton();
     // Collapse the sheet so the model has the screen. A phone control: at desk
@@ -2487,6 +2587,7 @@ export class Designer {
     for (const [id, pane, which] of [
       ['dzTabParts', 'dzPaneParts', 'parts'],
       ['dzTabArmour', 'dzPaneArmour', 'armour'],
+      ['dzTabFrame', 'dzPaneFrame', 'frame'],
       ['dzTabStats', 'dzPaneStats', 'stats'],
     ] as const) {
       $(id).className = this.#tab === which ? 'on' : '';

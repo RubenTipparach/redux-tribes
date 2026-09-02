@@ -1189,6 +1189,96 @@ async function checkModesAndRotation(page) {
   else ok('and the socket comes back to the gun it started with');
 }
 
+
+/**
+ * The architect, at whatever size this pass is running.
+ *
+ * It is a MODE of this screen rather than a screen of its own, so it inherits
+ * the canvas, the orbit and the bottom sheet and is checked here with them.
+ * What is asked is the thing a picture cannot answer: that the controls take a
+ * tap at 390 px, that a nudge moves the HULL and not merely a number, and that
+ * leaving takes the edit with it.
+ */
+async function checkArchitect(page, label) {
+  await page.goto(new URL('architect/terran_frigate', BASE).href, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1600);
+  const opened = await page.evaluate(() => window.ftDebug?.architect?.());
+  if (!opened) { fail(`${label}: the architect did not open`); return; }
+  ok(`${label}: the architect opens on ${opened.classKey}, ${opened.sockets.length} stations`);
+
+  // Select a drive, which is a station with a part on it: moving one that
+  // holds nothing would move no cells and prove nothing about the hull.
+  await page.evaluate(() => [...document.querySelectorAll('#dzArchList button')]
+    .find(x => x.textContent.includes('drive'))?.click());
+  await page.waitForTimeout(400);
+
+  // Every control the architect adds has to ARRIVE, which on a phone is the
+  // whole question: the file row sat under twenty nine scrolling stations the
+  // first time and was off the screen at both sizes.
+  const probe = await page.evaluate(() => {
+    const ids = ['dzArchXDown', 'dzArchXUp', 'dzArchYDown', 'dzArchYUp',
+      'dzArchZDown', 'dzArchZUp', 'dzArchKind', 'dzArchExport', 'dzArchImport',
+      'dzArchRevert'];
+    const rows = [...document.querySelectorAll('#dzArchList button')];
+    const bad = [];
+    for (const el of [...ids.map(i => document.getElementById(i)), ...rows]) {
+      if (!el) { bad.push('missing'); continue; }
+      // A row in a scrolling box is reached by scrolling to it, which is what
+      // a person does. The station list always scrolls; the selected station's
+      // controls do too once the sheet is short enough to need it.
+      if (el.closest('#dzArchList, #dzArchFoot')) el.scrollIntoView({ block: 'nearest' });
+      const r = el.getBoundingClientRect();
+      const name = el.id || el.textContent.trim().slice(0, 18);
+      if (!r.width || !r.height) { bad.push(name + ': zero size'); continue; }
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) {
+        bad.push(name + ': off screen'); continue;
+      }
+      const hit = document.elementFromPoint(x, y);
+      if (!(el === hit || el.contains(hit))) {
+        bad.push(name + ': covered by ' + (hit?.id || hit?.tagName || 'nothing'));
+      }
+    }
+    return { bad, n: ids.length + rows.length };
+  });
+  if (probe.bad.length) fail(`${label}: architect controls unreachable: ${probe.bad.slice(0, 3).join('; ')}`);
+  else ok(`${label}: all ${probe.n} architect controls take a tap`);
+
+  // A nudge has to move the SHIP, not just the readout. The grid hash is over
+  // the occupancy lattice, so it changes when a cell does and not otherwise.
+  const before = await page.evaluate(() => window.ftDebug.designer()?.gridHash);
+  await page.click('#dzArchZUp');
+  await page.waitForTimeout(700);
+  const after = await page.evaluate(() => window.ftDebug.designer()?.gridHash);
+  const now = await page.evaluate(() => window.ftDebug.architect());
+  if (before === after) fail(`${label}: moving a station did not move the hull`);
+  else if (!now.edited) fail(`${label}: the frame does not read as edited`);
+  else ok(`${label}: a station moves and the hull follows (${before} to ${after})`);
+
+  // Export names a file. The download itself is the browser's business; what
+  // this asks is that the button is wired and the JSON is the frame.
+  const dl = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+  await page.click('#dzArchExport');
+  const got = await dl;
+  if (!got) fail(`${label}: Export JSON produced no file`);
+  else ok(`${label}: exports ${got.suggestedFilename()}`);
+
+  // Revert puts the authored frame back, which is the way out of a bad edit.
+  await page.click('#dzArchRevert');
+  await page.waitForTimeout(700);
+  const back = await page.evaluate(() => window.ftDebug.architect());
+  if (back.edited) fail(`${label}: Revert left the frame edited`);
+  else ok(`${label}: Revert restores the frame this build authored`);
+
+  // And leaving must take the override with it, or a hull a player can SEE and
+  // the hull the core spawns would be two ships.
+  await page.goto(new URL('ship/terran_frigate', BASE).href, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  const gone = await page.evaluate(() => window.ftDebug.architect());
+  if (gone !== null) fail(`${label}: the architect is still open after leaving it`);
+  else ok(`${label}: leaving the architect clears the frame it was showing`);
+}
+
 for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   [390, 844, 'phone 390x844'], [390, 560, 'phone landscape 390x560']]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h },
@@ -1253,6 +1343,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     else ok(`${label}: the hint clears the tool row`);
     await checkLayout(page, label + ' with the card open');
   }
+  await checkArchitect(page, label);
   if (errs.length) { for (const e of errs.slice(0, 4)) fail(`page error: ${e}`); }
   else ok('no page errors');
   await ctx.close();
