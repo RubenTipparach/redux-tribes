@@ -760,6 +760,50 @@ test('a hull is meshed by the voxel rule, so it has an inside', async () => {
 // language can catch a disagreement, because every one of them is just a list,
 // so this is the only thing standing between a renumbered class and a desync
 // that reads as two clients disagreeing about physics.
+test('no stock mount is blocked in the direction it rests', async () => {
+  // The rule the user of a shipyard would state as "nothing should be standing
+  // in front of a gun", checked the only way it can be: by scanning the hull.
+  //
+  // Three separate things had a mount pointing into its own ship and every
+  // suite passed throughout, because a blocked arc is not a number any of them
+  // read. The trunnion went two cells UP from its ring whatever face the ring
+  // was on, so a ventral turret was pushed further inside its own hull and two
+  // mounts on the Terran heavy cruiser scanned as blocked in every direction
+  // there is; a flank ring rested dead ahead, which is a broadside gun looking
+  // down the length of its own ship; and a navy's decor could be laid straight
+  // across a mount's line of rest.
+  //
+  // So: for every stock hull, take each mount's rest direction (the ring's own
+  // facing plus whatever the placement turned it) and ask the scanned mask
+  // whether the hull is in the way there.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, socketsOf, moduleById, arcMasks, arcBlocked, spinOf, useCore,
+    useArcDirs } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
+
+  for (const f of FRAMES) {
+    const d = stockFor(f.classKey);
+    const masks = arcMasks(d);
+    const socks = socketsOf(f, d.parts);
+    let mount = 0;
+    for (const p of d.parts) {
+      if (!moduleById(p.module)?.weapon) continue;
+      const mask = masks[mount++];
+      const spin = spinOf(socks.find(k => k.id === p.socket), p.rot);
+      // Quarter turns about the hull's up axis, from the nose.
+      const a = (-spin * Math.PI) / 2;
+      assert.equal(arcBlocked(mask, Math.sin(a), 0, Math.cos(a)), false,
+        `${f.classKey}: ${p.socket} rests pointing into its own ship`);
+    }
+  }
+});
+
 test('every livery uses its whole palette, and the pick is the plating', async () => {
   // The two halves of the rule, and only one of them is visible in a picture.
   //

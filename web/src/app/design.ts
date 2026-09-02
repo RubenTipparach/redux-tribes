@@ -1111,8 +1111,9 @@ const flankAt = (hw: number, hh: number, dy: number): number =>
  * Nothing here may stand in front of a gun. A ring rests trained outboard on a
  * flank and abeam on the centreline (`ringFacing`), and decor is laid clear of
  * those lanes: the Terran's strakes leave the deck's centreline open and the
- * Rogue's blisters sit abaft its rings. `tools/measure_fleet.mjs` is not what
- * checks that; the arc scan is, and it reads zero mounts blocked ahead.
+ * Rogue's blisters sit abaft its rings. What holds that to it is the ARC SCAN,
+ * in `sim.test.mjs`: every mount on every stock hull, asked whether the ship
+ * is in the way in the direction it rests.
  */
 const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
   const out: Box[] = [];
