@@ -16,7 +16,33 @@
  * the hull.
  */
 
+import * as THREE from 'three';
+
 import { allRound, arcBlocked, ARC_PITCH, ARC_YAW, type GunDef } from './design.js';
+
+/**
+ * A mount's own frame, as the rotation that takes it into the ship's.
+ *
+ * Nine numbers row major, straight from `faceBasis`. It is what a design's
+ * yaw, pitch and roll come out as once the cells have been turned, and it is
+ * why a turret laid on a flank traverses about the flank rather than about
+ * the deck: the angles below are worked out in THIS frame and then put back.
+ */
+export type MountFace = readonly number[];
+
+/** An unturned mount, which is most of them. */
+export const UPRIGHT: MountFace = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+
+/** A direction taken out of the ship's frame and into the mount's. The basis
+ *  is a rotation, so its inverse is its transpose and no solve is needed. */
+function intoMount(f: MountFace, x: number, y: number, z: number):
+  { x: number; y: number; z: number } {
+  return {
+    x: (f[0] as number) * x + (f[3] as number) * y + (f[6] as number) * z,
+    y: (f[1] as number) * x + (f[4] as number) * y + (f[7] as number) * z,
+    z: (f[2] as number) * x + (f[5] as number) * y + (f[8] as number) * z,
+  };
+}
 
 /** How fast a mount traverses, in radians a second. */
 const SLEW = (110 * Math.PI) / 180;
@@ -27,8 +53,9 @@ const SLEW = (110 * Math.PI) / 180;
 const EASE = 5.5;
 
 export interface TurretGoal {
-  /** About the mount's own up axis, with its rest facing already taken off. */
+  /** About the mount's OWN up axis, in the mount's own frame. */
   readonly yaw: number;
+  /** Elevation about the mount's own trunnion, in the same frame. */
   readonly pitch: number;
   /** Whether it can actually bear: both gates passed. */
   readonly bears: boolean;
@@ -42,16 +69,21 @@ const wrap = (a: number): number => Math.atan2(Math.sin(a), Math.cos(a));
 /**
  * Where this mount wants to point, given a direction in the SHIP's frame.
  *
- * Yaw is the angle round from the nose and pitch is a true elevation off the
- * horizontal plane, which is what `arc_test_3d` measures: a mount has two
- * axes, and roll does not enter it. A mount that cannot bear stays at rest
- * rather than straining at its stop, which is also what makes "bearing"
- * readable at a glance, the ones that can reach the target are the ones that
- * moved.
+ * TWO frames, and keeping them apart is the whole of this function. The GATES
+ * are asked in the ship's: yaw is the angle round from the nose and pitch a
+ * true elevation off the horizontal plane, which is what `arc_test_3d`
+ * measures. The ANGLES come back in the MOUNT's, because a barrel swings on
+ * its own trunnions and not on the hull's.
+ *
+ * A mount still has two axes of travel. Its third, the roll the design bolted
+ * it on at, is fixed once the ship is built and is exactly what `face`
+ * carries. A mount that cannot bear stays at rest rather than straining at its
+ * stop, which is also what makes "bearing" readable at a glance: the ones that
+ * can reach the target are the ones that moved.
  */
 export function turretGoal(
   dir: { x: number; y: number; z: number },
-  rest: number,
+  face: MountFace,
   gun: GunDef,
   mask?: Uint32Array,
 ): TurretGoal {
@@ -64,11 +96,57 @@ export function turretGoal(
   // The authored arc, then the hull's own shadow. A turret that swung happily
   // onto a target through its own engine block would be the picture promising
   // a shot the match then refuses.
+  //
+  // Both gates are asked in the SHIP's frame, and that is deliberate: the arc
+  // a gun is authored with and the mask scanned off the hull are both about
+  // the hull, so which way the mount was bolted on does not widen or narrow
+  // what it may shoot at. What the facing changes is where the cells are, and
+  // the mask follows those, which is the whole of its effect on bearing.
   const bears = inside(h, gun.arcH) && inside(v, gun.arcV)
     && !(mask && arcBlocked(mask, dir.x, dir.y, dir.z));
   if (!bears) return AT_REST;
-  return { yaw: (h * Math.PI) / 180 - rest, pitch: (-v * Math.PI) / 180, bears: true };
+  // The ANGLES are the mount's, not the ship's. A gun rolled onto a flank
+  // traverses about the flank's normal and elevates about its own trunnion,
+  // and asking for them in the ship's frame is how a rolled turret ends up
+  // swinging about an axis that runs through its own barrel.
+  const m = intoMount(face, dir.x, dir.y, dir.z);
+  const yaw = Math.atan2(m.x, m.z);
+  const pitch = -Math.atan2(m.y, Math.hypot(m.x, m.z));
+  return { yaw, pitch, bears: true };
 }
+
+/**
+ * The rotation to apply to cells that were rasterised in the SHIP's frame.
+ *
+ * The cells come off the raster already turned by the facing, so posing one is
+ * not simply `Ry(yaw) * Rx(pitch)`: that elevates about the SHIP's beam, which
+ * for a mount yawed a quarter turn runs straight down its own barrel and moves
+ * nothing at all. Undo the facing, aim in the mount's frame, put the facing
+ * back: `F * Ry * Rx * F^-1`, which is the identity's `Ry * Rx` again for the
+ * mounts that are not turned.
+ */
+export function poseMatrix(
+  out: THREE.Matrix4, face: MountFace, yaw: number, pitch: number,
+): THREE.Matrix4 {
+  // Scratch rather than fresh objects: this runs once per moving mount per
+  // frame on every hull in the fight, and four allocations a call is a
+  // collection nobody asked for.
+  F.set(
+    face[0] as number, face[1] as number, face[2] as number, 0,
+    face[3] as number, face[4] as number, face[5] as number, 0,
+    face[6] as number, face[7] as number, face[8] as number, 0,
+    0, 0, 0, 1);
+  AIM.makeRotationFromEuler(E.set(pitch, yaw, 0, 'YXZ'));
+  // A rotation's inverse is its transpose, which is exact here and a solve is
+  // not: every entry is 0, 1 or -1 and must stay that way.
+  INV.copy(F).transpose();
+  return out.copy(F).multiply(AIM).multiply(INV);
+}
+
+const F = new THREE.Matrix4();
+const AIM = new THREE.Matrix4();
+const INV = new THREE.Matrix4();
+const E = new THREE.Euler(0, 0, 0, 'YXZ');
 
 /**
  * One frame of travel toward a goal angle, under both the ease and the cap.

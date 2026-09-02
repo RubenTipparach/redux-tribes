@@ -866,8 +866,13 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzsaid { font-size:11px; color:var(--muted); padding:6px 12px 0; min-height:0; }
 .dzsaid:empty { display:none; }
 .dzsaid.bad { color:var(--red); }
-.dzturn { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
-.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase; }
+/* Three of these stack now, one per axis, so the labels get a width and the
+   rows a tighter margin: unaligned buttons over three lines read as three
+   different controls rather than one control with three axes. */
+.dzturn { display:flex; align-items:center; gap:6px; margin:3px 0; }
+.dzturn:last-of-type { margin-bottom:8px; }
+.dzturn .k { font-size:11px; color:var(--dim); letter-spacing:.06em; text-transform:uppercase;
+  min-width:42px; }
 .dzturn button { padding:6px 10px; font-size:12px; border-radius:6px; }
 .dzturn b { font-size:12px; color:var(--cyan); min-width:34px; }
 #dzPick { position:absolute; left:9px; bottom:26px; z-index:4;

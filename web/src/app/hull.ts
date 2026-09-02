@@ -31,9 +31,10 @@ import * as THREE from 'three';
 import { finishMap, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
-  armourColour, bareGrid, cellColour, finishesOf, frameFor, moduleById, rasterise, rasterSig,
-  socketsOf, type Design,
+  armourColour, bareGrid, cellColour, faceBasis, facingOf, finishesOf, frameFor, moduleById,
+  rasterise, rasterSig, socketsOf, type Design,
 } from './design.js';
+import type { MountFace } from './turret.js';
 
 /**
  * One gun on a hull, as the map needs it: where it turns and which quads turn
@@ -65,8 +66,15 @@ export interface HullRig {
   readonly part: number;
   /** The socket it turns on, in ship units. */
   readonly pivot: readonly [number, number, number];
-  /** The rest facing the design gave it, in radians about the up axis. */
-  readonly rest: number;
+  /**
+   * The facing the design bolted it on at, as a rotation from the mount's
+   * frame into the ship's.
+   *
+   * Not an angle. A mount can be yawed, pitched and rolled, so its rest is an
+   * orientation rather than a number, and a scalar could only ever describe
+   * the one axis this used to have.
+   */
+  readonly face: MountFace;
 }
 
 export interface HullMesh {
@@ -311,7 +319,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         ((sock.at[1] as number) - NY / 2) * cell,
         ((sock.at[2] as number) - NZ / 2) * cell,
       ],
-      rest: -(p.rot ?? 0) * Math.PI / 2,
+      face: faceBasis(facingOf(p)),
     });
   });
 

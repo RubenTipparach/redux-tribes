@@ -1317,6 +1317,21 @@ export interface Placement {
    * them. Placeable and rotatable, never editable.
    */
   readonly rot?: number;
+  /**
+   * The other two axes, in the same quarter turns.
+   *
+   * Yaw alone can only ever bolt a gun to a deck. `pitch` tips it over so it
+   * can sit under a keel, and `roll` lays it onto a flank, which is how a
+   * broadside gets built. Optional and defaulting to zero, so a hull saved
+   * before these existed is still exactly the hull it was: no migration, and
+   * nothing to get wrong on somebody else's design.
+   *
+   * What a rotation may NOT do is only two things: lift the barbette off the
+   * frame, or put the body inside a cell something else already owns. See
+   * `mountFouling`.
+   */
+  readonly pitch?: number;
+  readonly roll?: number;
 }
 
 /**
@@ -1558,7 +1573,8 @@ export const DRAWN_MAX = 20000;
  *  depend on it, and anything that draws colour keys on this plus the paint. */
 export const rasterSig = (d: Design): string =>
   d.classKey + '|' + d.armour + '|'
-  + d.parts.map(p => p.socket + ':' + p.module + ':' + (p.rot ?? 0)).sort().join(',') + '|'
+  + d.parts.map(p => p.socket + ':' + p.module + ':' + facingKey(facingOf(p)))
+    .sort().join(',') + '|'
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
@@ -1697,11 +1713,12 @@ export function rasterise(d: Design): Raster {
     const sock = allSockets.find(k => k.id === p.socket);
     const m = moduleById(p.module);
     if (!sock || !m) continue;
-    const v = rotatedVoxels(m, p.rot ?? 0);
+    const face = facingOf(p);
+    const v = rotatedVoxels(m, face);
     const code = purposeCode(m.purpose);
     const seat = seatOf(frame, sock, v);
     // The PIVOT lands on the socket, not the box centre.
-    const pv = rotatedPivot(m, p.rot ?? 0);
+    const pv = rotatedPivot(m, face);
     const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
@@ -2771,16 +2788,119 @@ export function pivotOf(m: ModuleDef): readonly [number, number, number] {
   return [cx, cy, (sz - 1) / 2];
 }
 
-/** The same pivot in the coordinates of the model turned `rot` quarter turns. */
-export function rotatedPivot(m: ModuleDef, rot: number): readonly [number, number, number] {
-  const r = ((rot % 4) + 4) % 4;
+/**
+ * How a part is bolted on: three quarter turns, one per axis.
+ *
+ * `rot` is the original yaw and keeps its name and its meaning, so every design
+ * ever saved loads unchanged with the two new axes at zero. That is the whole
+ * reason this is three fields rather than one orientation index: a migration
+ * that rewrote saved hulls would be a migration that could get a hull wrong.
+ *
+ * Yaw alone could only ever bolt a turret to a deck. A gun on a flank or under
+ * a keel needs the other two, and a player who wants one there should not have
+ * to be told the editor cannot express it.
+ */
+export interface Facing {
+  /** Quarter turns about the up axis. */
+  readonly yaw: number;
+  /** Quarter turns about the beam axis, which tips the barrel over. */
+  readonly pitch: number;
+  /** Quarter turns about the long axis, which rolls it onto a flank. */
+  readonly roll: number;
+}
+
+/** A part's facing, defaulting every axis to zero. */
+export function facingOf(p: { rot?: number; pitch?: number; roll?: number }): Facing {
+  const q = (n: number | undefined) => (((n ?? 0) % 4) + 4) % 4;
+  return { yaw: q(p.rot), pitch: q(p.pitch), roll: q(p.roll) };
+}
+
+/** True when a facing is the identity, which is the common case and worth not
+ *  paying for: an unturned part uses its cached voxels directly. */
+export function isUpright(f: Facing): boolean {
+  return f.yaw === 0 && f.pitch === 0 && f.roll === 0;
+}
+
+/** A stable key for one facing, for the rotation cache. */
+export function facingKey(f: Facing): string {
+  return `${f.yaw}${f.pitch}${f.roll}`;
+}
+
+/**
+ * One quarter turn of a point inside a box, about a named axis.
+ *
+ * Integer arithmetic on purpose. A part is cells, and a rotation that produced
+ * fractions would put a turret half a cell into the plate beside it: exactly
+ * the z fighting the original yaw only code was written to avoid.
+ */
+function turnPoint(
+  px: number, py: number, pz: number,
+  sx: number, sy: number, sz: number,
+  axis: 'yaw' | 'pitch' | 'roll',
+): { p: [number, number, number]; s: [number, number, number] } {
+  if (axis === 'yaw') {
+    // (x, z) -> (sz - 1 - z, x). The map the yaw only code already used, kept
+    // exactly so an existing design turns the way it always did.
+    return { p: [sz - 1 - pz, py, px], s: [sz, sy, sx] };
+  }
+  if (axis === 'pitch') {
+    // About x: (y, z) -> (sz - 1 - z, y).
+    return { p: [px, sz - 1 - pz, py], s: [sx, sz, sy] };
+  }
+  // roll, about z: (x, y) -> (sy - 1 - y, x).
+  return { p: [sy - 1 - py, px, pz], s: [sy, sx, sz] };
+}
+
+/** The order the three axes are applied. Fixed, because a rotation is not
+ *  commutative: yaw then pitch then roll is a different part from roll then
+ *  pitch then yaw, and two places composing them differently would disagree
+ *  about where a turret sits. */
+const AXES = ['yaw', 'pitch', 'roll'] as const;
+
+/**
+ * The facing as a rotation from the MOUNT's own frame into the ship's.
+ *
+ * Nine numbers, row major, and every one of them is 0, 1 or -1: a quarter turn
+ * of a cell grid is a signed permutation of the axes and nothing else, so
+ * there is no rounding here and a mount cannot drift a fraction of a degree
+ * off the cells it was rasterised into.
+ *
+ * Derived from `turnPoint` rather than written out as a table of sines. The
+ * cells and the barrel have to agree about which way "turned" is, and the way
+ * to guarantee that is to ask the same function: a unit box makes `turnPoint`
+ * its own linear part, because `s - 1 - p` is `-p` when `s` is one.
+ */
+export function faceBasis(f: Facing): readonly number[] {
+  // Columns: where each of the three axes ends up. Identity to start with,
+  // which is what an unturned mount is.
+  let col: [number, number, number][] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (const axis of AXES) {
+    for (let n = 0; n < f[axis]; n++) {
+      col = col.map(c => turnPoint(c[0], c[1], c[2], 1, 1, 1, axis).p) as
+        [number, number, number][];
+    }
+  }
+  // Row major: entry (r, c) is the r'th component of the image of axis c.
+  return [
+    (col[0] as number[])[0] as number, (col[1] as number[])[0] as number,
+    (col[2] as number[])[0] as number,
+    (col[0] as number[])[1] as number, (col[1] as number[])[1] as number,
+    (col[2] as number[])[1] as number,
+    (col[0] as number[])[2] as number, (col[1] as number[])[2] as number,
+    (col[2] as number[])[2] as number,
+  ];
+}
+
+/** The same pivot in the coordinates of the model turned to `f`. */
+export function rotatedPivot(m: ModuleDef, f: Facing): readonly [number, number, number] {
   let [px, py, pz] = pivotOf(m);
-  let [sx, , sz] = m.size;
-  for (let n = 0; n < r; n++) {
-    // The same map the cells take: (x, z) -> (sz - 1 - z, x).
-    const nx = (sz as number) - 1 - pz, nz = px;
-    px = nx; pz = nz;
-    const t = sx; sx = sz; sz = t;
+  let [sx, sy, sz] = m.size as readonly [number, number, number];
+  for (const axis of AXES) {
+    for (let n = 0; n < f[axis]; n++) {
+      const t = turnPoint(px, py, pz, sx, sy, sz, axis);
+      px = t.p[0]; py = t.p[1]; pz = t.p[2];
+      sx = t.s[0]; sy = t.s[1]; sz = t.s[2];
+    }
   }
   return [px, py, pz];
 }
@@ -2795,26 +2915,39 @@ const rotCache = new Map<string, VoxelModel>();
  * on the grid: it stays one cell per cell, so it still cannot z fight with the
  * plate beside it or float a fraction of a cell off its ring.
  */
-export function rotatedVoxels(m: ModuleDef, rot: number): VoxelModel {
-  const r = ((rot % 4) + 4) % 4;
-  if (r === 0) return voxelsOf(m);
-  const key = m.id + '/' + r;
+export function rotatedVoxels(m: ModuleDef, f: Facing): VoxelModel {
+  if (isUpright(f)) return voxelsOf(m);
+  const key = m.id + '/' + facingKey(f);
   const hit = rotCache.get(key);
   if (hit) return hit;
   let cur = voxelsOf(m);
-  for (let n = 0; n < r; n++) {
-    // (x, z) -> (sz - 1 - z, x): one quarter turn, exact on integers.
-    const sx = cur.sz, sy = cur.sy, sz = cur.sx;
-    const data = new Uint8Array(sx * sy * sz);
-    for (let z = 0; z < cur.sz; z++) for (let y = 0; y < cur.sy; y++) for (let x = 0; x < cur.sx; x++) {
-      const v = cur.data[x + y * cur.sx + z * cur.sx * cur.sy] as number;
-      if (!v) continue;
-      data[(cur.sz - 1 - z) + y * sx + x * sx * sy] = v;
-    }
-    cur = { sx, sy, sz, data, filled: cur.filled };
+  for (const axis of AXES) {
+    for (let n = 0; n < f[axis]; n++) cur = turnVoxels(cur, axis);
   }
   rotCache.set(key, cur);
   return cur;
+}
+
+/**
+ * One quarter turn of a voxel model about a named axis.
+ *
+ * Rotating the CELLS rather than the drawn mesh is what keeps a turned turret
+ * on the grid: it stays one cell per cell, so it still cannot z fight with the
+ * plate beside it or float a fraction of a cell off its ring. That was true of
+ * the yaw only version and it is the reason all three axes are done this way
+ * rather than by spinning a mesh and hoping the raster follows.
+ */
+function turnVoxels(cur: VoxelModel, axis: 'yaw' | 'pitch' | 'roll'): VoxelModel {
+  const t = turnPoint(0, 0, 0, cur.sx, cur.sy, cur.sz, axis);
+  const [sx, sy, sz] = t.s;
+  const data = new Uint8Array(sx * sy * sz);
+  for (let z = 0; z < cur.sz; z++) for (let y = 0; y < cur.sy; y++) for (let x = 0; x < cur.sx; x++) {
+    const v = cur.data[x + y * cur.sx + z * cur.sx * cur.sy] as number;
+    if (!v) continue;
+    const q = turnPoint(x, y, z, cur.sx, cur.sy, cur.sz, axis).p;
+    data[(q[0] as number) + (q[1] as number) * sx + (q[2] as number) * sx * sy] = v;
+  }
+  return { sx, sy, sz, data, filled: cur.filled };
 }
 
 /**
@@ -3039,3 +3172,86 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
   voxCache.set(m.id, model);
   return model;
 }
+
+/**
+ * Why a mount may not be turned to a given facing, or an empty string.
+ *
+ * TWO rules and no others, which is the whole point:
+ *
+ * 1. **The base stays on the ship.** A gun is bolted to something, so the
+ *    part's cells have to touch the hull. Turn it far enough and the base
+ *    swings off into space, and a turret hanging beside its own hull is the
+ *    slop the voxel grid exists to prevent.
+ * 2. **The body fouls nothing.** No cell of the part may be lost to plating,
+ *    to another part or to another turret's swept box. Two things cannot
+ *    occupy one cell, and the one that loses is the one that vanishes.
+ *
+ * Anything else is the player's. A turret under a keel, laid along a flank or
+ * pointing aft is a design decision, and an editor that second guessed it
+ * would be an editor arguing with its user.
+ *
+ * It answers by RASTERISING the whole hull twice and comparing, rather than by
+ * placing the part itself and reasoning about what it lands on. That is not a
+ * style preference: the raster nudges a part that does not fit, seats it first
+ * come first served, and lets a part sink through the frame, so a private
+ * placement here was a second implementation that disagreed with the real one
+ * immediately. It refused the stock Terran's own drive bell at the facing the
+ * hull ships with, which is an editor that will not let you save the design it
+ * opened.
+ *
+ * Comparing against the CURRENT facing rather than against a perfect fit is
+ * the other half of that. A hull as authored is the baseline it has to be
+ * judged from: what a rotation may not do is cost the part cells it holds
+ * right now, and "cost it cells" is a thing the rasteriser can be asked rather
+ * than predicted.
+ */
+export function mountFouling(
+  d: Design, parts: readonly Placement[], socket: string,
+): string {
+  const at = parts.findIndex(p => p.socket === socket);
+  if (at < 0) return '';
+  if (!moduleById((parts[at] as Placement).module)) return '';
+  // `own` is one based, and both lists are in the same order, so one index
+  // names the same placement in either raster.
+  const want = at + 1;
+
+  const held = (r: Raster): { cells: number; attached: boolean } => {
+    let cells = 0;
+    let attached = false;
+    for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+      const n = idx3(i, j, k);
+      if (r.own[n] !== want) continue;
+      cells++;
+      if (attached) continue;
+      // Anything else of the ship's next door will do: frame, plate, or the
+      // part beside it. What is being ruled out is a mount floating in space,
+      // not one that fails to reach a rib.
+      for (const [dx, dy, dz] of NEIGHBOURS) {
+        const x = i + dx, y = j + dy, z = k + dz;
+        if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) continue;
+        const o = idx3(x, y, z);
+        if (r.grid[o] && r.own[o] !== want) { attached = true; break; }
+      }
+    }
+    return { cells, attached };
+  };
+
+  const now = held(rasterise(d));
+  const next = held(rasterise({ ...d, parts: [...parts] }));
+
+  if (next.cells === 0) {
+    return now.cells === 0 ? '' : 'the body would be buried: no cell of it would be left';
+  }
+  if (!next.attached && now.attached) return 'the base would leave the ship frame';
+  const lost = now.cells - next.cells;
+  if (lost > 0) {
+    return `the body would stand in ${lost} occupied cell${lost === 1 ? '' : 's'}`;
+  }
+  return '';
+}
+
+/** The six cells sharing a face. Used by the mount rule, which asks about
+ *  contact rather than about a diagonal touching a corner. */
+const NEIGHBOURS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1],
+];
