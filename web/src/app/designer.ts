@@ -19,7 +19,9 @@ import * as drafts from './drafts.js';
 // and cannot drift onto a different surface than the thing being designed will
 // fly with.
 import { finishMap, partMap } from './textures.js';
-import { AT_REST, blockedPct, blockedShell, easeAngle, turretGoal } from './turret.js';
+import {
+  AT_REST, blockedPct, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
+} from './turret.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -31,6 +33,8 @@ import {
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
   type FrameDef,
+  faceBasis, facingOf, isUpright,
+  mountFouling,
 } from './design.js';
 
 /** What the plate is doing: solid, see through, or off. */
@@ -71,13 +75,25 @@ const YARD_METAL = 0.0;
  * the target without the wedges.
  */
 
+/** Scratch for the pose, so aiming a turret does not allocate a matrix a
+ *  frame per mount. */
+const POSE = new THREE.Matrix4();
+
+/** A facing in words, for the one place a person reads one back. Only the axes
+ *  that are actually turned, because "yaw 0, pitch 0, roll 90" is three
+ *  numbers to say one thing. */
+const faceWords = (f: { yaw: number; pitch: number; roll: number }): string =>
+  ([['yaw', f.yaw], ['pitch', f.pitch], ['roll', f.roll]] as const)
+    .filter(([, n]) => n).map(([k, n]) => `${k} ${n * 90}\u00b0`).join(', ');
+
 /** One turret drawn in its own group so it can be swung without the hull. */
 interface Rig {
   readonly group: THREE.Group;
   readonly gun: GunDef;
   readonly pivot: THREE.Vector3;
-  /** The rest facing the player set, in radians about the up axis. */
-  readonly rest: number;
+  /** The facing the player set, as a rotation from mount to ship. Three axes,
+   *  so an orientation and not an angle. */
+  readonly face: MountFace;
   readonly label: string;
   /** Whether the target was inside this turret's arc on the last frame. */
   bears: boolean;
@@ -541,10 +557,9 @@ export class Designer {
       const group = new THREE.Group();
       const pivot = this.#pos(cell, sock.at[0], sock.at[1], sock.at[2]);
       group.position.copy(pivot);
-      group.rotation.order = 'YXZ';
       rigOf.set(n, this.#rigs.length);
       rigCells.push([]); rigCols.push([]);
-      this.#rigs.push({ group, gun: g, pivot, rest: -(p.rot ?? 0) * Math.PI / 2,
+      this.#rigs.push({ group, gun: g, pivot, face: faceBasis(facingOf(p)),
         label: `${m.name}, ${sock.label}`, bears: false, yaw: 0, pitch: 0 });
       this.#hull.add(group);
     });
@@ -838,7 +853,8 @@ export class Designer {
         + `<span class="nm">${m.name}</span><span class="id">${m.id}</span>`
         + `<button class="x" id="dzPickX">close</button></div>`
         + `<p class="sub"><b>${pu.label}</b> &middot; ${sock.label}`
-        + (held?.rot ? ` &middot; facing ${(held.rot ?? 0) * 90}\u00b0` : '') + `</p>`
+        + (held && !isUpright(facingOf(held)) ? ` &middot; facing ${faceWords(facingOf(held))}` : '')
+        + `</p>`
         + `<p class="sub">${bits.join(' &middot; ')}</p>`;
     }
     const x = document.getElementById('dzPickX');
@@ -1029,17 +1045,18 @@ export class Designer {
       // not.
       //
       // At rest is straight ahead ON THE MOUNT: the facing set in 90 degree
-      // steps is already baked into the cells, so zero in the group's own
-      // frame IS that direction.
+      // steps is already baked into the cells, so zero in the mount's own
+      // frame IS that direction, and `poseMatrix` is what takes the aim out of
+      // the ship's frame and into that one.
       const n = this.#rigs.indexOf(r);
       const goal = this.#showTarget
-        ? turretGoal(this.#target.clone().sub(r.pivot), r.rest, r.gun, this.#masks[n])
+        ? turretGoal(this.#target.clone().sub(r.pivot), r.face, r.gun, this.#masks[n])
         : AT_REST;
       r.bears = goal.bears;
       r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
       r.pitch = easeAngle(r.pitch, goal.pitch, dt);
-      r.group.rotation.y = r.yaw;
-      r.group.rotation.x = r.pitch;
+      r.group.quaternion.setFromRotationMatrix(
+        poseMatrix(POSE, r.face, r.yaw, r.pitch));
 
       const sight = this.#arcs.getObjectByName(`sight${this.#rigs.indexOf(r)}`);
       if (sight) {
@@ -1286,6 +1303,9 @@ export class Designer {
         b.textContent = held ? (moduleById(held.module)?.id ?? '?') : 'empty';
         b.onclick = () => {
           this.#socket = this.#socket === s.id ? null : s.id;
+          // A refusal belongs to the mount it was said about. Left standing,
+          // it reads as a complaint about the part just selected.
+          this.#turnSaid = '';
           this.#note = null;
           this.#refresh();
         };
@@ -1333,22 +1353,45 @@ export class Designer {
       host.appendChild(b);
     }
     if (held) {
-      // Which way it faces is the player's. Four positions, because the part
-      // is a volume of cells and four is how many orientations leave it one.
-      const rot = held.rot ?? 0;
-      const turn = document.createElement('div');
-      turn.className = 'dzturn';
-      turn.innerHTML = '<span class="k">Facing</span>';
-      for (const [label, delta] of [['\u21ba 90', 3], ['\u21bb 90', 1]] as const) {
-        const b = document.createElement('button');
-        b.textContent = label;
-        b.onclick = () => { this.#turn(sock.id, delta); };
-        turn.appendChild(b);
+      // Which way it faces is the player's, on all three axes. Ninety degree
+      // steps because the part is a volume of cells and a cell grid has four
+      // orientations per axis that are still the same volume: anything between
+      // would resample the part, and a resampled part is back to fractions of
+      // a cell.
+      //
+      // Yaw alone could only bolt a gun to a deck. Roll lays it on a flank and
+      // pitch tips it under a keel, which is how a broadside or a ventral
+      // turret gets built at all.
+      const face = facingOf(held);
+      for (const [key, name, axis] of [
+        ['yaw', 'Yaw', 'yaw'],
+        ['pitch', 'Pitch', 'pitch'],
+        ['roll', 'Roll', 'roll'],
+      ] as const) {
+        const turn = document.createElement('div');
+        turn.className = 'dzturn';
+        turn.dataset.axis = key;
+        turn.innerHTML = `<span class="k">${name}</span>`;
+        for (const [label, delta] of [['\u21ba 90', 3], ['\u21bb 90', 1]] as const) {
+          const b = document.createElement('button');
+          b.textContent = label;
+          b.onclick = () => { this.#turn(sock.id, axis, delta); };
+          turn.appendChild(b);
+        }
+        const deg = document.createElement('b');
+        deg.textContent = `${face[axis] * 90}\u00b0`;
+        turn.appendChild(deg);
+        host.appendChild(turn);
       }
-      const deg = document.createElement('b');
-      deg.textContent = `${rot * 90}\u00b0`;
-      turn.appendChild(deg);
-      host.appendChild(turn);
+      // Why a rotation was refused, when one was. Silence plus a part that
+      // snapped back is a control a player thinks is broken.
+      if (this.#turnSaid) {
+        const why = document.createElement('div');
+        why.className = 'dzsaid bad';
+        why.id = 'dzTurnSaid';
+        why.textContent = this.#turnSaid;
+        host.appendChild(why);
+      }
 
       const c = document.createElement('button');
       c.className = 'dzpart clear';
@@ -1360,16 +1403,71 @@ export class Designer {
   }
 
   #fit(socket: string, module: string | null): void {
-    const rot = this.#design.parts.find(p => p.socket === socket)?.rot ?? 0;
-    this.#design.parts = this.#design.parts.filter(p => p.socket !== socket);
-    if (module) this.#design.parts.push({ socket, module, rot });
+    // Keep the whole facing, not the yaw alone. A socket a player has already
+    // rolled onto a flank stays rolled when they swap the gun in it, and
+    // carrying one of the three axes across while dropping the other two would
+    // stand the part back up for no reason a player could see.
+    const held = this.#design.parts.find(p => p.socket === socket);
+    const face = held ? facingOf(held) : { yaw: 0, pitch: 0, roll: 0 };
+    const rest = this.#design.parts.filter(p => p.socket !== socket);
+    this.#turnSaid = '';
+    if (!module) { this.#design.parts = rest; this.#refresh(); return; }
+
+    // A facing that suited the last part need not suit this one: a different
+    // module is a different shape, and a kept roll can bury it. So the new
+    // part goes in upright, the kept facing is offered to the SAME rule that
+    // guards the turn buttons, and it only stands if the rule takes it.
+    // Without this the facing carries silently and the part simply vanishes
+    // into whatever it landed in.
+    const upright = [...rest, { socket, module }];
+    const turned = [...rest,
+      { socket, module, rot: face.yaw, pitch: face.pitch, roll: face.roll }];
+    this.#design.parts = isUpright(face)
+      || mountFouling({ ...this.#design, parts: upright }, turned, socket)
+      ? upright : turned;
     this.#refresh();
   }
 
-  #turn(socket: string, delta: number): void {
-    this.#design.parts = this.#design.parts.map(p => p.socket === socket
-      ? { socket: p.socket, module: p.module, rot: (((p.rot ?? 0) + delta) % 4 + 4) % 4 }
+  /**
+   * Turn a mount a quarter about one axis, if the result is legal.
+   *
+   * TWO rules and no others. A rotation is refused when the barbette would
+   * lift off the ship frame, because a gun has to be bolted to something, and
+   * when the body would stand inside a cell another part or the plating
+   * already owns, because two things cannot occupy one cell. Everything else a
+   * player wants to do with a mount is theirs: a turret hanging under a keel
+   * or laid along a flank is a design choice, not an error.
+   *
+   * Checked by ASKING the rasteriser rather than by reasoning about the shape
+   * here. `mountFouling` places the turned part exactly as the real raster
+   * would and reports what it hit, so the editor cannot approve a rotation the
+   * hull then refuses, and cannot refuse one the hull would have taken.
+   */
+  /** Why the last rotation was refused, shown beside the controls. Cleared by
+   *  the next one that works. */
+  #turnSaid = '';
+
+  #turn(socket: string, axis: 'yaw' | 'pitch' | 'roll', delta: number): void {
+    const held = this.#design.parts.find(p => p.socket === socket);
+    if (!held) return;
+    const face = facingOf(held);
+    const next: Record<'yaw' | 'pitch' | 'roll', number> = {
+      yaw: face.yaw, pitch: face.pitch, roll: face.roll,
+    };
+    next[axis] = (((next[axis] + delta) % 4) + 4) % 4;
+
+    const turned = this.#design.parts.map(p => p.socket === socket
+      ? { socket: p.socket, module: p.module, rot: next.yaw, pitch: next.pitch, roll: next.roll }
       : p);
+
+    const why = mountFouling(this.#design, turned, socket);
+    if (why) {
+      this.#turnSaid = why;
+      this.#refresh();
+      return;
+    }
+    this.#turnSaid = '';
+    this.#design.parts = turned;
     this.#refresh();
   }
 
@@ -2090,8 +2188,10 @@ export class Designer {
       h += '<p class="dznote">Measured about the hull\u2019s own nose, not about the '
         + 'mount, because that is what the core measures: <code>arc_test_3d</code> takes '
         + 'the ship\u2019s rotation and <code>sim_core</code> has no per mount facing yet. '
-        + 'Facing sets the model\u2019s rest pose. Turn the arcs on over the model to see '
-        + 'them, and Target for something to track.</p>';
+        + 'Yaw, Pitch and Roll set where the model SITS, which moves its cells and '
+        + 'therefore what its own hull shadows, and never what it is allowed to shoot '
+        + 'at. Turn the arcs on over the model to see them, and Target for something '
+        + 'to track.</p>';
 
       // And the arc this HULL leaves, which is the other half and the half
       // nobody authored. Scanned off the voxels, so it is a measurement and

@@ -110,8 +110,8 @@ All four must pass before a push:
 
 ```sh
 node prototype/cli.js test                  # 29, the JS design reference
-cd engine/sim_core && cargo test            # 82, the Rust core (tests/, not the lib target)
-npm --prefix web test                       # 56, the wasm boundary and the addresses
+cd engine/sim_core && cargo test            # 96, the Rust core (tests/, not the lib target)
+npm --prefix web test                       # 73, the wasm boundary, the addresses and the facings
 npm --prefix server test                    # 13, the lobby and the lockstep API
 ```
 
@@ -231,8 +231,10 @@ classes legal out of the box, the faction swatch a player PICKED actually on
 the hull and a different pick repainting it, every enclosed mount inside the
 hull, both exteriors, the plate
 toggle cycling on / ghost / off, a tap that names the part it landed on, a
-selection that outlines it, a turret that turns 90 degrees and takes its
-cells with it, a saved hull taken out of the library into a practice level and
+selection that outlines it, a turret that turns 90 degrees on EACH of its
+three axes and takes its cells with it, giving three different hulls rather
+than one control wired to three rows, and comes home from every one of them,
+a saved hull taken out of the library into a practice level and
 actually spawned on the ship it was picked FOR while the ship beside it stays
 stock, a turret whose box has nothing standing in it and a pencil
 that refuses to put anything there, and the armour pencil: a run that is fully reversible, a cell
@@ -876,6 +878,74 @@ by 0.76 by 3.2, and a carve measured from the event's own position took nothing
 at all: every shot landed in space beside the ship. The carve starts from the
 nearest cell to it instead, which is the cell the shot came in at, because the
 sphere point is in the direction the shot arrived from.
+
+## A mount is bolted on at an ORIENTATION, not at an angle
+
+A part used to carry `rot`, a quarter turn about the up axis, and that is only
+enough to bolt a gun to a deck. It carries `pitch` and `roll` as well now, four
+positions on each of three axes, which is what a broadside sponson or a ventral
+turret actually is. Both new fields default to zero, so every design that
+predates them loads as the hull it always was and there is no migration.
+
+**The order is fixed and it is yaw, then pitch, then roll.** Rotation does not
+commute, so two places composing the same three numbers differently would put
+the same turret in two places. `AXES` in `design.ts` is that order, and it is
+the only one.
+
+**Two descriptions of one rotation, and they are derived from each other.**
+`rotatedVoxels` permutes the CELLS, which is what keeps a turned part on the
+grid instead of half a cell into the plate beside it. `faceBasis` hands the
+renderer a 3x3 so a barrel can be aimed. Those two must be the same rotation,
+so `faceBasis` is built by running `turnPoint` on a unit box rather than by
+writing out a table of sines: `s - 1 - p` is `-p` when `s` is one, which makes
+the cell map its own linear part. `web/tests/facing.test.mjs` then checks it
+cell by cell, every module against all 64 facings, plus that the basis is a
+rotation and not a reflection: a mirrored turret has every cell in a legal
+place and nothing downstream can tell.
+
+**A rotation is refused for TWO reasons and no others.** The base leaves the
+ship, or the body stands where something already is. A turret under a keel,
+laid along a flank or pointing aft is a design decision, and an editor that
+argued with it would be an editor that knows better than its user.
+
+**And the way that is answered is by rasterising twice and comparing.** The
+first cut placed the part itself and counted what it landed on, which reads as
+obviously right and disagreed with the real placement immediately: the raster
+NUDGES a part that does not fit, seats first come first served, and lets a part
+sink through the frame. It refused the stock Terran's own drive bell at the
+facing the hull ships with, which is an editor that will not let you save the
+design it just opened. `mountFouling` asks the rasteriser instead, and compares
+against the CURRENT facing rather than against a perfect fit, because a hull as
+authored is the baseline a rotation has to be judged from. Measured on the
+Rogue corvette, which is the least hull in the game and therefore where a part
+actually runs out of room: 984 of 1088 facings taken, 80 refused for fouling
+and 24 for lifting off. A Terran frigate's beams take all 64, on all three
+mounts.
+
+**Anything keyed on a design has to know about all three axes.** `rasterSig`
+carried the yaw alone, so two hulls differing only in a roll shared a cache
+entry and the second was handed the first one's cells.
+
+### A barrel swings in the MOUNT's frame, and the gates stay in the ship's
+
+Which way a mount was bolted on changes where its cells are and therefore what
+its own hull shadows. It does NOT change what the gun may shoot at: the
+authored arc and the mask scanned off the hull are both about the hull, so both
+gates are asked in the ship's frame exactly as before, or a player would widen
+a limited arc by rolling the turret over.
+
+The ANGLES are the mount's. `turretGoal` takes the direction into the mount's
+frame before measuring, and `poseMatrix` is `F * Ry * Rx * F^-1`: undo the
+facing, aim, put it back. The cells come off the raster with the facing already
+baked in, so a plain `Ry * Rx` elevates about the SHIP's beam, and that was a
+real defect in the yaw only code rather than a new hazard. A mount yawed a
+quarter turn has the ship's beam running straight down its own barrel, so its
+elevation moved nothing at all. Both of these live in `turret.ts` because the
+map and the shipyard draw the same turret, and a second copy is the divergent
+path GUIDELINES 5.1 is about.
+
+`HullRig.rest` and `Rig.rest` are gone. A scalar can only describe the one axis
+this used to have, so a rig carries the basis and the pose is a matrix.
 
 ## They are THRUSTERS, never jets
 

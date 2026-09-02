@@ -32,7 +32,9 @@ import {
   DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
   arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
 } from './design.js';
-import { AT_REST, blockedShell, easeAngle, turretGoal } from './turret.js';
+import {
+  AT_REST, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
+} from './turret.js';
 import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, tintFar, tintHull, tintMix,
   type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
@@ -143,7 +145,8 @@ interface Debris {
 interface Rig {
   readonly quads: number[];
   readonly pivot: THREE.Vector3;
-  readonly rest: number;
+  /** How the design bolted it on, as a rotation from mount to ship. */
+  readonly face: MountFace;
   readonly key: string;
   readonly mask: Uint32Array | undefined;
   yaw: number;
@@ -1772,7 +1775,7 @@ export class View {
           const world = r.pivot.clone().applyQuaternion(q).add(at);
           const dir = new THREE.Vector3(aim.x, aim.y, aim.z).sub(world).applyQuaternion(inv);
           const gun = gunByKey(r.key);
-          if (gun) goal = turretGoal(dir, r.rest, gun, r.mask);
+          if (gun) goal = turretGoal(dir, r.face, gun, r.mask);
         }
         r.bears = goal.bears;
         r.yaw = easeAngle(r.yaw, goal.yaw, dt, true);
@@ -1796,13 +1799,14 @@ export class View {
     const a = src.array as Float32Array, b = dst.array as Float32Array;
     const an = srcN.array as Float32Array, bn = dstN.array as Float32Array;
     const m = new THREE.Matrix4();
-    const e = new THREE.Euler(0, 0, 0, 'YXZ');
     const p = new THREE.Vector3();
     for (const r of rigs) {
       r.drawnYaw = r.yaw;
       r.drawnPitch = r.pitch;
-      e.set(r.pitch, r.yaw, 0);
-      m.makeRotationFromEuler(e);
+      // The quads were rasterised with the facing already in them, so the pose
+      // has to take it off, aim, and put it back. `poseMatrix` is that, and it
+      // is the shipyard's too: one turret rule, drawn twice.
+      poseMatrix(m, r.face, r.yaw, r.pitch);
       for (const q of r.quads) {
         // A quad the hull has already lost stays lost: the wound collapsed its
         // four vertices onto one point, and rewriting them from the original
@@ -1832,7 +1836,7 @@ export class View {
     const rigs: Rig[] = hull.rigs.map((g, n) => ({
       quads: [],
       pivot: new THREE.Vector3(g.pivot[0], g.pivot[1], g.pivot[2]),
-      rest: g.rest,
+      face: g.face,
       key: g.key,
       mask: masks[n],
       yaw: 0, pitch: 0, bears: false, drawnYaw: 0, drawnPitch: 0,

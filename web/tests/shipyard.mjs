@@ -1057,21 +1057,43 @@ async function checkModesAndRotation(page) {
   }
   if (!picked) { fail('no trunnion gun on the panel, so a gun cannot be reached at all'); return; }
   await page.waitForTimeout(350);
-  const turn = await page.$$('.dzturn button');
-  if (turn.length !== 2) { fail('no rotation control on a filled socket'); return; }
-  const before = await page.evaluate(() => window.ftDebug.designer().gridHash);
-  await turn[1].click();
-  await page.waitForTimeout(500);
-  const after = await page.evaluate(() => window.ftDebug.designer());
-  if (!after.parts) fail('rotating dropped the part');
-  else if (after.gridHash === before) fail(`rotating the ${picked} changed nothing in the grid`);
-  else ok(`a ${picked} turns 90 degrees and the cells move with it`);
-  // And back, so the harness leaves the ship as it found it.
-  await (await page.$$('.dzturn button'))[0].click();
-  await page.waitForTimeout(400);
-  const home = await page.evaluate(() => window.ftDebug.designer().gridHash);
-  if (home !== before) fail('turning back did not restore the hull');
-  else ok('and turns back to exactly where it started');
+  const axes = await page.$$eval('.dzturn', rows => rows.map(r => r.dataset.axis));
+  if (axes.join(',') !== 'yaw,pitch,roll') {
+    fail(`a filled socket offers ${axes.join(', ') || 'no'} rotation, not all three axes`);
+    return;
+  }
+  // Each axis on its own, from upright and back to it. Turning all three and
+  // then undoing them would pass on a control that moved the wrong axis, since
+  // the hull comes home either way.
+  const start = await page.evaluate(() => window.ftDebug.designer().gridHash);
+  const moved = [];
+  for (const axis of ['yaw', 'pitch', 'roll']) {
+    const before = await page.evaluate(() => window.ftDebug.designer().gridHash);
+    await (await page.$$(`.dzturn[data-axis="${axis}"] button`))[1].click();
+    await page.waitForTimeout(500);
+    const after = await page.evaluate(() => window.ftDebug.designer());
+    const said = await page.$eval('#dzTurnSaid', e => e.textContent).catch(() => '');
+    if (said) { fail(`${axis} on a ${picked} was refused: ${said}`); return; }
+    if (!after.parts) { fail(`turning a ${picked} in ${axis} dropped the part`); return; }
+    if (after.gridHash === before) {
+      fail(`turning the ${picked} in ${axis} changed nothing in the grid`);
+      return;
+    }
+    moved.push(`${axis} ${after.gridHash.toString(16)}`);
+    // And back, so the next axis is judged from upright too.
+    await (await page.$$(`.dzturn[data-axis="${axis}"] button`))[0].click();
+    await page.waitForTimeout(450);
+    const home = await page.evaluate(() => window.ftDebug.designer().gridHash);
+    if (home !== before) { fail(`turning back in ${axis} did not restore the hull`); return; }
+  }
+  // Three different hulls, not one control wired to three rows. A pitch that
+  // silently did a yaw would move the cells and come home and look identical
+  // to a pitch that worked.
+  const hashes = new Set(moved.map(m => m.split(' ')[1]));
+  if (hashes.size !== 3) fail(`three axes gave ${hashes.size} distinct hulls: ${moved.join(', ')}`);
+  else ok(`a ${picked} turns on all three axes, ${moved.join(', ')}, and comes home`);
+  const end = await page.evaluate(() => window.ftDebug.designer().gridHash);
+  if (end !== start) fail('the ship was not left as it was found');
 }
 
 for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
