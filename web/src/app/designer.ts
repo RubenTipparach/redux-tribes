@@ -79,6 +79,27 @@ const YARD_METAL = 0.0;
  *  frame per mount. */
 const POSE = new THREE.Matrix4();
 
+/** Scratch for the barrel readout, which runs per mount per debug read. */
+const BARREL = new THREE.Vector3();
+
+/**
+ * Where a mount's barrel points in the SHIP's frame, in degrees.
+ *
+ * Its cells came off the raster already turned by the facing, so the barrel at
+ * rest lies along `F * z` rather than along z, and the pose on the group takes
+ * it from there. Reported so a check can ask about the authored arc, which is
+ * a fact about the hull and is measured in the hull's frame.
+ */
+function barrelOf(r: Rig): { shipYaw: number; shipPitch: number } {
+  BARREL.set(r.face[2] as number, r.face[5] as number, r.face[8] as number)
+    .applyQuaternion(r.group.quaternion);
+  return {
+    shipYaw: +(Math.atan2(BARREL.x, BARREL.z) * 180 / Math.PI).toFixed(1),
+    shipPitch: +(Math.atan2(BARREL.y, Math.hypot(BARREL.x, BARREL.z)) * 180 / Math.PI)
+      .toFixed(1),
+  };
+}
+
 /** A facing in words, for the one place a person reads one back. Only the axes
  *  that are actually turned, because "yaw 0, pitch 0, roll 90" is three
  *  numbers to say one thing. */
@@ -2423,10 +2444,23 @@ export class Designer {
       plate: this.#plate,
       arcs: this.#showArcs,
       target: this.#showTarget,
+      // TWO pairs of angles, because a mount now has two frames and a check
+      // that conflated them could not ask either question. `yaw` and `pitch`
+      // are the MOUNT's own: zero is straight ahead on the mount whatever
+      // facing it was bolted at, which is what "at rest" means. `shipYaw` and
+      // `shipPitch` are where the barrel actually points, which is the frame
+      // the authored arc is measured in.
+      //
+      // The ship frame euler used to stand in for both and was silently the
+      // wrong one for the first: it reported a rolled mount's rest as some
+      // arbitrary angle, and the harness compared it against a `rest` field
+      // that was never published at all, so the comparison was NaN and the
+      // check passed on every hull without ever looking.
       rigs: this.#rigs.map(r => ({ label: r.label, key: r.gun.key,
         arcH: r.gun.arcH, arcV: r.gun.arcV, bears: r.bears,
-        yaw: +(r.group.rotation.y * 180 / Math.PI).toFixed(1),
-        pitch: +(r.group.rotation.x * 180 / Math.PI).toFixed(1) })),
+        yaw: +(r.yaw * 180 / Math.PI).toFixed(1),
+        pitch: +(r.pitch * 180 / Math.PI).toFixed(1),
+        ...barrelOf(r) })),
       bearing: this.#rigs.filter(r => r.bears).length,
       // The scan, so the harness can wait for it and read what it found
       // without ever being able to drive it.

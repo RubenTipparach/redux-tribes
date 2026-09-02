@@ -318,14 +318,31 @@ async function checkTurrets(page) {
   else ok('Arcs and Target are independent switches');
 
   await frames(page, 12);
-  const a = await page.evaluate(() => window.ftDebug.designer());
-  if (!a.rigs.length) { fail('no turret rigs at all'); return; }
-  await frames(page, 48);
-  const b = await page.evaluate(() => window.ftDebug.designer());
+  const first = await page.evaluate(() => window.ftDebug.designer());
+  if (!first.rigs.length) { fail('no turret rigs at all'); return; }
 
-  const moved = a.rigs.some((r, n) => Math.abs(r.yaw - b.rigs[n].yaw) > 3);
-  if (!moved) fail('the turrets did not move while tracking');
-  else ok(`${a.rigs.length} turrets swing on the target`);
+  // Sampled across a LAP of the target, not at two instants.
+  //
+  // The preview's target orbits in about seven seconds of wall time and a
+  // turret at rest when nothing is in arc is the feature, not a fault. Two
+  // snapshots 48 frames apart therefore both land in the stretch where every
+  // mount sits at zero, on a renderer slow enough that 48 frames is most of a
+  // minute: the check reported turrets that never moved and never bore while
+  // a poll over the same period watched them sweep 343 degrees and two of the
+  // three bear. Ask over a window that contains the answer.
+  const laps = [];
+  for (let n = 0; n < 30; n++) {
+    laps.push(await page.evaluate(() => window.ftDebug.designer().rigs));
+    await page.waitForTimeout(400);
+  }
+  const spread = first.rigs.map((_r, q) => {
+    const seen = laps.map(l => l[q].yaw);
+    return Math.max(...seen) - Math.min(...seen);
+  });
+  const bore = Math.max(...laps.map(l => l.filter(r => r.bears).length));
+  if (!spread.some(d => d > 3)) fail('the turrets did not move while tracking');
+  else ok(`${first.rigs.length} turrets swing on the target, `
+    + `${spread.map(d => d.toFixed(0)).join('/')} degrees of travel each`);
 
   // Easing, not snapping. Sampled across a second and a half so the claim
   // rests on frames where the turrets were actually moving: a single pair of
@@ -353,30 +370,38 @@ async function checkTurrets(page) {
   else ok(`turrets ease rather than snap: ${swept.toFixed(0)} degrees swept, `
     + `worst step ${jump.toFixed(1)} in 130 ms`);
 
-  // With the target off, every turret comes home to its mount's own forward.
+  // With the target off, every turret comes home to its MOUNT's own forward,
+  // which is zero in the mount's frame whatever facing it was bolted at. This
+  // used to compare against a `rest` field the app never published, so it was
+  // NaN against a threshold and passed on every hull without looking.
   await page.click('#dzTrack');
   await page.waitForTimeout(1400);
   const home = await page.evaluate(() => window.ftDebug.designer());
-  const away = home.rigs.filter(r => Math.abs(r.yaw - r.rest) > 6 || Math.abs(r.pitch) > 6);
-  if (away.length) fail(`${away.length} turrets did not return to their mount's forward`);
+  const away = home.rigs.filter(r => Math.abs(r.yaw) > 6 || Math.abs(r.pitch) > 6);
+  if (away.length) fail(`${away.length} turrets did not return to their mount's forward: `
+    + away.map(r => `${r.key} at ${r.yaw}, ${r.pitch}`).join('; '));
   else ok('with nothing to track, every turret returns to straight ahead');
   await page.click('#dzTrack');
   await page.waitForTimeout(600);
 
-  // Never past the limit, in either sample.
+  // Never past the limit. Measured on the BARREL in the ship's frame, because
+  // that is the frame the authored arc is in, and only while a mount bears:
+  // one that cannot is parked at its own forward, which is allowed to be
+  // anywhere the design bolted it.
   const over = [];
-  for (const snap of [a, b]) {
-    for (const r of snap.rigs) {
+  for (const snap of laps) {
+    for (const r of snap) {
+      if (!r.bears) continue;
       const wide = Math.abs(r.arcH[1] - r.arcH[0]) >= 360;
-      if (!wide && (r.yaw < r.arcH[0] - 0.6 || r.yaw > r.arcH[1] + 0.6))
-        over.push(`${r.key} at ${r.yaw} against ${r.arcH.join(' to ')}`);
+      if (!wide && (r.shipYaw < r.arcH[0] - 0.6 || r.shipYaw > r.arcH[1] + 0.6))
+        over.push(`${r.key} at ${r.shipYaw} against ${r.arcH.join(' to ')}`);
     }
   }
-  if (over.length) fail(`a turret swung past its arc: ${over.join('; ')}`);
+  if (over.length) fail(`a turret swung past its arc: ${over[0]}`);
   else ok('no turret swings past its own arc');
 
-  if (!a.bearing && !b.bearing) fail('no turret ever bore on the target');
-  else ok(`turrets bearing on the target: ${a.bearing} then ${b.bearing} of ${a.rigs.length}`);
+  if (!bore) fail('no turret ever bore on the target');
+  else ok(`${bore} of ${first.rigs.length} turrets bear on the target at once`);
 
   await page.click('#dzArcs');
   await page.click('#dzTrack');
@@ -1057,6 +1082,22 @@ async function checkModesAndRotation(page) {
   }
   if (!picked) { fail('no trunnion gun on the panel, so a gun cannot be reached at all'); return; }
   await page.waitForTimeout(350);
+  const stock = await page.evaluate(() => window.ftDebug.designer().gridHash);
+
+  // The gun has to be one no quarter turn leaves alone, or "the cells moved"
+  // is a question about the shape rather than about the control. A beam
+  // turret is a square barrel, so rolling it about its own long axis is a
+  // SYMMETRY that lands every cell back where it was: a real no-op that reads
+  // exactly like a dead button, and it failed this check for that reason. The
+  // projectile turret is 5 by 4 by 9 and is unchanged by nothing.
+  const gunNamed = (name) => page.locator('#dzPalette .dzpart', { hasText: name }).first();
+  if (!(await gunNamed('Projectile turret').count())) {
+    fail('no projectile turret offered for a trunnion');
+    return;
+  }
+  await gunNamed('Projectile turret').click();
+  await page.waitForTimeout(700);
+  picked = 'WPN-CN1';
   const axes = await page.$$eval('.dzturn', rows => rows.map(r => r.dataset.axis));
   if (axes.join(',') !== 'yaw,pitch,roll') {
     fail(`a filled socket offers ${axes.join(', ') || 'no'} rotation, not all three axes`);
@@ -1092,8 +1133,13 @@ async function checkModesAndRotation(page) {
   const hashes = new Set(moved.map(m => m.split(' ')[1]));
   if (hashes.size !== 3) fail(`three axes gave ${hashes.size} distinct hulls: ${moved.join(', ')}`);
   else ok(`a ${picked} turns on all three axes, ${moved.join(', ')}, and comes home`);
+  // And the beam back, so the harness leaves the ship as it found it. Against
+  // the hash taken BEFORE the swap, since `start` is the cannon's hull.
+  await gunNamed('Beam turret').click();
+  await page.waitForTimeout(700);
   const end = await page.evaluate(() => window.ftDebug.designer().gridHash);
-  if (end !== start) fail('the ship was not left as it was found');
+  if (end !== stock) fail('the ship was not left as it was found');
+  else ok('and the socket comes back to the gun it started with');
 }
 
 for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
