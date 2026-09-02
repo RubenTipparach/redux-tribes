@@ -485,6 +485,24 @@ bay, berths and clamps. What a class is FOR stays hand authored, which is its
 profile and its guns. The four frigates keep their original cell coordinates,
 read off the archived silhouettes.
 
+**A drive's volume is its own, like a turret's sweep.** Cells are claimed
+first come first served and the nudge charged one point for a cell another part
+held, so a fitting with nowhere better simply settled inside the engines: a
+Karisen corvette carried twenty three cells of docking clamp in its drive
+block, a Rogue corvette forty two cells of barracks, and most of the fleet had
+one or the other in theirs. A bell now costs what a sweep costs, so the nudge
+walks OUT rather than taking the nearest hole whichever it is, and the two are
+kept apart for the reason they always were: a berth that lost a few cells came
+out small, and a clamp bolted through an engine is not a ship.
+
+Which exposed the seating that put them there. The bay and clamp stations were
+a flat eight and nine cells off the transom, and eight was never a clearance,
+it was a guess that the bells were shorter than they are. They clear the
+LONGEST drive in the table now, because a frame does not know which one its
+stock fit will carry, and the keel fallback is clamped to the same line: it
+splits its pair fore and aft of the station, and the aft half walked straight
+back into the bells the station had just cleared.
+
 **Nothing may be buried and nothing may foul.** Cells are first come first
 served, so a socket seated inside another part is not an error anywhere: the
 part simply never appears while paying full mass. `sim.test.mjs` walks every

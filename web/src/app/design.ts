@@ -1087,13 +1087,21 @@ const suite = (prof: readonly Station[],
   // spoken for. A Karisen cruiser keeps six missile cells on the keel and is
   // six cells deep: berths and cells cannot share a station, and the even
   // march below has no way to know that.
-  const z0 = aft + 9, z1 = nose - 19;
+  // Nothing is seated inside the engines. The LONGEST drive there is, not one
+  // of them: clearing `DRV-N` at four cells is no clearance on a liner, which
+  // fits `DRV-H` at seven. A frame does not know which drive its stock fit
+  // will carry, so the clearance is the worst case, and it applies to the
+  // authored stations as well as the marched ones.
+  const bell = MODULES.reduce(
+    (a, m) => (m.fits === 'drive' ? Math.max(a, m.size[2] as number) : a), 4);
+  const clearAft = aft + 1 + Math.ceil(bell / 2) + 4;
+  const z0 = Math.max(aft + 9, clearAft), z1 = nose - 19;
   const stations = Math.max(1, Math.ceil((bays - 1) / 2));
   for (let n = 1; n < bays; n++) {
     const k = Math.floor((n - 1) / 2);
-    const z = bayZ
+    const z = Math.max(clearAft, bayZ
       ? (bayZ[Math.min(k, bayZ.length - 1)] as number)
-      : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
+      : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1)));
     const first = (n - 1) % 2 === 0;
     const lane = laneOf(prof, z);
     if (lane.axis === 'x') {
@@ -1106,17 +1114,27 @@ const suite = (prof: readonly Station[],
       // No lane either way, so the pair goes fore and aft of the station
       // instead of abreast of it. A berth is seven cells long, so four clear
       // of the station is the least that keeps two of them apart.
+      // Clamped, because the pair splits fore and aft of its station and the
+      // aft half walked straight back into the bells the station cleared: the
+      // liner's first passenger deck came out four cells inside its engines.
       out.push(seatAt(prof, 'bay', `b${n}`, `bay, keel ${n}`,
-        z + (first ? -4 : 4), 0, bayV));
+        Math.max(clearAft, z + (first ? -4 : 4)), 0, bayV));
     }
   }
 
   // Clamps go on the QUARTER, aft of the bays and aft of anything a missile
   // pad sweeps. A clamp is enclosed, so on a thin hull it is pulled inboard to
   // fit, and amidships that walked it straight into a ventral pad's box.
+  //
+  // Clear of the DRIVE BLOCK, by the same clearance the bays use. The station
+  // was a flat eight cells off the transom, which is inside a bell on a short
+  // hull: a Karisen corvette's port clamp sat with twenty three of its cells
+  // in the engines, and once a drive's volume became its own the clamp had
+  // nowhere legal left and vanished entirely. Eight was never a clearance, it
+  // was a guess that the bells were shorter than they are.
   for (let n = 0; n < clamps; n++) {
     const k = Math.floor(n / 2);
-    const z = aft + 8 + k * 9;
+    const z = clearAft + k * 9;
     const port = n % 2 === 0;
     const lane = laneOf(prof, z);
     out.push(lane.axis === 'x'
@@ -1126,7 +1144,7 @@ const suite = (prof: readonly Station[],
         ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'upper' : 'lower'} ${k + 1}`,
           z, 0, port ? lane.at : -lane.at)
         : seatAt(prof, 'clamp', `c${n}`, `clamp, keel ${n + 1}`,
-          z + (port ? -4 : 4), 0, -0.42));
+          Math.max(clearAft, z + (port ? -4 : 4)), 0, -0.42));
   }
   return out;
 };
@@ -1681,7 +1699,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_frigate', name: 'Rogue Frigate',
     faction: 'rogue', tier: 'frigate', rung: 'frigate',
-    radius: 3, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3, massMax: 0.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
     profile: PROF_ROGUE,
@@ -1777,7 +1795,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'freighter', name: 'Freighter',
     faction: 'civil', tier: 'freighter', rung: 'escort',
-    radius: 4.9, massMax: 2.62, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.9, massMax: 2.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
       ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
@@ -1838,7 +1856,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.5, massMax: 2.62, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.5, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -1861,7 +1879,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.4, massMax: 5.53, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.4, massMax: 5.56, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -1909,7 +1927,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.02, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -1927,7 +1945,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 4.09, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -1978,7 +1996,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.5, massMax: 1.47, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.5, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -1995,7 +2013,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
     faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.3, massMax: 2.91, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.3, massMax: 2.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CA,
     spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
       [CX - 13, CY - 2, 34, 26, 4, 6] as const,
@@ -2059,7 +2077,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7, massMax: 4.69, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7, massMax: 4.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
@@ -2104,7 +2122,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_hauler', name: 'Hauler',
     faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.4, massMax: 2.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.2, massMax: 2.64, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_HAULER,
     spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
       ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
@@ -2170,7 +2188,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_liner', name: 'Liner',
     faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.5, massMax: 5.34, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.5, massMax: 5.35, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LINER,
     spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
       ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
@@ -2784,6 +2802,16 @@ export interface Raster {
    *  anything this rasteriser built; above zero means a part was placed into
    *  one, or a design saved before the rule came in. */
   readonly fouled: number;
+  /**
+   * Cells of a DRIVE that some other part wanted.
+   *
+   * The same rule as a turret's sweep and for the same reason: the two are not
+   * the same kind of bad. A berth that lost a few cells to a neighbour came
+   * out small; a boarding clamp bolted through a drive bell is not a ship. A
+   * Karisen corvette carried twenty three cells of docking clamp in its
+   * engines, and most hulls in the fleet had a clamp or a barracks in theirs.
+   */
+  readonly bellFouled: number;
   readonly extent: readonly [number, number, number];
   /** The true bounding sphere, in cells, about the hull's own centre.
    *  A box diagonal is not one: it measures corners a long thin ship has
@@ -2969,7 +2997,7 @@ export function rasterise(d: Design): Raster {
   const outboard: number[] = [];
   /** The boxes turrets sweep, which nothing else may occupy. */
   const turrets: TurretBox[] = [];
-  let enclosedOutside = 0, flushProud = 0;
+  let enclosedOutside = 0, flushProud = 0, bellFouled = 0;
   // Guns first, then everything else.
   //
   // A turret's box is its own, and a box only exists once the turret is
@@ -2978,9 +3006,38 @@ export function rasterise(d: Design): Raster {
   // move left, because parts are fitted rather than dragged. Placing the
   // turrets first makes that unreachable rather than merely unlikely.
   const isGun = (n: number) => !!moduleById((d.parts[n] as Placement).module)?.weapon;
+  // Drives go second, for the same reason turrets go first: a drive's volume
+  // is its own and nothing may stand in it, and a volume only exists once the
+  // part is placed. A bay seated before the drive beside it means the drive
+  // arrives to find its own bell occupied.
+  const isDrive = (n: number) => {
+    const m = moduleById((d.parts[n] as Placement).module);
+    return !!m && (m.fits === 'drive' || m.fits === 'retro');
+  };
   const every = d.parts.map((_, n) => n);
-  const order = [...every.filter(isGun), ...every.filter(n => !isGun(n))];
+  const order = [
+    ...every.filter(isGun),
+    ...every.filter(n => !isGun(n) && isDrive(n)),
+    ...every.filter(n => !isGun(n) && !isDrive(n)),
+  ];
   const reserved = new Uint8Array(CELLS);
+  /**
+   * The drive bells, which are nobody else's to stand in.
+   *
+   * A part's cells are claimed first come first served and the nudge treats a
+   * cell another part is standing in as costing one point, so a clamp with
+   * nowhere better to go simply settled inside the engines: measured over the
+   * fleet, a Karisen corvette carried twenty three cells of docking clamp in
+   * its drive block and most hulls had a clamp or a barracks in theirs. A
+   * berth that lost a few cells to a neighbour is a berth that came out small;
+   * a boarding clamp bolted through a drive bell is not a ship.
+   *
+   * Weighted like a turret's sweep rather than like an occupied cell, so the
+   * nudge walks OUT of a drive instead of settling for the nearest hole
+   * whichever it is. That distinction is the one the turret boxes already
+   * taught: the two are not the same kind of bad.
+   */
+  const bells = new Uint8Array(CELLS);
   // Which cells the weld pass grew, so the mount rule can ask whether a base
   // is on the SHIP rather than on a spar the weld grew to catch it.
   const welded = new Uint8Array(CELLS);
@@ -3078,7 +3135,7 @@ export function rasterise(d: Design): Raster {
         // that came out a little small. Weighted equally, the nudge took the
         // nearest free hole whichever it was, and four heavy cruisers seated
         // a barracks inside their own gun rings.
-        if (reserved[n]) lost += FOUL_COST;
+        if (reserved[n] || bells[n]) lost += FOUL_COST;
         else if (at && at !== Mat.Frame) lost++;
       }
       return lost;
@@ -3122,6 +3179,17 @@ export function rasterise(d: Design): Raster {
 
     placedAt.set(pi, [ox, oy, oz] as const);
 
+    // A drive claims its own bell. The FILLED cells rather than the box: a
+    // bell is a ring and a nozzle with space around them, and reserving the
+    // whole box would push the plating off the transom.
+    if (m.fits === 'drive' || m.fits === 'retro') {
+      for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
+        if (!v.data[i + j * v.sx + k * v.sx * v.sy]) continue;
+        const x = ox + i, y = oy + j, z = oz + k;
+        if (inBounds(x, y, z)) bells[idx3(x, y, z)] = 1;
+      }
+    }
+
     // A turret swivels, so its own volume belongs to it and to nothing else.
     // Recorded as the placed box rather than as its filled cells, because the
     // gaps in a gun (under the barrel, beside the base) are the gaps the shell
@@ -3148,6 +3216,12 @@ export function rasterise(d: Design): Raster {
       const x = ox + i, y = oy + j, z = oz + k;
       if (!inBounds(x, y, z)) continue;
       const n = idx3(x, y, z);
+      // A cell of somebody else's DRIVE that this part still wants. Zero on
+      // anything this rasteriser places, because a bell costs the nudge as
+      // much as a turret's sweep; above zero means a part had nowhere legal
+      // to go and settled in the engines anyway.
+      if (bells[n] && own[n] !== pi + 1
+        && m.fits !== 'drive' && m.fits !== 'retro') bellFouled++;
       if (grid[n] && grid[n] !== Mat.Frame) continue;
       grid[n] = mat;
       purp[n] = code;
@@ -3576,7 +3650,7 @@ export function rasterise(d: Design): Raster {
         }
   }
 
-  const raster: Raster = { grid, purp, own, tone, orphans, welded,
+  const raster: Raster = { grid, purp, own, tone, orphans, welded, bellFouled,
     plateCells, solidCells: cells.length / 3,
     enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };

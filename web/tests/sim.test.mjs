@@ -1092,6 +1092,33 @@ test('the client and the core name the same classes in the same order', async ()
 // part never appears. On a stock hull that is a drive nobody can see paying
 // full mass for nothing, and it is invisible in every other check here because
 // the arithmetic reads the PART LIST rather than the picture.
+test('nothing is bolted through a drive bell', async () => {
+  // A drive's volume is its own, the same rule a turret's sweep already has
+  // and for the same reason: the two are not the same kind of bad. A berth
+  // that lost a few cells to a neighbour came out small; a docking clamp
+  // through an engine is not a ship.
+  //
+  // Cells are claimed first come first served and the nudge charged one point
+  // for a cell another part held, so a clamp with nowhere better simply
+  // settled inside the engines: a Karisen corvette carried twenty three cells
+  // of it there and most of the fleet had a clamp or a barracks in theirs. It
+  // costs what a turret's sweep costs now, so the nudge walks out instead.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, rasterise, useCore } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  const bad = [];
+  for (const f of FRAMES) {
+    const n = rasterise(stockFor(f.classKey)).bellFouled;
+    if (n) bad.push(`${f.classKey}: ${n} cells`);
+  }
+  assert.deepEqual(bad, [], 'parts standing in a drive');
+});
+
 test('every part of every stock hull actually gets cells', async () => {
   const dsn = await build({
     entryPoints: [resolve(root, 'src/app/design.ts')],
