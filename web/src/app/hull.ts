@@ -32,7 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
-  isPainted, paintedSlot,
+  isPainted, paintedSlot, purposeAt,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
@@ -68,7 +68,23 @@ import type { MountFace } from './turret.js';
  */
 export const SURF_ARMOUR = 0;
 export const SURF_FRAME = ARMOUR_BANDS;
-export const SURF_PART = ARMOUR_BANDS + 1;
+/**
+ * Machinery, three ways: what pushes, what shoots, and everything else.
+ *
+ * It was ONE surface for every part on the ship, and the note that justified
+ * it said a player can tell a drive from a gun by its COLOUR, which is true
+ * and is not the question a surface answers. A drive bell is a cast nozzle, a
+ * turret is a machined gun and a barracks is a box; one greeble over all three
+ * says none of it, and there was no way to say otherwise.
+ *
+ * Three rather than eight, because these are the three a player names when
+ * asked what a ship is made of. Propulsion and attitude are one surface: both
+ * are bells, and CLAUDE.md's own vocabulary keeps them one family of thing
+ * even while keeping the WORDS apart.
+ */
+export const SURF_DRIVE = ARMOUR_BANDS + 1;
+export const SURF_WEAPON = ARMOUR_BANDS + 2;
+export const SURF_PART = ARMOUR_BANDS + 3;
 /**
  * One surface per PALETTE SLOT, for cells laid down by the brush.
  *
@@ -84,7 +100,7 @@ export const SURF_PART = ARMOUR_BANDS + 1;
  * surface that has quads in it, so a hull nobody has painted pays nothing and
  * a hull painted from two slots pays for two.
  */
-export const SURF_SLOT = ARMOUR_BANDS + 2;
+export const SURF_SLOT = ARMOUR_BANDS + 4;
 export const PAINT_SLOTS = 8;
 export const SURF_COUNT = SURF_SLOT + PAINT_SLOTS;
 
@@ -118,7 +134,7 @@ const WINDOW_DEPTH_REF = 5;
 const REF_NX = 32;
 
 export const SURF_NAMES: readonly string[] =
-  ['plate', 'trim', 'structure', 'frame', 'part',
+  ['plate', 'trim', 'structure', 'frame', 'drive', 'weapon', 'part',
     ...Array.from({ length: PAINT_SLOTS }, (_, n) => `brush ${n + 1}`)];
 
 export interface HullRig {
@@ -331,6 +347,12 @@ export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
   }
   mats[SURF_FRAME] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.45, roughness: 0.70, normalMap: finishMap(f.frame),
+  });
+  mats[SURF_DRIVE] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.drive),
+  });
+  mats[SURF_WEAPON] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.weapon),
   });
   mats[SURF_PART] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.part),
@@ -768,7 +790,20 @@ export function hullMesh(d: Design, bare = false): HullMesh {
       return isPainted(t) ? SURF_SLOT + paintedSlot(t)
         : SURF_ARMOUR + ROLE_BAND[roleAt(t)];
     }
-    return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
+    if (mat === Mat.Frame) return SURF_FRAME;
+    // Which machinery, by what the cell is FOR. `purp` is the purpose code the
+    // rasteriser already writes for the colour legend, so this is the same
+    // answer asked about the surface instead of about the hue.
+    //
+    // Nought is NO purpose recorded, which is a spar or a weld rather than a
+    // drive. `purposeAt` answers the first row of the table for it, so asking
+    // it directly would have put every unclaimed cell in the engines.
+    const code = purp[n] as number;
+    if (!code) return SURF_PART;
+    const job = purposeAt(code);
+    if (job === 'propulsion' || job === 'attitude') return SURF_DRIVE;
+    if (job === 'gun' || job === 'ordnance') return SURF_WEAPON;
+    return SURF_PART;
   };
   const order = cellOf.map((_, q) => q);
   // Stable, so a run of plate stays in the order the greedy pass laid it down

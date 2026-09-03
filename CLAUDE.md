@@ -1434,13 +1434,41 @@ metalness and roughness. Two surfaces rather than one, and the distinction is
 plate against machinery: an armour panel and a drive bell are not the same
 thing, and painting the plate's rivets onto a reactor made a ship one material
 with parts drawn on it. `PART_FINISH` is greebled, more metallic and rougher,
-and every cell that belongs to a placement wears it: the yard's parts, the
-schematic's torn edge, and the inside of a wound on the map.
+and it is what a cell belonging to a placement wears wherever the picture does
+not split machinery further: the schematic's torn edge and the inside of a
+wound on the map, both of which are a mixed cross section rather than one
+fitting.
 
-One finish for all machinery rather than one per module kind. A player can
-already tell a drive from a gun by its COLOUR, which is the shipyard's whole
-legend; what they could not tell was machinery from plate, and that is one
-distinction, not nine.
+That started as ONE finish for all machinery, on the grounds that a player can
+already tell a drive from a gun by its COLOUR. True of the colour, and never
+true of the SURFACE: a drive bell is a cast nozzle, a turret is a machined gun,
+and a barracks is a welded box, and one greeble over all three says they are
+the same material. Machinery is three finishes now, `SURF_DRIVE`, `SURF_WEAPON`
+and `SURF_PART`, routed by `purposeAt` rather than by module kind, because
+`purposeAt` is the same answer the COLOUR legend is already cut from and a
+fourth division would be one a player cannot name. Propulsion and attitude are
+the drive, gun and ordnance are the weapon, everything else is a part.
+
+`driveFinish` and `weaponFinish` both fall back to `partFinish`, so every
+design that predates them loads as the hull it always was and there is no
+migration.
+
+**And the yard draws all four, because that is the screen the dropdowns are
+in.** It used to draw every cell that is not plating out of ONE material, so
+three of the four finish controls changed nothing a player could see while
+they were setting them: a control whose effect is somewhere else is a control
+nobody can tell the state of. Four instanced draws rather than one, at no fill
+cost, because the same cells are drawn either way.
+
+**A design FILE is read field by field, and that list is the actual
+contract.** `designToJson` writes the whole record and `designFromJson`
+whitelists what it will take back, so a finish left off that list is a finish a
+hull loses on the way through a file, silently, coming back wearing the
+fallback. `slotFinish` was already going that way before the drives and the
+guns got theirs. `sim.test.mjs` round trips every one of them now, and checks
+that a slot list full of rubbish comes back as nulls rather than costing the
+seven good entries beside the bad one: a file is untrusted input even when a
+player wrote it.
 
 The yard and the modal are indoor views with no sky, and metalness with no
 environment renders BLACK, so both take `studioEnv` from `textures.ts`: the
@@ -1625,6 +1653,22 @@ the offsets are a PERMUTATION of nought to seven, every swatch in the palette
 lands somewhere. `shipyard.mjs` checks both halves: eight tones on the hull,
 and the picked one among them on the broad plating.
 
+**So a swatch is a PRESET, and the control has to say so.** Eight swatches
+under a heading reading "Hull colour" look like eight colours, and they are
+eight whole schemes: picking one moves all eight roles at once. That row is
+labelled "Scheme preset" and says what it does. WHICH palette those eight come
+from is a separate question and now a separate control, a dropdown over the
+five palettes, because a row of faction chips looked like a side to fly for
+rather than a set of colours to paint from.
+
+**Every surface gets its own normal map dropdown, and they are all on screen at
+once.** There used to be two, one for the armour and one for "the selected
+slot", so seven of the eight slot maps were unreachable and neither dropdown
+said which colour it was about. The rail lists all twelve: the eight slots, each
+beside a chip in its own colour, then Hull frame, Engines and thrusters,
+Weapons and Subsystems. A control that governs one of a set has to be shown once
+per member of that set, or it is a control nobody can tell the state of.
+
 **Three normal maps for the LIVERY, and one per slot for the BRUSH.** A colour
 is free, because a vertex carries its own and any number of them merge into one
 draw. A normal map is a material and a material is a DRAW CALL, so "different
@@ -1639,10 +1683,12 @@ draw nobody could name.
 a colour AND what it is made of, and a group is only emitted for a surface that
 has quads in it. So a hull nobody has painted costs exactly what it always did,
 and a hull painted from two slots pays for two. Measured on a Terran frigate,
-draw groups: 4 bare, 5 painted from one slot, 7 from three.
+draw groups: 6 bare, 7 painted from one slot, 9 from three.
 
-That makes thirteen surfaces on a hull, five of them there whatever a player
-does, and `SURF_NAMES` is what reports them.
+That makes fifteen surfaces on a hull, seven of them there whatever a player
+does, and `SURF_NAMES` is what reports them. A bare Terran frigate draws six of
+the seven: plate, trim, structure, drive, weapon and part, the frame being
+entirely inside its own plating on that hull.
 `view.ts` used to spell the list `['armour', 'frame', 'part']`, which was right
 for exactly as long as there were three: a fourth would have been reported
 under the third's name, so a trim band whose texture never loaded would have

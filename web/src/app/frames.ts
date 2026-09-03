@@ -23,7 +23,8 @@
  * lattice write off the end of an array.
  */
 import {
-  latOf, migrateDesign, type Lat, FRAMES, SECTIONS, SOCKET_KINDS, frameFor, moduleById,
+  latOf, migrateDesign, paintFor,
+  type Lat, FRAMES, SECTIONS, SOCKET_KINDS, frameFor, moduleById,
   socketsOf, stockFor, stockFrameFor,
   type Design, type FrameDef, type Placement, type Socket, type SocketKind,
 } from './design.js';
@@ -362,8 +363,23 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
   if (typeof src['paint'] === 'number' && Number.isFinite(src['paint']))
     out.paint = src['paint'] >>> 0;
   if (typeof src['armour'] === 'string') out.armour = src['armour'] as Design['armour'];
-  for (const k of ['finish', 'frameFinish', 'partFinish'] as const) {
+  // Every finish field, and this list is the whole reason the machinery split
+  // is a hazard: a field left off here is a field a design loses on its way
+  // through a file, silently, wearing whatever the fallback says instead.
+  for (const k of ['finish', 'frameFinish', 'partFinish',
+    'driveFinish', 'weaponFinish'] as const) {
     if (typeof src[k] === 'string') out[k] = src[k] as string;
+  }
+  // The per slot finishes, which are a SPARSE list: a null means "as hull"
+  // and is not the same as an absent design. Bounded to the eight slots a
+  // palette has, and anything that is not a string becomes a null rather than
+  // taking the whole field down, because a file is untrusted input and one
+  // bad entry is not a reason to lose the other seven.
+  const slots = src['slotFinish'];
+  if (Array.isArray(slots)) {
+    const n8 = paintFor(out.faction).swatches.length;
+    out.slotFinish = Array.from({ length: n8 },
+      (_, n) => (typeof slots[n] === 'string' ? slots[n] as string : null));
   }
   for (const k of ['metal', 'rough'] as const) {
     const v = src[k];

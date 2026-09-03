@@ -956,6 +956,12 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   color:var(--cyan); text-align:right; }
 
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
+/* A surface row carries the COLOUR it is about, so eight dropdowns are eight
+   answers about eight swatches rather than eight rows called "Slot n". */
+.dzsurf { align-items:center; gap:8px; }
+.dzsw.sm { width:18px; height:18px; flex:0 0 18px; border-radius:4px;
+  border:1px solid #ffffff26; }
+.dzsurf .k { flex:1 1 auto; min-width:0; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
 /* What a surface is made of: a labelled row with one full width picker, which
@@ -1324,21 +1330,22 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       hashed, never sent to the core, so two players who painted the same hull
       differently cannot read as a desync.</p>
       <div id="dzFactions" class="dzchips"></div>
-      <div class="dzgrp">Hull colour</div>
-      <p class="dznote">The colour of the broad plating, and the one every
-      other part of the livery is an offset from: the deck, the belt, the bow
-      flash and the rest move round the palette with it, so the swatch you pick
-      really is the ship's colour and every swatch lands somewhere. To colour
-      ONE panel rather than the ship, use the brush below.</p>
+      <div class="dzgrp">Scheme preset</div>
+      <p class="dznote">Eight presets, one per swatch, and each is a WHOLE
+      scheme rather than one colour: the swatch you pick becomes the broad
+      plating and the deck, the belt, the bow flash and the rest move round the
+      palette with it. That is what makes every swatch land somewhere on the
+      ship. To colour ONE panel rather than the ship, use the brush below.</p>
       <div id="dzPaint"></div>
       <div class="dzgrp">Surfaces</div>
       <p class="dznote">A slot is a colour AND what it is made of, because the
       two are one decision: the same pale grey is a composite panel or bare
-      rolled steel depending on the surface under it. Each swatch above carries
-      its own, and "as hull" leaves it on whatever the hull wide finish is. The
-      frame and the fitted parts are the inside of the ship, which a hole in the
-      plating now shows, so they are choosable too. Cosmetic like the paint:
-      never hashed, never sent to the core.</p>
+      rolled steel depending on the surface under it. Every slot has its own
+      row, next to the colour it is about, and "as hull" leaves it on whatever
+      the hull wide finish is. Under them are the four things that are not
+      armour: the frame, and machinery split by what it DOES, because a drive
+      bell is a cast nozzle, a turret is a machined gun and a barracks is a
+      box. Cosmetic like the paint: never hashed, never sent to the core.</p>
       <div id="dzInner"></div>
       <div class="dzgrp">Colour key</div>
       <div id="dzKey" class="dzkeys"></div>

@@ -1469,3 +1469,115 @@ test('a picked colour paints one cell, not the whole scheme', async () => {
     + `draws ${plainGroups} bare, ${oneSlot.geo.groups.length} on one slot, `
     + `${threeSlots.geo.groups.length} on three`);
 });
+
+test('a surface per colour slot, and machinery split by what it does', async () => {
+  // Two complaints, one answer. The palette offered a normal map for "the
+  // selected slot", so seven of the eight were invisible and there was no
+  // saying which colour the dropdown was about. And every part on the ship
+  // shared ONE surface, on the grounds that a drive is already orange and a
+  // gun already red: true of the colour, and never true of the surface. A
+  // drive bell is a cast nozzle, a turret is a machined gun, a barracks is a
+  // box.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, finishesOf, paintFor, useCore } = design;
+  useCore(() => null);
+
+  // Every surface has a name, and the count is what `SURF_COUNT` says: a list
+  // spelled by hand somewhere else is how a trim band whose texture never
+  // loaded came to be reported as a healthy frame.
+  assert.equal(H.SURF_NAMES.length, H.SURF_COUNT);
+  for (const want of ['drive', 'weapon', 'part', 'frame']) {
+    assert.ok(H.SURF_NAMES.includes(want), `no surface called ${want}`);
+  }
+  assert.equal(H.SURF_NAMES.filter(n => n.startsWith('brush ')).length, H.PAINT_SLOTS,
+    'one surface per palette slot');
+
+  const base = stockFor('terran_frigate');
+  const groups = H.hullMesh(base).geo.groups;
+  const used = new Set(groups.map(g => g.materialIndex));
+  // A hull with engines, guns and berths on it draws all three, so the split
+  // is reachable rather than merely declared.
+  for (const which of ['drive', 'weapon', 'part']) {
+    assert.ok(used.has(H.SURF_NAMES.indexOf(which)),
+      `a stock frigate draws no ${which} surface`);
+  }
+
+  // And each one is a separate answer: setting the drives' finish must not
+  // move the guns'.
+  const mixed = { ...base, driveFinish: 'ribbed', weaponFinish: 'hex', partFinish: 'plate' };
+  const f = finishesOf(mixed);
+  assert.equal(f.drive, 'ribbed');
+  assert.equal(f.weapon, 'hex');
+  assert.equal(f.part, 'plate');
+  // A design that never set them falls back to the one answer it used to
+  // have, so nothing needs migrating.
+  const old = { ...base, partFinish: 'weave' };
+  delete old.driveFinish; delete old.weaponFinish;
+  const g = finishesOf(old);
+  assert.equal(g.drive, 'weave', 'an old design lost its machinery finish');
+  assert.equal(g.weapon, 'weave', 'an old design lost its machinery finish');
+
+  // Eight slots, and every one of them addressable.
+  assert.equal(paintFor(base.faction).swatches.length, H.PAINT_SLOTS,
+    'the palette and the slot surfaces disagree about how many there are');
+  console.log(`  surfaces: ${H.SURF_COUNT} named, `
+    + `${groups.length} drawn on a bare frigate (${[...used].sort((a, b) => a - b)
+      .map(i => H.SURF_NAMES[i]).join(', ')})`);
+});
+
+test('a design file carries every finish it was saved with', async () => {
+  // A design file is written whole and read back FIELD BY FIELD, so the
+  // reader's whitelist is the actual contract. A field left off it is a field
+  // a hull loses on the way through a file, silently, coming back wearing
+  // whatever the fallback says: the per slot maps were already going that way
+  // before the drives and the guns got theirs.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/frames.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const F = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  design.useCore(() => null);
+
+  const d = {
+    ...design.stockFor('terran_frigate'),
+    finish: 'hex', frameFinish: 'cracked', partFinish: 'tread',
+    driveFinish: 'ribbed', weaponFinish: 'battered',
+    slotFinish: ['plate', null, 'weave', null, null, null, null, 'crate'],
+  };
+  const back = F.designFromJson(F.designToJson(d, 'round trip'));
+  assert.ok(back.design, `a file this build wrote came back refused: ${back.why}`);
+  for (const k of ['finish', 'frameFinish', 'partFinish', 'driveFinish', 'weaponFinish']) {
+    assert.equal(back.design[k], d[k], `${k} was lost on the way through a file`);
+  }
+  assert.deepEqual(back.design.slotFinish, d.slotFinish,
+    'the per slot finishes were lost on the way through a file');
+
+  // And a file is untrusted input: a slot list full of rubbish comes back as
+  // nulls rather than as whatever was in it, and one bad entry does not cost
+  // the seven good ones.
+  const junk = JSON.parse(F.designToJson(d, 'junk'));
+  junk.design.slotFinish = [{ x: 1 }, 'weave', 7, null, 'plate', [], 'hex', 'tread'];
+  const read = F.designFromJson(JSON.stringify(junk));
+  assert.ok(read.design, `a design with a bad slot list was refused whole: ${read.why}`);
+  assert.deepEqual(read.design.slotFinish,
+    [null, 'weave', null, null, 'plate', null, 'hex', 'tread']);
+  console.log('  design file: five finish fields and eight slots survive a round trip');
+});

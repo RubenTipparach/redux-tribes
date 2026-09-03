@@ -209,7 +209,7 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
 
 export const DEFAULT_FINISH = 'plate';
 /**
- * What the two surfaces that are not armour wear until asked otherwise.
+ * What the surfaces that are not armour wear until asked otherwise.
  *
  * `greeble` for the parts is where the machinery finish has always been; the
  * frame used to have no answer of its own and simply wore the plating's,
@@ -223,14 +223,14 @@ export const DEFAULT_METAL = 0.25;
 export const DEFAULT_ROUGH = 0.55;
 
 /**
- * The three surfaces a hull is drawn with, resolved.
+ * The five surfaces a hull is drawn with, resolved.
  *
- * ONE place decides what a design's armour, frame and machinery are made of,
- * because four pictures ask it: the map, the shipyard, the schematic and the
- * chip thumbnail. Each spelling out its own `?? DEFAULT` chain is four places
- * to change and three of them to forget, which is the divergence GUIDELINES
- * 5.1 is about, and it is exactly how the wound came to draw its plate in a
- * finish the hull beside it was not wearing.
+ * ONE place decides what a design's armour, frame, drives, guns and other
+ * machinery are made of, because four pictures ask it: the map, the shipyard,
+ * the schematic and the chip thumbnail. Each spelling out its own `?? DEFAULT`
+ * chain is four places to change and three of them to forget, which is the
+ * divergence GUIDELINES 5.1 is about, and it is exactly how the wound came to
+ * draw its plate in a finish the hull beside it was not wearing.
  *
  * The armour answer is the PICKED SLOT's, falling back to the hull wide
  * finish for a design that has never set one.
@@ -239,13 +239,25 @@ export function finishesOf(d: {
   faction: string; paint: number;
   finish?: string; slotFinish?: (string | null)[];
   frameFinish?: string; partFinish?: string;
-}): { armour: string; frame: string; part: string } {
+  driveFinish?: string; weaponFinish?: string;
+}): { armour: string; frame: string; part: string;
+  drive: string; weapon: string } {
   const slot = paintFor(d.faction).swatches.indexOf(d.paint);
   const picked = slot >= 0 ? d.slotFinish?.[slot] : null;
   return {
     armour: picked || d.finish || DEFAULT_FINISH,
     frame: d.frameFinish || DEFAULT_FRAME_FINISH,
     part: d.partFinish || DEFAULT_PART_FINISH,
+    // Machinery split three ways. It was ONE finish for everything a part is
+    // made of, on the grounds that a player can already tell a drive from a
+    // gun by its COLOUR and the distinction worth having was machinery
+    // against plate. That is still true of the colour and it was never true
+    // of the SURFACE: a drive bell is a cast nozzle, a turret is a machined
+    // gun, and a barracks is a box, and one greeble over all three says none
+    // of it. Each falls back to the old single answer, so a design that never
+    // set them looks exactly as it did.
+    drive: d.driveFinish || d.partFinish || DEFAULT_PART_FINISH,
+    weapon: d.weaponFinish || d.partFinish || DEFAULT_PART_FINISH,
   };
 }
 
@@ -2897,6 +2909,21 @@ export interface Design {
    */
   frameFinish?: string;
   partFinish?: string;
+  /**
+   * What the DRIVES and the GUNS are made of, apart from everything else.
+   *
+   * `partFinish` was ONE answer for all machinery, on the grounds that a
+   * player can already tell a drive from a gun by its colour and the
+   * distinction worth drawing was machinery against plate. That is still true
+   * of the COLOUR and it was never true of the SURFACE: a drive bell is a
+   * cast nozzle, a turret is a machined gun and a barracks is a box, and one
+   * greeble over all three says none of it.
+   *
+   * Optional, and absent means whatever `partFinish` says, which is what every
+   * design that predates them already has: nothing to migrate.
+   */
+  driveFinish?: string;
+  weaponFinish?: string;
   /** How metallic and how rough that armour is, 0 to 1. Presentation. */
   metal?: number;
   rough?: number;

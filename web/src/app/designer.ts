@@ -33,7 +33,7 @@ import {
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
-  DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
+  DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf, purposeAt,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   ARMOUR_BANDS, ROLE_BAND, bandFinishes, roleAt, roleCode, seatedFacing,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
@@ -46,16 +46,29 @@ import {
 type PlateView = 'on' | 'ghost' | 'off';
 
 /**
- * What a hull is drawn with in here: machinery, one material per BAND of
- * plating, and the ghosted shell.
+ * What a hull is drawn with in here: one material per BAND of plating, four
+ * for the machinery, and the ghosted shell. It is the map's list.
  *
  * The plate is three rather than one for the reason `hull.ts` gives: colour is
  * free and a normal map is a draw call, so a ship whose deck is corrugated
  * over riveted flanks costs one material per pattern. The yard has to pay it
  * too, or a player designs on one surface and flies another, which is the
  * divergence GUIDELINES 5.1 is about.
+ *
+ * The same argument is why the machinery is four. It was ONE surface over
+ * every cell that is not plating, which meant three of the four finish
+ * dropdowns in this very screen changed nothing you could see in it: the
+ * frame, the drives and the guns all came out wearing the subsystems' answer.
+ * A control set where its effect is invisible is a control nobody can tell the
+ * state of, which is the whole complaint these dropdowns exist to answer.
+ *
+ * Four instanced draws rather than one, at no fill cost: the same cells are
+ * drawn either way, over three more draw calls.
  */
 interface HullSurfaces {
+  frame: THREE.MeshStandardMaterial;
+  drive: THREE.MeshStandardMaterial;
+  weapon: THREE.MeshStandardMaterial;
   part: THREE.MeshStandardMaterial;
   plate: THREE.MeshStandardMaterial[];
   ghost: THREE.MeshStandardMaterial;
@@ -573,17 +586,17 @@ export class Designer {
       const base = () => new THREE.MeshStandardMaterial({
         metalness: YARD_METAL, roughness: 0.62, dithering: true,
       });
-      const part = base();
-      // Machinery, once: it never depends on the design. A drive bell and an
-      // armour panel are not the same surface, and painting the plate's rivets
-      // onto a reactor made a ship one material with parts drawn on it.
-      part.normalMap = partMap();
+      // Machinery, four ways: the frame under the plating, what pushes, what
+      // shoots, and everything else. `partMap` is only the starting value;
+      // each is set from the design below.
+      const frame = base(), drive = base(), weapon = base(), part = base();
+      for (const m of [frame, drive, weapon, part]) m.normalMap = partMap();
       const plate = Array.from({ length: ARMOUR_BANDS }, base);
       const ghost = base();
       ghost.transparent = true;
       ghost.opacity = 0.3;
       ghost.depthWrite = false;
-      this.#surfaces = { part, plate, ghost };
+      this.#surfaces = { frame, drive, weapon, part, plate, ghost };
     }
     const s = this.#surfaces;
     // The picked SLOT's surface, through the same resolver the map uses, so
@@ -600,10 +613,13 @@ export class Designer {
     // skin is: three ghosts would be three transparent draws over each other.
     const finish = finishMap(bands[0] as string);
     if (s.ghost.normalMap !== finish) { s.ghost.normalMap = finish; s.ghost.needsUpdate = true; }
-    const partFinish = finishMap(surf.part);
-    if (s.part.normalMap !== partFinish) {
-      s.part.normalMap = partFinish;
-      s.part.needsUpdate = true;
+    // Each of the four from the design, and `needsUpdate` only where the map
+    // actually moved: setting it every rebuild is the shader recompile the
+    // whole cache exists to avoid, spelled a different way.
+    for (const [m, key] of [[s.frame, surf.frame], [s.drive, surf.drive],
+      [s.weapon, surf.weapon], [s.part, surf.part]] as const) {
+      const map = finishMap(key);
+      if (m.normalMap !== map) { m.normalMap = map; m.needsUpdate = true; }
     }
     return s;
   }
@@ -710,7 +726,27 @@ export class Designer {
       this.#hull.add(group);
     });
 
-    const solid: number[] = [], solidCol: number[] = [];
+    // Machinery, in four lists because it is drawn in four surfaces: the
+    // frame, the drives, the guns and everything else. Same cells, same
+    // colours, sorted by what they are FOR so each can wear its own finish.
+    const SOLID = ['frame', 'drive', 'weapon', 'part'] as const;
+    const solid: Record<typeof SOLID[number], number[]> =
+      { frame: [], drive: [], weapon: [], part: [] };
+    const solidCol: Record<typeof SOLID[number], number[]> =
+      { frame: [], drive: [], weapon: [], part: [] };
+    const solidOf = (mat: number, code: number): typeof SOLID[number] => {
+      // Structure wears the frame's surface, which is what its COLOUR already
+      // says: `cellColour` gives a frame cell and a skinned one the same
+      // structure hue, so giving them different materials would be one cell
+      // painted two ways.
+      if (mat === Mat.Frame || mat === Mat.Skinned) return 'frame';
+      // Nought is no purpose recorded, which is a spar rather than a drive.
+      if (!code) return 'part';
+      const job = purposeAt(code);
+      if (job === 'propulsion' || job === 'attitude') return 'drive';
+      if (job === 'gun' || job === 'ordnance') return 'weapon';
+      return 'part';
+    };
     // One list per band of plating, because each band is its own material and
     // an instanced draw takes one.
     const skin: number[][] = Array.from({ length: ARMOUR_BANDS }, () => []);
@@ -737,8 +773,9 @@ export class Designer {
           (rigCells[rig] as number[]).push(i, j, k);
           (rigCols[rig] as number[]).push(col);
         } else {
-          solid.push(i, j, k);
-          solidCol.push(col);
+          const which = solidOf(mat, purp[n] as number);
+          (solid[which] as number[]).push(i, j, k);
+          (solidCol[which] as number[]).push(col);
         }
       }
     }
@@ -760,7 +797,7 @@ export class Designer {
     }
 
     let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
-    for (const list of [solid, ...skin, ghost, ...rigCells]) {
+    for (const list of [...SOLID.map(k => solid[k]), ...skin, ghost, ...rigCells]) {
       for (let q = 0; q < list.length; q += 3) {
         const x = list[q] as number, y = list[q + 1] as number, z = list[q + 2] as number;
         if (x < loX) loX = x; if (x > hiX) hiX = x;
@@ -789,7 +826,8 @@ export class Designer {
     }
 
     const skinCells = skin.reduce((a, c) => a + c.length / 3, 0);
-    this.#voxelCount = solid.length / 3 + skinCells + ghost.length / 3
+    const solidCells = SOLID.reduce((a, k) => a + (solid[k] as number[]).length / 3, 0);
+    this.#voxelCount = solidCells + skinCells + ghost.length / 3
       + rigCells.reduce((a, c) => a + c.length / 3, 0);
     // Every distinct colour the armour actually came out.
     //
@@ -812,7 +850,7 @@ export class Designer {
     const hist: Record<number, number> = {};
     for (let n = 0; n < grid.length; n++)
       if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
-    this.#hist = { ...hist, solid: solid.length / 3, skin: skinCells,
+    this.#hist = { ...hist, solid: solidCells, skin: skinCells,
       ghost: ghost.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
@@ -848,8 +886,12 @@ export class Designer {
     // what a finish is.
     const surf = this.#surfaceFor(this.#design);
 
-    place(solid, surf.part,
-      q => solidCol[q] as number);
+    // One draw per machinery surface, so the frame dropdown, the engines
+    // dropdown and the weapons dropdown each reach something in here.
+    for (const k of SOLID) {
+      place(solid[k] as number[], surf[k],
+        q => (solidCol[k] as number[])[q] as number);
+    }
     // The plate over it, in the navy's whole scheme rather than one colour: a
     // deck, an underside, a waist belt, a flank stripe, a bow flash and a
     // transom band, every swatch in the palette on the hull at once, and one
@@ -886,7 +928,9 @@ export class Designer {
     // Every gun in its own group, drawn about its pivot so a rotation of the
     // group is a rotation of the turret on its mount.
     this.#rigs.forEach((r, n) => {
-      place(rigCells[n] as number[], surf.part,
+      // A rig IS a gun, so it wears the weapons surface by construction
+      // rather than by asking what its cells are for.
+      place(rigCells[n] as number[], surf.weapon,
         q => (rigCols[n] as number[])[q] as number, true, r.group, r.pivot);
     });
 
@@ -1785,21 +1829,30 @@ export class Designer {
     }
 
     // --- paint, which reaches the armour and nothing else -----------------
+    // A DROPDOWN, because that is what swapping one whole palette for another
+    // is. Five chips read as five things you might combine; they are not, they
+    // are five presets and exactly one is in use.
     const fac = $('dzFactions');
     fac.innerHTML = '';
+    const pal = document.createElement('select');
+    pal.id = 'dzPaletteSel';
     for (const f of FACTION_PAINT) {
-      const b = document.createElement('button');
-      b.className = f.key === this.#design.faction ? 'on' : '';
-      b.textContent = f.name;
-      b.onclick = () => {
-        this.#design.faction = f.key;
-        // Land on the scheme's first swatch, because a faction whose colours
-        // are not on the ship is a menu rather than a choice.
-        this.#design.paint = f.swatches[0] as number;
-        this.#refresh();
-      };
-      fac.appendChild(b);
+      const o = document.createElement('option');
+      o.value = f.key;
+      o.textContent = `${f.name} palette`;
+      if (f.key === this.#design.faction) o.selected = true;
+      pal.appendChild(o);
     }
+    pal.onchange = () => {
+      const f = FACTION_PAINT.find(x => x.key === pal.value);
+      if (!f) return;
+      this.#design.faction = f.key;
+      // Land on the scheme's first swatch, because a palette whose colours are
+      // not on the ship is a menu rather than a choice.
+      this.#design.paint = f.swatches[0] as number;
+      this.#refresh();
+    };
+    fac.appendChild(pal);
 
     const paint = $('dzPaint');
     paint.innerHTML = '';
@@ -1833,7 +1886,6 @@ export class Designer {
       + 'Put the brush down to go back to tapping parts to name them.';
     const brushRow = document.createElement('div');
     brushRow.className = 'dzpaint';
-    let picked = scheme.swatches.indexOf(this.#design.paint);
     scheme.swatches.forEach((col, slot) => {
       const b = document.createElement('button');
       b.className = 'dzsw' + (this.#brushSlot === slot ? ' on' : '');
@@ -1845,7 +1897,6 @@ export class Designer {
         this.#brushSlot = this.#brushSlot === slot ? null : slot;
         this.#refresh();
       };
-      if (this.#brushSlot === slot) picked = slot;
       brushRow.appendChild(b);
     });
 
@@ -1882,41 +1933,61 @@ export class Designer {
     // hole in the plating is a look at both of them.
     const inner = $('dzInner');
     inner.innerHTML = '';
-    const rows: Array<[string, string, string | null, (k: string | null) => void, string?]> = [
-      [this.#brushSlot !== null ? 'Brush surface' : 'Hull colour surface',
-        picked >= 0
-          ? (this.#brushSlot !== null
-            ? 'What every cell you paint with this brush is made of'
-            : 'What the broad plating is made of')
-          : 'Pick a swatch first',
-        picked >= 0 ? (this.#design.slotFinish?.[picked] ?? null) : null,
-        key => {
-          if (picked < 0) return;
-          // Sparse until something is actually chosen, so a design that never
-          // touched this still falls back to the hull wide finish rather than
-          // freezing today's default into eight slots.
-          const list = (this.#design.slotFinish ?? []).slice();
-          while (list.length < scheme.swatches.length) list.push(null);
-          list[picked] = key;
-          this.#design.slotFinish = list;
-        },
-        'As hull'],
+    // EVERY slot, each beside its own colour, and then the four things that
+    // are not armour.
+    //
+    // One row that edited "the selected slot" meant a player had to remember
+    // which swatch they last touched to know what the dropdown was about, and
+    // seven of the eight were invisible. Eight rows say which colour is which
+    // surface by standing next to it.
+    const rows: Array<[string, string, string | null, (k: string | null) => void,
+      string?, number?]> = scheme.swatches.map((col, slot) => [
+      `Slot ${slot + 1}`,
+      `What every cell painted in #${col.toString(16).padStart(6, '0')} is made of`,
+      this.#design.slotFinish?.[slot] ?? null,
+      (key: string | null) => {
+        // Sparse until something is actually chosen, so a design that never
+        // touched this still falls back to the hull wide finish rather than
+        // freezing today's default into eight slots.
+        const list = (this.#design.slotFinish ?? []).slice();
+        while (list.length < scheme.swatches.length) list.push(null);
+        list[slot] = key;
+        this.#design.slotFinish = list;
+      },
+      'As hull',
+      col,
+    ] as [string, string, string | null, (k: string | null) => void, string?, number?]);
+    rows.push(
       ['Hull frame', 'Surface of the frame under the plating',
         this.#design.frameFinish ?? DEFAULT_FRAME_FINISH,
         key => { this.#design.frameFinish = key ?? DEFAULT_FRAME_FINISH; }],
-      ['Subsystems', 'Surface of the fitted parts',
+      ['Engines and thrusters', 'Surface of every bell and attitude block',
+        this.#design.driveFinish ?? this.#design.partFinish ?? DEFAULT_PART_FINISH,
+        key => { this.#design.driveFinish = key ?? DEFAULT_PART_FINISH; }],
+      ['Weapons', 'Surface of the barbettes, turrets and missile pads',
+        this.#design.weaponFinish ?? this.#design.partFinish ?? DEFAULT_PART_FINISH,
+        key => { this.#design.weaponFinish = key ?? DEFAULT_PART_FINISH; }],
+      ['Subsystems', 'Surface of the bridge, the berths, the clamps and the holds',
         this.#design.partFinish ?? DEFAULT_PART_FINISH,
         key => { this.#design.partFinish = key ?? DEFAULT_PART_FINISH; }],
-    ];
-    for (const [label, title, cur, set, blank] of rows) {
+    );
+    for (const [label, title, cur, set, blank, swatch] of rows) {
       const row = document.createElement('div');
-      row.className = 'dzrow';
+      row.className = 'dzrow dzsurf';
+      // The colour this row is about, drawn on the row. Eight dropdowns
+      // labelled "Slot 1" to "Slot 8" is eight rows nobody can map onto the
+      // swatches above them, which is the complaint this is answering.
+      if (swatch !== undefined) {
+        const chip = document.createElement('span');
+        chip.className = 'dzsw sm';
+        chip.style.background = `#${swatch.toString(16).padStart(6, '0')}`;
+        row.appendChild(chip);
+      }
       const k = document.createElement('span');
       k.className = 'k';
       k.textContent = label;
       row.appendChild(k);
       const sel = this.#finishPick(cur, title, key => { set(key); this.#refresh(); }, blank);
-      if (label === 'Selected slot' && picked < 0) sel.disabled = true;
       row.appendChild(sel);
       inner.appendChild(row);
     }
@@ -2793,7 +2864,7 @@ export class Designer {
       stockCount: STOCK.length,
       voxels: this.#voxelCount,
       /**
-       * What the preview is actually drawing the two surfaces WITH.
+       * What the preview is actually drawing each surface WITH.
        *
        * Read off the live materials rather than off the record, because that
        * is the whole question: a finish that was chosen and never reached the
@@ -2803,6 +2874,9 @@ export class Designer {
        */
       surfaces: [
         ...(this.#surfaces?.plate ?? []).map((m, b) => ({ what: `plate${b}`, m })),
+        { what: 'frame', m: this.#surfaces?.frame },
+        { what: 'drive', m: this.#surfaces?.drive },
+        { what: 'weapon', m: this.#surfaces?.weapon },
         { what: 'part', m: this.#surfaces?.part },
       ].map(({ what, m }) => {
         const img = m?.normalMap?.image as { src?: string; width?: number } | undefined;

@@ -146,7 +146,11 @@ async function checkLayout(page, label) {
   await page.waitForTimeout(250);
   const pane = await page.evaluate(() => {
     const out = [];
-    for (const sel of ['#dzMode button', '#dzFactions button', '#dzPaint button',
+    for (const sel of ['#dzMode button', '#dzPaletteSel', '#dzPaint button',
+      // Twelve surface dropdowns in what is a bottom sheet on a phone. A list
+      // that grew from two rows to twelve is exactly how a control ends up
+      // below the fold with nothing on screen saying it is there.
+      '#dzInner select',
       '#dzArmour input', '#dzSliceAt', '#dzBrushAdd', '#dzBrushCut',
       '#dzMirrorX', '#dzMirrorY', '#dzOnion', '#dzDepth',
       '#dzSliceClear', '#dzDrawClear']) {
@@ -166,7 +170,7 @@ async function checkLayout(page, label) {
     return out;
   });
   for (const p of pane) fail(`${label} [armour]: ${p}`);
-  if (!pane.length) ok(`${label} [armour]: mode, faction, swatches and sliders all reachable`);
+  if (!pane.length) ok(`${label} [armour]: mode, palette, swatches and sliders all reachable`);
 }
 
 /**
@@ -1116,6 +1120,104 @@ async function checkModesAndRotation(page) {
     await (await page.$$('#dzPaint button'))[0].click();
     await page.waitForTimeout(300);
   }
+
+  // WHICH palette is a dropdown, and every one of them is in it. Five chips
+  // read as five things a hull might combine; they are five presets and
+  // exactly one is in use, which is what a select says and a chip row does not.
+  const palette = await page.evaluate(() => {
+    const el = document.getElementById('dzPaletteSel');
+    if (!el) return null;
+    return { tag: el.tagName, opts: [...el.options].map(o => o.value), value: el.value };
+  });
+  if (!palette) fail('no palette dropdown on the armour tab');
+  else if (palette.tag !== 'SELECT')
+    fail(`the palette control is a ${palette.tag}, not a dropdown`);
+  else if (palette.opts.length < 5)
+    fail(`the palette dropdown offers ${palette.opts.length} palettes, not five`);
+  else {
+    // And swapping it actually repaints: a dropdown that changes a field
+    // nothing draws from is a dropdown with no effect.
+    const other = palette.opts.find(k => k !== palette.value);
+    const was = await page.evaluate(() => window.ftDebug.designer().hullTone);
+    await page.selectOption('#dzPaletteSel', other);
+    await page.waitForTimeout(500);
+    const now = await page.evaluate(() => window.ftDebug.designer());
+    if (now.faction !== other)
+      fail(`picked the ${other} palette and the design says ${now.faction}`);
+    else if (now.hullTone === was)
+      fail(`swapping to the ${other} palette left the plating 0x${was.toString(16)}`);
+    else ok(`the palette is a dropdown of ${palette.opts.length}: `
+      + `${palette.value} to ${other} repaints 0x${was.toString(16)} to `
+      + `0x${now.hullTone.toString(16)}`);
+    await page.selectOption('#dzPaletteSel', palette.value);
+    await page.waitForTimeout(500);
+  }
+
+  // A normal map per colour slot, and one for each thing that is not armour.
+  // There used to be TWO dropdowns, one of them about "the selected slot", so
+  // seven of the eight were unreachable and neither said which colour it was
+  // for. Every row is checked to carry the swatch it names.
+  const surf = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#dzInner .dzrow')];
+    return rows.map(r => ({
+      label: r.querySelector('.k')?.textContent ?? '',
+      chip: r.querySelector('.dzsw')?.style.background ?? '',
+      opts: r.querySelector('select')?.options.length ?? 0,
+    }));
+  });
+  const slotRows = surf.filter(r => /^Slot \d+$/.test(r.label));
+  const named = surf.map(r => r.label);
+  const wantRows = ['Hull frame', 'Engines and thrusters', 'Weapons', 'Subsystems'];
+  const missing = wantRows.filter(w => !named.includes(w));
+  if (slotRows.length !== 8)
+    fail(`${slotRows.length} slot surface rows, not 8: ${named.join(', ')}`);
+  else if (missing.length)
+    fail(`no surface dropdown for ${missing.join(', ')}`);
+  else if (slotRows.some(r => !r.chip))
+    fail('a slot surface row has no colour on it, so nothing says which slot it is');
+  else if (surf.some(r => r.opts < 2))
+    fail('a surface row has no finishes to choose from');
+  else ok(`${surf.length} surface dropdowns: eight slots each beside its colour, `
+    + `then ${wantRows.join(', ').toLowerCase()}`);
+
+  // And they reach the MODEL. Three of these four used to change nothing you
+  // could see in this screen: the frame, the drives and the guns were all
+  // drawn out of the subsystems' material, so setting them was a dropdown
+  // whose effect was somewhere else. Read off the live materials, because a
+  // finish that never reached one draws exactly like a finish nobody picked.
+  const want = { 'Hull frame': 'Corrugated', 'Engines and thrusters': 'Ablative',
+    Weapons: 'Patched', Subsystems: 'Grip deck' };
+  const set = await page.evaluate(async (labels) => {
+    const rows = [...document.querySelectorAll('#dzInner .dzrow')];
+    const missed = [];
+    for (const [label, choice] of Object.entries(labels)) {
+      const row = rows.find(r => r.querySelector('.k')?.textContent === label);
+      const sel = row?.querySelector('select');
+      const opt = sel && [...sel.options].find(o => o.textContent === choice);
+      if (!opt) { missed.push(`${label}: no "${choice}" to pick`); continue; }
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return missed;
+  }, want);
+  for (const m of set) fail(m);
+  await page.waitForTimeout(700);
+  const MACHINERY = ['frame', 'drive', 'weapon', 'part'];
+  const drawn = await page.evaluate(keys => Object.fromEntries(
+    window.ftDebug.designer().surfaces
+      .filter(s => keys.includes(s.what)).map(s => [s.what, s])), MACHINERY);
+  const files = MACHINERY.map(k => drawn[k]?.finish);
+  if (files.some(f => !f || f === 'none'))
+    fail('the yard draws no normal map on '
+      + MACHINERY.filter((k, i) => !files[i] || files[i] === 'none').join(', '));
+  else if (new Set(files).size !== 4)
+    fail(`four different finishes were picked and the yard drew ${new Set(files).size}: `
+      + `${files.join(', ')}`);
+  else if (MACHINERY.some(k => !drawn[k].loaded))
+    fail(`a yard surface has a normal map with no pixels: `
+      + MACHINERY.filter(k => !drawn[k].loaded).join(', '));
+  else ok(`each machinery dropdown reaches its own surface in the yard: ${files.join(', ')}`);
 
   // A turret is on a swivel: turning it has to move CELLS, not just a label.
   // The barbette under it is a drum and a drum is the same drum at 90 degrees,
