@@ -1580,6 +1580,27 @@ finish's file name and whether that file has pixels, and the playthrough fails
 if a bound finish has none. Putting `./` back flips `loaded` to false on every
 hull, which is how the guard was checked.
 
+## And a picked colour is a BRUSH, not a scheme
+
+Choosing a swatch used to set `paint`, which every livery role is an OFFSET
+from, so picking a colour repainted the whole ship in a scheme built round it
+and there was no way to say "this cell, that colour". Hull colour and the brush
+are two controls now: one is the base the livery is cut from, the other is a
+colour you pick up and lay on ONE cell.
+
+`Design.tint` is the strokes, as `cell * 8 + slot`. A wire format beside
+`plate` and `cut`, measured against the same budget, so it is one integer per
+cell rather than a pair; it migrates across a lattice change with its colour on
+it. It rides into the raster on the high BIT of `tone`, which is the byte the
+livery role already travels in, so the map, the shipyard, the schematic and the
+wound paint the same cell the same way without four of them learning what a
+brush is.
+
+Armour only, and that is the rule rather than a limitation to work around: a
+part is coloured by what it DOES, so a drive is orange and a gun is red on
+anybody's ship, which is what makes an unfamiliar hull readable without a
+legend. The brush says so when it refuses.
+
 ## A hull is a LIVERY, not a colour
 
 A ship used to be one paint value and one normal map from transom to nose, and
@@ -1604,14 +1625,24 @@ the offsets are a PERMUTATION of nought to seven, every swatch in the palette
 lands somewhere. `shipyard.mjs` checks both halves: eight tones on the hull,
 and the picked one among them on the broad plating.
 
-**Three normal maps, not one, and three is where it stops.** A colour is free,
-because a vertex carries its own and any number of them merge into one draw. A
-normal map is a material and a material is a DRAW CALL, so "different patterns
-on one ship" costs one group per pattern. `ARMOUR_BANDS` is three: the broad
-plating, the trim that runs along it, and the structure bolted to it. A fourth
-would be a draw nobody could name.
+**Three normal maps for the LIVERY, and one per slot for the BRUSH.** A colour
+is free, because a vertex carries its own and any number of them merge into one
+draw. A normal map is a material and a material is a DRAW CALL, so "different
+patterns on one ship" costs one group per pattern.
 
-That makes five surfaces on a hull, and `SURF_NAMES` is what reports them.
+`ARMOUR_BANDS` is three and stops at three, because that is what the livery
+paints by ITSELF, on every hull, without being asked: the broad plating, the
+trim that runs along it, and the structure bolted to it. A fourth would be a
+draw nobody could name.
+
+`SURF_SLOT` is eight more, one per palette slot, and they are OPT IN: a slot is
+a colour AND what it is made of, and a group is only emitted for a surface that
+has quads in it. So a hull nobody has painted costs exactly what it always did,
+and a hull painted from two slots pays for two. Measured on a Terran frigate,
+draw groups: 4 bare, 5 painted from one slot, 7 from three.
+
+That makes thirteen surfaces on a hull, five of them there whatever a player
+does, and `SURF_NAMES` is what reports them.
 `view.ts` used to spell the list `['armour', 'frame', 'part']`, which was right
 for exactly as long as there were three: a fourth would have been reported
 under the third's name, so a trim band whose texture never loaded would have

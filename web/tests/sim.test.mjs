@@ -1450,5 +1450,22 @@ test('a picked colour paints one cell, not the whole scheme', async () => {
   const C = latOf(frameFor('terran_cruiser'));
   const [ci, cj, ck] = cellAt(C, (moved2.tint[0] / 8) | 0);
   assert.equal(cellIndex(C, ci, cj, ck), (moved2.tint[0] / 8) | 0);
-  console.log(`  brush: one cell painted, ${moved} others moved`);
+  // A slot carries a FINISH as well as a colour, and a hull pays a draw call
+  // for each slot it actually paints with and none for the rest. Three bands
+  // is what the livery paints by itself on every hull; these are opt in.
+  const plainGroups = hullMesh(base).geo.groups.length;
+  const armourCells = [];
+  for (let n = 0; n < plain.grid.length && armourCells.length < 60; n++) {
+    if (plain.grid[n] === Mat.Plate) armourCells.push(n);
+  }
+  const oneSlot = hullMesh({ ...base, tint: armourCells.slice(0, 30).map(n => n * 8 + 4) });
+  const threeSlots = hullMesh({ ...base,
+    tint: armourCells.map((n, i) => n * 8 + [1, 4, 6][i % 3]) });
+  assert.equal(oneSlot.geo.groups.length, plainGroups + 1,
+    'painting from one slot did not cost exactly one more draw');
+  assert.equal(threeSlots.geo.groups.length, plainGroups + 3,
+    'painting from three slots did not cost exactly three more draws');
+  console.log(`  brush: one cell painted, ${moved} others moved; `
+    + `draws ${plainGroups} bare, ${oneSlot.geo.groups.length} on one slot, `
+    + `${threeSlots.geo.groups.length} on three`);
 });

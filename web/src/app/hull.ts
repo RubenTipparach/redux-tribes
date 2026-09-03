@@ -32,7 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
-  isPainted,
+  isPainted, paintedSlot,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
@@ -69,7 +69,24 @@ import type { MountFace } from './turret.js';
 export const SURF_ARMOUR = 0;
 export const SURF_FRAME = ARMOUR_BANDS;
 export const SURF_PART = ARMOUR_BANDS + 1;
-export const SURF_COUNT = ARMOUR_BANDS + 2;
+/**
+ * One surface per PALETTE SLOT, for cells laid down by the brush.
+ *
+ * A slot is a colour and what it is made of, and until now only the colour
+ * reached a hand painted cell: the finish came from whichever band the cell's
+ * livery role fell in, so painting a panel could not make it a different
+ * material. Eight more surfaces is what a finish per slot costs, because a
+ * normal map is a material and a material is a draw call.
+ *
+ * The three BANDS above are still three and still capped for the reason they
+ * always were: they are what the livery paints by itself, on every hull,
+ * without being asked. These are opt in, and a group is only emitted for a
+ * surface that has quads in it, so a hull nobody has painted pays nothing and
+ * a hull painted from two slots pays for two.
+ */
+export const SURF_SLOT = ARMOUR_BANDS + 2;
+export const PAINT_SLOTS = 8;
+export const SURF_COUNT = SURF_SLOT + PAINT_SLOTS;
 
 /** What each surface is called, for anything that reports them. One list, so
  *  a screen cannot label the second band 'frame' because it counted wrong. */
@@ -101,7 +118,8 @@ const WINDOW_DEPTH_REF = 5;
 const REF_NX = 32;
 
 export const SURF_NAMES: readonly string[] =
-  ['plate', 'trim', 'structure', 'frame', 'part'];
+  ['plate', 'trim', 'structure', 'frame', 'part',
+    ...Array.from({ length: PAINT_SLOTS }, (_, n) => `brush ${n + 1}`)];
 
 export interface HullRig {
   /** The weapon key, for naming it. */
@@ -317,6 +335,18 @@ export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
   mats[SURF_PART] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.part),
   });
+  // A surface per slot: the finish that swatch carries, falling back to the
+  // hull's own. Built whether or not anything is painted with it, because a
+  // material is cheap and a MISSING one is a group pointing at nothing; the
+  // draw call is only paid when the mesh has quads in that group.
+  for (let n = 0; n < PAINT_SLOTS; n++) {
+    mats[SURF_SLOT + n] = new THREE.MeshStandardMaterial({
+      ...common,
+      metalness: d.metal ?? DEFAULT_METAL,
+      roughness: d.rough ?? DEFAULT_ROUGH,
+      normalMap: finishMap(d.slotFinish?.[n] || f.armour),
+    });
+  }
   return mats;
 }
 
@@ -732,8 +762,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
       // A hand painted cell draws in the broad plating's band. Its COLOUR is
       // the slot's, which is a vertex attribute and free; its finish is the
       // hull's, because a finish is a material and a material is a draw call.
+      // A hand painted cell draws in its SLOT's surface, so the finish a
+      // player put on that swatch is the finish the panel wears.
       const t = tone[n] as number;
-      return SURF_ARMOUR + (isPainted(t) ? 0 : ROLE_BAND[roleAt(t)]);
+      return isPainted(t) ? SURF_SLOT + paintedSlot(t)
+        : SURF_ARMOUR + ROLE_BAND[roleAt(t)];
     }
     return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
   };

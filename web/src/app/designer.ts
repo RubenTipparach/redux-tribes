@@ -1883,8 +1883,12 @@ export class Designer {
     const inner = $('dzInner');
     inner.innerHTML = '';
     const rows: Array<[string, string, string | null, (k: string | null) => void, string?]> = [
-      ['Selected slot',
-        picked >= 0 ? `Surface of the swatch in use` : 'Pick a swatch first',
+      [this.#brushSlot !== null ? 'Brush surface' : 'Hull colour surface',
+        picked >= 0
+          ? (this.#brushSlot !== null
+            ? 'What every cell you paint with this brush is made of'
+            : 'What the broad plating is made of')
+          : 'Pick a swatch first',
         picked >= 0 ? (this.#design.slotFinish?.[picked] ?? null) : null,
         key => {
           if (picked < 0) return;
