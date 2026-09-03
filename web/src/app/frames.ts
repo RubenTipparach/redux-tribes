@@ -351,6 +351,13 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
     : latOf(frameFor(key));
   out.plate = readCells(L, src['plate']);
   out.cut = readCells(L, src['cut']);
+  // The brush, whose entries are `cell * 8 + slot` rather than a bare cell, so
+  // they are bounded against eight times the lattice.
+  const tint = src['tint'];
+  out.tint = Array.isArray(tint)
+    ? [...new Set(tint.filter(n => typeof n === 'number' && Number.isInteger(n)
+      && n >= 0 && n < L.cells * 8))].sort((a, b) => a - b)
+    : [];
   if (typeof src['faction'] === 'string') out.faction = src['faction'];
   if (typeof src['paint'] === 'number' && Number.isFinite(src['paint']))
     out.paint = src['paint'] >>> 0;

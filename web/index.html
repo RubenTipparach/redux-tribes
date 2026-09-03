@@ -844,7 +844,15 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 /* Only the list scrolls. The pane is a column: note and heading above, the
    station list taking what is left, and the selected station plus the file
    row pinned under it where a thumb can always reach them. */
-#dzPaneFrame { display:flex; flex-direction:column; overflow:hidden; }
+/* `:not(.hidden)`, and it is not decoration. An ID beats two classes, so a
+   plain `#dzPaneFrame { display:flex }` outranks `.dzpane.hidden{display:none}`
+   and this pane was laid out in the SHIPYARD on every tab: the architect's
+   station list sat under the fitting rail and under the paint, which is the
+   rail reading as two screens stacked. It cost nothing visible while the list
+   was a few rows and became a 465 pixel hole the moment the list had a floor
+   under it. Every pane that styles itself by id has to opt out of `hidden` the
+   same way. */
+#dzPaneFrame:not(.hidden) { display:flex; flex-direction:column; overflow:hidden; }
 /* A floor under the list and a ceiling over the pinned rows, because at
    390x560 there are about 300 pixels of sheet in total and the nudges plus the
    file row take all of it: the list collapsed to nothing and not one station
@@ -1308,16 +1316,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
       so a belt that stops a beam is porous to a shell. The frame under it is
       not editable in either mode.</p>
       <div id="dzArmour"></div>
-      <div class="dzgrp">Paint</div>
-      <p class="dznote">Armour only, and the colour you pick is the colour it
-      stays: eight per faction, one hull. Nothing is chosen for you. Everything
-      else on the ship is coloured by what it DOES, so a drive is orange and a
-      gun is red whoever built them, which is what makes an unfamiliar hull
-      readable without a legend. Cosmetic either way: never hashed, never sent
-      to the core, so two players who painted the same hull differently cannot
-      read as a desync.</p>
+      <div class="dzgrp">Faction palette</div>
+      <p class="dznote">Whose eight swatches this hull is painted from. Armour
+      only: everything else on the ship is coloured by what it DOES, so a drive
+      is orange and a gun is red whoever built them, which is what makes an
+      unfamiliar hull readable without a legend. Cosmetic either way: never
+      hashed, never sent to the core, so two players who painted the same hull
+      differently cannot read as a desync.</p>
       <div id="dzFactions" class="dzchips"></div>
-      <div id="dzPaint" class="dzpaint"></div>
+      <div class="dzgrp">Hull colour</div>
+      <p class="dznote">The colour of the broad plating, and the one every
+      other part of the livery is an offset from: the deck, the belt, the bow
+      flash and the rest move round the palette with it, so the swatch you pick
+      really is the ship's colour and every swatch lands somewhere. To colour
+      ONE panel rather than the ship, use the brush below.</p>
+      <div id="dzPaint"></div>
       <div class="dzgrp">Surfaces</div>
       <p class="dznote">A slot is a colour AND what it is made of, because the
       two are one decision: the same pale grey is a composite panel or bare

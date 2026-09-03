@@ -32,6 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
+  isPainted,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
@@ -728,7 +729,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const n = cellOf[q] as number;
     const mat = grid[n] as number;
     if (mat === Mat.Plate || mat === Mat.Skinned) {
-      return SURF_ARMOUR + ROLE_BAND[roleAt(tone[n] as number)];
+      // A hand painted cell draws in the broad plating's band. Its COLOUR is
+      // the slot's, which is a vertex attribute and free; its finish is the
+      // hull's, because a finish is a material and a material is a draw call.
+      const t = tone[n] as number;
+      return SURF_ARMOUR + (isPainted(t) ? 0 : ROLE_BAND[roleAt(t)]);
     }
     return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
   };

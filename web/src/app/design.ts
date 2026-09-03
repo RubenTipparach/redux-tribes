@@ -2823,6 +2823,20 @@ export interface Design {
   plate?: number[];
   cut?: number[];
   /**
+   * Cells painted BY HAND, as `cell * 8 + slot`.
+   *
+   * The palette used to be a scheme picker: choosing a swatch set `paint` and
+   * every other role moved with it, so a player who wanted one panel a
+   * different colour repainted the whole ship instead. A slot picked here is
+   * a BRUSH, and this is where the strokes go.
+   *
+   * One integer per cell rather than a pair, because this is a wire format
+   * living in a design record beside `plate` and `cut` and it is measured
+   * against the same budget. Eight slots, so the low three bits are the slot
+   * and the rest is the cell.
+   */
+  tint?: number[];
+  /**
    * The lattice `plate` and `cut` were drawn on, as [nx, ny, nz].
    *
    * A cell index means nothing without it: cell 5000 is one place on a
@@ -3123,7 +3137,7 @@ export const rasterSig = (d: Design): string =>
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
-  + drawSig(d.plate) + '/' + drawSig(d.cut);
+  + drawSig(d.plate) + '/' + drawSig(d.cut) + '/' + drawSig(d.tint);
 
 const drawSig = (list: readonly number[] | undefined): string => {
   if (!list || !list.length) return '0';
@@ -3933,6 +3947,21 @@ export function rasterise(d: Design): Raster {
     if (j < loY) loY = j; if (j > hiY) hiY = j;
     if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
   }
+  // --- the brush ----------------------------------------------------------
+  //
+  // Hand painted cells, last, over whatever the livery worked out. Only where
+  // there is ARMOUR to paint: a stroke that outlived the plate under it would
+  // colour a drive bell the day somebody moved a belt, and a part is coloured
+  // by what it DOES, which is the thing that makes an unfamiliar hull
+  // readable.
+  for (const v of d.tint ?? []) {
+    const n = (v / 8) | 0;
+    if (n < 0 || n >= CELLS) continue;
+    const m = grid[n] as number;
+    if (m !== Mat.Plate && m !== Mat.Skinned) continue;
+    tone[n] = PAINTED | (v & 7);
+  }
+
   const extent = [
     Math.max(1, hiX - loX + 1), Math.max(1, hiY - loY + 1), Math.max(1, hiZ - loZ + 1),
   ] as [number, number, number];
@@ -4752,10 +4781,27 @@ export function migrateDesign(d: Design): Design {
     }
     return [...out].sort((a, b) => a - b);
   };
+  // The brush carries its SLOT with it: an entry is `cell * 8 + slot`, so the
+  // cell moves and the colour stays on it.
+  const moveTint = (list: number[] | undefined): number[] | undefined => {
+    if (!list?.length) return list;
+    const out = new Map<number, number>();
+    for (const v of list) {
+      const n = (v / 8) | 0;
+      if (!Number.isInteger(v) || v < 0 || n >= f.nx * f.ny * f.nz) continue;
+      const i = n % f.nx, j = ((n / f.nx) | 0) % f.ny, k = (n / (f.nx * f.ny)) | 0;
+      out.set(idx3(to, axis(i, f.nx, to.nx), axis(j, f.ny, to.ny),
+        axis(k, f.nz, to.nz)), v & 7);
+    }
+    return [...out].sort((a, b) => a[0] - b[0]).map(([n, slot]) => n * 8 + slot);
+  };
+
   const next: Design = { ...d, lattice: stamp };
   const plate = move(d.plate), cut = move(d.cut);
+  const tint = moveTint(d.tint);
   if (plate) next.plate = plate;
   if (cut) next.cut = cut;
+  if (tint) next.tint = tint;
   return next;
 }
 
@@ -4896,7 +4942,24 @@ export function cellColour(mat: number, code: number, paint: number): number {
  * orange and a gun still red on anybody's ship. That is the part a player must
  * be able to read on an unfamiliar hull, and it is not paint.
  */
+/**
+ * A cell PAINTED BY HAND rides in the same byte the livery role does.
+ *
+ * `tone` is a role code, one to eight, and the high bit says "this is not a
+ * role, it is a slot somebody chose". Everything that draws armour already
+ * asks `armourColour` for a cell's colour, so putting it here is what gets the
+ * map, the shipyard, the schematic and the wound painting the same cell the
+ * same way without four of them learning about a brush.
+ */
+export const PAINTED = 0x80;
+export const paintedSlot = (tone: number): number => tone & 0x07;
+export const isPainted = (tone: number): boolean => (tone & PAINTED) !== 0;
+
 export function armourColour(faction: string, paint: number, tone = 0): number {
+  if (isPainted(tone)) {
+    const sw = paintFor(faction).swatches;
+    return (sw[paintedSlot(tone) % sw.length] ?? paint) as number;
+  }
   return tone ? roleColour(faction, paint, roleAt(tone)) : paint;
 }
 

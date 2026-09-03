@@ -1356,3 +1356,99 @@ test('a bell is a wall round a cavity, and the cavity stays empty', async () => 
   assert.ok(cavities > 0, 'no hull in the fleet has a drive cavity at all');
   console.log(`  drive cavities: ${cavities} cells over ${FRAMES.length} hulls, none occupied`);
 });
+
+test('a picked colour paints one cell, not the whole scheme', async () => {
+  // The palette used to be a SCHEME picker: choosing a swatch set `paint`, and
+  // every livery role is an offset from it, so picking a colour repainted the
+  // entire ship in a scheme built round it. A player who wanted one panel a
+  // different colour had no way to say so.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { hullMesh } = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, rasterise, paintFor, latOf, frameFor, cellIndex, cellAt,
+    isPainted, paintedSlot, armourColour, migrateDesign, Mat, useCore } = design;
+  useCore(() => null);
+
+  const key = 'terran_frigate';
+  const L = latOf(frameFor(key));
+  const base = stockFor(key);
+  const plain = rasterise(base);
+
+  // A cell of armour to paint, and one the brush must refuse.
+  let armour = -1, machinery = -1;
+  for (let n = 0; n < plain.grid.length; n++) {
+    const m = plain.grid[n];
+    if (armour < 0 && (m === Mat.Plate || m === Mat.Skinned)) armour = n;
+    if (machinery < 0 && m === Mat.Machine) machinery = n;
+  }
+  assert.ok(armour >= 0 && machinery >= 0, 'the frigate has both armour and machinery');
+
+  const swatches = paintFor(base.faction).swatches;
+  const slot = 5;
+  const painted = { ...base, tint: [armour * 8 + slot] };
+  const r = rasterise(painted);
+
+  // The cell wears the slot's own colour...
+  assert.ok(isPainted(r.tone[armour]), 'the painted cell is marked as hand painted');
+  assert.equal(paintedSlot(r.tone[armour]), slot, 'and it remembers which slot');
+  assert.equal(armourColour(painted.faction, painted.paint, r.tone[armour]),
+    swatches[slot], 'a painted cell is the swatch that was picked, exactly');
+
+  // ...and NOTHING ELSE MOVED. This is the whole complaint: one cell changed,
+  // the ship did not.
+  let moved = 0;
+  for (let n = 0; n < r.tone.length; n++) {
+    if (n === armour) continue;
+    if (r.tone[n] !== plain.tone[n]) moved++;
+  }
+  assert.equal(moved, 0, `${moved} other cells changed colour when one was painted`);
+  assert.equal(painted.paint, base.paint, 'the brush did not change the hull colour');
+
+  // The mesh really draws it: the quad on that cell carries the slot's colour.
+  // three stores vertex colour in the LINEAR working space, so the swatch is
+  // converted the same way rather than compared as bytes: a raw comparison
+  // fails on a colour that is drawn perfectly.
+  const lin = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  const mesh = hullMesh(painted);
+  const col = mesh.geo.getAttribute('color');
+  const want = swatches[slot];
+  const wr = lin(((want >> 16) & 255) / 255), wg = lin(((want >> 8) & 255) / 255),
+    wb = lin((want & 255) / 255);
+  let seen = false;
+  for (let q = 0; q < mesh.quads && !seen; q++) {
+    if (mesh.cellOf[q] !== armour) continue;
+    seen = Math.abs(col.getX(q * 4) - wr) < 0.01
+      && Math.abs(col.getY(q * 4) - wg) < 0.01
+      && Math.abs(col.getZ(q * 4) - wb) < 0.01;
+  }
+  assert.ok(seen, 'the mesh does not draw the painted cell in the picked colour');
+
+  // Machinery is not paintable, and that is the rule rather than an oversight:
+  // a drive is orange and a gun is red on anybody's ship, which is what makes
+  // an unfamiliar hull readable without a legend.
+  const onPart = rasterise({ ...base, tint: [machinery * 8 + slot] });
+  assert.ok(!isPainted(onPart.tone[machinery]),
+    'the brush painted a part, so a drive can stop looking like a drive');
+
+  // And a stroke survives a lattice change with its colour on it.
+  const old = { ...stockFor('terran_cruiser') };
+  delete old.lattice;
+  const at = [16, 18, 40];
+  old.tint = [(at[0] + at[1] * 32 + at[2] * 32 * 32) * 8 + 3];
+  const moved2 = migrateDesign(old);
+  assert.equal(moved2.tint.length, 1, 'the stroke survived');
+  assert.equal(moved2.tint[0] & 7, 3, 'and kept its colour');
+  const C = latOf(frameFor('terran_cruiser'));
+  const [ci, cj, ck] = cellAt(C, (moved2.tint[0] / 8) | 0);
+  assert.equal(cellIndex(C, ci, cj, ck), (moved2.tint[0] / 8) | 0);
+  console.log(`  brush: one cell painted, ${moved} others moved`);
+});

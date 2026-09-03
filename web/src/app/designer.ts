@@ -255,6 +255,17 @@ export class Designer {
   // so a slab index that was in range on one class is off the end of another.
   #slab = 32;
   #brush: 'add' | 'cut' = 'add';
+  /**
+   * The colour slot the pointer is holding, or null for no brush.
+   *
+   * Picking a swatch used to set `paint`, which is the base every livery role
+   * is an OFFSET from, so choosing a colour repainted the whole ship in a
+   * scheme built round it. That is a seed rather than a decision, and it is
+   * what a player means when they say the palette will not let them pick a
+   * colour to paint WITH. This is the brush; `paint` is still the hull's own
+   * colour and has its own control.
+   */
+  #brushSlot: number | null = null;
   /** How many SLABS either side are ghosted, and how thick a slab is. */
   #onion = 1;
   #depth = 1;
@@ -328,6 +339,7 @@ export class Designer {
       rough: typeof d.rough === 'number' ? d.rough : DEFAULT_ROUGH,
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
+      tint: Array.isArray(d.tint) ? d.tint.slice(0, DRAWN_MAX) : [],
       ...(Array.isArray(d.lattice) ? { lattice: [...d.lattice] as [number, number, number] } : {}),
     });
     this.#slot = slot;
@@ -964,6 +976,9 @@ export class Designer {
     const { nx: NX, ny: NY } = this.#lat;
     const n = i + j * NX + k * NX * NY;
     const owner = own[n] as number;
+    // The BRUSH takes the tap before anything else does. A player who has
+    // picked up a colour is not asking what a cell is called.
+    if (this.#brushSlot !== null) { this.#paintAt(n, grid[n] as number); return; }
     if (owner > 0) {
       const p = this.#design.parts[owner - 1];
       this.#socket = p ? p.socket : null;
@@ -981,6 +996,38 @@ export class Designer {
           : 'The frame. It is the class, not the design: it cannot be moved, cut '
             + 'or painted, and everything you fit hangs inside it.';
     }
+    this.#refresh();
+  }
+
+  /**
+   * Lay the brush on one cell, or lift it off.
+   *
+   * Armour only, and that is not a limitation to work around: a part is
+   * coloured by what it DOES, so a drive is orange and a gun is red whoever
+   * built them, which is what makes an unfamiliar hull readable without a
+   * legend. Painting one would take that away for the sake of a panel.
+   */
+  #paintAt(n: number, mat: number): void {
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) {
+      this.#note = 'The brush paints ARMOUR. A part is coloured by what it is '
+        + 'for, so a drive is orange and a gun is red on anybody\u2019s ship, '
+        + 'and the frame is the class rather than the design.';
+      this.#refresh();
+      return;
+    }
+    const list = (this.#design.tint ??= []);
+    const at = list.findIndex(v => ((v / 8) | 0) === n);
+    const want = n * 8 + (this.#brushSlot as number);
+    if (at >= 0) {
+      // The same colour again lifts it off, which is what a second tap with
+      // the same brush means everywhere else.
+      if (list[at] === want) list.splice(at, 1);
+      else list[at] = want;
+    } else {
+      if (list.length >= DRAWN_MAX) return;
+      list.push(want);
+    }
+    this.#note = null;
     this.#refresh();
   }
 
@@ -1757,18 +1804,66 @@ export class Designer {
     const paint = $('dzPaint');
     paint.innerHTML = '';
     const scheme = paintFor(this.#design.faction);
-    let picked = -1;
-    scheme.swatches.forEach((col, slot) => {
+
+    // TWO controls, because they were one and it was the wrong one.
+    //
+    // The hull's own colour is the base every livery role is an OFFSET from,
+    // so setting it repaints the ship in a scheme built round it. That is
+    // worth having and it is not a brush: a player who wants one panel a
+    // different colour was repainting the whole ship to get it. The brush is
+    // the row under it, and it lays a colour on ONE cell.
+    const hullRow = document.createElement('div');
+    hullRow.className = 'dzpaint';
+    scheme.swatches.forEach(col => {
       const b = document.createElement('button');
       b.className = 'dzsw' + (col === this.#design.paint ? ' on' : '');
       b.style.background = `#${col.toString(16).padStart(6, '0')}`;
-      const wears = this.#design.slotFinish?.[slot];
-      b.title = `#${col.toString(16).padStart(6, '0')}`
-        + (wears ? ` · ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
+      b.title = `Paint the whole hull from #${col.toString(16).padStart(6, '0')}`;
       b.onclick = () => { this.#design.paint = col; this.#refresh(); };
-      if (col === this.#design.paint) picked = slot;
-      paint.appendChild(b);
+      hullRow.appendChild(b);
     });
+
+    const brushHead = document.createElement('div');
+    brushHead.className = 'dzgrp';
+    brushHead.textContent = 'Brush';
+    const brushNote = document.createElement('p');
+    brushNote.className = 'dznote';
+    brushNote.textContent = 'Pick a colour and tap the model to lay it on one '
+      + 'cell of armour. The same colour on the same cell lifts it off again. '
+      + 'Put the brush down to go back to tapping parts to name them.';
+    const brushRow = document.createElement('div');
+    brushRow.className = 'dzpaint';
+    let picked = scheme.swatches.indexOf(this.#design.paint);
+    scheme.swatches.forEach((col, slot) => {
+      const b = document.createElement('button');
+      b.className = 'dzsw' + (this.#brushSlot === slot ? ' on' : '');
+      b.style.background = `#${col.toString(16).padStart(6, '0')}`;
+      const wears = this.#design.slotFinish?.[slot];
+      b.title = `Paint with #${col.toString(16).padStart(6, '0')}`
+        + (wears ? ` \u00b7 ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
+      b.onclick = () => {
+        this.#brushSlot = this.#brushSlot === slot ? null : slot;
+        this.#refresh();
+      };
+      if (this.#brushSlot === slot) picked = slot;
+      brushRow.appendChild(b);
+    });
+
+    const down = document.createElement('button');
+    down.id = 'dzBrushDown';
+    down.className = 'dzpart clear';
+    down.innerHTML = '<span class="sw"></span><span class="nm">'
+      + (this.#brushSlot === null ? 'No brush: a tap names the part it lands on'
+        : 'Put the brush down') + '</span>';
+    down.onclick = () => { this.#brushSlot = null; this.#refresh(); };
+    const wipe = document.createElement('button');
+    wipe.id = 'dzTintClear';
+    wipe.className = 'dzpart clear';
+    const strokes = (this.#design.tint ?? []).length;
+    wipe.innerHTML = '<span class="sw"></span><span class="nm">'
+      + `Wipe ${strokes} hand painted cell${strokes === 1 ? '' : 's'}</span>`;
+    wipe.onclick = () => { this.#design.tint = []; this.#refresh(); };
+    paint.append(hullRow, brushHead, brushNote, brushRow, down, wipe);
 
     // The surfaces, one row each.
     //
@@ -2822,6 +2917,10 @@ export class Designer {
       gridHash: this.#gridHash,
       faction: this.#design.faction,
       paint: this.#design.paint,
+      /** The brush, and what it has laid down. Observed by the harness; the
+       *  harness never sets either. */
+      brushSlot: this.#brushSlot,
+      tint: (this.#design.tint ?? []).length,
       hist: this.#hist,
     };
   }
