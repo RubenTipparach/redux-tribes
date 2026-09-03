@@ -1453,6 +1453,23 @@ export class Designer {
     // with guns nobody could reach: the barbette is what carries a gun, and
     // the barbette is a part.
     const all = socketsOf(frame, this.#design.parts);
+    // A heading and a sentence, because "empty empty empty" under no title is
+    // a grid of buttons nobody can name.
+    const top = document.createElement('div');
+    top.className = 'dzgrp';
+    top.textContent = 'Stations on this hull';
+    const why = document.createElement('p');
+    why.className = 'dznote';
+    why.textContent = 'Every place this frame will take a part, by what it is '
+      + 'for. Tap one to see what fits it; a full station shows the part it is '
+      + 'holding. You never add a station here, because a station is a fact '
+      + 'about the class: the architect is where those move.';
+    host.append(top, why);
+    // Its own scroller. Twenty nine stations laid out whole pushed the palette
+    // and the facing controls off the bottom of the rail.
+    const box = document.createElement('div');
+    box.className = 'dzlist';
+    host.appendChild(box);
     const order: Array<[string, string]> = [
       ['drive', 'Drive'], ['retro', 'Retro'], ['rcs', 'Manoeuvring'],
       ['gun', 'Gun rings'], ['trunnion', 'Trunnions'], ['missile', 'Missile pads'],
@@ -1464,7 +1481,7 @@ export class Designer {
       const h = document.createElement('div');
       h.className = 'dzgrp';
       h.textContent = label;
-      host.appendChild(h);
+      box.appendChild(h);
       const row = document.createElement('div');
       row.className = 'dzrow';
       for (const s of list) {
@@ -1483,7 +1500,7 @@ export class Designer {
         };
         row.appendChild(b);
       }
-      host.appendChild(row);
+      box.appendChild(row);
     }
   }
 
@@ -1500,11 +1517,19 @@ export class Designer {
     }
     const head = document.createElement('div');
     head.className = 'dzgrp';
-    head.textContent = sock.label;
-    host.appendChild(head);
+    head.textContent = `What fits ${sock.label}`;
+    const lead = document.createElement('p');
+    lead.className = 'dznote';
+    lead.textContent = 'Everything this station will take, with what it weighs '
+      + 'on the right and what it does underneath. Tap one to fit it; tapping '
+      + 'the one already in takes it out.';
+    host.append(head, lead);
 
     const fits = MODULES.filter(m => m.fits === sock.kind);
     const held = this.#design.parts.find(p => p.socket === sock.id);
+    const list = document.createElement('div');
+    list.className = 'dzlist';
+    host.appendChild(list);
     for (const m of fits) {
       const b = document.createElement('button');
       b.className = 'dzpart' + (held?.module === m.id ? ' on' : '');
@@ -1522,7 +1547,7 @@ export class Designer {
         + (m.reach ? ` &middot; reach +${m.reach} u` : '')
         + '</span>';
       b.onclick = () => { this.#fit(sock.id, m.id); };
-      host.appendChild(b);
+      list.appendChild(b);
     }
     if (held) {
       // Which way it faces is the player's, on all three axes. Ninety degree
@@ -1535,6 +1560,18 @@ export class Designer {
       // pitch tips it under a keel, which is how a broadside or a ventral
       // turret gets built at all.
       const face = facingOf(held);
+      const turnHead = document.createElement('div');
+      turnHead.className = 'dzgrp';
+      turnHead.textContent = `Facing of the ${moduleById(held.module)?.name ?? 'part'}`;
+      host.appendChild(turnHead);
+      const turnNote = document.createElement('p');
+      turnNote.className = 'dznote';
+      turnNote.textContent = 'Which way this part is bolted on, in quarter turns'
+        + ' about each of the three axes. Yaw swings it round the mast, pitch'
+        + ' tips it under the keel, roll lays it on a flank. A rotation is'
+        + ' refused only if the base would leave the ship or the body would'
+        + ' stand where something already is.';
+      host.appendChild(turnNote);
       for (const [key, name, axis] of [
         ['yaw', 'Yaw', 'yaw'],
         ['pitch', 'Pitch', 'pitch'],
@@ -2051,7 +2088,7 @@ export class Designer {
     const L = this.#lat;
     const { nx: NX, ny: NY } = L;
     if (i < 0 || j < 0 || i >= NX || j >= NY) return false;
-    const { grid, turrets } = rasterise(this.#design);
+    const { grid, turrets, hollow } = rasterise(this.#design);
     const plate = (this.#design.plate ??= []);
     const cut = (this.#design.cut ??= []);
     const drop = (list: number[], set: Set<number>, v: number) => {
@@ -2086,6 +2123,11 @@ export class Designer {
           // because a pencil that can put a cell somewhere the rasteriser will
           // not keep is a pencil that lies.
           if (inTurret(turrets, ci, cj, k)) { inGun = true; continue; }
+          // And a drive's THROAT, for the same reason: a bell is a one cell
+          // wall round a cavity, the cavity is the engine's, and a cell drawn
+          // in one makes the hull illegal. Refusing the stroke is how a player
+          // finds that out from the pencil rather than from the verdict.
+          if (hollow[n]) { inGun = true; continue; }
           // Undoing a cut is the same gesture as adding, which is what anyone
           // expects from a pencil that has just rubbed something out.
           if (drop(cut, this.#cutSet, n)) { changed = true; continue; }
@@ -2626,7 +2668,13 @@ export class Designer {
       ['dzTabFrame', 'dzPaneFrame', 'frame'],
       ['dzTabStats', 'dzPaneStats', 'stats'],
     ] as const) {
-      $(id).className = this.#tab === which ? 'on' : '';
+      // TOGGLE, never assign. `dzTabFrame` carries `archonly`, which is what
+      // keeps the architect's tab out of the shipyard, and assigning
+      // `className` wiped it the first time this ran: from then on the Frame
+      // tab stood in the yard's tab bar on every hull, and pressing it took a
+      // player who had asked for a shipyard into the architect on whatever
+      // class they happened to be looking at.
+      $(id).classList.toggle('on', this.#tab === which);
       $(pane).classList.toggle('hidden', this.#tab !== which);
     }
     this.#renderSlabBox();

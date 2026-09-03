@@ -274,7 +274,10 @@ export class Architect {
     if (!sel) {
       const p = document.createElement('p');
       p.className = 'dznote';
-      p.textContent = 'Tap a station above to move it.';
+      p.textContent = 'Tap a station in the list above to move it, rename it, '
+        + 'or change what fits in it. Nothing here reaches a match: the '
+        + 'architect previews and exports, and an edit gets into the game by '
+        + 'going back into design.ts.';
       host.appendChild(p);
       const bar = document.createElement('div');
       bar.id = 'dzArchAct';
@@ -285,6 +288,25 @@ export class Architect {
       host.appendChild(bar);
       return;
     }
+
+    // What is being edited, said outright.
+    //
+    // Three unlabelled rows of minus and plus under a scrolling list is a
+    // control nobody can name: "beam x" alone does not say whose beam, in what
+    // units, or that the number between the buttons is a cell rather than a
+    // distance. Every block on this rail carries a heading and a sentence for
+    // that reason.
+    const head = document.createElement('div');
+    head.className = 'dzgrp';
+    head.textContent = 'Selected station';
+    const who = document.createElement('p');
+    who.className = 'dznote';
+    who.innerHTML = `<b>${sel.label}</b> &middot; ${sel.kind}<br>`
+      + `Where this station sits in the hull's own lattice, in CELLS from the `
+      + `corner: beam is across the ship, depth is up it, length is along it. `
+      + `Move it and the hull is re-rasterised under you, so the part that `
+      + `seats here moves with it.`;
+    host.append(head, who);
 
     // Three axes of nudges, as BUTTONS. A phone has no arrow keys and no
     // keyboard worth typing coordinates on, and the mobile rule is that every
@@ -311,6 +333,16 @@ export class Architect {
       host.appendChild(row);
     }
 
+    const kindHead = document.createElement('div');
+    kindHead.className = 'dzgrp';
+    kindHead.textContent = 'What fits here';
+    const kindNote = document.createElement('p');
+    kindNote.className = 'dznote';
+    kindNote.textContent = 'A station\u2019s kind is what the yard will offer '
+      + 'to bolt into it: a drive plate offers bells, a gun ring offers a '
+      + 'barbette. Changing it changes the shopping list, not the geometry.';
+    host.append(kindHead, kindNote);
+
     const kind = document.createElement('select');
     kind.id = 'dzArchKind';
     for (const k of SOCKET_KINDS) {
@@ -322,6 +354,16 @@ export class Architect {
     }
     kind.onchange = () => { this.#setKind(kind.value as SocketKind); };
     host.appendChild(kind);
+
+    const nameHead = document.createElement('div');
+    nameHead.className = 'dzgrp';
+    nameHead.textContent = 'Its name';
+    const nameNote = document.createElement('p');
+    nameNote.className = 'dznote';
+    nameNote.textContent = 'What the shipyard calls this station in its own '
+      + 'list, so "drive, port lower" reads as a place on a ship rather than '
+      + 'as a row number.';
+    host.append(nameHead, nameNote);
 
     const label = document.createElement('input');
     label.type = 'text';

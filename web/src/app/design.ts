@@ -2932,9 +2932,9 @@ export interface Derived {
    * hand drawn stroke left a block hanging in space, which is not a ship.
    */
   readonly orphans: number;
-  /** Cells inside a turret box that something else is standing in. Zero on
-   *  anything this rasteriser built; above zero means a part was placed into
-   *  one, or a design saved before the rule came in. */
+  /** Cells inside a turret box or a drive's throat that something else is
+   *  standing in. Zero on anything this rasteriser built; above zero means a
+   *  part was placed into one, or a design saved before the rule came in. */
   readonly fouled: number;
   readonly extent: readonly [number, number, number];
   readonly accelFwd: number;
@@ -3058,10 +3058,19 @@ export interface Raster {
    * would pass on every hull without ever being reachable.
    */
   readonly welded: Uint8Array;
-  /** Cells inside a turret box that something else is standing in. Zero on
-   *  anything this rasteriser built; above zero means a part was placed into
-   *  one, or a design saved before the rule came in. */
+  /** Cells inside a turret box or a drive's throat that something else is
+   *  standing in. Zero on anything this rasteriser built; above zero means a
+   *  part was placed into one, or a design saved before the rule came in. */
   readonly fouled: number;
+  /**
+   * The cavity inside every drive bell: claimed, and empty.
+   *
+   * A bell is a one cell wall round a throat and the throat is the engine's.
+   * Exposed so the armour pencil can refuse a stroke there with a reason,
+   * rather than letting a player draw a cell that makes the hull illegal and
+   * only finding out from the verdict.
+   */
+  readonly hollow: Uint8Array;
   /**
    * Cells of a DRIVE that some other part wanted.
    *
@@ -3312,6 +3321,16 @@ export function rasterise(d: Design): Raster {
    * taught: the two are not the same kind of bad.
    */
   const bells = new Uint8Array(CELLS);
+  /**
+   * The CAVITY inside a drive bell, which is the engine's and must stay empty.
+   *
+   * A bell is a one cell wall round a throat, and the throat is as much a part
+   * of the engine as the metal: a docking clamp bolted up the mouth of a
+   * nozzle is not a ship. So a cavity is reserved exactly as a turret's sweep
+   * is, and anything found standing in one is counted with the same number and
+   * fails the same gate.
+   */
+  const hollow = new Uint8Array(CELLS);
   // Which cells the weld pass grew, so the mount rule can ask whether a base
   // is on the SHIP rather than on a spar the weld grew to catch it.
   const welded = new Uint8Array(CELLS);
@@ -3458,9 +3477,29 @@ export function rasterise(d: Design): Raster {
     // whole box would push the plating off the transom.
     if (m.fits === 'drive' || m.fits === 'retro') {
       for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
-        if (!v.data[i + j * v.sx + k * v.sx * v.sy]) continue;
+        const mat = v.data[i + j * v.sx + k * v.sx * v.sy] as number;
+        if (!mat) continue;
         const x = ox + i, y = oy + j, z = oz + k;
-        if (inBounds(x, y, z)) bells[idx3(LAT, x, y, z)] = 1;
+        if (!inBounds(x, y, z)) continue;
+        const n = idx3(LAT, x, y, z);
+        bells[n] = 1;
+        // The throat is claimed and left EMPTY. `reserved` is what every plate
+        // pass below already reads, so putting it there is what keeps the
+        // shell, the belts, the decor and the pencil out of an engine without
+        // five separate writers each remembering to check.
+        if (mat !== Mat.Void) continue;
+        hollow[n] = 1;
+        reserved[n] = 1;
+        // And it takes a FRAME cell if the keel runs through it, exactly as a
+        // part's solid cells already do. Four hulls in the fleet had a rib or
+        // a keel run standing in a bell's throat, and a frame member through
+        // an engine is the thing this rule exists to refuse rather than an
+        // exception to it. The weld pass below catches anything this leaves
+        // loose.
+        if (grid[n] === Mat.Frame && own[n] === 0) {
+          grid[n] = Mat.Empty;
+          purp[n] = 0;
+        }
       }
     }
 
@@ -3496,6 +3535,9 @@ export function rasterise(d: Design): Raster {
       // to go and settled in the engines anyway.
       if (bells[n] && own[n] !== pi + 1
         && m.fits !== 'drive' && m.fits !== 'retro') bellFouled++;
+      // A cavity is claimed and left empty: it is drawn by nothing, including
+      // the part that owns it.
+      if (mat === Mat.Void) continue;
       if (grid[n] && grid[n] !== Mat.Frame) continue;
       grid[n] = mat;
       purp[n] = code;
@@ -3911,6 +3953,11 @@ export function rasterise(d: Design): Raster {
   // carve round them, so anything here came in with the design: a part nudged
   // into one, or a save made before the rule existed.
   let fouled = 0;
+  // A drive's throat, judged the same way and counted with the same number.
+  // The two are one rule stated twice: a volume some part keeps clear, and
+  // anything else in it makes the whole hull illegal rather than merely
+  // costing somebody a few cells.
+  for (let n = 0; n < CELLS; n++) if (hollow[n] && grid[n]) fouled++;
   for (const t of turrets) {
     for (let k = Math.max(0, t.k0); k <= Math.min(NZ - 1, t.k1); k++)
       for (let j = Math.max(0, t.j0); j <= Math.min(NY - 1, t.j1); j++)
@@ -3924,7 +3971,7 @@ export function rasterise(d: Design): Raster {
         }
   }
 
-  const raster: Raster = { grid, purp, own, tone, orphans, welded, bellFouled,
+  const raster: Raster = { grid, purp, own, tone, orphans, welded, bellFouled, hollow,
     plateCells, solidCells: cells.length / 3,
     enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
@@ -4764,7 +4811,21 @@ export const stockFor = (classKey: string): Design => {
  */
 export const Mat = {
   Empty: 0, Plate: 1, Frame: 2, Machine: 3, Glow: 4, Accent: 5, Case: 6, Skinned: 7,
+  Void: 8,
 } as const;
+
+/**
+ * `Void` is a cell a part CLAIMS AND LEAVES EMPTY, and it never reaches a hull.
+ *
+ * A drive bell is a shell round a cavity, and the cavity is as much a part of
+ * the engine as the metal: a docking clamp bolted up the throat of a nozzle is
+ * not a ship. So the bell marks it, `rasterise` reserves it, and nothing
+ * else may be written there.
+ *
+ * It lives in a `VoxelModel` only. Writing it into the hull grid would make it
+ * a solid cell to everything that walks the grid by truthiness: the mesher
+ * would draw quads across the mouth of every engine in the fleet.
+ */
 
 /**
  * `Skinned` is a frame member lying where the armour shell wants to be.
@@ -5058,18 +5119,37 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       // Aft is -z, so the throat is forward and the bell flares to the back.
       const rOuter = Math.min(sx, sy) / 2;
       const rThroat = m.art === 'bell' ? rOuter * 0.42 : rOuter * 0.55;
-      for (let z = 0; z < sz; z++) {
+      const radiusAt = (z: number) => {
         const t = z / Math.max(1, sz - 1);          // 0 aft, 1 forward
-        const r = rOuter + (rThroat - rOuter) * Math.min(1, t * 1.35);
+        return rOuter + (rThroat - rOuter) * Math.min(1, t * 1.35);
+      };
+      for (let z = 0; z < sz; z++) {
+        const t = z / Math.max(1, sz - 1);
+        const r = radiusAt(z);
         for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
           const d = rad(x, y);
           if (d > r) continue;
-          // Hollow through the flare, solid at the forward plug, and a lit
-          // ring at the very back where the exhaust leaves. Every second
-          // course of the flare is banded, which is what tells one bell from
-          // another once they are all the same orange.
-          if (t > 0.72) put(x, y, z, Mat.Case);
-          else if (d > r - 1.35) put(x, y, z, z === 0 ? Mat.Glow : (z % 2 ? Mat.Accent : Mat.Machine));
+          // Solid at the forward plug, and a ONE CELL WALL round a cavity
+          // everywhere else, with a lit ring at the very back where the
+          // exhaust leaves. Every second course of the flare is banded, which
+          // is what tells one bell from another once they are all the same
+          // orange.
+          //
+          // A wall is where the cone ENDS, not a thickness: a fixed 1.35 cells
+          // is most of a small nozzle's radius, so the light nozzle, which is
+          // four cells across, came out very nearly solid and had no cavity to
+          // speak of. Asking whether a neighbour is outside the cone gives one
+          // cell of wall at any radius, so the smallest bell in the game is
+          // still a bell rather than a plug.
+          if (t > 0.72) { put(x, y, z, Mat.Case); continue; }
+          const wall = rad(x + 1, y) > r || rad(x - 1, y) > r
+            || rad(x, y + 1) > r || rad(x, y - 1) > r;
+          if (wall) put(x, y, z, z === 0 ? Mat.Glow : (z % 2 ? Mat.Accent : Mat.Machine));
+          // Inside the wall is the CAVITY, and it is the engine's as much as
+          // the metal is: `rasterise` reserves it and nothing else may sit in
+          // it. Marked rather than left empty, because "empty" is what every
+          // other part is looking for somewhere to go.
+          else put(x, y, z, Mat.Void);
         }
       }
       break;
@@ -5330,8 +5410,11 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
         put(x, y, z, y === sy - 1 ? Mat.Machine : Mat.Case);
   }
 
+  // A cavity is claimed and empty, so it is not FILLED: a bell that counted
+  // its own throat would report more cells than it draws, and everything that
+  // asks a part how big it is would be told the box rather than the metal.
   let filled = 0;
-  for (let i = 0; i < data.length; i++) if (data[i]) filled++;
+  for (let i = 0; i < data.length; i++) if (data[i] && data[i] !== Mat.Void) filled++;
   const model: VoxelModel = { sx, sy, sz, data, filled };
   voxCache.set(m.id, model);
   return model;
