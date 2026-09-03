@@ -1468,15 +1468,40 @@ picture nobody can see them in.
 
 ## A window is a hole in the PLATING, not a part
 
-**And it looks THROUGH the plating, not one cell into it.** A belt is three to
-five courses thick, so a room behind it is three to five cells inside the skin
-and a rule that looked exactly one cell inward found a room only where the
-armour happened to be one cell deep. Measured over the fleet it was finding
-almost nothing: a Terran corvette carried a bridge and drew no viewport at all,
-and a container ship with twelve boxes in it showed six door panels.
-`WINDOW_DEPTH` is five courses, and every cell crossed has to be plating, so a
-window still means "a room immediately behind this skin" rather than "a room
-somewhere along this line". Counts went from single digits to hundreds.
+**And it looks THROUGH the plating, not one cell into it.** A belt is courses
+thick, so a room behind it is that many cells inside the skin and a rule that
+looked exactly one cell inward found a room only where the armour happened to
+be one cell deep. Measured over the fleet it was finding almost nothing: a
+Terran corvette carried a bridge and drew no viewport at all, and a container
+ship with twelve boxes in it showed six door panels. Every cell crossed has to
+be plating, so a window still means "a room immediately behind this skin"
+rather than "a room somewhere along this line". Counts went from single digits
+to hundreds.
+
+**How far it looks is not a constant, and the second time it was one it broke
+the same way.** Two things put a room further inside a bigger hull and both
+scale with the rung: the PLATING, since courses are cut to the lattice and the
+fleet's belts run from one course on a Rogue frigate to twelve on a Benefactor
+heavy cruiser; and the ROOM, since a bay is seated at a fraction of the half
+beam, so the same fitting on a hull twice as wide sits twice as many cells in.
+A flat five cells tracked neither, and the Terran destroyer, the Terran
+cruiser, both Benefactor heavies and the Rogue cruiser drew NO room decal at
+all, only the running lights on their clamps, which sit on parts standing proud
+of the skin and never had to look through anything.
+
+So the reach is the rung's own, and never less than the CLASS's stock plating.
+The ceiling is still there for its original reason: a player may lay fifteen
+courses on a frigate, and fifteen courses over a barracks is a barracks nobody
+has a window onto. Taking the class's STOCK courses rather than this hull's is
+what keeps that true while a heavy cruiser still gets its viewports.
+
+The check that missed it counted FACES, and a beacon is a face. `sim.test.mjs`
+counts hulls lit by running lights ALONE now, and at most one may be: the
+Benefactor heavy cruiser, which is the hull rather than the rule. It is the
+narrowest section in the game under the heaviest belt, so `laneOf` stacks its
+berths up the centreline and leaves a void between them and its twelve courses
+of plating, and a ship with no room against its own skin has nothing to put a
+window over.
 
 **A cabin does not have a window in the roof, and `WINDOW_FACE` is what says
 so.** It names the axes a decal's normal may run along: `x` the flanks, `y` the

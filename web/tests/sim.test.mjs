@@ -788,6 +788,7 @@ test('every stock hull has windows, and they are cut where a room is', async () 
    *  the class's own: a corvette is 24 wide and a heavy cruiser 64. */
   const mirror = (nx, n) => { const i = n % nx; return (nx - 1 - i) + (n - i); };
   let lop = 0, all = 0;
+  const lightsOnly = [];
 
   for (const f of FRAMES) {
     const nx = latOf(f).nx;
@@ -805,6 +806,17 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     // which is what every one of them did.
     assert.ok(faces >= 20,
       `${f.classKey}: ${faces} window faces, so the hull reads as unlit`);
+    // And they have to be ROOMS, not just running lights.
+    //
+    // A count of faces was blind to the thing that actually went wrong. A
+    // beacon is on a docking clamp, which stands PROUD of the skin, so it
+    // never had to look through any plating at all: when the armour courses
+    // started scaling with the rung and the window reach did not, the Terran
+    // destroyer, the Terran cruiser, both Benefactor heavies and the Rogue
+    // cruiser lost every cabin, viewport and porthole they had and kept
+    // drawing eighty to two hundred beacons, which sailed past a check that
+    // only counted faces.
+    if (h.windows.every(w => w.key === 'beacons')) lightsOnly.push(f.classKey);
     // And every decal drawn is one a part on this ship actually wears. A key
     // with no module behind it would be a texture bound to nothing, and
     // `windowMap` answers null for an unknown one without saying so.
@@ -824,6 +836,19 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   // that is not itself mirrored and fittings the rasteriser's collision nudge
   // walks off their sockets, and both are about the hull rather than about the
   // windows. It is here so the number cannot quietly climb back.
+  // At most one hull may be lit by running lights alone, and the message
+  // names whichever it is rather than the test naming it in advance. The
+  // Benefactor heavy cruiser is the one, and it is the hull rather than the
+  // rule: it is the narrowest section in the game under the heaviest belt, so
+  // `laneOf` stacks its berths up the centreline and there is a void between
+  // them and its twelve courses of plating. A window means a room IMMEDIATELY
+  // behind the skin, and that ship has none.
+  assert.ok(lightsOnly.length <= 1,
+    `${lightsOnly.length} hulls are lit by running lights alone, with no room `
+    + `decal anywhere: ${lightsOnly.join(', ')}`);
+  console.log(`  windows: lit by running lights alone: `
+    + (lightsOnly.join(', ') || 'none'));
+
   const lopsided = lop / all;
   assert.ok(lopsided < 0.40,
     `${(100 * lopsided).toFixed(1)}% of window cells have no twin across the keel `

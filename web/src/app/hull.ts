@@ -30,7 +30,7 @@
 import * as THREE from 'three';
 import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
-  latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
+  latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
@@ -73,15 +73,31 @@ export const SURF_COUNT = ARMOUR_BANDS + 2;
 /** What each surface is called, for anything that reports them. One list, so
  *  a screen cannot label the second band 'frame' because it counted wrong. */
 /**
- * How far through the plating a window looks for its room, in cells.
+ * How far through the plating a window looks for its room, in REFERENCE cells.
  *
- * A player may lay fifteen courses, and fifteen courses of armour over a
- * barracks is a barracks nobody has a window onto: past about five the room is
- * not "behind the skin" in any sense a viewport could mean, and a decal that
- * appeared through a foot of belt would be a hole in the armour that the
- * armour does not have.
+ * A window is a hole in the PLATING over a room, so how far it looks has to be
+ * how thick the plating is, and how thick the plating is has to be the class's
+ * own: courses are cut to the rung (`stock`), so a heavy cruiser carries ten
+ * to twelve of them where a frigate carries three to five. A flat five cells
+ * cannot cross that, and it did not: measured over the fleet, the Terran
+ * destroyer, the Terran cruiser, both Benefactor heavies and the Rogue cruiser
+ * drew NO room decal at all, only the running lights on their clamps, which
+ * are on parts standing proud of the skin and never had to look through
+ * anything. This is the same defect the depth was written for, back when it
+ * was one cell and a belt was three.
+ *
+ * There is still a ceiling, and it is still the reason there was one: a player
+ * may lay fifteen courses on a frigate, and fifteen courses of armour over a
+ * barracks is a barracks nobody has a window onto. A decal that appeared
+ * through that would be a hole the armour does not have. So the ceiling is
+ * what the CLASS carries rather than what this hull was given, and over
+ * armouring a ship still costs it its viewports.
  */
-const WINDOW_DEPTH = 5;
+const WINDOW_DEPTH_REF = 5;
+
+/** The lattice `WINDOW_DEPTH_REF` is authored on, so the reach is cut to a
+ *  class's own the way everything else authored in cells already is. */
+const REF_NX = 32;
 
 export const SURF_NAMES: readonly string[] =
   ['plate', 'trim', 'structure', 'frame', 'part'];
@@ -343,6 +359,30 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   // the lattice walk it is.
   const cell = VOXEL;
   const { nx: NX, ny: NY, nz: NZ, cells: CELLS } = latOf(frame);
+  // How far in the room is, which is two things and both of them scale.
+  //
+  // The PLATING is one: courses are cut to the rung, so the fleet's belts run
+  // from one course on a Rogue frigate to twelve on a Benefactor heavy
+  // cruiser. And the ROOM is the other: a bay is seated at a fraction of the
+  // half beam, so the same fitting on a hull twice as wide sits twice as many
+  // cells inside the skin, whatever the armour over it is doing.
+  //
+  // A flat five cells tracked neither, and measured over the fleet the Terran
+  // destroyer, the Terran cruiser, both Benefactor heavies and the Rogue
+  // cruiser drew NO room decal at all: only the running lights on their
+  // clamps, which sit on parts standing proud of the skin and never had to
+  // look through anything. That is the same defect the depth was written for,
+  // back when it was one cell and a belt was three.
+  //
+  // So it is the rung's own reach, and never less than the CLASS's stock
+  // plating. The ceiling is still there and still for its original reason: a
+  // player may lay fifteen courses on a frigate, and fifteen courses over a
+  // barracks is a barracks nobody has a window onto. Taking the class's stock
+  // courses rather than this hull's is what keeps that true.
+  const stockCourses = stockFor(d.classKey).sections;
+  const depth = Math.max(
+    Math.round(WINDOW_DEPTH_REF * NX / REF_NX),
+    1 + Math.max(...SECTIONS.map(k => stockCourses[k])));
   const raster = rasterise(d);
   const purp = raster.purp, own = raster.own, tone = raster.tone;
   const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
@@ -467,7 +507,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     // anything else it is inside the ship and whatever it met is the answer,
     // so a window still means "a room immediately behind this skin" rather
     // than "a room somewhere along this line".
-    for (let step = 1; step <= WINDOW_DEPTH; step++) {
+    for (let step = 1; step <= depth; step++) {
       const bi = i - dx * step, bj = j - dy * step, bk = k - dz * step;
       if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
       const m = idx(bi, bj, bk);
