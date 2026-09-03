@@ -27,7 +27,7 @@ import {
 import { hullMesh } from './hull.js';
 import { designFromJson, designToJson } from './frames.js';
 import {
-  NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
+  latOf, VOXEL, migrateDesign, type Lat, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
@@ -250,7 +250,10 @@ export class Designer {
    * there are 16 of them rather than 64 positions that each smear four cells
    * into their neighbours. A run paints the whole slab.
    */
-  #slab = Math.floor(NZ / 2);
+  // Amidships of a frigate to start with, and clamped by `#slabZ` from then
+  // on: the lattice is 48 cells deep on a corvette and 128 on a heavy cruiser,
+  // so a slab index that was in range on one class is off the end of another.
+  #slab = 32;
   #brush: 'add' | 'cut' = 'add';
   /** How many SLABS either side are ghosted, and how thick a slab is. */
   #onion = 1;
@@ -295,7 +298,11 @@ export class Designer {
    * makes a new row rather than touching theirs.
    */
   loadDesign(d: Design, slot: DesignSlot): void {
-    this.#design = {
+    // Rebuilt field by field and then MIGRATED, because this is where a stored
+    // record becomes the design on the bench: the lattice stamp has to travel
+    // with the cell indices or the next Save writes a cruiser's armour back as
+    // though it had been drawn on a frigate.
+    this.#design = migrateDesign({
       classKey: d.classKey,
       parts: (d.parts ?? []).map(p => ({ ...p })),
       sections: { ...zeroSections(), ...(d.sections ?? {}) },
@@ -321,7 +328,8 @@ export class Designer {
       rough: typeof d.rough === 'number' ? d.rough : DEFAULT_ROUGH,
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
-    };
+      ...(Array.isArray(d.lattice) ? { lattice: [...d.lattice] as [number, number, number] } : {}),
+    });
     this.#slot = slot;
     // The draft slot for a saved hull is its own id, which is also what the
     // URL carries. One name for what is being edited.
@@ -588,8 +596,19 @@ export class Designer {
     return s;
   }
 
+  /**
+   * The lattice the hull on the bench is drawn on.
+   *
+   * A corvette is 24 x 24 x 48 and a heavy cruiser 64 x 64 x 128, so every
+   * walk over the grid and every cell index in this file depends on which
+   * class is open. Asked here rather than captured, because the class changes
+   * under the same designer when a player picks another hull.
+   */
+  get #lat(): Lat { return latOf(frameFor(this.#design.classKey)); }
+
   /** World position of a cell centre, with the lattice centred on the origin. */
   #pos(cell: number, i: number, j: number, k: number): THREE.Vector3 {
+    const { nx: NX, ny: NY, nz: NZ } = this.#lat;
     return new THREE.Vector3(
       (i - NX / 2) * cell, (j - NY / 2) * cell, (k - NZ / 2) * cell);
   }
@@ -614,7 +633,8 @@ export class Designer {
     this.#pickable = [];
 
     const frame = frameFor(this.#design.classKey);
-    const cell = RUNG[frame.rung];
+    const cell = VOXEL;
+    const { nx: NX, ny: NY, nz: NZ } = this.#lat;
     const { grid, purp, own, tone } = rasterise(this.#design);
     const idx = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
 
@@ -941,6 +961,7 @@ export class Designer {
     const i = entry.cells[q] as number, j = entry.cells[q + 1] as number,
       k = entry.cells[q + 2] as number;
     const { own, grid } = rasterise(this.#design);
+    const { nx: NX, ny: NY } = this.#lat;
     const n = i + j * NX + k * NX * NY;
     const owner = own[n] as number;
     if (owner > 0) {
@@ -1319,7 +1340,9 @@ export class Designer {
     if (!d) return false;
     this.#restoring = true;
     try {
-      this.#design = d.design as Design;
+      // A draft is storage, and storage predating the per class lattices
+      // holds cell indices for a lattice this class is no longer on.
+      this.#design = migrateDesign(d.design as Design);
       this.#syncDrawSets();
       this.#socket = null;
       if (this.#renderer) this.#refresh();
@@ -1811,12 +1834,13 @@ export class Designer {
    */
   /** The z range this slab covers, inclusive. */
   #slabZ(): readonly [number, number] {
-    const z0 = this.#slab * this.#depth;
+    const NZ = this.#lat.nz;
+    const z0 = Math.min(this.#slabCount() - 1, this.#slab) * this.#depth;
     return [z0, Math.min(NZ - 1, z0 + this.#depth - 1)];
   }
 
   /** How many slabs the lattice divides into at the current thickness. */
-  #slabCount(): number { return Math.ceil(NZ / this.#depth); }
+  #slabCount(): number { return Math.ceil(this.#lat.nz / this.#depth); }
 
   /** Rebuild the fast sets from the record. Called whenever the record is
    *  replaced wholesale: a class change, a reset, a design loaded. */
@@ -1832,7 +1856,7 @@ export class Designer {
    * be four milliseconds a cell and a drag asks per pixel.
    */
   #solidAt(n: number, grid: Uint8Array): boolean {
-    if (n < 0 || n >= NX * NY * NZ) return false;
+    if (n < 0 || n >= this.#lat.cells) return false;
     if (this.#drawSet.has(n)) return true;
     if (this.#cutSet.has(n)) return false;
     return (grid[n] as number) !== Mat.Empty;
@@ -1840,6 +1864,7 @@ export class Designer {
 
   /** Face neighbours, staying inside the lattice and never wrapping a row. */
   #neighbours(n: number): number[] {
+    const { nx: NX, ny: NY, nz: NZ } = this.#lat;
     const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
     const out: number[] = [];
     if (i > 0) out.push(n - 1);
@@ -1856,6 +1881,12 @@ export class Designer {
     const ctx = cv.getContext('2d');
     if (!ctx) return;
     const { grid, purp, tone } = rasterise(this.#design);
+    const L = this.#lat;
+    const { nx: NX, ny: NY, nz: NZ } = L;
+    // Pulled back into range HERE rather than only inside `#slabZ`, because
+    // the readout and the slider both show the raw index: opening a corvette
+    // while parked amidships a heavy cruiser would paint cell 40 and say 64.
+    this.#slab = Math.max(0, Math.min(this.#slabCount() - 1, this.#slab));
     const [za, zb] = this.#slabZ();
     // The slab is drawn as one picture: a cell shows if ANY z in the slab has
     // it, taking the material of the first that does. Drawing on it writes the
@@ -1866,14 +1897,14 @@ export class Designer {
     ctx.clearRect(0, 0, cv.width, cv.height);
     const inSlab = (i: number, j: number): number => {
       for (let z = za; z <= zb; z++) {
-        const m = grid[cellIndex(i, j, z)] as number;
+        const m = grid[cellIndex(L, i, j, z)] as number;
         if (m) return m;
       }
       return 0;
     };
     const purpIn = (i: number, j: number): number => {
       for (let z = za; z <= zb; z++) {
-        const n = cellIndex(i, j, z);
+        const n = cellIndex(L, i, j, z);
         if (grid[n]) return purp[n] as number;
       }
       return 0;
@@ -1882,7 +1913,7 @@ export class Designer {
      *  painted the same colours the model beside it is. */
     const toneIn = (i: number, j: number): number => {
       for (let z = za; z <= zb; z++) {
-        const n = cellIndex(i, j, z);
+        const n = cellIndex(L, i, j, z);
         if (grid[n]) return tone[n] as number;
       }
       return 0;
@@ -1912,7 +1943,7 @@ export class Designer {
         ctx.fillStyle = side < 0 ? '#35C7FF' : '#FFD24B';
         for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
           let any = false;
-          for (let z = oa; z <= ob && !any; z++) if (grid[cellIndex(i, j, z)]) any = true;
+          for (let z = oa; z <= ob && !any; z++) if (grid[cellIndex(L, i, j, z)]) any = true;
           if (!any) continue;
           ctx.fillRect(i * px + px * 0.28, (NY - 1 - j) * px + px * 0.28, px * 0.44, px * 0.44);
         }
@@ -2017,6 +2048,8 @@ export class Designer {
    * itself something for the next one to touch.
    */
   #paintCell(i: number, j: number): boolean {
+    const L = this.#lat;
+    const { nx: NX, ny: NY } = L;
     if (i < 0 || j < 0 || i >= NX || j >= NY) return false;
     const { grid, turrets } = rasterise(this.#design);
     const plate = (this.#design.plate ??= []);
@@ -2044,7 +2077,7 @@ export class Designer {
     for (const col of columns) {
       const ci = (col / NY) | 0, cj = col % NY;
       for (let k = za; k <= zb; k++) {
-        const n = cellIndex(ci, cj, k);
+        const n = cellIndex(L, ci, cj, k);
         const mat = grid[n] as number;
 
         if (this.#brush === 'add') {
@@ -2115,13 +2148,14 @@ export class Designer {
     let painting = false, last = -1;
     const cellFrom = (e: PointerEvent): readonly [number, number] => {
       const r = cv.getBoundingClientRect();
+      const { nx: NX, ny: NY } = this.#lat;
       const i = Math.floor(((e.clientX - r.left) / r.width) * NX);
       const j = NY - 1 - Math.floor(((e.clientY - r.top) / r.height) * NY);
       return [i, j];
     };
     const at = (e: PointerEvent) => {
       const [i, j] = cellFrom(e);
-      const key = i * NY + j;
+      const key = i * this.#lat.ny + j;
       if (key === last) return;
       last = key;
       if (this.#paintCell(i, j)) this.#drawChanged();
@@ -2183,6 +2217,7 @@ export class Designer {
     $('dzBrushCut').onclick = () => { this.#brush = 'cut'; this.#syncBrush(); };
     $('dzSliceClear').onclick = () => {
       const [za, zb] = this.#slabZ();
+      const { nx: NX, ny: NY } = this.#lat;
       const off = (n: number) => {
         const z = (n / (NX * NY)) | 0;
         return z < za || z > zb;
@@ -2216,7 +2251,8 @@ export class Designer {
   #renderSlabBox(): void {
     this.#clear(this.#slabBox);
     if (this.#tab !== 'armour') return;
-    const cell = RUNG[frameFor(this.#design.classKey).rung];
+    const cell = VOXEL;
+    const { nx: NX, ny: NY, nz: NZ } = this.#lat;
     const [za, zb] = this.#slabZ();
     const depth = (zb - za + 1) * cell;
     const mid = ((za + zb + 1) / 2 - NZ / 2) * cell;
@@ -2728,7 +2764,11 @@ export class Designer {
       /** One derivation, for measuring what the crossing costs. */
       timeDerive: () => derive(this.#design).hull,
       cellAt: (i: number, j: number, k: number) =>
-        rasterise(this.#design).grid[cellIndex(i, j, k)] ?? 0,
+        rasterise(this.#design).grid[cellIndex(this.#lat, i, j, k)] ?? 0,
+      // The lattice this hull is on, because a harness that walks the grid
+      // cannot know how far to walk without it: a corvette is 24 x 24 x 48
+      // and a heavy cruiser 64 x 64 x 128.
+      lat: { ...this.#lat },
       marks: this.#marks.children.length,
       note: this.#note,
       gridHash: this.#gridHash,

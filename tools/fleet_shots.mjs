@@ -182,6 +182,7 @@ async function ladder(faction) {
     const png = await page.locator('#dzCanvas').screenshot();
     const row = rows.find((r) => r.key === key);
     shots.push({ key, length: row ? row.length : 1, cell: row ? row.cell : 0,
+      lattice: row ? row.lattice : null, plate: row ? row.plateCells : 0,
       url: 'data:image/png;base64,' + png.toString('base64') });
     console.log(`  ${key}  ${row ? row.length.toFixed(2) : '?'} u`);
   }
@@ -226,11 +227,15 @@ async function ladder(faction) {
       picture is the ladder rather than the camera. The blue box on each row is
       one world unit at that same scale, tiled with that class's own voxel: same
       box everywhere, and the grid inside it is what says whether a voxel is the
-      same size from rung to rung.</div>
+      same size from rung to rung. It is, so the grids match and the LATTICE is
+      what differs: a bigger ship is more cells, and the plate count beside each
+      name is how many of them its skin actually costs.</div>
     ${shots.map((s) => `<div style="display:flex;align-items:center;gap:16px;padding:10px 18px">
       <div style="width:170px;flex:0 0 170px;text-align:right;opacity:.85">${s.key}<br>
         <b style="font-size:15px">${s.length.toFixed(2)} u</b>
-        <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span></div>
+        <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span><br>
+        <span style="font-size:11px;opacity:.65">${s.lattice ? s.lattice.join(' x ') : ''}</span><br>
+        <span style="font-size:11px;opacity:.5">${s.plate} plate cells</span></div>
       <div style="width:${Math.max(8, PPU).toFixed(0)}px;flex:0 0 auto;text-align:left">
         ${cube(s.cell)}</div>
       <canvas data-src="${s.url}" data-w="${Math.round(WIDEST * (s.length / longest))}"

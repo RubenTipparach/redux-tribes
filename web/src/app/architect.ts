@@ -23,7 +23,7 @@
  */
 import type { Designer } from './designer.js';
 import {
-  NX, NY, NZ, SOCKET_KINDS, frameFor, setFrameOverride, stockFrameFor,
+  latOf, SOCKET_KINDS, frameFor, setFrameOverride, stockFrameFor,
   type FrameDef, type Socket, type SocketKind,
 } from './design.js';
 import {
@@ -123,7 +123,8 @@ export class Architect {
   #nudge(axis: 0 | 1 | 2, by: number): void {
     const f = this.#frame, sel = this.#selected();
     if (!f || !sel) return;
-    const lim = [NX, NY, NZ][axis] as number;
+    const L = latOf(f);
+    const lim = [L.nx, L.ny, L.nz][axis] as number;
     const at: [number, number, number] = [sel.at[0], sel.at[1], sel.at[2]];
     at[axis] = Math.max(0, Math.min(lim - 1, (at[axis] as number) + by));
     this.#apply({ ...f, sockets: f.sockets.map(s => (s.id === sel.id ? { ...s, at } : s)) });
@@ -160,7 +161,7 @@ export class Architect {
     const id = `n${n}`;
     const sock: Socket = {
       id, kind: 'bay', label: `new station ${n}`,
-      at: [NX / 2, NY / 2, Math.round(NZ / 2)],
+      at: [latOf(f).cx, latOf(f).cy, Math.round(latOf(f).nz / 2)],
     };
     this.#apply({ ...f, sockets: [...f.sockets, sock] });
     this.#dz.selectSocket(id);

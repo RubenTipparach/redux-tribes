@@ -30,7 +30,7 @@
 import * as THREE from 'three';
 import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
-  CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
+  latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
@@ -107,8 +107,16 @@ export interface HullRig {
 
 export interface HullMesh {
   readonly geo: THREE.BufferGeometry;
-  /** The world size of one cell for this hull's class. */
+  /** The world size of one cell, which is the SAME on every class. */
   readonly cell: number;
+  /**
+   * The lattice this hull was meshed on.
+   *
+   * Carried here rather than looked up again by everything that walks the
+   * quads: a cell index means nothing without the lattice it was made on, and
+   * the map takes hits apart in cell indices.
+   */
+  readonly lat: Lat;
   /** Which lattice cell each QUAD belongs to, so damage can take one away. */
   readonly cellOf: Int32Array;
   /** The centre of that cell in SHIP units, three per quad. What a hit is
@@ -330,7 +338,11 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   if (hit) return hit;
 
   const frame = frameFor(d.classKey);
-  const cell = RUNG[frame.rung];
+  // A voxel is the same size on every hull; how many of them there are is what
+  // makes one class bigger than another. Shadowed so the walk below reads as
+  // the lattice walk it is.
+  const cell = VOXEL;
+  const { nx: NX, ny: NY, nz: NZ, cells: CELLS } = latOf(frame);
   const raster = rasterise(d);
   const purp = raster.purp, own = raster.own, tone = raster.tone;
   const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
@@ -829,7 +841,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   const out: HullMesh = {
     geo,
     windows,
-    cell,
+    cell, lat: latOf(frame),
     rigOf,
     rigs,
     rigOfCell,

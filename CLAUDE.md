@@ -391,50 +391,87 @@ cruiser for Terran, Karisen, Rogue and Benefactor. The civil yards do not build
 a ladder, they build TRADES: freighter, lighter, hauler, container ship,
 tanker, mining ship and liner. Twenty three classes.
 
-**Corvettes and frigates are half the size they were.** `RUNG.frigate` is
-3.5/64: a Terran frigate is 3.17 units where it was 6.34, and a corvette 1.59.
-Destroyers and heavy cruisers are untouched, on the owner's call, so the ladder
-is deliberately no longer 0.5/1/1.5/2: a destroyer is 2.95 times a frigate and
-the big step is now frigate to destroyer. The civil lighter has its own rung at
-the old cell, because it shared the frigate's and is neither.
+**A rung is a LATTICE, and a voxel is one size for the whole game.**
 
-Two things follow from it and neither is cosmetic. **Plate mass and hull go as
-the CUBE of the cell**, so a Terran frigate carries 121 hull points where it
-carried 300 while a beam still does 27.5: these classes are much more fragile
-than they were, and `tests/turn.rs` asks its damage model questions of heavy
-cruisers now because a frigate no longer survives being pounded on one volume.
-And **`FRIGATE_CELL` in `data.rs` is a REFERENCE, not a statement about
-frigates**: `PLATE_UM`, `HULL_MILLI` and `MOUNT_RADIUS` are authored per cell
-of that size and every rung scales by its own `rung_cell` over it. Halving it
-alongside `RUNG.frigate` looks right and silently undoes the whole change.
+```
+corvette  24 x 24 x  48        every one of those cells is 3.5/64 of a unit
+frigate   32 x 32 x  64
+escort    48 x 48 x  96
+cruiser   64 x 64 x 128
+```
 
-**A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
-every hull; what changes is what one cell is worth in the world, and `RUNG`
-authors four of those. A corvette is a SHORT profile at the frigate's cell; a
-destroyer is the escort cell and a heavy cruiser the cruiser cell, and since
-`design.rs` scales plate by the CUBE of the cell, the same cells cost a cruiser
-eight times a frigate's mass and give it eight times the hull. The ladder is
-therefore mostly a consequence of one number rather than of twenty three
-tables.
+A rung used to be a CELL SIZE: every class was 32 x 32 x 64 and what changed
+was what a cell was worth. That made the ladder one multiplication, and it made
+the ladder a lie. A heavy cruiser was a frigate drawn four times as big with
+exactly as many cells in it, so the Karisen cruiser carried the SAME VOXEL
+COUNT as its own frigate at 4.34 times the length. Nothing in the fleet said a
+big ship was a big ship, because nothing counted; a voxel model whose voxels do
+not mean anything is a mesh format with extra steps.
 
-That rule is now OBEYED rather than merely written down. Seventeen profiles
-were seventeen hand tables and each rung had been drawn a little longer as well
-as scaled, so the ladder came out at 1.55 and 2.15 times the frigate instead of
-1.5 and 2. A navy authors ONE envelope (`NAVY_SECTION`) and every warship rung
-is that envelope at its own cell, so the world size ladder is exactly the rung
-ratio by construction. What still separates a rung is where the volume SITS:
-`FULLNESS` is an exponent on the longitudinal distribution, so a heavy cruiser
-carries its waist further fore and aft and a corvette is a needle, and neither
-can change the ladder, because one raised to any power is one.
+So `RUNG` is four lattices, `VOXEL` is a constant, and everything a size ought
+to buy is COUNTED. Terran plate cells up the ladder: 2268, 6001, 20251, 57440.
+A heavy cruiser is heavy because it is four times a frigate's skin at twice the
+plating, and it is slow because that mass is real.
+
+Two things follow and neither is cosmetic.
+
+**Armour courses scale with the rung, and they have to.** A course is a cell
+and a cell is the same size everywhere, so a cruiser plated to a frigate's six
+courses is plated to a frigate's THICKNESS: twice the ship behind the same
+armour. Plate volume is skin area times thickness, so a fleet whose courses did
+not scale would have hull points going as the SQUARE of length while gun counts
+go as length, and a heavy cruiser dies to another heavy cruiser in one turn.
+`stock()` cuts its authored courses to the class's lattice, thickness goes as
+length again, and hull goes as the cube of it: 70, 121, 228, 485 up the Terran
+ladder. The SLIDER stays in cells, because a player asking for four courses
+means four courses on whatever hull is on the bench.
+
+**A volume's HP is a share of its own hull now** (`SUB_HP_REF` in
+`measure_fleet.mjs`, 240). It used to be a hand written ladder beside the class
+table that did not relate to the hulls next to it: a Terran frigate carried 100
+points in each belt against 121 of hull, and a frigate therefore died before it
+could be shot apart a volume at a time, which is why `tests/turn.rs` asked its
+questions of heavy cruisers. The cruisers only worked because their hulls were
+eight times a frigate's while their volumes were three. Solved rather than
+picked: a belt absorbs 80 percent and bleeds 20, so taking one off costs an
+eighth of the hull behind it, and the volume in front of a shot goes before the
+ship does on EVERY class.
+
+**`FRIGATE_CELL` in `data.rs` is still a REFERENCE, not a statement about
+frigates.** `PLATE_UM`, `HULL_MILLI` and `MOUNT_RADIUS` are authored per cell of
+that size; `VOXEL` is what the fleet is actually built out of, and the ratio
+between them is what a cell of plate costs. Setting one to the other looks
+right and undoes the change it is following.
+
+**A cell index is meaningless without its lattice.** `d.plate` and `d.cut` are
+indices, so cell 5000 is one place on a corvette and another on a heavy
+cruiser. A design record carries `lattice`, `migrateDesign` carries an older
+one onto the hull it was drawn for, and every route a stored design takes into
+the app goes through it: the library, a save, a file and a draft. A FRAME file
+is refused instead (`fallen-tribes/frame@2`), because a frame is an authoring
+artefact with one copy and a hand to re-cut it.
+
+**A navy still authors ONE envelope.** `NAVY_SECTION` is written in REFERENCE
+cells and `profileFor` cuts it to whichever lattice the class is on, so the
+world size ladder is exactly the lattice ratio by construction. So is every
+socket, every keel run and every rib: the whole `FRAMES` table is authored in
+frigate cells and evaluated once per rung with the lattice set, and `Z`, `RX`,
+`RY`, `UY`, `PX`, `SX`, `keel` and `slab` are what say so. Four hand written
+copies of a Terran would be four Terrans that drift. What still separates a
+rung is where the volume SITS: `FULLNESS` is an exponent on the longitudinal
+distribution, so a heavy cruiser carries its waist further fore and aft and a
+corvette is a needle, and neither can change the ladder, because one raised to
+any power is one.
 
 Measured, and this is the command that measures it:
 
 ```
-node tools/measure_fleet.mjs                  # the table, with the ladder column
+node tools/measure_fleet.mjs                  # the table, with the lattice and the ladder
 node tools/fleet_shots.mjs --ladder terran    # the same claim as a picture
 ```
 
-corvette 0.50, frigate 1, destroyer 1.45 to 1.52, cruiser 1.93 to 2.07. The
+corvette 0.70 to 0.79, frigate 1, destroyer 1.42 to 1.51, cruiser 1.88 to 2.02,
+which is the lattice ratio and nothing else. The
 picture is the one that answers "are they actually bigger", because the
 shipyard FRAMES each hull to fill the view: a corvette and a heavy cruiser come
 out the same size on screen and the screen cannot answer the question at all.
@@ -556,13 +593,14 @@ seventeen spent the slack without a line of the code around them changing.
   61.25. Clamped at both ends, and `tests/subsystems.rs` drives a real capture
   rather than restating the arithmetic.
 - **A catch radius authored at one cell size.** `MOUNT_RADIUS` is 0.45 because
-  a turret is a handful of cells and a cell is 7/64 of a unit, which is the
-  FRIGATE's cell. A cruiser's cell is twice that and its turret is twice the
-  size, so a fixed 0.45 is a catch radius smaller than the gun it catches and a
-  shot down a cruiser's barrel misses it. `data::mount_radius` scales it by the
-  rung; the ratio is one at the frigate rung, so nothing that existed moved.
-  `MOUNT_HP` deliberately does NOT scale: a turret is the same machine at every
-  rung and costs the same mass, so it is the same 110 points.
+  a turret is a handful of cells and the cell it was authored at is 7/64 of a
+  unit. It was per class for as long as a rung was a cell size, because a
+  cruiser's turret was then twice a frigate's and a fixed 0.45 was a catch
+  radius smaller than the gun it catches. A turret is the same handful of cells
+  on every hull now, so `data::mount_radius` is the same on every hull too,
+  and scaling it per class would be a cruiser catching shots that missed.
+  `MOUNT_HP` never scaled either, for the same reason: a turret is the same
+  machine at every rung and costs the same mass, so it is the same 110 points.
 - **Eight draft slots.** `drafts.ts` kept eight, which was one per class and is
   now half of them: merely BROWSING the picker evicted the saved hull somebody
   was building. Twenty eight.

@@ -753,7 +753,14 @@ fn breaching_the_reactor_ends_the_ship_and_takes_the_neighbours_with_it() {
     );
     let bystander_before = sim.ships[2].hull;
     let hull_before = sim.ships[1].hull;
-    assert!(hull_before > 500.0, "the point of a freighter here is that it does not die of the bleed");
+    // Twice the frigate beside it, which is what makes it the right ship for
+    // this test: the reactor has to go before the bleed does. A flat number
+    // here was a stand in for that and went stale the moment a hull's plating
+    // became counted rather than scaled.
+    assert!(
+        hull_before > 2.0 * sim.ships[2].hull,
+        "the point of a freighter here is that it does not die of the bleed",
+    );
 
     let events = pound(&mut sim, 2, 20);
     assert!(sim.ships[1].subs[2].dead, "a clear lane to the core must eventually breach it");

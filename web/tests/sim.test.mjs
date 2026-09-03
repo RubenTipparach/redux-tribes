@@ -780,15 +780,17 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, moduleById, useCore, NX } = design;
+  const { FRAMES, stockFor, moduleById, useCore, latOf } = design;
   useCore(() => null);
 
-  /** The same cell on the other side of the keel. The plane runs BETWEEN
-   *  columns 15 and 16, so the mirror of column i is NX - 1 - i. */
-  const mirror = (n) => { const i = n % NX; return (NX - 1 - i) + (n - i); };
+  /** The same cell on the other side of the keel. The plane runs BETWEEN the
+   *  two middle columns, so the mirror of column i is nx - 1 - i, and `nx` is
+   *  the class's own: a corvette is 24 wide and a heavy cruiser 64. */
+  const mirror = (nx, n) => { const i = n % nx; return (nx - 1 - i) + (n - i); };
   let lop = 0, all = 0;
 
   for (const f of FRAMES) {
+    const nx = latOf(f).nx;
     const d = stockFor(f.classKey);
     const h = hullMesh(d);
     const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
@@ -798,7 +800,7 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     const lit = new Set();
     for (const w of h.windows) for (const n of w.cellOf) lit.add(n);
     all += lit.size;
-    for (const n of lit) if (!lit.has(mirror(n))) lop++;
+    for (const n of lit) if (!lit.has(mirror(nx, n))) lop++;
     // Twenty is not a taste: below that a hull reads as unlit at map range,
     // which is what every one of them did.
     assert.ok(faces >= 20,
@@ -903,16 +905,19 @@ test('every stock turret stands on its hull face, ring outboard', async () => {
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, Mat,
+  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, latOf, Mat,
     useCore, useArcDirs } = design;
   useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
   useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 
-  const NX = 32, NY = 32, NZ = 64;
-  const at = (i, j, k) => i + j * NX + k * NX * NY;
   const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   let seen = 0;
   for (const f of FRAMES) {
+    // The class's own lattice: a corvette is 24 x 24 x 48 and a heavy cruiser
+    // 64 x 64 x 128, so a walk written against one walks off the end of five
+    // of the others and reads another hull's cells as this one's.
+    const { nx: NX, ny: NY, nz: NZ } = latOf(f);
+    const at = (i, j, k) => i + j * NX + k * NX * NY;
     const d = stockFor(f.classKey);
     const r = rasterise(d);
     const socks = socketsOf(f, d.parts);
@@ -920,7 +925,7 @@ test('every stock turret stands on its hull face, ring outboard', async () => {
       if (moduleById(p.module)?.art !== 'barbette') return;
       const sock = socks.find(k => k.id === p.socket);
       if (!sock) return;
-      const [ox, oy] = outwardAt(f.profile, sock.at);
+      const [ox, oy] = outwardAt(latOf(f), f.profile, sock.at);
       const axis = ox ? 0 : 1, dir = ox || oy;
       let n = 0, ring = 0, sumRing = 0, sumAll = 0, touching = 0;
       for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
@@ -1144,4 +1149,117 @@ test('every part of every stock hull actually gets cells', async () => {
     // for it, so a stock ship that fouls is a stock ship nobody can field.
     assert.equal(r.fouled, 0, `${f.classKey}: ${r.fouled} cells inside a turret box`);
   }
+});
+
+test('a bigger ship is more voxels, not bigger ones', async () => {
+  // The claim the whole lattice exists to make, and the one that was false
+  // for as long as a rung was a cell SIZE: a heavy cruiser was a frigate
+  // drawn four times as big with exactly as many cells in it. The Karisen
+  // cruiser carried the same voxel count as its own frigate at 4.34 times the
+  // length, so nothing in the fleet said a big ship was a big ship.
+  //
+  // Three properties, and each of them fails a different way of cheating.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, RUNG, VOXEL, latOf, stockFor, rasterise, useCore } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+
+  // ONE voxel, for everybody. `VOXEL` being a constant is what makes the two
+  // below mean anything: a per class cell size would let a class pass them
+  // while being a scaled picture of another one.
+  assert.equal(typeof VOXEL, 'number');
+  assert.ok(VOXEL > 0);
+
+  // The four lattices the fleet is built on, and the ladder is theirs.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(RUNG)
+      .map(([k, l]) => [k, [l.nx, l.ny, l.nz]])),
+    {
+      corvette: [24, 24, 48], frigate: [32, 32, 64],
+      escort: [48, 48, 96], cruiser: [64, 64, 128],
+    });
+
+  // And a rung up the ladder is MORE CELLS in the ship, not the same cells
+  // drawn bigger. Terran, because it is the navy with all four rungs and the
+  // one every other ladder is quoted against.
+  const cells = {};
+  const len = {};
+  for (const key of ['terran_corvette', 'terran_frigate',
+    'terran_destroyer', 'terran_cruiser']) {
+    const f = FRAMES.find(x => x.classKey === key);
+    const r = rasterise(stockFor(key));
+    cells[key] = r.plateCells;
+    len[key] = r.extent[2] * VOXEL;
+    // Every hull sits on its class's own lattice, and its extent is inside it.
+    const l = latOf(f);
+    assert.ok(r.extent[0] <= l.nx && r.extent[1] <= l.ny && r.extent[2] <= l.nz,
+      `${key}: ${r.extent.join('x')} does not fit ${l.nx}x${l.ny}x${l.nz}`);
+  }
+  const up = ['terran_corvette', 'terran_frigate', 'terran_destroyer', 'terran_cruiser'];
+  for (let n = 1; n < up.length; n++) {
+    assert.ok(len[up[n]] > len[up[n - 1]],
+      `${up[n]} is not longer than ${up[n - 1]}`);
+    assert.ok(cells[up[n]] > cells[up[n - 1]],
+      `${up[n]} has ${cells[up[n]]} plate cells against ${up[n - 1]}'s `
+      + `${cells[up[n - 1]]}: a bigger ship with no more ship in it`);
+  }
+  // Not merely more: a heavy cruiser is twice a frigate in every dimension, so
+  // its plating is the SQUARE of that at the least. Four times, and the belts
+  // scale with the rung as well, so it comes out above it.
+  assert.ok(cells['terran_cruiser'] >= 4 * cells['terran_frigate'],
+    `a heavy cruiser has ${cells['terran_cruiser']} plate cells against a `
+    + `frigate's ${cells['terran_frigate']}`);
+  console.log(`  plate cells up the Terran ladder: `
+    + up.map(k => `${k.split('_')[1]} ${cells[k]}`).join(', '));
+});
+
+test('a design saved on another lattice is carried onto this one', async () => {
+  // Cell indices are the WIRE FORMAT for hand drawn armour, and an index means
+  // nothing without the lattice it was written on: cell 5000 is one place on a
+  // corvette and another on a heavy cruiser. Every design in the world was
+  // drawn on 32 x 32 x 64, because that is all there was.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { migrateDesign, stockFor, latOf, frameFor, cellIndex, cellAt } = design;
+
+  // A cruiser drawn before the lattices existed: no stamp, and a cell in the
+  // middle of the old 32 x 32 x 64.
+  const old = { ...stockFor('terran_cruiser') };
+  delete old.lattice;
+  const from = { nx: 32, ny: 32, nz: 64 };
+  const at = [16, 18, 40];
+  old.plate = [at[0] + at[1] * 32 + at[2] * 32 * 32];
+
+  const now = migrateDesign(old);
+  const L = latOf(frameFor('terran_cruiser'));
+  assert.deepEqual([...now.lattice], [L.nx, L.ny, L.nz], 'the record is stamped');
+  assert.equal(now.plate.length, 1, 'the cell survived');
+  const [i, j, k] = cellAt(L, now.plate[0]);
+  // The SAME PLACE on the hull: both lattices are centred on it, so a cell two
+  // cells to starboard of the plane stays two cells to starboard once the
+  // lattice is twice as wide in each direction.
+  for (const [n, v, f, t] of [[0, i, from.nx, L.nx], [1, j, from.ny, L.ny],
+    [2, k, from.nz, L.nz]]) {
+    const want = Math.round((at[n] + 0.5 - f / 2) * (t / f) + t / 2 - 0.5);
+    assert.equal(v, want, `axis ${n}: ${v} against ${want}`);
+  }
+
+  // And a record already on this lattice is left exactly as it is: migrating
+  // twice must not walk a hull's armour across it a cell at a time.
+  const again = migrateDesign(now);
+  assert.deepEqual(again.plate, now.plate, 'a second migration moved it again');
+
+  // A frigate never moves at all, because its lattice is the one every stored
+  // record was written on.
+  const frig = { ...stockFor('terran_frigate'), plate: [cellIndex(latOf(frameFor('terran_frigate')), 12, 14, 30)] };
+  delete frig.lattice;
+  assert.deepEqual(migrateDesign(frig).plate, frig.plate);
 });

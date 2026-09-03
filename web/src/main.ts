@@ -16,8 +16,8 @@ import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
 import { Architect } from './app/architect.js';
 import {
-  arcMasks, gunByKey, mountsOf, partAtCell, partsOf, PURPOSE, rasterise,
-  stockFor, useArcDirs, useCore, type Design,
+  arcMasks, gunByKey, migrateDesign, mountsOf, partAtCell, partsOf, PURPOSE,
+  rasterise, stockFor, useArcDirs, useCore, type Design,
 }
   from './app/design.js';
 import { hullTone } from './app/hull.js';
@@ -386,7 +386,9 @@ function start(): void {
   const refused: string[] = [];
   for (const pick of picks) {
     const side = pick.side === 1 ? 1 : 0;
-    const d = pick.design as Design;
+    // Off the wire or out of a save, so it may have been drawn on a lattice
+    // this build no longer uses.
+    const d = migrateDesign(pick.design as Design);
     // A class this build has never heard of. It used to go across as -1, which
     // the core read as an enormous unsigned index and CLAMPED to the last class
     // in its list; the core refuses it now, and saying so here is cheaper than
@@ -3770,7 +3772,7 @@ async function showRoute(r: route.Route): Promise<void> {
       try {
         const d = await api.getDesign(r.designId);
         designer.show();
-        designer.loadDesign(d.design as Design, {
+        designer.loadDesign(migrateDesign(d.design as Design), {
           designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
         });
       } catch {

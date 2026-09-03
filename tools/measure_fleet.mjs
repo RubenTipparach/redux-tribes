@@ -52,7 +52,7 @@ const load = async (rel) => {
 const { Sim } = await load('src/sim/wasm.ts');
 const design = await load('src/app/design.ts');
 const types = await load('src/sim/types.ts');
-const { FRAMES, RUNG, stockFor, rasterise, derive, mountsOf, partsOf, useCore } = design;
+const { FRAMES, RUNG, VOXEL, stockFor, rasterise, derive, mountsOf, partsOf, useCore } = design;
 const { CLASS_KEYS } = types;
 
 const sim = await Sim.load(readFileSync(resolve(web, 'public/sim_core.wasm')));
@@ -63,7 +63,8 @@ const rows = FRAMES.map((f) => {
   const d = stockFor(f.classKey);
   const r = rasterise(d);
   const stats = derive(d);
-  const cell = RUNG[f.rung];
+  const cell = VOXEL;
+  const lat = RUNG[f.rung];
   const [ex, ey, ez] = r.extent;
   const idx = CLASS_KEYS.indexOf(f.classKey);
   const core = idx >= 0 ? match.classInfo(idx) : null;
@@ -74,6 +75,7 @@ const rows = FRAMES.map((f) => {
     tier: f.tier,
     rung: f.rung,
     cell,
+    lattice: [lat.nx, lat.ny, lat.nz],
     latticeExtent: [ex, ey, ez],
     // Length, beam and depth in world units: the size a player actually sees.
     world: [ex * cell, ey * cell, ez * cell].map((v) => +v.toFixed(3)),
@@ -140,7 +142,6 @@ const wanted = (r) => ({
   hull: +r.hull.toFixed(4),
   radius: +(Math.ceil(r.radius * SPHERE_ROOM * 10) / 10).toFixed(4),
   mass: +(Math.ceil((r.mass / BERTH_FILL) * 100) / 100).toFixed(4),
-  rung_cell: r.cell,
   yaw_rate: r.yaw,
   pitch_rate: r.pitch,
   accel_fwd: r.accelFwd,
@@ -162,16 +163,42 @@ const wanted = (r) => ({
  * radius and that slack goes, so the two have to be the same number rather
  * than two numbers that happen to agree.
  */
-const patchSubs = (src, blockKey, radius) => {
+const patchSubs = (src, blockKey, radius, hp) => {
   const at = src.indexOf(`    key: "${blockKey}",`);
   if (at < 0) throw new Error(`no class block for ${blockKey}`);
   const end = src.indexOf('};', at);
   const m = /\n\s*subsystems: &([A-Z0-9_]+),/.exec(src.slice(at, end));
   if (!m) throw new Error(`no subsystems on ${blockKey}`);
-  const re = new RegExp(`(static ${m[1]}: \\[SubDef; \\d+\\] = [a-z_]+\\()[0-9.]+`);
+  // The radius is the first argument and the hp share is the LAST, on both
+  // `hull_subs(radius, block, hp)` and `civil_subs(radius, hp)`: what is
+  // between them is the armour block, which is a doctrine rather than a
+  // measurement and stays hand authored.
+  const re = new RegExp(
+    `(static ${m[1]}: \\[SubDef; \\d+\\] = [a-z_]+\\()[0-9.]+(, [0-9.]+)*(, )[0-9.]+(\\);)`);
   if (!re.test(src)) throw new Error(`no sub table ${m[1]}`);
-  return src.replace(re, `$1${radius}`);
+  return src.replace(re, `$1${radius}$2$3${hp}$4`);
 };
+
+/**
+ * A class's volume HP, as a share of its own hull.
+ *
+ * Volumes used to be a hand written ladder beside the class table, and it did
+ * not relate to the hulls beside it. The Terran frigate carried 100 points in
+ * each belt against a hull of 121, and CLAUDE.md records what that cost: a
+ * frigate could not be shot apart a volume at a time because it died first,
+ * so `tests/turn.rs` had to ask its damage model questions of heavy cruisers.
+ * The cruisers only worked because their hulls were eight times a frigate's
+ * while their volumes were three: an inconsistency, not a design.
+ *
+ * A volume is a box full of a ship's own structure, so what it can take is a
+ * SHARE of what the ship can take, and one number sets the share. 240 is
+ * solved rather than picked: a belt absorbs 80 percent and bleeds 20, so
+ * taking one off costs an eighth of the hull behind it, and the volume in
+ * front of a shot always goes before the ship does. It holds on every class
+ * now, frigates included, which is the defect above finally closed.
+ */
+const SUB_HP_REF = 240;
+const subHp = (r) => +(Math.round((r.hull / SUB_HP_REF) * 100) / 100).toFixed(2);
 
 /** Rewrite one `field: value,` inside one `static C_*: ShipClass = {...};`. */
 const patchRust = (src, blockKey, field, value) => {
@@ -206,8 +233,10 @@ if (process.argv.includes('--sync') || process.argv.includes('--check')) {
       if (before !== rust) drift.push(`${r.key}.${field} -> ${lit}`);
     }
     const beforeSubs = rust;
-    rust = patchSubs(rust, r.key, f32(want.radius));
-    if (beforeSubs !== rust) drift.push(`${r.key} volumes sized to ${want.radius}`);
+    rust = patchSubs(rust, r.key, f32(want.radius), f32(subHp(r)));
+    if (beforeSubs !== rust) {
+      drift.push(`${r.key} volumes sized to ${want.radius} at ${subHp(r)} hp`);
+    }
     // The frame's copy of the two gates, which the editor draws its budget bar
     // from before it has asked the core anything. sim.test.mjs pins them to
     // 1e-4 of each other; if they part, a hull reads legal and is refused.
@@ -282,7 +311,7 @@ if (process.argv.includes('--sync') || process.argv.includes('--check')) {
   for (const r of rows) {
     console.log(`// ${r.name}: ${r.length} u long, ${r.beam} beam, ${r.depth} deep`);
     console.log(`hull: ${r.hull}, radius: ${r.radius}, mass: ${r.mass}, `
-      + `rung_cell: ${r.cell}, marines: ${r.marines}, capacity: ${r.capacity}, `
+      + `marines: ${r.marines}, capacity: ${r.capacity}, `
       + `boarding_range: ${r.boardingRange},`);
   }
 } else {
@@ -294,16 +323,18 @@ if (process.argv.includes('--sync') || process.argv.includes('--check')) {
     ?? rows.find((r) => r.faction === fac) ?? rows[0];
   const pad = (s, n) => String(s).padEnd(n);
   const num = (s, n) => String(s).padStart(n);
-  console.log(pad('class', 22) + num('len', 7) + num('beam', 7) + num('deep', 7)
+  console.log(pad('class', 22) + num('lattice', 12) + num('len', 7)
+    + num('beam', 7) + num('deep', 7)
     + num('xFrig', 7) + num('radius', 9) + num('mass', 9) + num('/max', 7)
     + num('plate', 7) + num('mounts', 7) + '  legal');
-  console.log('-'.repeat(96));
+  console.log('-'.repeat(108));
   for (const r of rows) {
     const ok = r.legal ? 'yes' : 'NO';
     const agree = r.coreRadius !== null
       && Math.abs(r.coreRadius - r.frameRadius) < 1e-4
       && Math.abs(r.coreMass - r.massMax) < 1e-4;
-    console.log(pad(r.key, 22) + num(r.length.toFixed(2), 7) + num(r.beam.toFixed(2), 7)
+    console.log(pad(r.key, 22) + num(r.lattice.join('x'), 12)
+      + num(r.length.toFixed(2), 7) + num(r.beam.toFixed(2), 7)
       + num(r.depth.toFixed(2), 7)
       + num((r.length / frigateOf(r.faction).length).toFixed(2), 7)
       + num(r.radius.toFixed(3), 9) + num(r.mass.toFixed(3), 9)

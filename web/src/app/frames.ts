@@ -23,16 +23,31 @@
  * lattice write off the end of an array.
  */
 import {
-  NX, NY, NZ, CELLS, FRAMES, SECTIONS, SOCKET_KINDS, frameFor, moduleById,
+  latOf, migrateDesign, type Lat, FRAMES, SECTIONS, SOCKET_KINDS, frameFor, moduleById,
   socketsOf, stockFor, stockFrameFor,
   type Design, type FrameDef, type Placement, type Socket, type SocketKind,
 } from './design.js';
 
-/** What a frame file says it is. Bumped only for a shape change a reader here
- *  could not otherwise detect. */
-export const FRAME_FORMAT = 'fallen-tribes/frame@1';
+/**
+ * What a frame file says it is. Bumped only for a shape change a reader here
+ * could not otherwise detect.
+ *
+ * Version 2 is the per class lattices. A frame's sockets are CELLS, and every
+ * file written before them holds cells on 32 x 32 x 64: on a heavy cruiser,
+ * whose lattice is 64 x 64 x 128, those coordinates are all in range and all
+ * in the wrong half of the ship, which is exactly the shape change a reader
+ * cannot otherwise detect. Refusing an old file by name is the honest answer,
+ * because a frame is an AUTHORING artefact with one copy and a hand to re-cut
+ * it; a design is somebody's saved hull and is migrated instead.
+ */
+export const FRAME_FORMAT = 'fallen-tribes/frame@2';
 
-/** What a design file says it is. Same rules, different resource. */
+/**
+ * What a design file says it is. Same rules, different resource, and it does
+ * NOT move with the lattices: a design carries the lattice it was drawn on in
+ * the record itself, so `migrateDesign` can carry an old one across rather
+ * than turning it away.
+ */
 export const DESIGN_FORMAT = 'fallen-tribes/design@1';
 
 /**
@@ -80,11 +95,11 @@ export function toFile(f: FrameDef): FrameFile {
 export type Refusal = string | null;
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-const inBox = (a: readonly number[]): boolean =>
+const inBox = (L: Lat, a: readonly number[]): boolean =>
   isNum(a[0]) && isNum(a[1]) && isNum(a[2])
-  && (a[0] as number) >= 0 && (a[0] as number) < NX
-  && (a[1] as number) >= 0 && (a[1] as number) < NY
-  && (a[2] as number) >= 0 && (a[2] as number) < NZ;
+  && (a[0] as number) >= 0 && (a[0] as number) < L.nx
+  && (a[1] as number) >= 0 && (a[1] as number) < L.ny
+  && (a[2] as number) >= 0 && (a[2] as number) < L.nz;
 
 /**
  * One socket out of untrusted JSON, or a reason it is not one.
@@ -93,7 +108,7 @@ const inBox = (a: readonly number[]): boolean =>
  * hand edited file into a write past the end of the lattice, and the whole
  * point of a file format is that somebody will hand edit it.
  */
-function readSocket(v: unknown, n: number): { sock?: Socket; why?: string } {
+function readSocket(L: Lat, v: unknown, n: number): { sock?: Socket; why?: string } {
   const at = `socket ${n}`;
   if (!v || typeof v !== 'object') return { why: `${at} is not an object` };
   const o = v as Record<string, unknown>;
@@ -103,8 +118,8 @@ function readSocket(v: unknown, n: number): { sock?: Socket; why?: string } {
   if (typeof o['kind'] !== 'string' || !SOCKET_KINDS.includes(o['kind'] as SocketKind))
     return { why: `${id}: "${String(o['kind'])}" is not a socket kind` };
   const raw = o['at'];
-  if (!Array.isArray(raw) || raw.length !== 3 || !inBox(raw as number[]))
-    return { why: `${id}: at must be three cells inside ${NX}x${NY}x${NZ}` };
+  if (!Array.isArray(raw) || raw.length !== 3 || !inBox(L, raw as number[]))
+    return { why: `${id}: at must be three cells inside ${L.nx}x${L.ny}x${L.nz}` };
   const label = typeof o['label'] === 'string' ? o['label'] : id;
   const facing = o['facing'];
   if (facing !== undefined && (!isNum(facing) || facing < 0 || facing > 3))
@@ -151,7 +166,7 @@ export function fromFile(text: string): { frame?: FrameDef; why?: string } {
   const sockets: Socket[] = [];
   const seen = new Set<string>();
   for (let n = 0; n < list.length; n++) {
-    const { sock, why } = readSocket(list[n], n);
+    const { sock, why } = readSocket(latOf(frameFor(key)), list[n], n);
     if (!sock) return { why: why ?? `socket ${n} is not a socket` };
     if (seen.has(sock.id)) return { why: `two sockets called "${sock.id}"` };
     seen.add(sock.id);
@@ -251,11 +266,11 @@ export function designToJson(d: Design, name: string): string {
 
 /** Cell indices that are actually cells, deduplicated and ordered so two
  *  exports of one hull are the same bytes. */
-const readCells = (v: unknown): number[] => {
+const readCells = (L: Lat, v: unknown): number[] => {
   if (!Array.isArray(v)) return [];
   const out = new Set<number>();
   for (const n of v) {
-    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n >= CELLS) continue;
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0 || n >= L.cells) continue;
     out.add(n);
   }
   return [...out].sort((a, b) => a - b);
@@ -317,8 +332,20 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
       }
     }
   }
-  out.plate = readCells(src['plate']);
-  out.cut = readCells(src['cut']);
+  // A file is untrusted input, so the lattice it claims is read the same way
+  // every other field is: three numbers or nothing, and nothing means the one
+  // lattice there used to be. `migrateDesign` then carries the cells onto the
+  // one this class is drawn on.
+  const lat = src['lattice'];
+  if (Array.isArray(lat) && lat.length === 3 && lat.every(n => isNum(n) && n > 0 && n <= 256)) {
+    out.lattice = [lat[0] as number, lat[1] as number, lat[2] as number];
+  }
+  const L = out.lattice
+    ? { nx: out.lattice[0], ny: out.lattice[1], nz: out.lattice[2],
+      cells: out.lattice[0] * out.lattice[1] * out.lattice[2], cx: 0, cy: 0 }
+    : latOf(frameFor(key));
+  out.plate = readCells(L, src['plate']);
+  out.cut = readCells(L, src['cut']);
   if (typeof src['faction'] === 'string') out.faction = src['faction'];
   if (typeof src['paint'] === 'number' && Number.isFinite(src['paint']))
     out.paint = src['paint'] >>> 0;
@@ -331,5 +358,7 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
     if (typeof v === 'number' && Number.isFinite(v)) out[k] = Math.max(0, Math.min(1, v));
   }
   const name = typeof o['name'] === 'string' && o['name'] ? o['name'] : key;
-  return { design: out, name };
+  // Onto the lattice the class is actually drawn on, which for a file written
+  // before the per class lattices means moving every cell it carries.
+  return { design: migrateDesign(out), name };
 }
