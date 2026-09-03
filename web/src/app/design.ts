@@ -49,9 +49,26 @@ export interface Lat {
    * reason, and both of them start here.
    */
   readonly cx: number; readonly cy: number;
+  /**
+   * The thickest a FRAME member may be, in cells.
+   *
+   * A keel run is a BEAM, and a beam is the same beam whatever it is holding
+   * up: it does not scale with the ship, any more than a turret or a drive
+   * bell does. Scaling its section with the lattice was a mistake and it is
+   * the one thing a bigger lattice makes worse rather than better, because a
+   * solid box is the only thing in the model that gains nothing from more
+   * cells. The Terran heavy cruiser's raised dorsal run came out 20 cells
+   * across and 4 deep over 84 stations: a grey slab welded along the top of
+   * the ship, standing proud of an elliptical deck that a flat box cannot
+   * follow. 1496 of its frame cells were outside its own hull, against 0 on
+   * every frigate and corvette in the fleet.
+   *
+   * So a section is capped in real cells, and only the RUN scales.
+   */
+  readonly beam: number;
 }
-const lat = (nx: number, ny: number, nz: number): Lat =>
-  ({ nx, ny, nz, cells: nx * ny * nz, cx: nx / 2, cy: ny / 2 });
+const lat = (nx: number, ny: number, nz: number, beam: number): Lat =>
+  ({ nx, ny, nz, cells: nx * ny * nz, cx: nx / 2, cy: ny / 2, beam });
 
 /**
  * One voxel, in world units, on every hull in the game.
@@ -84,10 +101,10 @@ export const VOXEL = 3.5 / 64;
  * lattice is `REACHES` and `FULLNESS`, and both of those are keyed on the TIER.
  */
 export const RUNG = {
-  corvette: lat(24, 24, 48),
-  frigate: lat(32, 32, 64),
-  escort: lat(48, 48, 96),
-  cruiser: lat(64, 64, 128),
+  corvette: lat(24, 24, 48, 2),
+  frigate: lat(32, 32, 64, 2),
+  escort: lat(48, 48, 96, 2),
+  cruiser: lat(64, 64, 128, 3),
 } as const;
 export type RungKey = keyof typeof RUNG;
 
@@ -899,16 +916,32 @@ const RY = (n: number): number => Math.round(n * A.ny / REF.ny);
 /** A row `n` reference cells above the keel line, or below it if negative. */
 const UY = (n: number): number => A.cy + RY(n);
 
-/** A raw spine slab: low corner `dx`, `dy` reference cells off the keel line
- *  at reference station `z`, and `w` by `h` by `l` reference cells. */
+/**
+ * A raw spine slab: low corner `dx`, `dy` reference cells off the keel line at
+ * reference station `z`, spanning `w` reference cells across the beam and `h`
+ * by `l` cells THICK.
+ *
+ * The span scales with the ship, because a gantry welded across a Rogue's beam
+ * is across the beam whatever the beam is. The thickness does not, for the
+ * reason `Lat.beam` gives.
+ */
 const slab = (dx: number, dy: number, z: number,
   w: number, h: number, l: number) =>
-  [A.cx + RX(dx), A.cy + RY(dy), Z(z), RX(w), RY(h), Z(l)] as const;
+  [A.cx + RX(dx), A.cy + RY(dy), Z(z),
+    RX(w), Math.min(h, A.beam), Math.min(l, A.beam)] as const;
 
-/** A keel run: one box from z0 to z1 along the middle, `dy` cells off the
- *  keel line. All four numbers are reference cells. */
+/**
+ * A keel run: one member from z0 to z1 along the middle, `dy` cells off the
+ * keel line, `w` by `h` in section.
+ *
+ * Where it RUNS is reference cells cut to the lattice; what it is MADE OF is
+ * capped at `Lat.beam` and never scaled. So a class authored with a heavy
+ * dorsal girder still gets the heaviest member its rung allows and a class
+ * authored with a light one still gets a light one, and neither becomes a
+ * block on a bigger hull.
+ */
 const keel = (dy: number, z0: number, z1: number, w = 4, h = 3) => {
-  const y = UY(dy), zw = RX(w), zh = RY(h);
+  const y = UY(dy), zw = Math.min(w, A.beam), zh = Math.min(h, A.beam);
   return [A.cx - zw / 2, y - zh / 2, Z(z0), zw, zh, Z(z1) - Z(z0)] as const;
 };
 /**
@@ -1844,7 +1877,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'karisen_frigate', name: 'Karisen Frigate',
       faction: 'karisen', tier: 'frigate', rung: 'frigate',
-      radius: 1.9, massMax: 0.55, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 1.9, massMax: 0.56, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       // Three parallel runs, and the ventral beam overruns the body at both ends
       // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
       profile: PROF_KARISEN,
@@ -1937,7 +1970,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
       faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-      radius: 1.8, massMax: 0.58, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 1.8, massMax: 0.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       // A deep aft drop keel, which is the one archived fact worth keeping from
       // a prefab that is otherwise a single mesh.
       profile: PROF_BENEFACTOR,
@@ -1981,7 +2014,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'freighter', name: 'Freighter',
       faction: 'civil', tier: 'freighter', rung: 'escort',
-      radius: 2.9, massMax: 1.06, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.9, massMax: 1.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_FREIGHTER,
       spine: [keel(0, 12, 48), keel(0, 16, 44, 14, 1),
         ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
@@ -2042,7 +2075,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'terran_destroyer', name: 'Terran Destroyer',
       faction: 'terran', tier: 'destroyer', rung: 'escort',
-      radius: 2.6, massMax: 1.17, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.6, massMax: 1.18, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_TERRAN_DD,
       // The raised dorsal spine is what makes a Terran read as a Terran from
       // above: a flat deck with a rail down the middle of it.
@@ -2065,7 +2098,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
       faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-      radius: 3.5, massMax: 2.01, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.5, massMax: 2.1, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_TERRAN_CA,
       spine: [keel(0, 3, 59), keel(6, 10, 52, 10, 2), keel(-5, 8, 50, 8, 2),
         ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -2113,7 +2146,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
       faction: 'karisen', tier: 'destroyer', rung: 'escort',
-      radius: 2.8, massMax: 0.84, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.8, massMax: 0.86, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_KARISEN_DD,
       spine: [keel(0, 3, 60), keel(-5, 0, 63, 4, 2), keel(5, 10, 52, 5, 2),
         ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -2131,7 +2164,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
       faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-      radius: 3.8, massMax: 1.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.8, massMax: 1.4, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_KARISEN_CA,
       spine: [keel(0, 2, 61), keel(-6, 0, 63, 5, 2), keel(6, 8, 54, 6, 2),
         ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -2199,7 +2232,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
       faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-      radius: 2.9, massMax: 1.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.9, massMax: 1.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_ROGUE_CA,
       spine: [keel(0, 7, 53), slab(-13, -2, 22, 26, 4, 6),
         slab(-13, -2, 34, 26, 4, 6),
@@ -2243,7 +2276,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
       faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-      radius: 2.5, massMax: 1.01, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.5, massMax: 1.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_BENEFACTOR_DD,
       // A deep aft drop keel and a shallower dorsal one: the section is the
       // whole Benefactor idea and the spine says so from the inside.
@@ -2263,7 +2296,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
       faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-      radius: 3.4, massMax: 1.62, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.4, massMax: 1.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_BENEFACTOR_CA,
       spine: [keel(0, 3, 60), keel(-10, 6, 30, 6, 6), keel(8, 6, 28, 6, 4),
         ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
@@ -2308,7 +2341,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'civil_hauler', name: 'Hauler',
       faction: 'civil', tier: 'hauler', rung: 'escort',
-      radius: 2.5, massMax: 1.23, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.5, massMax: 1.24, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_HAULER,
       spine: [keel(0, 8, 56), keel(7, 16, 44, 12, 1),
         ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
@@ -2322,7 +2355,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'civil_boxship', name: 'Container Ship',
       faction: 'civil', tier: 'boxship', rung: 'cruiser',
-      radius: 3.5, massMax: 2.39, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.5, massMax: 2.43, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_BOXSHIP,
       spine: [keel(0, 4, 60), keel(8, 12, 52, 16, 1), keel(-7, 12, 52, 12, 1),
         ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
@@ -2338,7 +2371,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'civil_tanker', name: 'Tanker',
       faction: 'civil', tier: 'tanker', rung: 'cruiser',
-      radius: 3.3, massMax: 2.13, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.3, massMax: 2.14, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_TANKER,
       spine: [keel(0, 4, 60), keel(-8, 14, 50, 8, 1),
         ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
@@ -2354,7 +2387,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'civil_miner', name: 'Mining Ship',
       faction: 'civil', tier: 'miner', rung: 'escort',
-      radius: 2.2, massMax: 1.3, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 2.2, massMax: 1.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_MINER,
       spine: [keel(0, 10, 52), keel(-6, 14, 48, 10, 1),
         ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
@@ -2374,7 +2407,7 @@ const buildFrames = (): FrameDef[] => {
     {
       classKey: 'civil_liner', name: 'Liner',
       faction: 'civil', tier: 'liner', rung: 'cruiser',
-      radius: 3.6, massMax: 1.93, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      radius: 3.6, massMax: 1.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
       profile: PROF_LINER,
       spine: [keel(0, 2, 62), keel(7, 10, 54, 14, 1),
         ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],

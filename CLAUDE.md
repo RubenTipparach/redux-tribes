@@ -409,11 +409,30 @@ big ship was a big ship, because nothing counted; a voxel model whose voxels do
 not mean anything is a mesh format with extra steps.
 
 So `RUNG` is four lattices, `VOXEL` is a constant, and everything a size ought
-to buy is COUNTED. Terran plate cells up the ladder: 2268, 6001, 20251, 57440.
+to buy is COUNTED. Terran plate cells up the ladder: 2268, 6029, 21509, 65443.
 A heavy cruiser is heavy because it is four times a frigate's skin at twice the
 plating, and it is slow because that mass is real.
 
-Two things follow and neither is cosmetic.
+Three things follow and none of them is cosmetic.
+
+**A FRAME MEMBER DOES NOT SCALE.** `Lat.beam` caps a keel run's section at two
+cells, three on a heavy cruiser, and only its RUN is cut to the lattice. A
+keel is a beam and a beam is the same beam whatever it is holding up, exactly
+as a turret is the same handful of cells and a drive bell the same bell.
+
+Scaling it was a real defect and it is the one thing a bigger lattice makes
+WORSE rather than better, because a solid box is the only thing in the model
+that gains nothing from more cells: everything else grows detail, a box just
+grows. The Terran heavy cruiser's raised dorsal run came out 20 cells across
+and 4 deep over 84 stations, which is a grey slab welded along the top of the
+ship. And a flat box cannot follow an elliptical deck, so its corners and its
+ends stood proud of the plating that was supposed to cover it: 1496 of its
+frame cells were outside its own hull, against 0 on every frigate and corvette
+in the fleet, and the Benefactor cruiser was worse at 3.96 percent of the whole
+ship. Capped, the worst hull in the fleet is 0.03 percent.
+
+The authored `w` and `h` are still worth having, because the cap is a MAXIMUM:
+a class authored with a light one cell girder still gets a light one.
 
 **Armour courses scale with the rung, and they have to.** A course is a cell
 and a cell is the same size everywhere, so a cruiser plated to a frigate's six
@@ -422,7 +441,7 @@ armour. Plate volume is skin area times thickness, so a fleet whose courses did
 not scale would have hull points going as the SQUARE of length while gun counts
 go as length, and a heavy cruiser dies to another heavy cruiser in one turn.
 `stock()` cuts its authored courses to the class's lattice, thickness goes as
-length again, and hull goes as the cube of it: 70, 121, 228, 485 up the Terran
+length again, and hull goes as the cube of it: 69, 121, 258, 519 up the Terran
 ladder. The SLIDER stays in cells, because a player asking for four courses
 means four courses on whatever hull is on the bench.
 

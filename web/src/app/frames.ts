@@ -340,9 +340,14 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
   if (Array.isArray(lat) && lat.length === 3 && lat.every(n => isNum(n) && n > 0 && n <= 256)) {
     out.lattice = [lat[0] as number, lat[1] as number, lat[2] as number];
   }
-  const L = out.lattice
+  const L: Lat = out.lattice
     ? { nx: out.lattice[0], ny: out.lattice[1], nz: out.lattice[2],
-      cells: out.lattice[0] * out.lattice[1] * out.lattice[2], cx: 0, cy: 0 }
+      cells: out.lattice[0] * out.lattice[1] * out.lattice[2],
+      // Only `cells` is read below, to bound an index. The rest is the shape
+      // of a lattice this build may no longer have, so it carries no centre
+      // and no beam: `migrateDesign` is what turns these cells into cells on
+      // a lattice that does exist.
+      cx: 0, cy: 0, beam: 0 }
     : latOf(frameFor(key));
   out.plate = readCells(L, src['plate']);
   out.cut = readCells(L, src['cut']);
