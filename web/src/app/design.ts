@@ -46,7 +46,7 @@ export type RungKey = keyof typeof RUNG;
 /** What a part is for. Eight jobs, eight hues. */
 export type Purpose =
   | 'propulsion' | 'attitude' | 'gun' | 'ordnance'
-  | 'command' | 'crew' | 'boarding' | 'structure';
+  | 'command' | 'crew' | 'boarding' | 'structure' | 'warp';
 
 /**
  * The purpose palette: base, shadow and highlight per job.
@@ -66,6 +66,11 @@ export const PURPOSE: Record<Purpose,
   crew:       { base: 0xFFC93C, dark: 0x6B4C03, mid: 0xFFDF8A, lit: 0xFFF2CC, label: 'crew' },
   boarding:   { base: 0xFF5FA8, dark: 0x6B1439, mid: 0xFF9ECA, lit: 0xFFD6E9, label: 'boarding' },
   structure:  { base: 0x8494A8, dark: 0x333E4C, mid: 0xB0BDCB, lit: 0xDCE4EC, label: 'structure' },
+  // The warp blue. No part carries it: it is what the nacelle grilles and the
+  // deflector in a bow are lit in, and it is a purpose rather than a paint
+  // because it is the same blue on every navy's ship, the way a drive is the
+  // same orange.
+  warp:       { base: 0x3D8BFF, dark: 0x0F2F66, mid: 0x86BDFF, lit: 0xD4E9FF, label: 'warp drive' },
 };
 
 /**
@@ -1106,27 +1111,6 @@ const suite = (prof: readonly Station[],
 
 
 /**
- * What a navy BOLTS ON, which is the half of a silhouette a section cannot
- * carry.
- *
- * A section says how a hull is proportioned and it stops there, so four navies
- * cut from four sections are still four smooth lozenges. What tells a Terran
- * from a Benefactor across a battlefield is the stuff standing off the skin:
- * the stepped crown and the fluting down a Terran flank, the swept wings on a
- * Benefactor, the rail that overruns a Karisen at both ends, the gantry welded
- * across a Rogue's beam, and the rack rails a civil hull stacks its boxes on.
- *
- * Emitted as ONE CELL THICK SLABS PER STATION rather than as long boxes,
- * because a box has one y and a hull does not: a crown authored as a single
- * run from the waist to the bow either buries itself in the deck amidships or
- * floats off it forward. Per station it follows the sheer exactly, and it
- * costs a few hundred cells on a hull that already has thousands.
- *
- * It is ARMOUR, and it costs armour's mass, because that is what it is: a
- * plate welded to the outside of a ship. `data.rs` is measured from the stock
- * hulls rather than authored beside them, so the ladder absorbs it.
- */
-/**
  * The SKIN at a point, which is what decor has to be bolted to.
  *
  * A hull station is an ellipse, so its deck is only `hh` above the keel line
@@ -1142,45 +1126,149 @@ const flankAt = (hw: number, hh: number, dy: number): number =>
   hw * Math.sqrt(Math.max(0, 1 - (dy / Math.max(0.5, hh)) ** 2));
 
 /**
+ * What one cell of decor is made of.
+ *
+ * Nearly all of it is plate in a livery role, which is what a strake or a
+ * pylon is. The exceptions are LIT: the bussard cap on a warp nacelle, the
+ * grille down its inboard face, the deflector in a bow and the tips of a
+ * grapple are not armour anybody painted, they are the machinery showing
+ * through, so they take a purpose colour the way a part's own lights do.
+ * `mat` is `Mat.Glow` or `Mat.Accent`, the two tones a part is lit in.
+ */
+export type DecorLook =
+  | { readonly role: LiveryRole }
+  | { readonly lit: Purpose; readonly mat: number };
+
+/** A box of decor: origin, size, and what it is made of. No look means the
+ *  accent role, which is what the strakes and rails have always been. */
+export type Decor = readonly [number, number, number, number, number, number, DecorLook?];
+
+/**
  * What a navy BOLTS ON, which is the half of a silhouette a section cannot
  * carry.
  *
  * A section says how a hull is proportioned and it stops there, so four navies
  * cut from four sections are still four smooth lozenges. What tells a Terran
- * from a Benefactor across a battlefield is the stuff standing off the skin:
- * the stepped strakes and the fluting down a Terran flank, the swept wings on
- * a Benefactor, the rail that overruns a Karisen at both ends, the gantry
- * welded across a Rogue's beam, and the rack rails a civil hull stacks its
- * boxes on.
+ * from a Benefactor across a battlefield is the stuff standing off the skin,
+ * and the fleet's language for that is the one every starship on television
+ * speaks: WARP NACELLES on pylons, wings, fins, a deflector lit in the bow.
+ * Each navy says it its own way:
  *
- * Emitted as ONE CELL THICK SLABS PER STATION rather than as long boxes,
- * because a box has one y and a hull does not: a crown authored as a single
- * run from the waist to the bow either buries itself in the deck amidships or
- * floats off it forward. Per station it follows the sheer exactly, and every
- * cell is placed against the SKIN at its own point (see `deckAt` above), so
- * everything here is welded to the ship rather than near it.
+ * - Terran: a saucer's stepped strakes on the deck, and twin nacelles carried
+ *   high and aft on swept pylons, above the deck line, the way a line cruiser
+ *   wears them. A deflector dish lit in the nose.
+ * - Karisen: the keel rail overrunning both ends, and wings swept aft and DOWN
+ *   off the lower flanks with the nacelles slung at their tips, which is a
+ *   bird of prey seen from ahead.
+ * - Rogue: a crescent bow, two chines that grow out of the lower flanks as the
+ *   hull narrows and run on past the nose as grapples, lit at the tips, and
+ *   twin drive pods tucked under the belly on stub pylons. The gantry across
+ *   the waist stays, because a boarding party still goes over it.
+ * - Benefactor: forward swept wings at the waist carrying the nacelles well
+ *   forward, a tall tail fin aft and a keel fin under it. The one navy that
+ *   flies point first.
+ * - Civil: rack rails on the deck, and a pair of outrigger nacelles slung low
+ *   on stub pylons, which is what a tramp freighter in that universe has.
+ *
+ * Three rules hold it together, and the suites hold the navies to them:
+ *
+ * Emitted as CELLS rather than as long boxes, because a box has one y and a
+ * hull does not: a crown authored as a single run from the waist to the bow
+ * either buries itself in the deck amidships or floats off it forward. Per
+ * station it follows the sheer exactly, and every cell is placed against the
+ * SKIN at its own point (see `deckAt` above), so everything here is welded to
+ * the ship rather than near it. Anything that stands OFF the skin, a nacelle
+ * or a wing tip, reaches the ship by a `strut`, which is a run of cells that
+ * share faces, so nothing here needs the weld pass to find its way home.
  *
  * It is ARMOUR, and it costs armour's mass, because that is what it is: a
  * plate welded to the outside of a ship. `data.rs` is measured from the stock
- * hulls rather than authored beside them, so the ladder absorbs it.
+ * hulls rather than authored beside them, so the ladder absorbs it. The lit
+ * cells are counted with it: a nacelle weighs what it weighs whether or not a
+ * bit of it glows.
  *
- * Nothing here may stand in front of a gun. A ring rests trained outboard on a
- * flank and abeam on the centreline (`ringFacing`), and decor is laid clear of
- * those lanes: the Terran's strakes leave the deck's centreline open and the
- * Rogue's blisters sit abaft its rings. What holds that to it is the ARC SCAN,
- * in `sim.test.mjs`: every mount on every stock hull, asked whether the ship
- * is in the way in the direction it rests.
+ * Nothing here may stand in front of a gun. A ring on a flank rests along the
+ * keel and one on the deck or the belly rests abeam (`ringFacing`), and decor
+ * is laid clear of those lanes: the Terran's strakes leave the deck's
+ * centreline open, its nacelles ride above the deck rings' line, the Rogue's
+ * chines run under its flank rings and the Benefactor's wings under its. What
+ * holds that to it is the ARC SCAN, in `sim.test.mjs`: every mount on every
+ * stock hull, asked whether the ship is in the way in the direction it rests.
  */
-const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
-  const out: Box[] = [];
+const decorFor = (frame: FrameDef): Decor[] => {
+  const { faction, profile: prof } = frame;
+  const out: Decor[] = [];
   const aft = Math.round((prof[0] as Station)[0]);
   const nose = Math.round((prof[prof.length - 1] as Station)[0]);
   const len = Math.max(1, nose - aft);
+  // The waist: the largest half extents anywhere on the profile, which is
+  // what a nacelle has to stand clear of, because a nacelle is one straight
+  // tube and the hull under it is not.
+  let hwMax = 0, hhMax = 0;
+  for (const [, w, h] of prof) { hwMax = Math.max(hwMax, w); hhMax = Math.max(hhMax, h); }
+  const zOf = (t: number): number => Math.round(aft + t * len);
+  /** The cell that mirrors `x` about the keel line. `CX` is a cell boundary,
+   *  so the mirror of an index is an index and never a half. */
+  const mirror = (x: number): number => 2 * CX - 1 - x;
+
+  /**
+   * The stations a gun ring stands at, which a pylon must not cross.
+   *
+   * A ring on the deck rests abeam, and the arc scan fires its ray from the
+   * trunnion straight out across the station the ring is on: a pylon rising
+   * through that plane at that station is a pylon in front of the gun, and
+   * the scan says so. So a pylon is sited by asking the frame where its
+   * rings are, rather than by picking a fraction that happened to clear
+   * them on the four hulls somebody looked at. The corvette is the one that
+   * made this necessary: two deck rings on a hull half a frigate long leave
+   * three clear stations between them, and the fraction that suits every
+   * other Terran lands a pylon on one of the rings.
+   */
+  const gunZ = new Set<number>();
+  for (const s of frame.sockets) if (s.kind === 'gun') gunZ.add(Math.round(s.at[2] as number));
+  /** Whether a two cell thick strand at `z` stands clear of every ring. */
+  const clearAt = (z: number): boolean => !gunZ.has(z) && !gunZ.has(z + 1);
+  /**
+   * A run of stations clear of the rings, preferring the run authored and
+   * otherwise the longest clear run inside the wider band, cut to the
+   * authored length. Returns [aft end, forward end].
+   */
+  const clearRun = (t0: number, t1: number, p0: number, p1: number): [number, number] => {
+    const pa = zOf(p0), pb = zOf(p1);
+    let ok = true;
+    for (let z = pa; z <= pb; z++) if (!clearAt(z)) ok = false;
+    if (ok) return [pa, pb];
+    let bestA = pa, bestB = pa, runA = -1;
+    for (let z = zOf(t0); z <= zOf(t1) + 1; z++) {
+      if (z <= zOf(t1) && clearAt(z)) { if (runA < 0) runA = z; continue; }
+      if (runA >= 0 && z - 1 - runA > bestB - bestA) { bestA = runA; bestB = z - 1; }
+      runA = -1;
+    }
+    const want = pb - pa;
+    if (bestB - bestA > want) {
+      const mid = Math.round((bestA + bestB) / 2);
+      bestA = mid - Math.floor(want / 2);
+      bestB = bestA + want;
+    }
+    return [bestA, bestB];
+  };
+
+  const HULL: DecorLook = { role: 'hull' };
+  const DECOR: DecorLook = { role: 'decor' };
+  const TRIM: DecorLook = { role: 'trim' };
+  const BELT: DecorLook = { role: 'belt' };
+  /** The bussard collector: the drive's own orange, in its lit tone. */
+  const BUSSARD: DecorLook = { lit: 'propulsion', mat: Mat.Accent };
+  /** The warp grille and the deflector: the warp blue, brightest. */
+  const WARP: DecorLook = { lit: 'warp', mat: Mat.Glow };
+  /** A grapple's tip, lit the boarding pink. */
+  const GRAPPLE: DecorLook = { lit: 'boarding', mat: Mat.Accent };
+
   /** One cell of decor, at a lattice position. */
-  const put = (x: number, y: number, z: number): void => {
+  const put = (x: number, y: number, z: number, look: DecorLook = DECOR): void => {
     const i = Math.round(x), j = Math.round(y), k = Math.round(z);
     if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return;
-    out.push([i, j, k, 1, 1, 1] as Box);
+    out.push([i, j, k, 1, 1, 1, look]);
   };
   // The CELL the skin occupies, not the height the surface is at. A cell is a
   // whole cell and the ellipse is continuous: a rail placed at "the deck plus
@@ -1197,18 +1285,86 @@ const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
 
   /** A strip ON THE DECK, from one offset to another, `up` cells above it. */
   const onDeck = (hw: number, hh: number, x0: number, x1: number,
-    up: number, z: number, sign = 1): void => {
+    up: number, z: number, sign = 1, look: DecorLook = DECOR): void => {
     const a = Math.round(Math.min(x0, x1)), b = Math.round(Math.max(x0, x1));
     for (let x = a; x <= b; x++) {
-      put(x, deckCell(hw, hh, x + 0.5 - CX, sign) + sign * up, z);
+      put(x, deckCell(hw, hh, x + 0.5 - CX, sign) + sign * up, z, look);
     }
   };
   /** A rib ON A FLANK, from one height to another, `proud` cells off it. */
   const onFlank = (hw: number, hh: number, y0: number, y1: number,
-    proud: number, z: number, side: number): void => {
+    proud: number, z: number, side: number, look: DecorLook = DECOR): void => {
     const a = Math.round(Math.min(y0, y1)), b = Math.round(Math.max(y0, y1));
     for (let y = a; y <= b; y++) {
-      put(flankCell(hw, hh, y + 0.5 - CY, side) + side * proud, y, z);
+      put(flankCell(hw, hh, y + 0.5 - CY, side) + side * proud, y, z, look);
+    }
+  };
+
+  /**
+   * A straight run of cells from one lattice point to another, stepping ONE
+   * axis at a time so every cell shares a face with the one before it. A
+   * pylon is this, and so is the spar of a wing: it is why nothing hung off
+   * one needs the weld pass, and why a nacelle does not come off the day the
+   * weld pass is tuned. `thick` repeats it along z, because a pylon one cell
+   * thick is a wire.
+   */
+  const strut = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number,
+    look: DecorLook = TRIM, thick = 1): void => {
+    let x = Math.round(x0), y = Math.round(y0), z = Math.round(z0);
+    const tx = Math.round(x1), ty = Math.round(y1), tz = Math.round(z1);
+    const dx = Math.abs(tx - x), dy = Math.abs(ty - y), dz = Math.abs(tz - z);
+    const sx = Math.sign(tx - x), sy = Math.sign(ty - y), sz = Math.sign(tz - z);
+    const n = dx + dy + dz;
+    const lay = () => { for (let t = 0; t < thick; t++) put(x, y, z + t, look); };
+    lay();
+    let ex = 0, ey = 0, ez = 0;
+    for (let s = 0; s < n; s++) {
+      ex += dx; ey += dy; ez += dz;
+      // The axis furthest behind, among those still short of where they are
+      // going, so the run lands exactly where it was sent.
+      const cx = x !== tx ? ex : -Infinity;
+      const cy = y !== ty ? ey : -Infinity;
+      const cz = z !== tz ? ez : -Infinity;
+      if (cx >= cy && cx >= cz) { ex -= n; x += sx; }
+      else if (cy >= cz) { ey -= n; y += sy; }
+      else { ez -= n; z += sz; }
+      lay();
+    }
+  };
+
+  /**
+   * A warp nacelle: a tube of hull plate from z0 to z1 about (cx, cy), `r`
+   * cells to each side with the corners knocked off when there is room, a
+   * bussard collector lit at its forward end, and a grille lit down the face
+   * that looks at the ship. `side` says which flank it hangs off, so the
+   * grille faces inboard where a player looking at the ship can see it.
+   */
+  const nacelle = (cx: number, cy: number, z0: number, z1: number, r: number,
+    side: number): void => {
+    const a = Math.round(z0), b = Math.round(z1);
+    const capFrom = b - Math.max(1, Math.round((b - a) * 0.12));
+    const gA = a + Math.round((b - a) * 0.22), gB = capFrom - Math.round((b - a) * 0.16);
+    for (let z = a; z <= b; z++) {
+      const cap = z >= capFrom;
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+        if (r >= 2 && Math.abs(dx) === r && Math.abs(dy) === r) continue;
+        const grille = !cap && dx === -side * r && Math.abs(dy) < Math.max(1, r)
+          && z >= gA && z <= gB;
+        put(cx + dx, cy + dy, z, cap ? BUSSARD : grille ? WARP : HULL);
+      }
+    }
+    // The exhaust: the aft face, one course of accent, so the tube has a
+    // back end rather than simply stopping.
+    for (let dy = -r + 1; dy <= r - 1; dy++) for (let dx = -r + 1; dx <= r - 1; dx++) {
+      put(cx + dx, cy + dy, a - 1, DECOR);
+    }
+  };
+
+  /** A deflector: a lit disc standing one course proud of the bow cap, on
+   *  the centreline and a little below the waterline. */
+  const deflector = (w: number, h: number): void => {
+    for (let dy = -h; dy < h; dy++) for (let dx = -w; dx < w; dx++) {
+      put(CX + dx, CY - 1 + dy, nose + 1, WARP);
     }
   };
 
@@ -1243,41 +1399,20 @@ const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
         }
       }
     } else if (faction === 'benefactor') {
-      // Wings: a plate sweeping out of each flank, widest just abaft the waist
-      // and gone by the bow, DROPPING as it goes out so it reads as swept
-      // rather than as a disc round the middle of the ship. Low on the body,
-      // because at the gun rings' own height a wing stands in front of two
-      // thirds of the broadside.
-      //
-      // The span is a fraction of the beam rather than a count of cells: at a
-      // fixed count a corvette wore a cruiser's wings, and the Benefactor is
-      // the narrowest section in the game.
-      if (t > 0.14 && t < 0.80) {
-        const s = (t - 0.14) / 0.66;
-        const span = hw * 0.70 * (1 - (2 * s - 1) * (2 * s - 1)) + 1;
-        const y0 = Math.round(CY - hh * 0.55);
-        for (const side of [-1, 1]) {
-          for (let n = 0; n <= Math.round(span); n++) {
-            // Each cell of the wing is placed against the skin at ITS OWN
-            // height, and the wing drops as it goes out, so the root cell of
-            // each course is welded on rather than the whole plate being hung
-            // off one station's beam.
-            const y = Math.round(y0 - n * 0.42);
-            const root = flankCell(hw, hh, y + 0.5 - CY, side);
-            // A staircase, filled. Stepping out one cell and down one cell
-            // leaves two cells meeting at an EDGE, and an edge is not a weld:
-            // the sweep came apart into a hundred loose blocks per hull.
-            const prev = Math.round(y0 - Math.max(0, n - 1) * 0.42);
-            for (let yy = y; yy <= prev; yy++) put(root + side * n, yy, z);
-            if (n < span * 0.5) put(root + side * n, prev + 1, z);
-          }
+      // The tail fin: tall at the transom and swept down to nothing forward,
+      // two cells wide so it sits astride the keel line rather than to one
+      // side of it, and a keel fin under it, smaller, because the section is
+      // already deep below the waterline.
+      if (t > 0.03 && t < 0.32) {
+        const s = 1 - (t - 0.03) / 0.29;
+        const up = Math.max(1, Math.round(6 * s));
+        const down = Math.max(1, Math.round(3 * s));
+        for (const x of [CX - 1, CX]) {
+          const top = deckCell(hw, hh, x + 0.5 - CX, 1);
+          for (let dy = 1; dy <= up; dy++) put(x, top + dy, z, t < 0.10 ? DECOR : BELT);
+          const bottom = deckCell(hw, hh, x + 0.5 - CX, -1);
+          for (let dy = 1; dy <= down; dy++) put(x, bottom - dy, z, BELT);
         }
-      }
-      // And a dorsal fin aft, which is what stops the section reading as a
-      // wing with a body drawn on it.
-      if (t > 0.10 && t < 0.44) {
-        const h = Math.max(1, Math.round(3 * (1 - Math.abs(t - 0.27) / 0.17)));
-        for (let dy = 1; dy <= h; dy++) put(CX, deckCell(hw, hh, 0.5, 1) + dy, z);
       }
     } else if (faction === 'karisen') {
       // The rail under the keel, overrunning the body at both ends. It is the
@@ -1335,6 +1470,161 @@ const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
       }
     }
   }
+
+  // --- what stands OFF the hull -------------------------------------------
+  //
+  // Laid after the per station pass so a pylon that lands on a strake lands
+  // on it rather than under it. Positions are in fractions of the waist, so
+  // a corvette wears a corvette's nacelles and a cruiser a cruiser's, and a
+  // navy authors the geometry once for its whole ladder.
+  if (faction === 'terran') {
+    // Twin nacelles high and aft, above the deck line, on pylons that sweep
+    // up and back from the deck's shoulder. Above the deck so the aft deck
+    // rings, which rest abeam, look out under them.
+    //
+    // The height is not a taste: a deck ring's trunnion stands about three
+    // courses over the deck and the scan's ray leaves it horizontally, so a
+    // nacelle six courses over the waist's deck is the lowest that every
+    // Terran's aft rings look out under.
+    const r = 1;
+    const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + r + 1));
+    const cy = Math.min(NY - 1 - r, Math.round(CY + hhMax + 5));
+    const z0 = aft + 1, z1 = zOf(0.52);
+    // The pylon is a BLADE: strands one station apart, each a run from the
+    // deck's shoulder up and out to the nacelle, swept so the top edge sits
+    // aft of the root, which is what a pylon looks like from the side rather
+    // than a post. Sited clear of the rings and cut to whatever room they
+    // leave, which on a corvette is three stations and a shorter sweep.
+    const sweep0 = Math.max(1, Math.round(len * 0.06));
+    const width0 = Math.max(2, Math.round(len * 0.09));
+    const [lo, hi] = clearRun(0.14, 0.50, 0.28, 0.28 + (width0 + sweep0 - 1) / len);
+    const total = Math.max(1, hi - lo + 1);
+    const sweep = Math.min(sweep0, Math.max(0, total - 2));
+    const width = total - sweep;
+    for (const side of [-1, 1]) {
+      const cx = side > 0 ? cxS : mirror(cxS);
+      nacelle(cx, cy, z0, z1, r, side);
+      for (let j = 0; j < width; j++) {
+        const zr = lo + sweep + j;
+        const [rw, rh] = hullAt(prof, zr);
+        const dx = (rw as number) * 0.50;
+        const rx = side > 0 ? Math.round(CX + dx) : mirror(Math.round(CX + dx));
+        const ry = deckCell(rw as number, rh as number, dx, 1);
+        strut(rx, ry, zr, cx - side * r, cy - r, zr - sweep, HULL);
+      }
+    }
+    deflector(2, 2);
+  } else if (faction === 'karisen') {
+    // Wings swept aft and DOWN off the lower flanks, widest at the transom,
+    // with the nacelles slung at their tips. The bird of prey.
+    const r = 1;
+    const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + 5));
+    const cy = Math.max(r, Math.round(CY - hhMax * 0.35 - 5));
+    const z0 = aft + 1, z1 = zOf(0.34);
+    const tA = 0.05, tB = 0.27;
+    for (const side of [-1, 1]) {
+      const cx = side > 0 ? cxS : mirror(cxS);
+      nacelle(cx, cy, z0, z1, r, side);
+      for (let z = zOf(tA); z <= zOf(tB); z++) {
+        const t = (z - aft) / len;
+        const s = 1 - (t - tA) / (tB - tA);
+        const [w, h] = hullAt(prof, z);
+        const ry = Math.round(CY - (h as number) * 0.35);
+        const rx = flankCell(w as number, h as number, ry + 0.5 - CY, side);
+        const tipX = cx - side * r, tipY = cy;
+        const ex = Math.round(rx + (tipX - rx) * s), ey = Math.round(ry + (tipY - ry) * s);
+        strut(rx, ry, z, ex, ey, z, HULL);
+        strut(rx, ry - 1, z, ex, ey - 1, z, HULL);
+      }
+    }
+    deflector(1, 1);
+  } else if (faction === 'rogue') {
+    // The crescent: a chine on each lower flank that the hull narrows away
+    // from, so it stands further out the further forward it goes, and runs
+    // on past the nose as a grapple curling in toward the centreline.
+    const zC = zOf(0.70);
+    const [cw, ch] = hullAt(prof, zC);
+    const cyA = CY - 4, cyB = CY - 3;
+    const reach = Math.min(NZ - 1, nose + Math.max(3, Math.round(len * 0.12)));
+    for (const side of [-1, 1]) {
+      const rootX = flankCell(cw as number, ch as number, cyA + 0.5 - CY, side);
+      for (let z = zC; z <= reach; z++) {
+        const past = Math.max(0, z - nose);
+        const x = rootX - side * Math.floor(past / 2);
+        const tip = z > reach - 2;
+        for (const y of [cyA, cyB]) {
+          put(x, y, z, tip ? GRAPPLE : HULL);
+          put(x - side, y, z, tip ? GRAPPLE : HULL);
+          // The web between the chine and the skin, which is what makes it a
+          // chine growing out of the hull rather than a prong stuck to it.
+          if (z <= nose) {
+            const [w, h] = hullAt(prof, z);
+            const skin = flankCell(w as number, h as number, y + 0.5 - CY, side);
+            for (let xx = skin; side > 0 ? xx < x - side : xx > x - side; xx += side) {
+              put(xx, y, z, HULL);
+            }
+          }
+        }
+      }
+    }
+    // Drive pods tucked under the belly, on stub pylons.
+    const r = 1;
+    const cxS = Math.round(CX + hwMax * 0.62);
+    const cy = Math.max(r, Math.round(CY - hhMax - r - 2));
+    const z0 = aft + 1, z1 = zOf(0.44);
+    for (const side of [-1, 1]) {
+      const cx = side > 0 ? cxS : mirror(cxS);
+      nacelle(cx, cy, z0, z1, r, side);
+      for (const tz of [0.12, 0.32]) {
+        const z = zOf(tz);
+        const [w, h] = hullAt(prof, z);
+        const belly = deckCell(w as number, h as number, cx + 0.5 - CX, -1);
+        strut(cx, belly, z, cx, cy + r, z, HULL, 2);
+      }
+    }
+  } else if (faction === 'benefactor') {
+    // Forward swept wings at the waist, carrying the nacelles well forward
+    // of the beam, dropping a little as they go out. Under the flank rings'
+    // line, so the rings, which rest along the keel, look over them.
+    const r = 1;
+    const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + 7));
+    const cy = Math.max(r, Math.round(CY - hhMax * 0.15 - 2));
+    const z0 = zOf(0.34), z1 = zOf(0.80);
+    const tA = 0.28, tB = 0.62;
+    for (const side of [-1, 1]) {
+      const cx = side > 0 ? cxS : mirror(cxS);
+      nacelle(cx, cy, z0, z1, r, side);
+      for (let z = zOf(tA); z <= zOf(tB); z++) {
+        const t = (z - aft) / len;
+        const s = (t - tA) / (tB - tA);
+        const [w, h] = hullAt(prof, z);
+        const ry = Math.round(CY - (h as number) * 0.15);
+        const rx = flankCell(w as number, h as number, ry + 0.5 - CY, side);
+        const tipX = cx - side * r, tipY = cy;
+        const ex = Math.round(rx + (tipX - rx) * s), ey = Math.round(ry + (tipY - ry) * s);
+        strut(rx, ry, z, ex, ey, z, HULL);
+        strut(rx, ry - 1, z, ex, ey - 1, z, HULL);
+      }
+    }
+    deflector(1, 2);
+  } else {
+    // Outrigger nacelles slung low, on stub pylons, clear of the racks on
+    // the deck and of the ventral thrusters on the centreline.
+    const r = 1;
+    const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + r + 1));
+    const cy = Math.max(r, Math.round(CY - hhMax * 0.55));
+    const z0 = aft + 1, z1 = zOf(0.46);
+    for (const side of [-1, 1]) {
+      const cx = side > 0 ? cxS : mirror(cxS);
+      nacelle(cx, cy, z0, z1, r, side);
+      for (const tz of [0.10, 0.30]) {
+        const z = zOf(tz);
+        const [w, h] = hullAt(prof, z);
+        const skin = flankCell(w as number, h as number, cy + 0.5 - CY, side);
+        strut(skin, cy, z, cx - side * r, cy, z, HULL, 2);
+      }
+    }
+  }
   return out;
 };
 
@@ -1347,11 +1637,11 @@ const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
  * class key because `rasterise` runs on every slider pixel and this is a walk
  * over every station of the hull.
  */
-const decorCache = new Map<string, readonly Box[]>();
-export const decorOf = (frame: FrameDef): readonly Box[] => {
+const decorCache = new Map<string, readonly Decor[]>();
+export const decorOf = (frame: FrameDef): readonly Decor[] => {
   const had = decorCache.get(frame.classKey);
   if (had) return had;
-  const made = decorFor(frame.faction, frame.profile);
+  const made = decorFor(frame);
   decorCache.set(frame.classKey, made);
   return made;
 };
@@ -2759,7 +3049,10 @@ export function bareGrid(grid: Uint8Array, own?: Int16Array): Uint8Array {
     // the same material a plate is, and taking the plate off should not take
     // the cargo off with it.
     if (own && (own[n] as number) > 0) continue;
-    if (m === Mat.Plate) out[n] = Mat.Empty;
+    // A lit cell nobody owns is decor: the cap on a nacelle, the deflector in
+    // a bow. It is bolted to the plate and comes off with it, or the armour
+    // off view would show a pair of glowing rings hanging beside the frame.
+    if (m === Mat.Plate || m === Mat.Glow || m === Mat.Accent) out[n] = Mat.Empty;
     else if (m === Mat.Skinned) out[n] = Mat.Frame;
   }
   return out;
@@ -3114,11 +3407,19 @@ export function rasterise(d: Design): Raster {
   // off a wing still gets a spar back to the ship. It takes the `decor` role,
   // which is what puts the palette's accent swatch on every hull: seven roles
   // are places on a hull and this one is a thing added to it.
-  for (const [x, y, z, w, h, l] of decorOf(frame)) {
+  //
+  // A LIT cell (a bussard cap, a warp grille, a deflector) is machinery
+  // showing through rather than plate, so it takes a purpose colour the way
+  // a part does. It belongs to no placement, which is what tells it from a
+  // part: `own` stays zero, so a click on it names the hull.
+  for (const box of decorOf(frame)) {
+    const [x, y, z, w, h, l] = box;
+    const look = box[6] ?? { role: 'decor' as LiveryRole };
     for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const px = Math.round(x) + i, py = Math.round(y) + j, pz = Math.round(z) + k;
       if (!inBounds(px, py, pz) || reserved[idx3(px, py, pz)]) continue;
-      skin(px, py, pz, 'decor');
+      if ('role' in look) skin(px, py, pz, look.role);
+      else set(px, py, pz, look.mat, purposeCode(look.lit));
     }
   }
 
@@ -3342,7 +3643,11 @@ export function rasterise(d: Design): Raster {
     // of armour. The shell's own cells are counted where the shell is; charging
     // the coat as well would bill one volume twice, and it billed the Rogue
     // hardest, which is the class with the least plate to hide it in.
-    if (mat === Mat.Plate && !own[n]) plateCells++;
+    //
+    // A lit cell of decor belongs to nobody and is bolted to the outside of
+    // the ship the same as the plate round it, so it weighs what plate weighs:
+    // a nacelle is not lighter for having a grille down its side.
+    if (!own[n] && (mat === Mat.Plate || mat === Mat.Glow || mat === Mat.Accent)) plateCells++;
     if (i < loX) loX = i; if (i > hiX) hiX = i;
     if (j < loY) loY = j; if (j > hiY) hiY = j;
     if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
@@ -4164,7 +4469,7 @@ export const Mat = {
 /** Purpose in one byte, so a whole grid can carry it beside the material. */
 export const PURPOSE_ORDER: readonly Purpose[] = [
   'propulsion', 'attitude', 'gun', 'ordnance',
-  'command', 'crew', 'boarding', 'structure',
+  'command', 'crew', 'boarding', 'structure', 'warp',
 ];
 export const purposeCode = (p: Purpose): number => PURPOSE_ORDER.indexOf(p) + 1;
 export const purposeAt = (code: number): Purpose =>
