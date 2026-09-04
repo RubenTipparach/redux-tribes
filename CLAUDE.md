@@ -392,23 +392,63 @@ almost no guns, Benefactor adds belt and calibre and gets slower at every step.
 
 **A section alone is not a silhouette, so each navy BOLTS something on.** Four
 navies cut from four sections are still four smooth lozenges. `decorFor` is
-what makes a Terran a Terran across a battlefield: stepped strakes and vertical
-fluting on the deck and flanks, wings swept off a Benefactor's keel line, a
-rail overrunning a Karisen at both ends, a gantry welded across a Rogue's beam,
-rack rails a civil hull stacks its boxes on. Three rules hold it together:
+what makes a Terran a Terran across a battlefield, and the language it speaks
+is the one every starship on television speaks: WARP NACELLES on pylons, wings,
+fins, a deflector lit in the bow. Each navy says it its own way, and each keeps
+the habit it had before:
 
-- **It is a function of the navy and the profile**, not a field on a frame, so
+- **Terran** flies like a line cruiser: twin nacelles carried high and aft on
+  swept blade pylons, ABOVE the deck line, a deflector in the nose, and the
+  saucer's stepped strakes and fluting under them.
+- **Karisen** is a bird of prey: wings swept aft and DOWN off the lower
+  flanks, widest at the transom, with the nacelles slung at their tips, and the
+  keel rail still overrunning both ends.
+- **Rogue** has a crescent bow: a chine on each lower flank that the hull
+  narrows away from, running on past the nose as a grapple lit at the tip, and
+  twin drive pods tucked under the belly. The gantry across the waist stays.
+- **Benefactor** flies point first: forward swept wings at the waist carrying
+  the nacelles well ahead of the beam, a tall tail fin aft and a keel fin under
+  it.
+- **Civil** hulls keep their rack rails and get a pair of outrigger nacelles
+  slung low on stub pylons, which is what a tramp freighter there looks like.
+
+Five rules hold it together:
+
+- **It is a function of the navy and the FRAME**, not a field on a frame, so
   a class added tomorrow gets its navy's habits for free and twenty three
-  tables cannot drift about what a Terran looks like.
+  tables cannot drift about what a Terran looks like. It reads the frame's
+  sockets for one thing only, which is where the gun rings are (below).
 - **Every cell is placed against the SKIN at its own point.** A hull station is
   an ellipse, so a rail laid at a constant height above the keel line floats at
   its outer end and a rib laid at a constant beam floats at its top and bottom.
   `deckAt` and `flankAt` are the surface; `deckCell` and `flankCell` are the
   CELL, and it is the cell that matters, because a cell with a gap under it is
   a cell touching nothing.
-- **Nothing may stand in front of a gun.** The Terran's strakes leave the
-  deck's centreline open and the Rogue's blisters sit abaft its rings, and what
-  says so is the arc scan rather than a comment.
+- **Anything that stands OFF the skin reaches it by a `strut`**: a run of cells
+  that steps one axis at a time, so every cell shares a FACE with the one
+  before it. A nacelle or a wing tip is welded to the ship by construction
+  rather than by the weld pass finding it, and does not come off the day the
+  weld pass is tuned. A pylon is a blade of struts one station apart.
+- **Nothing may stand in front of a gun.** A ring on a flank rests along the
+  keel and one on the deck or the belly rests abeam (`ringFacing`), and the
+  arc scan fires its ray from the trunnion horizontally across the ring's own
+  station. So the Terran nacelles ride six courses over the waist's deck, which
+  is the lowest that every aft deck ring looks out under, and a pylon is SITED
+  by asking the frame where its rings are (`clearRun`) rather than at a
+  fraction that happened to clear them on the hulls somebody looked at. The
+  corvette is why: two deck rings on a hull half a frigate long leave three
+  clear stations between them, and the fraction that suits every other Terran
+  put a pylon on a ring. What holds it is the arc scan in `sim.test.mjs`, not
+  a comment.
+- **A LIT cell of decor is machinery, not paint.** A bussard cap, a warp
+  grille, a deflector and a grapple's tip take a purpose colour the way a
+  part's own lights do (`DecorLook`), in `Mat.Glow` or `Mat.Accent`, and there
+  is a `warp` purpose for the blue because it is the same blue on every navy's
+  ship the way a drive is the same orange. They belong to no placement, so
+  `own` stays zero and a click on one names the hull; they are COUNTED as
+  plate, because a nacelle weighs what it weighs whether or not a bit of it
+  glows; and `bareGrid` takes them off with the armour, or the armour off view
+  would show a pair of glowing rings hanging beside the frame.
 
 **The stock spawn and the stock design are the same ship.** A class's `hull`,
 `radius`, `mass`, flight envelope, marines, capacity and boarding range in
