@@ -319,6 +319,15 @@ input[type=range] { width:100%; accent-color:var(--cyan); }
   flex:0 0 auto; margin-right:8px; }
 .wrow span:last-child { text-align:right; }
 .hint { font-size:11px; color:var(--muted); line-height:1.5; }
+/* A binding list, not a paragraph. Two columns so the key and what it does
+   line up down the rail and a reader can scan one of them. */
+.keys { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 10px;
+  margin:0; font-size:11px; align-items:baseline; }
+.keys dt { color:var(--ink); white-space:nowrap; }
+.keys dd { margin:0; color:var(--muted); }
+.hint .sub { margin:10px 0 4px; color:var(--muted); }
+.steps { margin:0; padding-left:16px; font-size:11px; color:var(--muted); }
+.steps li { margin:2px 0; }
 .modes { display:flex; flex-wrap:wrap; gap:4px; }
 .tune { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted);
   margin-bottom:3px; }
@@ -1647,7 +1656,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <div class="modes">
       <button id="bRestart">Restart</button>
     </div>
-    <div class="sect">Help</div>
+    <div class="sect" id="helpHead">Help</div>
     <div class="hint" id="help"></div>
   </div>
 

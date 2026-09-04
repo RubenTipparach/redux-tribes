@@ -1188,12 +1188,26 @@ async function checkModesAndRotation(page) {
   const COPY_MAX = 50;
   const prose = await page.evaluate(max => {
     const out = [];
+    // Rows and cells count as containers too, or a ten row binding list is
+    // measured as one 260 character string and the rule punishes the very
+    // structure it is asking for.
+    const BLOCK = 'div,p,dl,ol,ul,table,section,figure,'
+      + 'dt,dd,li,tr,td,th,thead,tbody';
+    // A RUN OF PROSE is what the rule limits, so measure the paragraphs and
+    // not the container. A binding list of ten short rows is a reference
+    // somebody scans; measuring its container's whole textContent would call
+    // that a wall of text and push the fix in exactly the wrong direction.
+    const measure = (el) => {
+      const blocks = [...el.children].filter(c => c.matches(BLOCK));
+      if (blocks.length) { for (const c of blocks) measure(c); return; }
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > max) out.push({ t: t.slice(0, 70), n: t.length });
+    };
     for (const el of document.querySelectorAll('.dznote, .hint, .dzmore')) {
       if (el.closest('.hidden') || !el.offsetParent) continue;
       // An opened footnote is allowed to be long: it was asked for.
       if (el.classList.contains('dzmore')) continue;
-      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t.length > max) out.push({ t: t.slice(0, 70), n: t.length });
+      measure(el);
     }
     return out;
   }, COPY_MAX);

@@ -1836,29 +1836,61 @@ function renderHeader(): void {
   if (playTick === null && canPlan()) sc.value = String(previewTick);
 }
 
+/**
+ * The controls, as a REFERENCE rather than an essay.
+ *
+ * This was 1246 characters of prose sitting permanently in the rail, under a
+ * heading reading Help, above the controls it described. Nobody reads a wall
+ * of text to find out which button orbits; they scan for the word "orbit".
+ *
+ * So it is a list of bindings, which is what it always was, and the two
+ * paragraphs that genuinely explain something (what the outline IS, and what
+ * a phone does instead of a mouse) fold away behind the `?`.
+ */
 function renderHelp(): void {
+  const keys: Array<[string, string]> = [
+    ['Left drag', 'Inside the outline, a destination. Outside, pan.'],
+    ['Middle drag', 'Pan. Never touches a plan.'],
+    ['Right drag', 'Orbit'],
+    ['Scroll, pinch', 'Zoom'],
+    ['Shift drag', 'Swing the heading'],
+    ['<kbd>Q</kbd> <kbd>E</kbd>', 'Working altitude'],
+    ['<kbd>A</kbd> <kbd>D</kbd>', 'Swing the heading'],
+    ['<kbd>F</kbd>', 'Face the target'],
+    ['<kbd>i</kbd>', 'Schematic of the selected ship'],
+    ['<kbd>C</kbd>', 'Copy the camera pose'],
+  ];
+  const shoot: string[] = [
+    'Tap a hostile to target it',
+    'Tap a weapon to arm it',
+    'Tap a fire slot under the timeline',
+    'Choose a mount from the list',
+  ];
   $('help').innerHTML =
-    '<b>Left drag</b> inside the <span style="color:var(--green)">green outline</span> sets a '
-    + 'destination; anywhere else it pans. <b>Middle drag</b> always pans and never '
-    + 'touches a plan, whatever is under it. <b>Right drag</b> orbits. Scroll or pinch to zoom.'
-    + '<br><br>'
-    + 'Hold <kbd>Shift</kbd> and drag inside the outline to swing the heading instead.<br><br>'
-    + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
-    + '<kbd>F</kbd> face the target.<br><br>'
-    + '<b>To shoot:</b> tap a hostile to make it the target, tap a weapon to arm it, '
-    + 'then tap a <b>fire slot</b> under the timeline to pick the second, and '
-    + 'choose a mount from the list it opens. A shot already queued there is in '
-    + 'the same list, and tapping it takes the shot back.<br><br>'
-    + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
-    + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
-    + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
-    + 'do. On a phone, one finger does what the left button does and the '
-    + '<span style="color:var(--cyan)">&#10227;</span> button swaps it for orbiting; '
-    + '<b>two fingers</b> pan and pinch together, and never touch a plan.<br><br>'
-    + '<b>Reading a ship:</b> the chips list what is offline beside each hull, hovering '
-    + 'one gives the full state, and <b>i</b> opens its schematic. Zoom in on a ship and '
-    + '<b>Ship data</b> appears in the corner of the map, which labels its systems where '
-    + 'they are until you move away.';
+    '<dl class="keys">'
+    + keys.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+    + '</dl>'
+    + '<p class="sub">To shoot</p>'
+    + `<ol class="steps">${shoot.map(t => `<li>${t}</li>`).join('')}</ol>`
+    + '<p class="sub">Tap a queued shot to take it back.</p>';
+  // What the outline actually is, and what a phone does instead of a mouse.
+  // Both are worth knowing once and never again, which is what the fold is
+  // for: `main.ts` owns the toggle and this only has to hang the text on the
+  // heading the reference sits under.
+  const head = $('helpHead');
+  head.querySelector('.dzwhy')?.remove();
+  const why = document.createElement('button');
+  why.type = 'button';
+  why.className = 'dzwhy';
+  why.textContent = '?';
+  why.setAttribute('aria-expanded', 'false');
+  why.title = 'The outline is where the ship can actually finish its turn on '
+    + 'this plane, and the shell is that set in three dimensions. Both are '
+    + 'probed rather than derived: every point is a flight the core really '
+    + 'flew, so they change shape as your velocity, heading and stats do. On a '
+    + 'phone one finger does what the left button does, the orbit button swaps '
+    + 'it, and two fingers pan and pinch without ever touching a plan.';
+  head.appendChild(why);
 }
 
 function refreshAll(): void {

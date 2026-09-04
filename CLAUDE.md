@@ -89,6 +89,15 @@ Everything else goes behind the **`?`** beside the heading, which is
   describing needs a different design, or it belongs in `docs/` where somebody
   has actually chosen to read.
 
+**A reference is a LIST, not a paragraph.** The map's Help panel was 1246
+characters of prose describing the controls, permanently on screen, above the
+controls it described. Nobody reads a wall of text to find which button
+orbits; they scan for the word "orbit". It is a two column binding list now,
+and "To shoot" is numbered because that one really is a sequence. The check
+measures RUNS of prose rather than containers, descending through rows and
+cells, or a ten row reference would be measured as one 260 character string
+and the rule would punish exactly the structure it is asking for.
+
 The reasoning that used to sit on screen is not lost and was never the
 player's to carry: it belongs in a comment beside the code it explains, or in
 this file. A player wants to know what a button does. A person changing the
