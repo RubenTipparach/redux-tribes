@@ -1862,7 +1862,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_frigate', name: 'Terran Frigate',
     faction: 'terran', tier: 'frigate', rung: 'frigate',
-    radius: 3.6, massMax: 1.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.8, massMax: 1.14, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN,
     spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
     sockets: [
@@ -1903,7 +1903,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.7, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.2, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
@@ -1941,7 +1941,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_frigate', name: 'Rogue Frigate',
     faction: 'rogue', tier: 'frigate', rung: 'frigate',
-    radius: 3, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.3, massMax: 1.01, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // The frame feature no other class has: a transverse boarding gallery
     // crossing the keel, carrying the clamps and the collars as one structure.
     profile: PROF_ROGUE,
@@ -1993,7 +1993,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 0.92, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.6, massMax: 0.97, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -2037,7 +2037,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'freighter', name: 'Freighter',
     faction: 'civil', tier: 'freighter', rung: 'escort',
-    radius: 4.9, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.75, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_FREIGHTER,
     spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
       ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
@@ -2079,7 +2079,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_corvette', name: 'Terran Corvette',
     faction: 'terran', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.7, massMax: 0.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CV,
     spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
     sockets: [
@@ -2094,7 +2094,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.6, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.8, massMax: 2.79, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -2117,7 +2117,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.3, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 5.97, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -2146,7 +2146,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_corvette', name: 'Karisen Corvette',
     faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.4, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.5, massMax: 0.54, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CV,
     // The ventral rail overruns the body at both ends, which is the one
     // Karisen habit that survives at every rung.
@@ -2165,7 +2165,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.2, massMax: 2.23, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -2183,7 +2183,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 8.1, massMax: 4.53, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -2216,7 +2216,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_corvette', name: 'Rogue Corvette',
     faction: 'rogue', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.1, massMax: 0.47, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CV,
     // A cross beam through the keel, carrying the clamps and the collars as
     // one structure, exactly as the frigate does.
@@ -2234,7 +2234,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
     faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.7, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.2, massMax: 1.67, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_DD,
     spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
       ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
@@ -2251,7 +2251,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
     faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.3, massMax: 2.88, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.9, massMax: 3.3, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_ROGUE_CA,
     spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
       [CX - 13, CY - 2, 34, 26, 4, 6] as const,
@@ -2277,7 +2277,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
     faction: 'benefactor', tier: 'corvette', rung: 'frigate',
-    radius: 1.9, massMax: 0.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.3, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CV,
     spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
       ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
@@ -2295,7 +2295,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.2, massMax: 2.35, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -2315,7 +2315,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7, massMax: 4.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.1, massMax: 4.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
@@ -2346,7 +2346,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_lighter', name: 'Lighter',
     faction: 'civil', tier: 'lighter', rung: 'frigate',
-    radius: 2.6, massMax: 0.67, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.8, massMax: 0.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LIGHTER,
     spine: [keel(CY, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],
     sockets: [
@@ -2360,7 +2360,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_hauler', name: 'Hauler',
     faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.4, massMax: 2.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.4, massMax: 2.79, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_HAULER,
     spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
       ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
@@ -2374,7 +2374,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_boxship', name: 'Container Ship',
     faction: 'civil', tier: 'boxship', rung: 'cruiser',
-    radius: 7.3, massMax: 5.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 6.15, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BOXSHIP,
     spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
       ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
@@ -2390,7 +2390,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_tanker', name: 'Tanker',
     faction: 'civil', tier: 'tanker', rung: 'cruiser',
-    radius: 6.9, massMax: 5.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.9, massMax: 6.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TANKER,
     spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
       ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
@@ -2406,7 +2406,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_miner', name: 'Mining Ship',
     faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.5, massMax: 2.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.8, massMax: 2.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_MINER,
     spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
       ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
@@ -2426,7 +2426,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_liner', name: 'Liner',
     faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.5, massMax: 5.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.5, massMax: 5.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LINER,
     spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
       ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
