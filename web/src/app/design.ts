@@ -1521,20 +1521,22 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + 5));
     const cy = Math.max(r, Math.round(CY - hhMax * 0.35 - 5));
     const z0 = aft + 1, z1 = zOf(0.34);
-    const tA = 0.05, tB = 0.27;
+    // Full span from the transom to `tM`, then the leading edge sweeps in to
+    // nothing at `tB`: an arm with a swept front rather than a triangle,
+    // three courses thick so it reads as a wing and not as a wire.
+    const tA = 0.04, tM = 0.17, tB = 0.28;
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
       nacelle(cx, cy, z0, z1, r, side);
       for (let z = zOf(tA); z <= zOf(tB); z++) {
         const t = (z - aft) / len;
-        const s = 1 - (t - tA) / (tB - tA);
+        const s = Math.min(1, Math.max(0, (tB - t) / (tB - tM)));
         const [w, h] = hullAt(prof, z);
-        const ry = Math.round(CY - (h as number) * 0.35);
+        const ry = Math.round(CY - (h as number) * 0.30);
         const rx = flankCell(w as number, h as number, ry + 0.5 - CY, side);
-        const tipX = cx - side * r, tipY = cy;
+        const tipX = cx - side * r, tipY = cy + 1;
         const ex = Math.round(rx + (tipX - rx) * s), ey = Math.round(ry + (tipY - ry) * s);
-        strut(rx, ry, z, ex, ey, z, HULL);
-        strut(rx, ry - 1, z, ex, ey - 1, z, HULL);
+        for (let c = 0; c < 3; c++) strut(rx, ry - c, z, ex, ey - c, z, HULL);
       }
     }
     deflector(1, 1);
@@ -1590,20 +1592,21 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const cxS = Math.min(NX - 1 - r, Math.round(CX + hwMax + 7));
     const cy = Math.max(r, Math.round(CY - hhMax * 0.15 - 2));
     const z0 = zOf(0.34), z1 = zOf(0.80);
-    const tA = 0.28, tB = 0.62;
+    // The trailing edge sweeps out from `tA` to full span at `tM`, and the
+    // arm holds that span to `tB`. Three courses thick, like the Karisen's.
+    const tA = 0.26, tM = 0.46, tB = 0.60;
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
       nacelle(cx, cy, z0, z1, r, side);
       for (let z = zOf(tA); z <= zOf(tB); z++) {
         const t = (z - aft) / len;
-        const s = (t - tA) / (tB - tA);
+        const s = Math.min(1, Math.max(0, (t - tA) / (tM - tA)));
         const [w, h] = hullAt(prof, z);
-        const ry = Math.round(CY - (h as number) * 0.15);
+        const ry = Math.round(CY - (h as number) * 0.12);
         const rx = flankCell(w as number, h as number, ry + 0.5 - CY, side);
-        const tipX = cx - side * r, tipY = cy;
+        const tipX = cx - side * r, tipY = cy + 1;
         const ex = Math.round(rx + (tipX - rx) * s), ey = Math.round(ry + (tipY - ry) * s);
-        strut(rx, ry, z, ex, ey, z, HULL);
-        strut(rx, ry - 1, z, ex, ey - 1, z, HULL);
+        for (let c = 0; c < 3; c++) strut(rx, ry - c, z, ex, ey - c, z, HULL);
       }
     }
     deflector(1, 2);
@@ -1903,7 +1906,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_frigate', name: 'Karisen Frigate',
     faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 4.2, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.2, massMax: 0.97, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // Three parallel runs, and the ventral beam overruns the body at both ends
     // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
     profile: PROF_KARISEN,
@@ -1993,7 +1996,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
     faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.6, massMax: 0.97, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 3.6, massMax: 0.99, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     // A deep aft drop keel, which is the one archived fact worth keeping from
     // a prefab that is otherwise a single mesh.
     profile: PROF_BENEFACTOR,
@@ -2146,7 +2149,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_corvette', name: 'Karisen Corvette',
     faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.5, massMax: 0.54, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.5, massMax: 0.56, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CV,
     // The ventral rail overruns the body at both ends, which is the one
     // Karisen habit that survives at every rung.
@@ -2165,7 +2168,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
     faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 6.2, massMax: 2.23, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.2, massMax: 2.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_DD,
     spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
       ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
@@ -2183,7 +2186,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 8.1, massMax: 4.53, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 8.1, massMax: 4.74, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -2277,7 +2280,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
     faction: 'benefactor', tier: 'corvette', rung: 'frigate',
-    radius: 2.3, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 2.3, massMax: 0.53, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CV,
     spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
       ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
@@ -2295,7 +2298,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.3, massMax: 2.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.58, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -2315,7 +2318,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
     faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.1, massMax: 4.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.1, massMax: 5.15, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_CA,
     spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
       ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
