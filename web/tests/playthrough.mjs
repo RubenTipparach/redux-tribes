@@ -314,10 +314,12 @@ async function checkHullsWearTheirFinish(page) {
     process.exit(1);
   }
   // Every surface, not just the first. The fields above describe the broad
-  // plating, which is what they always described; a hull is drawn with five
-  // materials now (three bands of armour, the frame, the machinery) and a
-  // band whose texture never loaded would have passed every check above it,
-  // exactly the way the ember atlas and all nine finishes once shipped dead.
+  // plating, which is what they always described; a hull is drawn with seven
+  // materials now (three bands of armour, the frame, and machinery split into
+  // drives, guns and everything else) plus one per palette slot a player has
+  // actually painted with, and a band whose texture never loaded would have
+  // passed every check above it, exactly the way the ember atlas and all nine
+  // finishes once shipped dead.
   const skins = surf.flatMap(s => s.skins.map(k => ({ ship: s.ship, ...k })));
   const deadSkin = skins.filter(k => k.finish !== 'none' && !k.loaded);
   if (deadSkin.length) {

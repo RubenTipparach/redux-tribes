@@ -211,8 +211,8 @@ test('a side fields the design it picked, derived by the core', () => {
   // What the core says the design is, asked directly.
   const stats = sim.derive(2, geo, parts);
   assert.ok(stats, 'the core derives the record');
-  assert.ok(Math.abs(stats.hull - 194.848) < 0.1, `hull ${stats.hull}`);
-  assert.ok(Math.abs(stats.mass - 0.789256) < 1e-4, `mass ${stats.mass}`);
+  assert.ok(Math.abs(stats.hull - 146.296) < 0.1, `hull ${stats.hull}`);
+  assert.ok(Math.abs(stats.mass - 0.677872) < 1e-4, `mass ${stats.mass}`);
   assert.equal(stats.marines, 40);
   assert.equal(stats.gates, 0b1111111, 'the stock Rogue passes every gate');
 
@@ -440,10 +440,14 @@ test('class and mount metadata cross intact', () => {
   const terran = m.classInfo(0);
   // Measured rather than authored: `tools/measure_fleet.mjs --sync` writes
   // every class's table entry from what `derive(stockFor(key))` produces, and
-  // `--check` fails if the two part. The literal here is only a spot check
-  // that a number crossed the boundary at all; the fleet wide agreement is
-  // the test below it.
-  assert.ok(Math.abs(terran.hull - 296.936) < 0.01, `terran hull ${terran.hull}`);
+  // `--check` fails if the two part. The fleet wide agreement is the test
+  // below it; what THIS is for is that a real number crossed the boundary at
+  // all, so it is a band rather than a literal. Three separate changes to the
+  // fleet moved a pinned 121.024 by less than a percent each, and a check that
+  // has to be re-typed whenever the thing it watches is re-measured is a check
+  // people learn to update without reading.
+  assert.ok(terran.hull > 100 && terran.hull < 150,
+    `terran hull ${terran.hull}, which is not a frigate's`);
   assert.equal(terran.mountCount, 3);
   assert.equal(terran.flight.maxSpeed, 8);
 
@@ -780,17 +784,43 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, moduleById, useCore } = design;
+  const { FRAMES, stockFor, moduleById, useCore, latOf } = design;
   useCore(() => null);
 
+  /** The same cell on the other side of the keel. The plane runs BETWEEN the
+   *  two middle columns, so the mirror of column i is nx - 1 - i, and `nx` is
+   *  the class's own: a corvette is 24 wide and a heavy cruiser 64. */
+  const mirror = (nx, n) => { const i = n % nx; return (nx - 1 - i) + (n - i); };
+  let lop = 0, all = 0;
+  const lightsOnly = [];
+
   for (const f of FRAMES) {
+    const nx = latOf(f).nx;
     const d = stockFor(f.classKey);
     const h = hullMesh(d);
     const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // Symmetry, counted over every decal at once, because what a person sees
+    // is a lit window and not which room is behind it: a cabin to port and an
+    // airlock to starboard are two windows, not none.
+    const lit = new Set();
+    for (const w of h.windows) for (const n of w.cellOf) lit.add(n);
+    all += lit.size;
+    for (const n of lit) if (!lit.has(mirror(nx, n))) lop++;
     // Twenty is not a taste: below that a hull reads as unlit at map range,
     // which is what every one of them did.
     assert.ok(faces >= 20,
       `${f.classKey}: ${faces} window faces, so the hull reads as unlit`);
+    // And they have to be ROOMS, not just running lights.
+    //
+    // A count of faces was blind to the thing that actually went wrong. A
+    // beacon is on a docking clamp, which stands PROUD of the skin, so it
+    // never had to look through any plating at all: when the armour courses
+    // started scaling with the rung and the window reach did not, the Terran
+    // destroyer, the Terran cruiser, both Benefactor heavies and the Rogue
+    // cruiser lost every cabin, viewport and porthole they had and kept
+    // drawing eighty to two hundred beacons, which sailed past a check that
+    // only counted faces.
+    if (h.windows.every(w => w.key === 'beacons')) lightsOnly.push(f.classKey);
     // And every decal drawn is one a part on this ship actually wears. A key
     // with no module behind it would be a texture bound to nothing, and
     // `windowMap` answers null for an unknown one without saying so.
@@ -800,6 +830,35 @@ test('every stock hull has windows, and they are cut where a room is', async () 
         `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);
     }
   }
+
+  // A ship is symmetric about its keel and its windows should look it: a row
+  // of cabins down one flank with nothing facing them is the one thing on a
+  // hull that reads as a mistake at a glance. Half of every window cell had no
+  // twin before the skin was asked about the room behind its MIRROR as well.
+  //
+  // A ceiling rather than zero, and the gap is honest. What is left is plating
+  // that is not itself mirrored and fittings the rasteriser's collision nudge
+  // walks off their sockets, and both are about the hull rather than about the
+  // windows. It is here so the number cannot quietly climb back.
+  // At most one hull may be lit by running lights alone, and the message
+  // names whichever it is rather than the test naming it in advance. The
+  // Benefactor heavy cruiser is the one, and it is the hull rather than the
+  // rule: it is the narrowest section in the game under the heaviest belt, so
+  // `laneOf` stacks its berths up the centreline and there is a void between
+  // them and its twelve courses of plating. A window means a room IMMEDIATELY
+  // behind the skin, and that ship has none.
+  assert.ok(lightsOnly.length <= 1,
+    `${lightsOnly.length} hulls are lit by running lights alone, with no room `
+    + `decal anywhere: ${lightsOnly.join(', ')}`);
+  console.log(`  windows: lit by running lights alone: `
+    + (lightsOnly.join(', ') || 'none'));
+
+  const lopsided = lop / all;
+  assert.ok(lopsided < 0.40,
+    `${(100 * lopsided).toFixed(1)}% of window cells have no twin across the keel `
+    + `(${lop} of ${all})`);
+  console.log(`  windows: ${(100 * (1 - lopsided)).toFixed(1)}% mirrored across the keel, `
+    + `${all} lit cells over ${FRAMES.length} hulls`);
 });
 
 test('no stock mount is blocked in the direction it rests', async () => {
@@ -875,16 +934,19 @@ test('every stock turret stands on its hull face, ring outboard', async () => {
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, Mat,
+  const { FRAMES, stockFor, socketsOf, moduleById, rasterise, outwardAt, latOf, Mat,
     useCore, useArcDirs } = design;
   useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
   useArcDirs(() => sim.arcDirs(), (x, y, z) => sim.arcBit(x, y, z));
 
-  const NX = 32, NY = 32, NZ = 64;
-  const at = (i, j, k) => i + j * NX + k * NX * NY;
   const N6 = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   let seen = 0;
   for (const f of FRAMES) {
+    // The class's own lattice: a corvette is 24 x 24 x 48 and a heavy cruiser
+    // 64 x 64 x 128, so a walk written against one walks off the end of five
+    // of the others and reads another hull's cells as this one's.
+    const { nx: NX, ny: NY, nz: NZ } = latOf(f);
+    const at = (i, j, k) => i + j * NX + k * NX * NY;
     const d = stockFor(f.classKey);
     const r = rasterise(d);
     const socks = socketsOf(f, d.parts);
@@ -892,7 +954,7 @@ test('every stock turret stands on its hull face, ring outboard', async () => {
       if (moduleById(p.module)?.art !== 'barbette') return;
       const sock = socks.find(k => k.id === p.socket);
       if (!sock) return;
-      const [ox, oy] = outwardAt(f.profile, sock.at);
+      const [ox, oy] = outwardAt(latOf(f), f.profile, sock.at);
       const axis = ox ? 0 : 1, dir = ox || oy;
       let n = 0, ring = 0, sumRing = 0, sumAll = 0, touching = 0;
       for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
@@ -1064,6 +1126,33 @@ test('the client and the core name the same classes in the same order', async ()
 // part never appears. On a stock hull that is a drive nobody can see paying
 // full mass for nothing, and it is invisible in every other check here because
 // the arithmetic reads the PART LIST rather than the picture.
+test('nothing is bolted through a drive bell', async () => {
+  // A drive's volume is its own, the same rule a turret's sweep already has
+  // and for the same reason: the two are not the same kind of bad. A berth
+  // that lost a few cells to a neighbour came out small; a docking clamp
+  // through an engine is not a ship.
+  //
+  // Cells are claimed first come first served and the nudge charged one point
+  // for a cell another part held, so a clamp with nowhere better simply
+  // settled inside the engines: a Karisen corvette carried twenty three cells
+  // of it there and most of the fleet had a clamp or a barracks in theirs. It
+  // costs what a turret's sweep costs now, so the nudge walks out instead.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, stockFor, rasterise, useCore } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+  const bad = [];
+  for (const f of FRAMES) {
+    const n = rasterise(stockFor(f.classKey)).bellFouled;
+    if (n) bad.push(`${f.classKey}: ${n} cells`);
+  }
+  assert.deepEqual(bad, [], 'parts standing in a drive');
+});
+
 test('every part of every stock hull actually gets cells', async () => {
   const dsn = await build({
     entryPoints: [resolve(root, 'src/app/design.ts')],
@@ -1089,4 +1178,484 @@ test('every part of every stock hull actually gets cells', async () => {
     // for it, so a stock ship that fouls is a stock ship nobody can field.
     assert.equal(r.fouled, 0, `${f.classKey}: ${r.fouled} cells inside a turret box`);
   }
+});
+
+test('a bigger ship is more voxels, not bigger ones', async () => {
+  // The claim the whole lattice exists to make, and the one that was false
+  // for as long as a rung was a cell SIZE: a heavy cruiser was a frigate
+  // drawn four times as big with exactly as many cells in it. The Karisen
+  // cruiser carried the same voxel count as its own frigate at 4.34 times the
+  // length, so nothing in the fleet said a big ship was a big ship.
+  //
+  // Three properties, and each of them fails a different way of cheating.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, RUNG, VOXEL, latOf, stockFor, rasterise, useCore } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+
+  // ONE voxel, for everybody. `VOXEL` being a constant is what makes the two
+  // below mean anything: a per class cell size would let a class pass them
+  // while being a scaled picture of another one.
+  assert.equal(typeof VOXEL, 'number');
+  assert.ok(VOXEL > 0);
+
+  // The four lattices the fleet is built on, and the ladder is theirs.
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(RUNG)
+      .map(([k, l]) => [k, [l.nx, l.ny, l.nz]])),
+    {
+      corvette: [24, 24, 48], frigate: [32, 32, 64],
+      escort: [48, 48, 96], cruiser: [64, 64, 128],
+    });
+
+  // And a rung up the ladder is MORE CELLS in the ship, not the same cells
+  // drawn bigger. Terran, because it is the navy with all four rungs and the
+  // one every other ladder is quoted against.
+  const cells = {};
+  const len = {};
+  for (const key of ['terran_corvette', 'terran_frigate',
+    'terran_destroyer', 'terran_cruiser']) {
+    const f = FRAMES.find(x => x.classKey === key);
+    const r = rasterise(stockFor(key));
+    cells[key] = r.plateCells;
+    len[key] = r.extent[2] * VOXEL;
+    // Every hull sits on its class's own lattice, and its extent is inside it.
+    const l = latOf(f);
+    assert.ok(r.extent[0] <= l.nx && r.extent[1] <= l.ny && r.extent[2] <= l.nz,
+      `${key}: ${r.extent.join('x')} does not fit ${l.nx}x${l.ny}x${l.nz}`);
+  }
+  const up = ['terran_corvette', 'terran_frigate', 'terran_destroyer', 'terran_cruiser'];
+  for (let n = 1; n < up.length; n++) {
+    assert.ok(len[up[n]] > len[up[n - 1]],
+      `${up[n]} is not longer than ${up[n - 1]}`);
+    assert.ok(cells[up[n]] > cells[up[n - 1]],
+      `${up[n]} has ${cells[up[n]]} plate cells against ${up[n - 1]}'s `
+      + `${cells[up[n - 1]]}: a bigger ship with no more ship in it`);
+  }
+  // Not merely more: a heavy cruiser is twice a frigate in every dimension, so
+  // its plating is the SQUARE of that at the least. Four times, and the belts
+  // scale with the rung as well, so it comes out above it.
+  assert.ok(cells['terran_cruiser'] >= 4 * cells['terran_frigate'],
+    `a heavy cruiser has ${cells['terran_cruiser']} plate cells against a `
+    + `frigate's ${cells['terran_frigate']}`);
+  console.log(`  plate cells up the Terran ladder: `
+    + up.map(k => `${k.split('_')[1]} ${cells[k]}`).join(', '));
+});
+
+test('a design saved on another lattice is carried onto this one', async () => {
+  // Cell indices are the WIRE FORMAT for hand drawn armour, and an index means
+  // nothing without the lattice it was written on: cell 5000 is one place on a
+  // corvette and another on a heavy cruiser. Every design in the world was
+  // drawn on 32 x 32 x 64, because that is all there was.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { migrateDesign, stockFor, latOf, frameFor, cellIndex, cellAt } = design;
+
+  // A cruiser drawn before the lattices existed: no stamp, and a cell in the
+  // middle of the old 32 x 32 x 64.
+  const old = { ...stockFor('terran_cruiser') };
+  delete old.lattice;
+  const from = { nx: 32, ny: 32, nz: 64 };
+  const at = [16, 18, 40];
+  old.plate = [at[0] + at[1] * 32 + at[2] * 32 * 32];
+
+  const now = migrateDesign(old);
+  const L = latOf(frameFor('terran_cruiser'));
+  assert.deepEqual([...now.lattice], [L.nx, L.ny, L.nz], 'the record is stamped');
+  assert.equal(now.plate.length, 1, 'the cell survived');
+  const [i, j, k] = cellAt(L, now.plate[0]);
+  // The SAME PLACE on the hull: both lattices are centred on it, so a cell two
+  // cells to starboard of the plane stays two cells to starboard once the
+  // lattice is twice as wide in each direction.
+  for (const [n, v, f, t] of [[0, i, from.nx, L.nx], [1, j, from.ny, L.ny],
+    [2, k, from.nz, L.nz]]) {
+    const want = Math.round((at[n] + 0.5 - f / 2) * (t / f) + t / 2 - 0.5);
+    assert.equal(v, want, `axis ${n}: ${v} against ${want}`);
+  }
+
+  // And a record already on this lattice is left exactly as it is: migrating
+  // twice must not walk a hull's armour across it a cell at a time.
+  const again = migrateDesign(now);
+  assert.deepEqual(again.plate, now.plate, 'a second migration moved it again');
+
+  // A frigate never moves at all, because its lattice is the one every stored
+  // record was written on.
+  const frig = { ...stockFor('terran_frigate'), plate: [cellIndex(latOf(frameFor('terran_frigate')), 12, 14, 30)] };
+  delete frig.lattice;
+  assert.deepEqual(migrateDesign(frig).plate, frig.plate);
+});
+
+test('a bell is a wall round a cavity, and the cavity stays empty', async () => {
+  // A drive is a nozzle, not a plug. The wall used to be a fixed 1.35 cells of
+  // thickness, which is most of a small nozzle's radius: the Light nozzle is
+  // four cells across, so it came out very nearly solid and the smallest
+  // engine in the game had no throat at all.
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { FRAMES, MODULES, Mat, stockFor, rasterise, voxelsOf, useCore } = design;
+  useCore((classIdx, geo, parts) => sim.derive(classIdx, geo, parts));
+
+  const bells = MODULES.filter(m => m.art === 'bell' || m.art === 'nozzle');
+  assert.ok(bells.length >= 6, 'the table still has bells in it');
+  for (const m of bells) {
+    const v = voxelsOf(m);
+    let cavity = 0;
+    for (const b of v.data) if (b === Mat.Void) cavity++;
+    // Two cells across is the one shape that cannot have an inside: every cell
+    // of it is on the boundary. Anything bigger is a bell and has a throat.
+    const least = Math.min(m.size[0], m.size[1]);
+    if (least <= 2) {
+      assert.equal(cavity, 0, `${m.id} is ${least} across and cannot have a cavity`);
+      continue;
+    }
+    assert.ok(cavity > 0, `${m.id} (${m.size.join('x')}) has no cavity: it is a plug`);
+    // And the wall is ONE cell: every filled cell of the flare has to be
+    // against the cavity or against the outside, never buried between two
+    // other filled cells across the beam.
+    const at = (x, y, z) => x + y * m.size[0] + z * m.size[0] * m.size[1];
+    let buried = 0;
+    for (let z = 0; z < m.size[2]; z++) {
+      for (let y = 1; y < m.size[1] - 1; y++) for (let x = 1; x < m.size[0] - 1; x++) {
+        const c = v.data[at(x, y, z)];
+        if (!c || c === Mat.Void || c === Mat.Case) continue;   // Case is the plug
+        const n = [v.data[at(x + 1, y, z)], v.data[at(x - 1, y, z)],
+          v.data[at(x, y + 1, z)], v.data[at(x, y - 1, z)]];
+        if (n.every(q => q && q !== Mat.Void)) buried++;
+      }
+    }
+    assert.equal(buried, 0, `${m.id} has ${buried} wall cells with wall on all four sides`);
+  }
+
+  // And nothing stands in one, on any hull in the fleet. The cavity is claimed
+  // the way a turret's sweep is, so this is zero by construction; above zero
+  // means a part or a frame member got in and the hull is illegal.
+  let cavities = 0;
+  for (const f of FRAMES) {
+    const r = rasterise(stockFor(f.classKey));
+    let occupied = 0;
+    for (let n = 0; n < r.hollow.length; n++) {
+      if (!r.hollow[n]) continue;
+      cavities++;
+      if (r.grid[n]) occupied++;
+    }
+    assert.equal(occupied, 0,
+      `${f.classKey}: ${occupied} cells standing inside a drive's throat`);
+  }
+  assert.ok(cavities > 0, 'no hull in the fleet has a drive cavity at all');
+  console.log(`  drive cavities: ${cavities} cells over ${FRAMES.length} hulls, none occupied`);
+});
+
+test('a picked colour paints one cell, not the whole scheme', async () => {
+  // The palette used to be a SCHEME picker: choosing a swatch set `paint`, and
+  // every livery role is an offset from it, so picking a colour repainted the
+  // entire ship in a scheme built round it. A player who wanted one panel a
+  // different colour had no way to say so.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { hullMesh } = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, rasterise, paintFor, latOf, frameFor, cellIndex, cellAt,
+    isPainted, paintedSlot, armourColour, migrateDesign, Mat, useCore } = design;
+  useCore(() => null);
+
+  const key = 'terran_frigate';
+  const L = latOf(frameFor(key));
+  const base = stockFor(key);
+  const plain = rasterise(base);
+
+  // A cell of armour to paint, and one the brush must refuse.
+  let armour = -1, machinery = -1;
+  for (let n = 0; n < plain.grid.length; n++) {
+    const m = plain.grid[n];
+    if (armour < 0 && (m === Mat.Plate || m === Mat.Skinned)) armour = n;
+    if (machinery < 0 && m === Mat.Machine) machinery = n;
+  }
+  assert.ok(armour >= 0 && machinery >= 0, 'the frigate has both armour and machinery');
+
+  const swatches = paintFor(base.faction).swatches;
+  const slot = 5;
+  const painted = { ...base, tint: [armour * 8 + slot] };
+  const r = rasterise(painted);
+
+  // The cell wears the slot's own colour...
+  assert.ok(isPainted(r.tone[armour]), 'the painted cell is marked as hand painted');
+  assert.equal(paintedSlot(r.tone[armour]), slot, 'and it remembers which slot');
+  assert.equal(armourColour(painted.faction, painted.paint, r.tone[armour]),
+    swatches[slot], 'a painted cell is the swatch that was picked, exactly');
+
+  // ...and NOTHING ELSE MOVED. This is the whole complaint: one cell changed,
+  // the ship did not.
+  let moved = 0;
+  for (let n = 0; n < r.tone.length; n++) {
+    if (n === armour) continue;
+    if (r.tone[n] !== plain.tone[n]) moved++;
+  }
+  assert.equal(moved, 0, `${moved} other cells changed colour when one was painted`);
+  assert.equal(painted.paint, base.paint, 'the brush did not change the hull colour');
+
+  // The mesh really draws it: the quad on that cell carries the slot's colour.
+  // three stores vertex colour in the LINEAR working space, so the swatch is
+  // converted the same way rather than compared as bytes: a raw comparison
+  // fails on a colour that is drawn perfectly.
+  const lin = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  const mesh = hullMesh(painted);
+  const col = mesh.geo.getAttribute('color');
+  const want = swatches[slot];
+  const wr = lin(((want >> 16) & 255) / 255), wg = lin(((want >> 8) & 255) / 255),
+    wb = lin((want & 255) / 255);
+  let seen = false;
+  for (let q = 0; q < mesh.quads && !seen; q++) {
+    if (mesh.cellOf[q] !== armour) continue;
+    seen = Math.abs(col.getX(q * 4) - wr) < 0.01
+      && Math.abs(col.getY(q * 4) - wg) < 0.01
+      && Math.abs(col.getZ(q * 4) - wb) < 0.01;
+  }
+  assert.ok(seen, 'the mesh does not draw the painted cell in the picked colour');
+
+  // Machinery is not paintable, and that is the rule rather than an oversight:
+  // a drive is orange and a gun is red on anybody's ship, which is what makes
+  // an unfamiliar hull readable without a legend.
+  const onPart = rasterise({ ...base, tint: [machinery * 8 + slot] });
+  assert.ok(!isPainted(onPart.tone[machinery]),
+    'the brush painted a part, so a drive can stop looking like a drive');
+
+  // And a stroke survives a lattice change with its colour on it.
+  const old = { ...stockFor('terran_cruiser') };
+  delete old.lattice;
+  const at = [16, 18, 40];
+  old.tint = [(at[0] + at[1] * 32 + at[2] * 32 * 32) * 8 + 3];
+  const moved2 = migrateDesign(old);
+  assert.equal(moved2.tint.length, 1, 'the stroke survived');
+  assert.equal(moved2.tint[0] & 7, 3, 'and kept its colour');
+  const C = latOf(frameFor('terran_cruiser'));
+  const [ci, cj, ck] = cellAt(C, (moved2.tint[0] / 8) | 0);
+  assert.equal(cellIndex(C, ci, cj, ck), (moved2.tint[0] / 8) | 0);
+  // A slot carries a FINISH as well as a colour, and a hull pays a draw call
+  // for each slot it actually paints with and none for the rest. Three bands
+  // is what the livery paints by itself on every hull; these are opt in.
+  const plainGroups = hullMesh(base).geo.groups.length;
+  const armourCells = [];
+  for (let n = 0; n < plain.grid.length && armourCells.length < 60; n++) {
+    if (plain.grid[n] === Mat.Plate) armourCells.push(n);
+  }
+  const oneSlot = hullMesh({ ...base, tint: armourCells.slice(0, 30).map(n => n * 8 + 4) });
+  const threeSlots = hullMesh({ ...base,
+    tint: armourCells.map((n, i) => n * 8 + [1, 4, 6][i % 3]) });
+  assert.equal(oneSlot.geo.groups.length, plainGroups + 1,
+    'painting from one slot did not cost exactly one more draw');
+  assert.equal(threeSlots.geo.groups.length, plainGroups + 3,
+    'painting from three slots did not cost exactly three more draws');
+  console.log(`  brush: one cell painted, ${moved} others moved; `
+    + `draws ${plainGroups} bare, ${oneSlot.geo.groups.length} on one slot, `
+    + `${threeSlots.geo.groups.length} on three`);
+});
+
+test('a surface per colour slot, and machinery split by what it does', async () => {
+  // Two complaints, one answer. The palette offered a normal map for "the
+  // selected slot", so seven of the eight were invisible and there was no
+  // saying which colour the dropdown was about. And every part on the ship
+  // shared ONE surface, on the grounds that a drive is already orange and a
+  // gun already red: true of the colour, and never true of the surface. A
+  // drive bell is a cast nozzle, a turret is a machined gun, a barracks is a
+  // box.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, finishesOf, paintFor, useCore } = design;
+  useCore(() => null);
+
+  // Every surface has a name, and the count is what `SURF_COUNT` says: a list
+  // spelled by hand somewhere else is how a trim band whose texture never
+  // loaded came to be reported as a healthy frame.
+  assert.equal(H.SURF_NAMES.length, H.SURF_COUNT);
+  for (const want of ['drive', 'weapon', 'part', 'frame']) {
+    assert.ok(H.SURF_NAMES.includes(want), `no surface called ${want}`);
+  }
+  assert.equal(H.SURF_NAMES.filter(n => n.startsWith('brush ')).length, H.PAINT_SLOTS,
+    'one surface per palette slot');
+
+  const base = stockFor('terran_frigate');
+  const groups = H.hullMesh(base).geo.groups;
+  const used = new Set(groups.map(g => g.materialIndex));
+  // A hull with engines, guns and berths on it draws all three, so the split
+  // is reachable rather than merely declared.
+  for (const which of ['drive', 'weapon', 'part']) {
+    assert.ok(used.has(H.SURF_NAMES.indexOf(which)),
+      `a stock frigate draws no ${which} surface`);
+  }
+
+  // And each one is a separate answer: setting the drives' finish must not
+  // move the guns'.
+  const mixed = { ...base, driveFinish: 'ribbed', weaponFinish: 'hex', partFinish: 'plate' };
+  const f = finishesOf(mixed);
+  assert.equal(f.drive, 'ribbed');
+  assert.equal(f.weapon, 'hex');
+  assert.equal(f.part, 'plate');
+  // A design that never set them falls back to the one answer it used to
+  // have, so nothing needs migrating.
+  const old = { ...base, partFinish: 'weave' };
+  delete old.driveFinish; delete old.weaponFinish;
+  const g = finishesOf(old);
+  assert.equal(g.drive, 'weave', 'an old design lost its machinery finish');
+  assert.equal(g.weapon, 'weave', 'an old design lost its machinery finish');
+
+  // Eight slots, and every one of them addressable.
+  assert.equal(paintFor(base.faction).swatches.length, H.PAINT_SLOTS,
+    'the palette and the slot surfaces disagree about how many there are');
+  console.log(`  surfaces: ${H.SURF_COUNT} named, `
+    + `${groups.length} drawn on a bare frigate (${[...used].sort((a, b) => a - b)
+      .map(i => H.SURF_NAMES[i]).join(', ')})`);
+});
+
+test('a window can be painted where no room put one', async () => {
+  // Windows are DERIVED: a plate cell whose inner neighbour belongs to a
+  // bridge wears the bridge viewport, which is what gives every stock hull its
+  // viewports without anyone placing one. What that cannot do is let a player
+  // put a window anywhere, and there was no way to say otherwise.
+  //
+  // Both halves stay. A painted cell is consulted first and everything else
+  // falls through to the derivation, so this test asserts BOTH: the stock
+  // hull is unchanged, and the painted cell appears.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const D = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  D.useCore(() => null);
+
+  const base = D.stockFor('terran_frigate');
+  const before = H.hullMesh(base).windows;
+  const count = w => Object.fromEntries(w.map(x => [x.key, x.cellOf.length]));
+  const b = count(before);
+  assert.ok(!b.bridge, 'this hull was chosen because it derives no bridge viewport');
+  assert.ok(Object.keys(b).length, 'the derived pass drew nothing at all');
+
+  // A plate cell exposed to the outside that no derived window already claims,
+  // so what turns up afterwards can only be the painted one.
+  const L = D.latOf(D.frameFor('terran_frigate'));
+  const { grid } = D.rasterise(base);
+  const had = new Set(before.flatMap(w => [...w.cellOf]));
+  let cell = -1;
+  for (let n = 0; n < grid.length && cell < 0; n++) {
+    if (grid[n] !== D.Mat.Plate || had.has(n)) continue;
+    const i = n % L.nx;
+    if (i + 1 < L.nx && !grid[n + 1]) cell = n;
+  }
+  assert.ok(cell >= 0, 'no bare exposed plate cell to paint on');
+
+  const kind = D.DECALS.findIndex(k => k.key === 'bridge');
+  const painted = { ...base, decal: [cell * D.DECAL_STRIDE + kind] };
+  const after = count(H.hullMesh(painted).windows);
+  assert.ok(after.bridge > 0, 'a painted bridge viewport drew no faces');
+  assert.ok(H.hullMesh(painted).windows
+    .some(w => w.key === 'bridge' && [...w.cellOf].includes(cell)),
+    'the decal landed on a cell other than the one it was painted on');
+  // The derivation is untouched: every kind the stock hull had, it still has,
+  // at the same count.
+  for (const [k, n] of Object.entries(b)) {
+    assert.equal(after[k], n, `painting a decal changed the derived ${k} count`);
+  }
+
+  // The cache is keyed on the design, so a hull differing only in a decal
+  // cannot be handed the raster of the hull without one.
+  assert.notEqual(D.rasterSig(base), D.rasterSig(painted));
+
+  // A cell index means nothing without its lattice, so a decal migrates with
+  // its KIND still on it, exactly as a brush stroke migrates with its colour.
+  const moved = D.migrateDesign({ ...painted, classKey: 'terran_cruiser',
+    lattice: [L.nx, L.ny, L.nz] });
+  assert.equal(moved.decal.length, 1);
+  assert.equal(moved.decal[0] % D.DECAL_STRIDE, kind,
+    'a decal lost its kind crossing a lattice');
+  const to = D.latOf(D.frameFor('terran_cruiser'));
+  assert.ok(((moved.decal[0] / D.DECAL_STRIDE) | 0) < to.cells,
+    'a migrated decal points off the end of its new lattice');
+
+  console.log(`  decals: ${Object.entries(b).map(([k, n]) => `${k} ${n}`).join(', ')}`
+    + ` derived, and one painted bridge viewport adds ${after.bridge} faces`);
+});
+
+test('a design file carries every finish it was saved with', async () => {
+  // A design file is written whole and read back FIELD BY FIELD, so the
+  // reader's whitelist is the actual contract. A field left off it is a field
+  // a hull loses on the way through a file, silently, coming back wearing
+  // whatever the fallback says: the per slot maps were already going that way
+  // before the drives and the guns got theirs.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/frames.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const F = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  design.useCore(() => null);
+
+  const d = {
+    ...design.stockFor('terran_frigate'),
+    finish: 'hex', frameFinish: 'cracked', partFinish: 'tread',
+    driveFinish: 'ribbed', weaponFinish: 'battered',
+    slotFinish: ['plate', null, 'weave', null, null, null, null, 'crate'],
+    decal: [16 * 3 + 1, 16 * 900 + 5],
+  };
+  const back = F.designFromJson(F.designToJson(d, 'round trip'));
+  assert.ok(back.design, `a file this build wrote came back refused: ${back.why}`);
+  for (const k of ['finish', 'frameFinish', 'partFinish', 'driveFinish', 'weaponFinish']) {
+    assert.equal(back.design[k], d[k], `${k} was lost on the way through a file`);
+  }
+  assert.deepEqual(back.design.slotFinish, d.slotFinish,
+    'the per slot finishes were lost on the way through a file');
+  assert.deepEqual(back.design.decal, d.decal,
+    'the painted decals were lost on the way through a file');
+
+  // And a file is untrusted input: a slot list full of rubbish comes back as
+  // nulls rather than as whatever was in it, and one bad entry does not cost
+  // the seven good ones.
+  const junk = JSON.parse(F.designToJson(d, 'junk'));
+  junk.design.slotFinish = [{ x: 1 }, 'weave', 7, null, 'plate', [], 'hex', 'tread'];
+  const read = F.designFromJson(JSON.stringify(junk));
+  assert.ok(read.design, `a design with a bad slot list was refused whole: ${read.why}`);
+  assert.deepEqual(read.design.slotFinish,
+    [null, 'weave', null, null, 'plate', null, 'hex', 'tread']);
+  console.log('  design file: five finish fields and eight slots survive a round trip');
 });

@@ -71,6 +71,33 @@ page.on('pageerror', (e) => console.log('  page error: ' + e.message));
 /** Wait for FRAMES, never for a deadline: this runs on a software rasteriser
  *  where the yard draws single digits a second, and a wall clock wait there
  *  measures the machine rather than the picture settling. */
+/**
+ * Take the console's own furniture out of the photograph.
+ *
+ * A STYLE TAG rather than `el.style.visibility`, and that is the whole point:
+ * an inline style belongs to one element instance, and the picker is rebuilt
+ * on every refresh, so a hide set before a class was opened was gone by the
+ * time the shutter fired. Every shot in the fleet had the class picker, the
+ * tool row and the hint line printed across it, and because the chips are the
+ * BRIGHTEST thing in the frame, the bounding box `--ladder` crops to was a box
+ * round the panel rather than round the ship.
+ *
+ * A rule in the document survives any number of rebuilds, which is what makes
+ * it right rather than merely working today.
+ */
+const CHROME = ['#dzClasses', '#dzTools', '#dzHint', '#dzPick'];
+const hideChrome = (pg) => pg.addInitScript((sel) => {
+  const put = () => {
+    if (document.getElementById('shotChrome')) return;
+    const st = document.createElement('style');
+    st.id = 'shotChrome';
+    st.textContent = `${sel} { visibility:hidden !important; }`;
+    document.head.append(st);
+  };
+  if (document.head) put();
+  else document.addEventListener('DOMContentLoaded', put, { once: true });
+}, CHROME.join(','));
+
 const frames = (n) => page.evaluate(async (want) => {
   await new Promise((res) => {
     let seen = 0;
@@ -130,6 +157,17 @@ const closeTo = async (want) => {
   return c ? c.dist : 0;
 };
 
+// Armed BEFORE the first navigation and never touched again. The chips, the
+// tool row and the hint line are the brightest things in the frame, so a
+// bounding box taken with them in it is a box round the panel rather than
+// round the ship, and `--ladder` crops to exactly that box.
+//
+// An init script rather than a style tag or an inline style, and that is the
+// whole fix: this tool navigates once per hull, and BOTH of those die with the
+// document. The per hull loop never hid anything at all and the ladder path
+// hid it once, before the first `goto` threw it away, so every shot this tool
+// has ever written had the console's own furniture printed across it.
+await hideChrome(page);
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(600);
 
@@ -163,16 +201,6 @@ async function ladder(faction) {
     await page.waitForTimeout(500);
     const grow = page.locator('#dzGrow');
     if (await grow.count() && await grow.isVisible()) await grow.click().catch(() => {});
-    // The chips and the tool row are BRIGHTER than the ship, so a bounding
-    // box taken over the shot with them in it is a box round the panel. They
-    // are hidden for the photograph and nothing else: this tool takes
-    // pictures, it does not drive the app.
-    await page.evaluate(() => {
-      for (const id of ['dzClasses', 'dzTools', 'dzHint', 'dzPick']) {
-        const el = document.getElementById(id);
-        if (el) el.style.visibility = 'hidden';
-      }
-    });
     await frames(40);
     // Playwright's own screenshot, not `canvas.toDataURL`. The yard is a WebGL
     // canvas without `preserveDrawingBuffer`, so reading it back after the
@@ -181,12 +209,39 @@ async function ladder(faction) {
     // them.
     const png = await page.locator('#dzCanvas').screenshot();
     const row = rows.find((r) => r.key === key);
-    shots.push({ key, length: row ? row.length : 1,
+    shots.push({ key, length: row ? row.length : 1, cell: row ? row.cell : 0,
+      lattice: row ? row.lattice : null, plate: row ? row.plateCells : 0,
       url: 'data:image/png;base64,' + png.toString('base64') });
     console.log(`  ${key}  ${row ? row.length.toFixed(2) : '?'} u`);
   }
   const longest = Math.max(...shots.map((s) => s.length));
   const WIDEST = 820;
+  /**
+   * Pixels per WORLD UNIT, the same for every row.
+   *
+   * Each hull is drawn at `WIDEST * length / longest`, so this is constant down
+   * the sheet, which is what lets one reference square be a ruler rather than a
+   * decoration: a box of this many pixels is one unit on every row.
+   */
+  const PPU = WIDEST / longest;
+  /** One unit, as a box tiled with THAT CLASS's own voxel.
+   *
+   *  The hulls alone cannot answer "are the voxels the same size", because the
+   *  sheet normalises them to their own lengths and a bigger ship drawn from
+   *  bigger blocks looks the same as a bigger ship with more of them. The grid
+   *  inside this box is the answer: same outer square everywhere, and the
+   *  squares inside it are four times coarser on a cruiser than on a frigate. */
+  const cube = (cell) => {
+    const side = Math.max(8, PPU);
+    const vox = Math.max(1, cell * PPU);
+    return `<div style="width:${side.toFixed(1)}px;height:${side.toFixed(1)}px;`
+      + 'border:1px solid #6ea8d8;box-sizing:border-box;'
+      + `background-image:repeating-linear-gradient(to right,#6ea8d855 0 1px,transparent 1px ${vox.toFixed(2)}px),`
+      + `repeating-linear-gradient(to bottom,#6ea8d855 0 1px,transparent 1px ${vox.toFixed(2)}px)"></div>`
+      + `<div style="font-size:10px;opacity:.75;margin-top:3px">1 u</div>`
+      + `<div style="font-size:10px;opacity:.55">voxel ${cell.toFixed(4)}</div>`
+      + `<div style="font-size:10px;opacity:.55">${(1 / cell).toFixed(1)} per u</div>`;
+  };
   // One page, laid out and photographed, because compositing PNGs in Node
   // means a decoder and a rasteriser this repository has no reason to carry.
   // The CROP happens here too, on a decoded PNG rather than on a live WebGL
@@ -195,12 +250,24 @@ async function ladder(faction) {
   const html = `<body style="margin:0;background:#080b10;font:13px system-ui;color:#c8d4e2">
     <div style="padding:14px 18px 8px;font-size:14px;letter-spacing:.10em;text-transform:uppercase">
       ${faction} &middot; every rung to one scale</div>
+    <div style="padding:0 18px 10px;font-size:11px;opacity:.7;max-width:900px">
+      Every hull is cropped to itself and rescaled by its MEASURED length, so the
+      picture is the ladder rather than the camera. The blue box on each row is
+      one world unit at that same scale, tiled with that class's own voxel: same
+      box everywhere, and the grid inside it is what says whether a voxel is the
+      same size from rung to rung. It is, so the grids match and the LATTICE is
+      what differs: a bigger ship is more cells, and the plate count beside each
+      name is how many of them its skin actually costs.</div>
     ${shots.map((s) => `<div style="display:flex;align-items:center;gap:16px;padding:10px 18px">
-      <div style="width:170px;text-align:right;opacity:.85">${s.key}<br>
+      <div style="width:170px;flex:0 0 170px;text-align:right;opacity:.85">${s.key}<br>
         <b style="font-size:15px">${s.length.toFixed(2)} u</b>
-        <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span></div>
+        <span style="opacity:.6">&middot; ${(s.length / longest).toFixed(2)}x</span><br>
+        <span style="font-size:11px;opacity:.65">${s.lattice ? s.lattice.join(' x ') : ''}</span><br>
+        <span style="font-size:11px;opacity:.5">${s.plate} plate cells</span></div>
+      <div style="width:${Math.max(8, PPU).toFixed(0)}px;flex:0 0 auto;text-align:left">
+        ${cube(s.cell)}</div>
       <canvas data-src="${s.url}" data-w="${Math.round(WIDEST * (s.length / longest))}"
-        style="display:block"></canvas>
+        style="display:block;flex:0 0 auto"></canvas>
     </div>`).join('')}
     <script>
     window.drawn = 0;
@@ -233,10 +300,34 @@ async function ladder(faction) {
       im.src = cv.dataset.src;
     }
     </script></body>`;
-  const sheet = await browser.newPage({ viewport: { width: 1060, height: 900 } });
+  // Wide enough for the LONGEST row, computed rather than guessed: label, gaps,
+  // the reference cube, the widest hull and the page padding.
+  //
+  // The sheet was a flat 1060 and the cruiser row wanted 1123, so the row
+  // overflowed and the flex items shrank to fit: the canvas came out 757 px
+  // where the scale called for 820, and the biggest hull on every ladder was
+  // drawn 7.7 percent small. `flex:0 0` above is the other half of it, because
+  // a row that still overflowed would squeeze rather than scroll, and the one
+  // thing this sheet exists to do is put every rung on one ruler.
+  const sheetW = Math.ceil(170 + 16 + Math.max(8, PPU) + 16 + WIDEST + 36 + 8);
+  const sheet = await browser.newPage({ viewport: { width: sheetW, height: 900 } });
   await sheet.setContent(html);
   await sheet.waitForFunction((n) => window.drawn === n, shots.length, { timeout: 30000 });
   await sheet.waitForTimeout(200);
+  // The sheet's whole claim is that every rung is on ONE RULER, so it checks
+  // rather than asserts: what a canvas was ASKED to be against what it ended up
+  // on the page. They parted once, silently, because a flex row that overflows
+  // shrinks its items instead of scrolling, and the biggest hull on every
+  // ladder came out 7.7 percent small.
+  const laid = await sheet.evaluate(() => [...document.querySelectorAll('canvas')]
+    .map((c) => ({ want: +c.dataset.w, got: Math.round(c.getBoundingClientRect().width) })));
+  const off = laid.filter((l) => Math.abs(l.want - l.got) > 1);
+  if (off.length) {
+    console.log(`  SCALE BROKEN: ${off.length} of ${laid.length} rows are not at their own scale`);
+    for (const l of off) console.log(`    wanted ${l.want}px, laid out at ${l.got}px`);
+  } else {
+    console.log(`  every rung on one ruler: ${laid.length} rows at ${PPU.toFixed(1)} px per unit`);
+  }
   const png = await sheet.screenshot({ fullPage: true });
   writeFileSync(`${OUT}/ladder-${faction}.png`, png);
   console.log(`  ladder-${faction}.png  ${(png.length / 1024).toFixed(0)} kB`);

@@ -14,9 +14,10 @@ import * as THREE from 'three';
 import { BEAM_TICKS, FX_TICKS, HIT_TICKS, KILL_TICKS, View, type HullHit } from './app/view.js';
 import { Lobby, randomSeed, type Launch } from './app/lobby.js';
 import { Designer } from './app/designer.js';
+import { Architect } from './app/architect.js';
 import {
-  arcMasks, gunByKey, mountsOf, partAtCell, partsOf, PURPOSE, rasterise,
-  stockFor, useArcDirs, useCore, type Design,
+  arcMasks, gunByKey, migrateDesign, mountsOf, partAtCell, partsOf, PURPOSE,
+  rasterise, stockFor, useArcDirs, useCore, type Design,
 }
   from './app/design.js';
 import { hullTone } from './app/hull.js';
@@ -385,7 +386,9 @@ function start(): void {
   const refused: string[] = [];
   for (const pick of picks) {
     const side = pick.side === 1 ? 1 : 0;
-    const d = pick.design as Design;
+    // Off the wire or out of a save, so it may have been drawn on a lattice
+    // this build no longer uses.
+    const d = migrateDesign(pick.design as Design);
     // A class this build has never heard of. It used to go across as -1, which
     // the core read as an enormous unsigned index and CLAMPED to the last class
     // in its list; the core refuses it now, and saying so here is cheaper than
@@ -1833,29 +1836,61 @@ function renderHeader(): void {
   if (playTick === null && canPlan()) sc.value = String(previewTick);
 }
 
+/**
+ * The controls, as a REFERENCE rather than an essay.
+ *
+ * This was 1246 characters of prose sitting permanently in the rail, under a
+ * heading reading Help, above the controls it described. Nobody reads a wall
+ * of text to find out which button orbits; they scan for the word "orbit".
+ *
+ * So it is a list of bindings, which is what it always was, and the two
+ * paragraphs that genuinely explain something (what the outline IS, and what
+ * a phone does instead of a mouse) fold away behind the `?`.
+ */
 function renderHelp(): void {
+  const keys: Array<[string, string]> = [
+    ['Left drag', 'Inside the outline, a destination. Outside, pan.'],
+    ['Middle drag', 'Pan. Never touches a plan.'],
+    ['Right drag', 'Orbit'],
+    ['Scroll, pinch', 'Zoom'],
+    ['Shift drag', 'Swing the heading'],
+    ['<kbd>Q</kbd> <kbd>E</kbd>', 'Working altitude'],
+    ['<kbd>A</kbd> <kbd>D</kbd>', 'Swing the heading'],
+    ['<kbd>F</kbd>', 'Face the target'],
+    ['<kbd>i</kbd>', 'Schematic of the selected ship'],
+    ['<kbd>C</kbd>', 'Copy the camera pose'],
+  ];
+  const shoot: string[] = [
+    'Tap a hostile to target it',
+    'Tap a weapon to arm it',
+    'Tap a fire slot under the timeline',
+    'Choose a mount from the list',
+  ];
   $('help').innerHTML =
-    '<b>Left drag</b> inside the <span style="color:var(--green)">green outline</span> sets a '
-    + 'destination; anywhere else it pans. <b>Middle drag</b> always pans and never '
-    + 'touches a plan, whatever is under it. <b>Right drag</b> orbits. Scroll or pinch to zoom.'
-    + '<br><br>'
-    + 'Hold <kbd>Shift</kbd> and drag inside the outline to swing the heading instead.<br><br>'
-    + '<kbd>Q</kbd>/<kbd>E</kbd> working altitude, <kbd>A</kbd>/<kbd>D</kbd> swing heading, '
-    + '<kbd>F</kbd> face the target.<br><br>'
-    + '<b>To shoot:</b> tap a hostile to make it the target, tap a weapon to arm it, '
-    + 'then tap a <b>fire slot</b> under the timeline to pick the second, and '
-    + 'choose a mount from the list it opens. A shot already queued there is in '
-    + 'the same list, and tapping it takes the shot back.<br><br>'
-    + 'The outline is where the ship can actually finish its turn on this plane, and the shell '
-    + 'is the same set in three dimensions. Both are <b>probed, not derived</b>: every point is '
-    + 'a flight the core really flew, so they change shape as your velocity, heading and stats '
-    + 'do. On a phone, one finger does what the left button does and the '
-    + '<span style="color:var(--cyan)">&#10227;</span> button swaps it for orbiting; '
-    + '<b>two fingers</b> pan and pinch together, and never touch a plan.<br><br>'
-    + '<b>Reading a ship:</b> the chips list what is offline beside each hull, hovering '
-    + 'one gives the full state, and <b>i</b> opens its schematic. Zoom in on a ship and '
-    + '<b>Ship data</b> appears in the corner of the map, which labels its systems where '
-    + 'they are until you move away.';
+    '<dl class="keys">'
+    + keys.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')
+    + '</dl>'
+    + '<p class="sub">To shoot</p>'
+    + `<ol class="steps">${shoot.map(t => `<li>${t}</li>`).join('')}</ol>`
+    + '<p class="sub">Tap a queued shot to take it back.</p>';
+  // What the outline actually is, and what a phone does instead of a mouse.
+  // Both are worth knowing once and never again, which is what the fold is
+  // for: `main.ts` owns the toggle and this only has to hang the text on the
+  // heading the reference sits under.
+  const head = $('helpHead');
+  head.querySelector('.dzwhy')?.remove();
+  const why = document.createElement('button');
+  why.type = 'button';
+  why.className = 'dzwhy';
+  why.textContent = '?';
+  why.setAttribute('aria-expanded', 'false');
+  why.title = 'The outline is where the ship can actually finish its turn on '
+    + 'this plane, and the shell is that set in three dimensions. Both are '
+    + 'probed rather than derived: every point is a flight the core really '
+    + 'flew, so they change shape as your velocity, heading and stats do. On a '
+    + 'phone one finger does what the left button does, the orbit button swaps '
+    + 'it, and two fingers pan and pinch without ever touching a plan.';
+  head.appendChild(why);
 }
 
 function refreshAll(): void {
@@ -3565,6 +3600,10 @@ Object.defineProperty(window, 'ftDebug', {
     canPlan,
     /** The shipyard, read only. */
     designer: () => (designer.visible ? designer.debug() : null),
+    /** The architect's own state. Separate from the designer's because the
+     *  claim worth checking is that the two DISAGREE: the frame on screen is
+     *  an edit and the class is still what this build authored. */
+    architect: () => architect.debug(),
     /** The schematic modal: what it is describing, or null when it is down. */
     /** The schematic modal: what it is describing, what its armour is doing,
      *  and which cell and turret the pointer is on. */
@@ -3597,6 +3636,12 @@ const designer = new Designer(() => {
   else if (!lobby.visible) lobby.show();
 });
 $('bShipyard').onclick = () => { route.go({ kind: 'ship' }); };
+
+// The architect: the same yard editing the FRAME rather than a fit. It is a
+// mode of the designer, so this owns only the address and the way in.
+const architect = new Architect(designer);
+architect.onWhere(classKey => { route.go({ kind: 'architect', classKey }); });
+$('bArchitect').onclick = () => { route.go({ kind: 'architect' }); };
 
 // The seam between the shipyard and the library. The editor knows nothing
 // about the network and the lobby knows nothing about hulls; this is the one
@@ -3704,7 +3749,12 @@ async function showRoute(r: route.Route): Promise<void> {
   if (key === shownRoute) return;
   shownRoute = key;
 
-  if (r.kind !== 'ship') designer.hide();
+  // Leaving the architect CLEARS the frame override, and that is the whole
+  // safety property of the screen: an override left standing would follow the
+  // player into the shipyard and into a match, where the hull they can see and
+  // the hull the core spawns would be two different ships.
+  if (r.kind !== 'architect' && architect.open) architect.hide();
+  if (r.kind !== 'ship' && r.kind !== 'architect') designer.hide();
   if (r.kind !== 'play' && r.kind !== 'room') {
     // Leaving a game: the match stays in the module, but the screen over it
     // goes, and the lobby is the thing behind it.
@@ -3754,7 +3804,7 @@ async function showRoute(r: route.Route): Promise<void> {
       try {
         const d = await api.getDesign(r.designId);
         designer.show();
-        designer.loadDesign(d.design as Design, {
+        designer.loadDesign(migrateDesign(d.design as Design), {
           designId: d.designId, name: d.name, mine: d.mine, owner: d.owner.name,
         });
       } catch {
@@ -3770,6 +3820,18 @@ async function showRoute(r: route.Route): Promise<void> {
       lobby.show();
       return;
     }
+    case 'architect': {
+      // No class named: the lobby's own list of them. A picker screen with one
+      // job would be a third place that knows the class list, and the yard's
+      // chips already are one.
+      if (!r.classKey || classIndexOf(r.classKey) < 0) {
+        route.go({ kind: 'architect', classKey: CLASS_KEYS[0] as string }, { replace: true });
+        return;
+      }
+      architect.show(r.classKey);
+      lobby.show();
+      return;
+    }
     default:
       lobby.show();
   }
@@ -3778,6 +3840,48 @@ async function showRoute(r: route.Route): Promise<void> {
 // Back, Forward, and every `go` above. `showRoute` is idempotent on the route
 // it is already showing, which is what makes it safe to call from both.
 route.onRoute(r => { void showRoute(r); });
+
+/**
+ * The "?" beside a heading, which folds a paragraph away.
+ *
+ * A rail is for controls. What a control DOES belongs on screen as a short
+ * label; WHY it works that way is elaboration, and elaboration that is always
+ * visible is a wall of prose nobody reads, which is what these panes had:
+ * 2082 characters of it in the armour rail alone.
+ *
+ * A TAP rather than a hover, because a phone has no hover and a tooltip
+ * nothing can open is a tooltip that does not exist. `title` stays on the
+ * button so a desktop still gets the fast path, and nothing here is the ONLY
+ * statement of what a control is: the label above it always says that much,
+ * which is the rule about hover discoverability holding rather than being
+ * worked around.
+ *
+ * Delegated, so a pane built at runtime gets it without asking.
+ */
+document.addEventListener('click', ev => {
+  const why = (ev.target as HTMLElement | null)?.closest?.('.dzwhy');
+  if (!(why instanceof HTMLElement)) return;
+  const head = why.parentElement;
+  const text = why.getAttribute('title') ?? '';
+  if (!head || !text) return;
+  const open = head.nextElementSibling?.nextElementSibling;
+  if (open?.classList.contains('dzmore')) {
+    open.remove();
+    why.classList.remove('on');
+    why.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const p = document.createElement('p');
+  p.className = 'dzmore';
+  p.textContent = text;
+  // After the LABEL rather than after the heading, so the short answer stays
+  // first and the long one reads as a footnote to it.
+  const note = head.nextElementSibling;
+  if (note) note.insertAdjacentElement('afterend', p);
+  else head.insertAdjacentElement('afterend', p);
+  why.classList.add('on');
+  why.setAttribute('aria-expanded', 'true');
+});
 
 renderHelp();
 frame();

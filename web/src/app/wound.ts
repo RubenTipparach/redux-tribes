@@ -27,7 +27,7 @@
 
 import * as THREE from 'three';
 import {
-  Mat, NX, NY, NZ, RUNG, armourColour, bareGrid, cellColour, frameFor, rasterise, type Design,
+  Mat, VOXEL, latOf, armourColour, bareGrid, cellColour, frameFor, rasterise, type Design,
 } from './design.js';
 import type { HullMesh } from './hull.js';
 
@@ -274,7 +274,8 @@ export function buildWound(
   bare = false,
 ): Wound {
   const frame = frameFor(design.classKey);
-  const cell = RUNG[frame.rung];
+  const cell = VOXEL;
+  const { nx: NX, ny: NY, nz: NZ } = latOf(frame);
   const raster = rasterise(design);
   const purp = raster.purp;
   // The SAME lattice the hull it is tearing was meshed from. A wound built

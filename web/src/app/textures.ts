@@ -101,21 +101,36 @@ export function partMap(): THREE.Texture | null { return finishMap(PART_FINISH);
  * offset per cell is 1/N of the image, so a wrong N samples across a seam.
  */
 /**
- * Which FACES of a hull a decal may appear on.
+ * Which FACES of a hull a decal may appear on, as the axes its normal may run
+ * along: `x` the flanks, `y` the deck and the belly, `z` the bow and transom.
  *
- * A window is a hole in the plating over a room, and most rooms present the
- * same face whichever side you look at them from: a cabin is a cabin from
- * abeam and from above. Two are not like that. A container's doors are on its
- * END, and a radiator's slats run down a FLANK, so tiling either over every
- * exposed face of the module turns a box into a wall of doors: a container
- * ship came out wearing a thousand of them, one per cell, each the size of a
- * hand.
+ * **A cabin does not have a window in the roof.** The first cut of this had
+ * two settings, `ends` and `sides`, and `sides` meant "across or up", so every
+ * room decal that was not a container door tiled the DECK and the BELLY as
+ * well as the flanks: a Terran frigate carried a field of a hundred and forty
+ * lit cabin panes across the top of its hull, which is the one thing on a ship
+ * nobody has ever seen. A berth looks out sideways. So does a promenade, an
+ * observation gallery and an airlock porthole.
  *
- * 'ends' means a face whose normal runs along the hull, 'sides' one whose
- * normal runs across or up it. Anything unlisted goes anywhere.
+ * A bridge is the exception among rooms, because a bridge looks where the ship
+ * is GOING: it keeps the bow as well as the flanks.
+ *
+ * Three are about the module's own shape rather than about the view. A
+ * container's doors are on its END and a radiator's slats run down a FLANK, so
+ * tiling either over every exposed face turns a box into a wall of doors: a
+ * container ship came out wearing a thousand of them, one per cell, each the
+ * size of a hand.
+ *
+ * Running lights are the one thing that genuinely goes anywhere, because they
+ * are lights rather than windows: a clamp marks itself on whatever face it
+ * presents. Anything unlisted goes anywhere.
  */
-export const WINDOW_FACE: Readonly<Record<string, 'ends' | 'sides'>> = {
-  cargo: 'ends', hangar: 'ends', louvre: 'sides',
+export const WINDOW_FACE: Readonly<Record<string, string>> = {
+  // Rooms people look out of, and people look sideways.
+  panes: 'x', porthole: 'x', promenade: 'x', strip: 'x',
+  bridge: 'xz',
+  // Shape rather than view.
+  cargo: 'z', hangar: 'z', louvre: 'x',
 };
 
 export const WINDOW_VARIANTS: Readonly<Record<string, number>> = {
@@ -181,6 +196,25 @@ export function windowMap(key: string): WindowMaps | null {
  * per hull difference is in the vertex colours and the UVs.
  */
 const windowMats = new Map<string, THREE.MeshStandardMaterial>();
+/**
+ * The decal's own picture, for a picker chip.
+ *
+ * The EMISSIVE map, because that is the lit panes: a chip showing the colour
+ * map would be a dark rectangle, and what a player is choosing between is the
+ * pattern of light. Through here rather than spelled at the call site for the
+ * reason every other path is: `textures.ts` owns them, so a caller has nowhere
+ * to write `./` and hand the page an HTML file with no pixels in it.
+ *
+ * The file is a STRIP of variants laid side by side, so a chip that wants one
+ * of them scales the strip by its width and takes the first slice; `variants`
+ * is what a caller needs to do that.
+ */
+export function windowThumb(key: string): { url: string; variants: number } | null {
+  const variants = WINDOW_VARIANTS[key];
+  if (!variants) return null;
+  return { url: at(`surf/window_${key}_e.png`), variants };
+}
+
 export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
   const had = windowMats.get(key);
   if (had) return had;
@@ -196,7 +230,30 @@ export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
     metalness: 0.15,
     roughness: 0.35,
     dithering: true,
+    // A window is a DECAL laid on plating, and on one of the three screens
+    // that draw it the plating is still there underneath.
+    //
+    // The map and the schematic mesh greedily and drop the plate quad exactly
+    // where a window goes, so the pane is the only surface in that plane. The
+    // SHIPYARD draws a box per cell, because seeing the cells is the whole
+    // point of an editor, and a box keeps all six of its faces: the pane and
+    // the face under it are then coplanar to the last bit and the depth test
+    // has no way to choose, which is the stipple across a hull's flank.
+    //
+    // A depth bias rather than nudging the quad outward by a fixed epsilon. A
+    // cell is 7/64 of a unit on a frigate and 14/64 on a heavy cruiser, and
+    // the same epsilon that separates the two surfaces up close is a pane
+    // visibly floating off its own hull at map range. `polygonOffset` is in
+    // DEPTH units and scales with the slope and the distance, which is the
+    // whole reason it exists.
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
+  // Named so a harness can count the panes a screen actually DREW. The defect
+  // worth catching is a hull whose rooms all carry windows and a screen that
+  // draws none of them, and only the mesh can answer that.
+  mat.name = `window:${key}`;
   windowMats.set(key, mat);
   return mat;
 }

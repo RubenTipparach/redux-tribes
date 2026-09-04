@@ -45,6 +45,8 @@ test('every route survives the round trip through a path', () => {
     { kind: 'room', roomId: 'r-9' },
     { kind: 'ship' },
     { kind: 'ship', designId: 'd_42' },
+    { kind: 'architect' },
+    { kind: 'architect', classKey: 'terran_frigate' },
   ];
   for (const r of cases) {
     assert.deepEqual(route.parse(route.href(r)), r, `${JSON.stringify(r)}`);
@@ -64,6 +66,7 @@ test('a path nobody recognises is the lobby, not a blank screen', () => {
 test('trailing slashes and escapes do not make a second address', () => {
   assert.deepEqual(route.parse('/play/abc/'), { kind: 'play', gameId: 'abc' });
   assert.deepEqual(route.parse('/ship/'), { kind: 'ship' });
+  assert.deepEqual(route.parse('/architect/'), { kind: 'architect' });
   assert.ok(route.same({ kind: 'play', gameId: 'a' }, route.parse('/play/a/')));
   assert.ok(!route.same({ kind: 'play', gameId: 'a' }, { kind: 'play', gameId: 'b' }));
 });

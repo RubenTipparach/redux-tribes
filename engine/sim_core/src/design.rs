@@ -94,8 +94,9 @@ pub fn module_index(id: &str) -> Option<usize> {
 /// a part is a machine and does not.
 const PLATE_UM: f32 = 78.0;
 const HULL_MILLI: f32 = 34.0;
-/// The frigate cell, in world units. Every other rung is a multiple of it.
-use crate::data::FRIGATE_CELL;
+/// The reference cell the plate density is authored against, and the one
+/// lattice cell every class is actually built out of.
+use crate::data::{FRIGATE_CELL, VOXEL};
 /// Turn length, from `data.rs` CONST.
 const TURN_SECONDS: f32 = 10.0;
 
@@ -154,9 +155,10 @@ impl Derived {
     }
 }
 
-/// The cell size of a class, in world units.
-pub fn cell_of(class: ShipClassId) -> f32 {
-    ship_class(class).rung_cell
+/// The cell size of a class, in world units, which is the same for all of
+/// them: what makes a heavy cruiser bigger is how many cells it has.
+pub fn cell_of(_class: ShipClassId) -> f32 {
+    VOXEL
 }
 
 /// Derive a design: what it weighs, what it can take, and how it flies.
@@ -166,7 +168,7 @@ pub fn cell_of(class: ShipClassId) -> f32 {
 /// second opinion about them would be a second ship.
 pub fn derive(class: ShipClassId, parts: &[usize], geo: Geometry) -> Derived {
     let cls = ship_class(class);
-    let cell = cls.rung_cell;
+    let cell = VOXEL;
 
     let mut mass_um: i64 = 0;
     let mut hull_milli: i64 = 0;
@@ -203,7 +205,10 @@ pub fn derive(class: ShipClassId, parts: &[usize], geo: Geometry) -> Derived {
     }
 
     // The hull as built, counted rather than estimated. A cell of plate is a
-    // volume of material, so it scales with the rung; the parts do not.
+    // volume of material and every cell is the same volume, so what a hull
+    // weighs is how many of them it has: a heavy cruiser is heavy because it
+    // is four times a frigate's skin at the same plating, not because a
+    // multiplier says so.
     let scale = cell / FRIGATE_CELL;
     let vol = scale * scale * scale;
     mass_um += (geo.plate_cells as f32 * PLATE_UM * vol).round() as i64;

@@ -30,8 +30,9 @@
 import * as THREE from 'three';
 import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
-  CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
+  latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
+  isPainted, paintedSlot, purposeAt, decalMap,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
@@ -67,24 +68,74 @@ import type { MountFace } from './turret.js';
  */
 export const SURF_ARMOUR = 0;
 export const SURF_FRAME = ARMOUR_BANDS;
-export const SURF_PART = ARMOUR_BANDS + 1;
-export const SURF_COUNT = ARMOUR_BANDS + 2;
+/**
+ * Machinery, three ways: what pushes, what shoots, and everything else.
+ *
+ * It was ONE surface for every part on the ship, and the note that justified
+ * it said a player can tell a drive from a gun by its COLOUR, which is true
+ * and is not the question a surface answers. A drive bell is a cast nozzle, a
+ * turret is a machined gun and a barracks is a box; one greeble over all three
+ * says none of it, and there was no way to say otherwise.
+ *
+ * Three rather than eight, because these are the three a player names when
+ * asked what a ship is made of. Propulsion and attitude are one surface: both
+ * are bells, and CLAUDE.md's own vocabulary keeps them one family of thing
+ * even while keeping the WORDS apart.
+ */
+export const SURF_DRIVE = ARMOUR_BANDS + 1;
+export const SURF_WEAPON = ARMOUR_BANDS + 2;
+export const SURF_PART = ARMOUR_BANDS + 3;
+/**
+ * One surface per PALETTE SLOT, for cells laid down by the brush.
+ *
+ * A slot is a colour and what it is made of, and until now only the colour
+ * reached a hand painted cell: the finish came from whichever band the cell's
+ * livery role fell in, so painting a panel could not make it a different
+ * material. Eight more surfaces is what a finish per slot costs, because a
+ * normal map is a material and a material is a draw call.
+ *
+ * The three BANDS above are still three and still capped for the reason they
+ * always were: they are what the livery paints by itself, on every hull,
+ * without being asked. These are opt in, and a group is only emitted for a
+ * surface that has quads in it, so a hull nobody has painted pays nothing and
+ * a hull painted from two slots pays for two.
+ */
+export const SURF_SLOT = ARMOUR_BANDS + 4;
+export const PAINT_SLOTS = 8;
+export const SURF_COUNT = SURF_SLOT + PAINT_SLOTS;
 
 /** What each surface is called, for anything that reports them. One list, so
  *  a screen cannot label the second band 'frame' because it counted wrong. */
 /**
- * How far through the plating a window looks for its room, in cells.
+ * How far through the plating a window looks for its room, in REFERENCE cells.
  *
- * A player may lay fifteen courses, and fifteen courses of armour over a
- * barracks is a barracks nobody has a window onto: past about five the room is
- * not "behind the skin" in any sense a viewport could mean, and a decal that
- * appeared through a foot of belt would be a hole in the armour that the
- * armour does not have.
+ * A window is a hole in the PLATING over a room, so how far it looks has to be
+ * how thick the plating is, and how thick the plating is has to be the class's
+ * own: courses are cut to the rung (`stock`), so a heavy cruiser carries ten
+ * to twelve of them where a frigate carries three to five. A flat five cells
+ * cannot cross that, and it did not: measured over the fleet, the Terran
+ * destroyer, the Terran cruiser, both Benefactor heavies and the Rogue cruiser
+ * drew NO room decal at all, only the running lights on their clamps, which
+ * are on parts standing proud of the skin and never had to look through
+ * anything. This is the same defect the depth was written for, back when it
+ * was one cell and a belt was three.
+ *
+ * There is still a ceiling, and it is still the reason there was one: a player
+ * may lay fifteen courses on a frigate, and fifteen courses of armour over a
+ * barracks is a barracks nobody has a window onto. A decal that appeared
+ * through that would be a hole the armour does not have. So the ceiling is
+ * what the CLASS carries rather than what this hull was given, and over
+ * armouring a ship still costs it its viewports.
  */
-const WINDOW_DEPTH = 5;
+const WINDOW_DEPTH_REF = 5;
+
+/** The lattice `WINDOW_DEPTH_REF` is authored on, so the reach is cut to a
+ *  class's own the way everything else authored in cells already is. */
+const REF_NX = 32;
 
 export const SURF_NAMES: readonly string[] =
-  ['plate', 'trim', 'structure', 'frame', 'part'];
+  ['plate', 'trim', 'structure', 'frame', 'drive', 'weapon', 'part',
+    ...Array.from({ length: PAINT_SLOTS }, (_, n) => `brush ${n + 1}`)];
 
 export interface HullRig {
   /** The weapon key, for naming it. */
@@ -107,8 +158,16 @@ export interface HullRig {
 
 export interface HullMesh {
   readonly geo: THREE.BufferGeometry;
-  /** The world size of one cell for this hull's class. */
+  /** The world size of one cell, which is the SAME on every class. */
   readonly cell: number;
+  /**
+   * The lattice this hull was meshed on.
+   *
+   * Carried here rather than looked up again by everything that walks the
+   * quads: a cell index means nothing without the lattice it was made on, and
+   * the map takes hits apart in cell indices.
+   */
+  readonly lat: Lat;
   /** Which lattice cell each QUAD belongs to, so damage can take one away. */
   readonly cellOf: Int32Array;
   /** The centre of that cell in SHIP units, three per quad. What a hit is
@@ -289,9 +348,27 @@ export function hullMaterials(d: Design): THREE.MeshStandardMaterial[] {
   mats[SURF_FRAME] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.45, roughness: 0.70, normalMap: finishMap(f.frame),
   });
+  mats[SURF_DRIVE] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.drive),
+  });
+  mats[SURF_WEAPON] = new THREE.MeshStandardMaterial({
+    ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.weapon),
+  });
   mats[SURF_PART] = new THREE.MeshStandardMaterial({
     ...common, metalness: 0.55, roughness: 0.62, normalMap: finishMap(f.part),
   });
+  // A surface per slot: the finish that swatch carries, falling back to the
+  // hull's own. Built whether or not anything is painted with it, because a
+  // material is cheap and a MISSING one is a group pointing at nothing; the
+  // draw call is only paid when the mesh has quads in that group.
+  for (let n = 0; n < PAINT_SLOTS; n++) {
+    mats[SURF_SLOT + n] = new THREE.MeshStandardMaterial({
+      ...common,
+      metalness: d.metal ?? DEFAULT_METAL,
+      roughness: d.rough ?? DEFAULT_ROUGH,
+      normalMap: finishMap(d.slotFinish?.[n] || f.armour),
+    });
+  }
   return mats;
 }
 
@@ -330,7 +407,35 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   if (hit) return hit;
 
   const frame = frameFor(d.classKey);
-  const cell = RUNG[frame.rung];
+  // A voxel is the same size on every hull; how many of them there are is what
+  // makes one class bigger than another. Shadowed so the walk below reads as
+  // the lattice walk it is.
+  const cell = VOXEL;
+  const { nx: NX, ny: NY, nz: NZ, cells: CELLS } = latOf(frame);
+  // How far in the room is, which is two things and both of them scale.
+  //
+  // The PLATING is one: courses are cut to the rung, so the fleet's belts run
+  // from one course on a Rogue frigate to twelve on a Benefactor heavy
+  // cruiser. And the ROOM is the other: a bay is seated at a fraction of the
+  // half beam, so the same fitting on a hull twice as wide sits twice as many
+  // cells inside the skin, whatever the armour over it is doing.
+  //
+  // A flat five cells tracked neither, and measured over the fleet the Terran
+  // destroyer, the Terran cruiser, both Benefactor heavies and the Rogue
+  // cruiser drew NO room decal at all: only the running lights on their
+  // clamps, which sit on parts standing proud of the skin and never had to
+  // look through anything. That is the same defect the depth was written for,
+  // back when it was one cell and a belt was three.
+  //
+  // So it is the rung's own reach, and never less than the CLASS's stock
+  // plating. The ceiling is still there and still for its original reason: a
+  // player may lay fifteen courses on a frigate, and fifteen courses over a
+  // barracks is a barracks nobody has a window onto. Taking the class's stock
+  // courses rather than this hull's is what keeps that true.
+  const stockCourses = stockFor(d.classKey).sections;
+  const depth = Math.max(
+    Math.round(WINDOW_DEPTH_REF * NX / REF_NX),
+    1 + Math.max(...SECTIONS.map(k => stockCourses[k])));
   const raster = rasterise(d);
   const purp = raster.purp, own = raster.own, tone = raster.tone;
   const grid = bare ? bareGrid(raster.grid, raster.own) : raster.grid;
@@ -439,12 +544,16 @@ export function hullMesh(d: Design, bare = false): HullMesh {
    * Plate only. A window in the middle of a drive bell would be a window on a
    * part that is standing outside the hull, which is a hole in an engine.
    */
-  const windowAt = (
+  /**
+   * What a player painted on, by cell. Built once per mesh rather than read
+   * off the design per face: this is asked six times for every cell of the
+   * hull.
+   */
+  const decals = decalMap(d);
+
+  const roomBehind = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
-    const n = idx(i, j, k);
-    const mat = grid[n] as number;
-    if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
     // Through the PLATING, not one step in.
     //
     // A belt is three to five courses thick and a room behind it is therefore
@@ -458,7 +567,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     // anything else it is inside the ship and whatever it met is the answer,
     // so a window still means "a room immediately behind this skin" rather
     // than "a room somewhere along this line".
-    for (let step = 1; step <= WINDOW_DEPTH; step++) {
+    for (let step = 1; step <= depth; step++) {
       const bi = i - dx * step, bj = j - dy * step, bk = k - dz * step;
       if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
       const m = idx(bi, bj, bk);
@@ -467,15 +576,83 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         const part = d.parts[owner - 1];
         const key = (part ? moduleById(part.module)?.window : undefined) ?? null;
         if (!key) return null;
+        // Which axis this face's normal runs along, against the axes the
+        // decal is allowed on.
         const face = WINDOW_FACE[key];
-        if (face === 'ends' && dz === 0) return null;
-        if (face === 'sides' && dz !== 0) return null;
+        if (face) {
+          const axis = dx !== 0 ? 'x' : dy !== 0 ? 'y' : 'z';
+          if (!face.includes(axis)) return null;
+        }
         return key;
       }
       const inner = grid[m] as number;
       if (inner !== Mat.Plate && inner !== Mat.Skinned) return null;
     }
     return null;
+  };
+
+  /**
+   * The same question asked of the hull's OTHER SIDE as well.
+   *
+   * A ship is symmetric about its keel and its windows should be too: a row of
+   * cabins down the port flank with nothing facing them to starboard is the
+   * one thing on a hull that reads as a mistake at a glance. Measured over the
+   * fleet, half of every window cell had no twin.
+   *
+   * The rooms are not the problem. Every fitting is authored on a mirrored
+   * pair of sockets, and 432 of them are exact. What moves them is the
+   * rasteriser's own collision nudge: a part that cannot sit where its socket
+   * puts it walks until it fits, the walk sees whatever the placements before
+   * it left, and one displaced fitting sends the next one somewhere else
+   * again. The Terran frigate's clamps end six cells inboard of their sockets
+   * and five cells apart in z, so every beacon window on that hull was on one
+   * side only.
+   *
+   * So the skin is asked about the room behind it AND about the room behind
+   * its mirror, which is the ship as DESIGNED rather than as the packer
+   * happened to settle it. Both cells have to be plating and the mirrored face
+   * has to be the mirrored normal, so this can only ever light a pane on a
+   * surface that is really there; what it cannot do is invent a room, because
+   * a room is what it is asking about.
+   *
+   * Nothing here crosses the boundary or is hashed. Which cells are lit is the
+   * client drawing, and two clients that disagreed about a window would still
+   * play the same match.
+   */
+  const windowAt = (
+    i: number, j: number, k: number, dx: number, dy: number, dz: number,
+  ): string | null => {
+    const n = idx(i, j, k);
+    const mat = grid[n] as number;
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
+    // A HAND PAINTED decal wins, and it is asked first.
+    //
+    // The derivation below is what gives a stock hull its windows for free,
+    // and it can only ever answer for a cell with a room behind it. A player
+    // who wants a porthole somewhere else is not making a mistake the editor
+    // should argue with, so a painted cell is simply the answer.
+    //
+    // On EVERY exposed face of that cell, unlike the derived pass, which is
+    // held to `WINDOW_FACE` so a room's decal does not tile over a whole hull.
+    // A player placing one cell at a time is being deliberate, and a tool that
+    // silently drew nothing because the cell's only open face pointed the
+    // wrong way would be a tool nobody could tell was working.
+    const painted = decals.get(n);
+    if (painted) return painted;
+    const mine = roomBehind(i, j, k, dx, dy, dz);
+    if (mine) return mine;
+    // The mirror of this cell, looking the mirrored way: a face whose normal
+    // runs across the hull points the other way over there, and one running
+    // along it or up it points the same way.
+    const mi = NX - 1 - i;
+    if (mi === i) return null;
+    const mn = idx(mi, j, k);
+    const mm = grid[mn] as number;
+    if (mm !== Mat.Plate && mm !== Mat.Skinned) return null;
+    // And it has to be a face over there too, or this would light a pane on
+    // plating with more plating outside it.
+    if (!open(mi - dx, j - dy, k - dz)) return null;
+    return roomBehind(mi, j, k, -dx, dy, dz);
   };
   /** Every window face found, by decal kind: cell, and which way it looks. */
   const winFaces = new Map<string, Array<{ cell: number; dir: number }>>();
@@ -625,9 +802,29 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const n = cellOf[q] as number;
     const mat = grid[n] as number;
     if (mat === Mat.Plate || mat === Mat.Skinned) {
-      return SURF_ARMOUR + ROLE_BAND[roleAt(tone[n] as number)];
+      // A hand painted cell draws in the broad plating's band. Its COLOUR is
+      // the slot's, which is a vertex attribute and free; its finish is the
+      // hull's, because a finish is a material and a material is a draw call.
+      // A hand painted cell draws in its SLOT's surface, so the finish a
+      // player put on that swatch is the finish the panel wears.
+      const t = tone[n] as number;
+      return isPainted(t) ? SURF_SLOT + paintedSlot(t)
+        : SURF_ARMOUR + ROLE_BAND[roleAt(t)];
     }
-    return mat === Mat.Frame ? SURF_FRAME : SURF_PART;
+    if (mat === Mat.Frame) return SURF_FRAME;
+    // Which machinery, by what the cell is FOR. `purp` is the purpose code the
+    // rasteriser already writes for the colour legend, so this is the same
+    // answer asked about the surface instead of about the hue.
+    //
+    // Nought is NO purpose recorded, which is a spar or a weld rather than a
+    // drive. `purposeAt` answers the first row of the table for it, so asking
+    // it directly would have put every unclaimed cell in the engines.
+    const code = purp[n] as number;
+    if (!code) return SURF_PART;
+    const job = purposeAt(code);
+    if (job === 'propulsion' || job === 'attitude') return SURF_DRIVE;
+    if (job === 'gun' || job === 'ordnance') return SURF_WEAPON;
+    return SURF_PART;
   };
   const order = cellOf.map((_, q) => q);
   // Stable, so a run of plate stays in the order the greedy pass laid it down
@@ -778,7 +975,7 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   const out: HullMesh = {
     geo,
     windows,
-    cell,
+    cell, lat: latOf(frame),
     rigOf,
     rigs,
     rigOfCell,

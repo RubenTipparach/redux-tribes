@@ -22,24 +22,116 @@
 
 import { CLASS_KEYS } from '../sim/types.js';
 
-/** The hull lattice, every class. A frigate is 32 x 32 x 64 cells. */
-export const NX = 32, NY = 32, NZ = 64;
-export const CELLS = NX * NY * NZ;
+/**
+ * The hull lattice, and the one voxel every hull is built out of.
+ *
+ * A voxel is the SAME SIZE on every class. That is the whole point of the
+ * lattice: a bigger ship is more cells, not bigger cells, so its plating,
+ * its guns and its engines are counted rather than scaled and "how big is a
+ * heavy cruiser" is answered by the model instead of by a multiplier.
+ *
+ * It did not used to be. Every class was 32 x 32 x 64 and a rung was a CELL
+ * SIZE, so a heavy cruiser was a frigate drawn at four times the magnification
+ * with exactly as much detail in it: the Karisen cruiser carried the same
+ * number of voxels as its own frigate at 4.34 times the length. Nothing in the
+ * fleet said a big ship was a big ship, because nothing counted.
+ *
+ * So the LATTICE is the rung now, and `VOXEL` is a constant.
+ */
+export interface Lat {
+  readonly nx: number; readonly ny: number; readonly nz: number;
+  /** Cells in the whole lattice, which is what every grid is sized on. */
+  readonly cells: number;
+  /**
+   * The centre, which is a cell BOUNDARY and not a cell: on a lattice of 32
+   * the plane a ship is symmetric about runs between columns 15 and 16. Every
+   * mirrored pair in the file goes through `PX`/`SX` or `acrossFrom` for that
+   * reason, and both of them start here.
+   */
+  readonly cx: number; readonly cy: number;
+  /**
+   * The thickest a FRAME member may be, in cells.
+   *
+   * A keel run is a BEAM, and a beam is the same beam whatever it is holding
+   * up: it does not scale with the ship, any more than a turret or a drive
+   * bell does. Scaling its section with the lattice was a mistake and it is
+   * the one thing a bigger lattice makes worse rather than better, because a
+   * solid box is the only thing in the model that gains nothing from more
+   * cells. The Terran heavy cruiser's raised dorsal run came out 20 cells
+   * across and 4 deep over 84 stations: a grey slab welded along the top of
+   * the ship, standing proud of an elliptical deck that a flat box cannot
+   * follow. 1496 of its frame cells were outside its own hull, against 0 on
+   * every frigate and corvette in the fleet.
+   *
+   * So a section is capped in real cells, and only the RUN scales.
+   */
+  readonly beam: number;
+}
+const lat = (nx: number, ny: number, nz: number, beam: number): Lat =>
+  ({ nx, ny, nz, cells: nx * ny * nz, cx: nx / 2, cy: ny / 2, beam });
 
 /**
- * Cell size in world units, by rung.
+ * One voxel, in world units, on every hull in the game.
  *
- * A frigate is 7 u long (class radius 3.5) over 64 cells, so 7/64 = 0.109375,
- * which is 7 x 2^-6 and therefore exact in f32. Every rung is the same lattice
- * with a bigger cell, so a capital costs no more to store than a frigate.
+ * 3.5/64 = 0.0546875, which is 7 x 2^-7 and therefore exact in f32. It is the
+ * frigate's own cell, so a Terran frigate is the same 3.17 units it has always
+ * been and the rest of the fleet is measured against it.
+ *
+ * The ladder is a CONSEQUENCE of this and of the lattice, and it is worth
+ * being plain about what that costs: a heavy cruiser is twice a frigate rather
+ * than four times, because 128 cells over 64 is two. Anchoring the voxel at
+ * half this would put the cruiser back at four times the frigate and halve the
+ * frigate as well. One constant, and nothing else in the file cares.
+ */
+export const VOXEL = 3.5 / 64;
+
+/**
+ * The four lattices, which are the four sizes of ship.
+ *
+ * 24 x 24 x 48, 32 x 32 x 64, 48 x 48 x 96, 64 x 64 x 128: the ladder is
+ * 0.75, 1, 1.5, 2 in every dimension at once, and a heavy cruiser therefore
+ * carries eight times a frigate's volume in cells rather than the same cells
+ * eight times as big. That is what buys it more armour, more mounts and more
+ * berths, and what makes it slow: mass is plate cells, and it has eight times
+ * as many to push with engines that are the same engines.
+ *
+ * Four, and the civil trades sit on them too. A rung used to be a cell size,
+ * and twice a class was quietly moved because a neighbour sharing its rung
+ * changed; that hazard is gone, because what separates two classes on one
+ * lattice is `REACHES` and `FULLNESS`, and both of those are keyed on the TIER.
  */
 export const RUNG = {
-  frigate: 7 / 64,
-  escort: 10.5 / 64,
-  cruiser: 14 / 64,
-  capital: 28 / 64,
+  corvette: lat(24, 24, 48, 2),
+  frigate: lat(32, 32, 64, 2),
+  escort: lat(48, 48, 96, 2),
+  cruiser: lat(64, 64, 128, 3),
 } as const;
 export type RungKey = keyof typeof RUNG;
+
+/**
+ * The lattice everything authored by hand is authored ON.
+ *
+ * A section, a socket and a spine run are written once, in frigate cells, and
+ * cut to whichever lattice the class is drawn on. Four hand written copies of
+ * a Terran would be four Terrans that drift.
+ */
+const REF: Lat = RUNG.frigate;
+
+/** The lattice a frame is drawn on. */
+export const latOf = (frame: { readonly rung: RungKey }): Lat => RUNG[frame.rung];
+
+/**
+ * The lattice the FRAMES table is being authored on, while it is being built.
+ *
+ * The table names cells outright (`PX(4)`, `keel(CY, 6, 56)`, a drive at z 4),
+ * and those cells mean different things on four different lattices, so the
+ * table is evaluated ONCE PER RUNG with this set and each frame keeps the pass
+ * that matches its own rung. It is set only during that build and read only by
+ * the authoring helpers; nothing at raster time may touch it, because by then
+ * there are twenty three frames on four lattices and only one of them can be
+ * the ambient one.
+ */
+let A: Lat = RUNG.frigate;
 
 // -------------------------------------------------------------- colour --
 
@@ -115,9 +207,63 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'crate', name: 'Container' },
 ];
 
+/**
+ * The decals a player can PAINT onto plating, and the order is a wire value.
+ *
+ * Windows have always been derived: a plate cell whose inner neighbour belongs
+ * to a bridge wears the bridge viewport, and that is what gives a stock hull
+ * its windows for free. What it cannot do is let anybody put one anywhere:
+ * derive a hull with no berth against its skin and it has no cabin panes, and
+ * there was no way to say otherwise.
+ *
+ * So this is the OTHER half, and both halves stay. A hand painted decal is
+ * consulted first and a cell without one falls through to the derivation, so
+ * every hull in the fleet looks exactly as it did and a player can still put a
+ * porthole where they want one.
+ *
+ * The INDEX is what a design stores, so rows may be appended and never
+ * reordered: moving one would turn every saved bridge into a cargo door.
+ * `key` is the same key `WINDOW_VARIANTS` and the texture files use.
+ */
+export const DECALS: ReadonlyArray<{ key: string; name: string }> = [
+  { key: 'panes', name: 'Cabin panes' },
+  { key: 'porthole', name: 'Porthole' },
+  { key: 'strip', name: 'Strip window' },
+  { key: 'bridge', name: 'Bridge viewport' },
+  { key: 'promenade', name: 'Promenade' },
+  { key: 'beacons', name: 'Running lights' },
+  { key: 'louvre', name: 'Radiator louvre' },
+  { key: 'cargo', name: 'Cargo door' },
+  { key: 'hangar', name: 'Hangar mouth' },
+];
+/** Room to append to `DECALS` without moving a stored entry's cell. */
+export const DECAL_STRIDE = 16;
+export const decalKey = (n: number): string | null =>
+  DECALS[n % DECAL_STRIDE]?.key ?? null;
+
+/**
+ * Which decal a player painted on each cell, if any.
+ *
+ * `Design.decal` is a wire format beside `plate`, `cut` and `tint`: one
+ * integer per cell as `cell * DECAL_STRIDE + kind`, so a cell carries its
+ * decal with it across a lattice change and a design record stays inside the
+ * library's budget. Cosmetic, exactly like the brush: never hashed, never
+ * sent to the core, so two players who decorated the same hull differently
+ * cannot read as a desync.
+ */
+export const decalMap = (d: Design): Map<number, string> => {
+  const out = new Map<number, string>();
+  for (const v of d.decal ?? []) {
+    if (!Number.isInteger(v) || v < 0) continue;
+    const key = decalKey(v % DECAL_STRIDE);
+    if (key) out.set((v / DECAL_STRIDE) | 0, key);
+  }
+  return out;
+};
+
 export const DEFAULT_FINISH = 'plate';
 /**
- * What the two surfaces that are not armour wear until asked otherwise.
+ * What the surfaces that are not armour wear until asked otherwise.
  *
  * `greeble` for the parts is where the machinery finish has always been; the
  * frame used to have no answer of its own and simply wore the plating's,
@@ -131,14 +277,14 @@ export const DEFAULT_METAL = 0.25;
 export const DEFAULT_ROUGH = 0.55;
 
 /**
- * The three surfaces a hull is drawn with, resolved.
+ * The five surfaces a hull is drawn with, resolved.
  *
- * ONE place decides what a design's armour, frame and machinery are made of,
- * because four pictures ask it: the map, the shipyard, the schematic and the
- * chip thumbnail. Each spelling out its own `?? DEFAULT` chain is four places
- * to change and three of them to forget, which is the divergence GUIDELINES
- * 5.1 is about, and it is exactly how the wound came to draw its plate in a
- * finish the hull beside it was not wearing.
+ * ONE place decides what a design's armour, frame, drives, guns and other
+ * machinery are made of, because four pictures ask it: the map, the shipyard,
+ * the schematic and the chip thumbnail. Each spelling out its own `?? DEFAULT`
+ * chain is four places to change and three of them to forget, which is the
+ * divergence GUIDELINES 5.1 is about, and it is exactly how the wound came to
+ * draw its plate in a finish the hull beside it was not wearing.
  *
  * The armour answer is the PICKED SLOT's, falling back to the hull wide
  * finish for a design that has never set one.
@@ -147,13 +293,25 @@ export function finishesOf(d: {
   faction: string; paint: number;
   finish?: string; slotFinish?: (string | null)[];
   frameFinish?: string; partFinish?: string;
-}): { armour: string; frame: string; part: string } {
+  driveFinish?: string; weaponFinish?: string;
+}): { armour: string; frame: string; part: string;
+  drive: string; weapon: string } {
   const slot = paintFor(d.faction).swatches.indexOf(d.paint);
   const picked = slot >= 0 ? d.slotFinish?.[slot] : null;
   return {
     armour: picked || d.finish || DEFAULT_FINISH,
     frame: d.frameFinish || DEFAULT_FRAME_FINISH,
     part: d.partFinish || DEFAULT_PART_FINISH,
+    // Machinery split three ways. It was ONE finish for everything a part is
+    // made of, on the grounds that a player can already tell a drive from a
+    // gun by its COLOUR and the distinction worth having was machinery
+    // against plate. That is still true of the colour and it was never true
+    // of the SURFACE: a drive bell is a cast nozzle, a turret is a machined
+    // gun, and a barracks is a box, and one greeble over all three says none
+    // of it. Each falls back to the old single answer, so a design that never
+    // set them looks exactly as it did.
+    drive: d.driveFinish || d.partFinish || DEFAULT_PART_FINISH,
+    weapon: d.weaponFinish || d.partFinish || DEFAULT_PART_FINISH,
   };
 }
 
@@ -358,18 +516,26 @@ export function bandFinishes(d: {
 // ---------------------------------------------------------------- parts --
 
 /** What a socket will accept. A part never fits a socket of another kind. */
-export type SocketKind =
-  | 'drive' | 'retro' | 'rcs' | 'gun' | 'trunnion' | 'missile' | 'bay' | 'clamp'
-  /**
-   * A cargo station ON the hull rather than inside it.
-   *
-   * A container ship whose containers are enclosed bays is a grey slab with
-   * the cargo invisible inside it, which is what the first cut of the civil
-   * fleet came out as. A box is carried on deck, in tiers, and it is the boxes
-   * that make the ship read as a merchantman at all: this is the one socket
-   * kind whose whole point is that the part STANDS OUT.
-   */
-  | 'rack';
+/**
+ * Every kind of station a frame can carry.
+ *
+ * A runtime list with the type read OFF it, rather than a union beside an
+ * array somebody has to remember to extend twice. The architect reads untrusted
+ * JSON and has to be able to ask "is this a kind this build has", and the only
+ * way that answer stays true is if there is one list to ask.
+ *
+ * `rack` is a cargo station ON the hull rather than inside it. A container ship
+ * whose containers are enclosed bays is a grey slab with the cargo invisible
+ * inside it, which is what the first cut of the civil fleet came out as. A box
+ * is carried on deck, in tiers, and it is the boxes that make the ship read as
+ * a merchantman at all: this is the one socket kind whose whole point is that
+ * the part STANDS OUT.
+ */
+export const SOCKET_KINDS = [
+  'drive', 'retro', 'rcs', 'gun', 'trunnion', 'missile', 'bay', 'clamp', 'rack',
+] as const;
+
+export type SocketKind = typeof SOCKET_KINDS[number];
 
 export interface ModuleDef {
   readonly id: string;
@@ -707,7 +873,7 @@ export function seatedFacing(
  */
 export const mountRoll = (frame: FrameDef, sock: Socket | undefined): number => {
   if (!sock || (sock.kind !== 'gun' && sock.kind !== 'trunnion')) return 0;
-  const [ox, oy] = outwardAt(frame.profile, sock.at);
+  const [ox, oy] = outwardAt(latOf(frame), frame.profile, sock.at);
   if (ox) return ox > 0 ? 3 : 1;
   return oy >= 0 ? 0 : 2;
 };
@@ -801,12 +967,49 @@ export interface FrameDef {
   readonly note: string;
 }
 
-/** Centre of the lattice, so a frame can be authored symmetrically. */
-const CX = NX / 2, CY = NY / 2;
+/**
+ * A reference cell count, cut to the lattice this frame is being authored on.
+ *
+ * Everything the table writes by hand is written in frigate cells, so `Z(48)`
+ * is "forty eight cells along a frigate" and is 96 on a heavy cruiser, which
+ * is the same PLACE on a hull twice the size. Writing 48 outright would put a
+ * cruiser's bow thruster amidships.
+ */
+const Z = (n: number): number => Math.round(n * A.nz / REF.nz);
+/** The same, across the beam and up the depth. */
+const RX = (n: number): number => Math.round(n * A.nx / REF.nx);
+const RY = (n: number): number => Math.round(n * A.ny / REF.ny);
+/** A row `n` reference cells above the keel line, or below it if negative. */
+const UY = (n: number): number => A.cy + RY(n);
 
-/** A keel run: one box from z0 to z1 along the middle. */
-const keel = (y: number, z0: number, z1: number, w = 4, h = 3) =>
-  [CX - w / 2, y - h / 2, z0, w, h, z1 - z0] as const;
+/**
+ * A raw spine slab: low corner `dx`, `dy` reference cells off the keel line at
+ * reference station `z`, spanning `w` reference cells across the beam and `h`
+ * by `l` cells THICK.
+ *
+ * The span scales with the ship, because a gantry welded across a Rogue's beam
+ * is across the beam whatever the beam is. The thickness does not, for the
+ * reason `Lat.beam` gives.
+ */
+const slab = (dx: number, dy: number, z: number,
+  w: number, h: number, l: number) =>
+  [A.cx + RX(dx), A.cy + RY(dy), Z(z),
+    RX(w), Math.min(h, A.beam), Math.min(l, A.beam)] as const;
+
+/**
+ * A keel run: one member from z0 to z1 along the middle, `dy` cells off the
+ * keel line, `w` by `h` in section.
+ *
+ * Where it RUNS is reference cells cut to the lattice; what it is MADE OF is
+ * capped at `Lat.beam` and never scaled. So a class authored with a heavy
+ * dorsal girder still gets the heaviest member its rung allows and a class
+ * authored with a light one still gets a light one, and neither becomes a
+ * block on a bigger hull.
+ */
+const keel = (dy: number, z0: number, z1: number, w = 4, h = 3) => {
+  const y = UY(dy), zw = Math.min(w, A.beam), zh = Math.min(h, A.beam);
+  return [A.cx - zw / 2, y - zh / 2, Z(z0), zw, zh, Z(z1) - Z(z0)] as const;
+};
 /**
  * A station on the hull profile: z, half beam, half depth, in cells.
  *
@@ -840,11 +1043,11 @@ export function hullAt(profile: readonly Station[], z: number): readonly [number
  * are cut, and where the wrapped plate stops. Two would drift, and the drift
  * would look like plate floating off its own frame.
  */
-export function insideHull(profile: readonly Station[],
+export function insideHull(L: Lat, profile: readonly Station[],
   i: number, j: number, z: number, inset = 0): boolean {
   const [hw, hh] = hullAt(profile, z);
   const a = Math.max(0.5, (hw as number) - inset), b = Math.max(0.5, (hh as number) - inset);
-  const dx = i + 0.5 - CX, dy = j + 0.5 - CY;
+  const dx = i + 0.5 - L.cx, dy = j + 0.5 - L.cy;
   return (dx * dx) / (a * a) + (dy * dy) / (b * b) <= 1;
 }
 
@@ -865,33 +1068,33 @@ const rib = (profile: readonly Station[], z: number, inset = 1): Box[] => {
   const seen = new Set<number>();
   const out: Box[] = [];
   const put = (i: number, j: number) => {
-    if (i < 0 || j < 0 || i >= NX || j >= NY) return;
-    const key = i * NY + j;
+    if (i < 0 || j < 0 || i >= A.nx || j >= A.ny) return;
+    const key = i * A.ny + j;
     if (seen.has(key)) return;
     seen.add(key);
     out.push([i, j, z, 1, 1, 1] as Box);
   };
-  for (let i = Math.ceil(CX - hw); i <= Math.floor(CX + hw); i++) {
-    const u = (i + 0.5 - CX) / hw;
+  for (let i = Math.ceil(A.cx - hw); i <= Math.floor(A.cx + hw); i++) {
+    const u = (i + 0.5 - A.cx) / hw;
     const s = 1 - u * u;
     if (s < 0) continue;
     const dy = Math.sqrt(s) * hh;
-    put(i, Math.round(CY + dy - 0.5));
-    put(i, Math.round(CY - dy - 0.5));
+    put(i, Math.round(A.cy + dy - 0.5));
+    put(i, Math.round(A.cy - dy - 0.5));
   }
-  for (let j = Math.ceil(CY - hh); j <= Math.floor(CY + hh); j++) {
-    const v = (j + 0.5 - CY) / hh;
+  for (let j = Math.ceil(A.cy - hh); j <= Math.floor(A.cy + hh); j++) {
+    const v = (j + 0.5 - A.cy) / hh;
     const s = 1 - v * v;
     if (s < 0) continue;
     const dx = Math.sqrt(s) * hw;
-    put(Math.round(CX + dx - 0.5), j);
-    put(Math.round(CX - dx - 0.5), j);
+    put(Math.round(A.cx + dx - 0.5), j);
+    put(Math.round(A.cx - dx - 0.5), j);
   }
   return out;
 };
 
 const ribs = (profile: readonly Station[], zs: readonly number[]) =>
-  zs.flatMap(z => rib(profile, z));
+  zs.flatMap(z => rib(profile, Z(z)));
 
 /**
  * A socket seated BY THE PROFILE rather than at a counted cell.
@@ -935,12 +1138,31 @@ const acrossFrom = (half: number, frac: number, n: number): number => {
   return frac >= 0 ? out : (2 * half - 1) - out;
 };
 
+/**
+ * Cells `n` out from the centreline PLANE, to port and to starboard.
+ *
+ * The plane runs BETWEEN columns 15 and 16, not down the middle of column 16,
+ * so a pair written `CX - n` and `CX + n` is not a mirrored pair at all: the
+ * mirror of 16 - n is 15 + n, and the starboard half of every such pair sat
+ * one cell further out than its twin. Eighty four pairs across the fleet were
+ * authored that way, which is most of why a hull was not symmetric and why its
+ * windows came out on one side and not the other.
+ *
+ * `acrossFrom` has always done this correctly for anything seated by fraction;
+ * these are the two names for doing it by hand.
+ */
+const PX = (n: number): number => A.cx - 1 - RX(n);
+const SX = (n: number): number => A.cx + RX(n);
+
 const seatAt = (prof: readonly Station[], kind: SocketKind, id: string,
-  label: string, z: number, u = 0, v = 0): Socket => {
+  label: string, z: number, u = 0, v = 0, facing?: number): Socket => {
   const [hw, hh] = hullAt(prof, z);
   return {
     id, kind, label,
-    at: [acrossFrom(CX, u, hw as number), acrossFrom(CY, v, hh as number), z],
+    at: [acrossFrom(A.cx, u, hw as number), acrossFrom(A.cy, v, hh as number), z],
+    // Authored only where the hull makes the positional default wrong; see
+    // `ringFacing`, and `sim.test.mjs` is what proves each one.
+    ...(facing === undefined ? {} : { facing }),
   };
 };
 
@@ -1039,34 +1261,97 @@ const suite = (prof: readonly Station[],
   drives.forEach(([u, v], n) => out.push(
     seatAt(prof, 'drive', `d${n}`, `drive ${n + 1}`, aft + 1, u, v)));
 
-  out.push(...pairX(prof, 'retro', 'r0', 'r1', 'retro', nose - 8, 0.62));
+  out.push(...pairX(prof, 'retro', 'r0', 'r1', 'retro', nose - Z(8), 0.62));
   // A second pair, for the hulls that need it. Retro thrust does not scale
   // with the ship: two clusters brake a frigate and barely touch a cruiser,
   // and a heavy that cannot stop turns Full stop into a button that lies.
-  out.push(...pairX(prof, 'retro', 'r2', 'r3', 'retro, quarter', nose - 20, 0.62));
-  out.push(...pairX(prof, 'rcs', 'y0', 'y1', 'rcs, bow', nose - 12, 0.86));
-  out.push(...pairX(prof, 'rcs', 'y2', 'y3', 'rcs, quarter', aft + 11, 0.86));
+  out.push(...pairX(prof, 'retro', 'r2', 'r3', 'retro, quarter', nose - Z(20), 0.62));
+  out.push(...pairX(prof, 'rcs', 'y0', 'y1', 'rcs, bow', nose - Z(12), 0.86));
+  out.push(...pairX(prof, 'rcs', 'y2', 'y3', 'rcs, quarter', aft + Z(11), 0.86));
   out.push(seatAt(prof, 'rcs', 'p0', 'rcs, dorsal', mid, 0, 0.86));
   out.push(seatAt(prof, 'rcs', 'p1', 'rcs, ventral', mid, 0, -0.86));
-  out.push(seatAt(prof, 'rcs', 'p2', 'rcs, dorsal quarter', mid - 11, 0, 0.86));
-  out.push(seatAt(prof, 'rcs', 'p3', 'rcs, ventral quarter', mid - 11, 0, -0.86));
+  out.push(seatAt(prof, 'rcs', 'p2', 'rcs, dorsal quarter', mid - Z(11), 0, 0.86));
+  out.push(seatAt(prof, 'rcs', 'p3', 'rcs, ventral quarter', mid - Z(11), 0, -0.86));
 
   // b0 is the bridge bay on every frame: forward and dorsal, where a bridge
   // goes and where its viewport is worth having. Everything else is berths,
   // airlocks and holds, and the stock fit decides which.
-  out.push(seatAt(prof, 'bay', 'b0', 'bay, bridge', nose - 16, 0, 0.42));
+  out.push(seatAt(prof, 'bay', 'b0', 'bay, bridge', nose - Z(16), 0, 0.42));
   //
   // `bayZ` names the stations outright, for a hull whose midships volume is
   // spoken for. A Karisen cruiser keeps six missile cells on the keel and is
   // six cells deep: berths and cells cannot share a station, and the even
   // march below has no way to know that.
-  const z0 = aft + 9, z1 = nose - 19;
+  // Nothing is seated inside the engines. The LONGEST drive there is, not one
+  // of them: clearing `DRV-N` at four cells is no clearance on a liner, which
+  // fits `DRV-H` at seven. A frame does not know which drive its stock fit
+  // will carry, so the clearance is the worst case, and it applies to the
+  // authored stations as well as the marched ones.
+  const bell = MODULES.reduce(
+    (a, m) => (m.fits === 'drive' ? Math.max(a, m.size[2] as number) : a), 4);
+  const clearAft = aft + 1 + Math.ceil(bell / 2) + 4;
+  const z0 = Math.max(aft + Z(9), clearAft), z1 = nose - Z(19);
   const stations = Math.max(1, Math.ceil((bays - 1) / 2));
+
+  /**
+   * Keel stations already spoken for, and the next free one at or ahead of a
+   * wanted station.
+   *
+   * A hull with no lane either way puts EVERY fitting on the keel, and until
+   * this existed the berths and the clamps worked out their stations
+   * independently and landed on the same ones: the Karisen corvette, which is
+   * twelve cells across and the thinnest hull in the game, seated both of its
+   * clamps inside its own barracks and one of them came out with no cells at
+   * all. A part that pays its mass and never appears is worse than one that
+   * was never fitted, because nothing says so.
+   *
+   * Seven cells because that is how long a berth is: two of them closer than
+   * that are two parts in one place again.
+   *
+   * It searches BOTH WAYS from the station it wanted and stays between the
+   * drive clearance and the bridge, because a keel is a finite thing: marching
+   * forward alone walked a clamp off the nose of a corvette and out of the
+   * lattice, which the architect then reads as a socket that is not on the
+   * ship.
+   */
+  const keelAt: number[] = [];
+  const KEEL_STEP = 7;
+  const freeKeel = (want: number): number => {
+    const lo = clearAft, hi = Math.max(lo, nose - Z(14));
+    const free = (z: number) => z >= lo && z <= hi
+      && !keelAt.some(u => Math.abs(u - z) < KEEL_STEP);
+    let z = Math.max(lo, Math.min(hi, want));
+    if (!free(z)) {
+      let found = -1;
+      for (let n = 1; n <= 16 && found < 0; n++) {
+        for (const d of [-1, 1]) {
+          const t = z + d * n * KEEL_STEP;
+          if (free(t)) { found = t; break; }
+        }
+      }
+      // Nowhere CLEAR still has a best answer: the station with the most room
+      // round it. Leaving the part where it was asked for puts it dead in the
+      // middle of whatever is already there, and a berth loses more cells to a
+      // clamp in its centre than to one at its edge.
+      if (found >= 0) z = found;
+      else {
+        let best = z, room = -1;
+        for (let t = lo; t <= hi; t++) {
+          const gap = keelAt.reduce((a, u) => Math.min(a, Math.abs(u - t)), 1e9);
+          if (gap > room) { room = gap; best = t; }
+        }
+        z = best;
+      }
+    }
+    keelAt.push(z);
+    return z;
+  };
+
   for (let n = 1; n < bays; n++) {
     const k = Math.floor((n - 1) / 2);
-    const z = bayZ
+    const z = Math.max(clearAft, bayZ
       ? (bayZ[Math.min(k, bayZ.length - 1)] as number)
-      : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
+      : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1)));
     const first = (n - 1) % 2 === 0;
     const lane = laneOf(prof, z);
     if (lane.axis === 'x') {
@@ -1079,17 +1364,27 @@ const suite = (prof: readonly Station[],
       // No lane either way, so the pair goes fore and aft of the station
       // instead of abreast of it. A berth is seven cells long, so four clear
       // of the station is the least that keeps two of them apart.
+      // Clamped, because the pair splits fore and aft of its station and the
+      // aft half walked straight back into the bells the station cleared: the
+      // liner's first passenger deck came out four cells inside its engines.
       out.push(seatAt(prof, 'bay', `b${n}`, `bay, keel ${n}`,
-        z + (first ? -4 : 4), 0, bayV));
+        freeKeel(Math.max(clearAft, z + (first ? -4 : 4))), 0, bayV));
     }
   }
 
   // Clamps go on the QUARTER, aft of the bays and aft of anything a missile
   // pad sweeps. A clamp is enclosed, so on a thin hull it is pulled inboard to
   // fit, and amidships that walked it straight into a ventral pad's box.
+  //
+  // Clear of the DRIVE BLOCK, by the same clearance the bays use. The station
+  // was a flat eight cells off the transom, which is inside a bell on a short
+  // hull: a Karisen corvette's port clamp sat with twenty three of its cells
+  // in the engines, and once a drive's volume became its own the clamp had
+  // nowhere legal left and vanished entirely. Eight was never a clearance, it
+  // was a guess that the bells were shorter than they are.
   for (let n = 0; n < clamps; n++) {
     const k = Math.floor(n / 2);
-    const z = aft + 8 + k * 9;
+    const z = clearAft + k * 9;
     const port = n % 2 === 0;
     const lane = laneOf(prof, z);
     out.push(lane.axis === 'x'
@@ -1099,7 +1394,7 @@ const suite = (prof: readonly Station[],
         ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'upper' : 'lower'} ${k + 1}`,
           z, 0, port ? lane.at : -lane.at)
         : seatAt(prof, 'clamp', `c${n}`, `clamp, keel ${n + 1}`,
-          z + (port ? -4 : 4), 0, -0.42));
+          freeKeel(Math.max(clearAft, z + (port ? -4 : 4))), 0, -0.42));
   }
   return out;
 };
@@ -1171,7 +1466,11 @@ const flankAt = (hw: number, hh: number, dy: number): number =>
  * in `sim.test.mjs`: every mount on every stock hull, asked whether the ship
  * is in the way in the direction it rests.
  */
-const decorFor = (faction: FactionKey, prof: readonly Station[]): Box[] => {
+const decorFor = (L: Lat, faction: FactionKey, prof: readonly Station[]): Box[] => {
+  // Shadowed rather than spelt through `L` at each of the twenty seven uses
+  // below: the body of this function is a hull drawn in lattice coordinates
+  // and it reads as one.
+  const { nx: NX, ny: NY, nz: NZ, cx: CX, cy: CY } = L;
   const out: Box[] = [];
   const aft = Math.round((prof[0] as Station)[0]);
   const nose = Math.round((prof[prof.length - 1] as Station)[0]);
@@ -1351,7 +1650,7 @@ const decorCache = new Map<string, readonly Box[]>();
 export const decorOf = (frame: FrameDef): readonly Box[] => {
   const had = decorCache.get(frame.classKey);
   if (had) return had;
-  const made = decorFor(frame.faction, frame.profile);
+  const made = decorFor(latOf(frame), frame.faction, frame.profile);
   decorCache.set(frame.classKey, made);
   return made;
 };
@@ -1370,7 +1669,7 @@ const rack = (prof: readonly Station[], count: number,
   lanes = 2, tiers = 2): Socket[] => {
   const aft = Math.round((prof[0] as Station)[0]);
   const nose = Math.round((prof[prof.length - 1] as Station)[0]);
-  const z0 = aft + 11, z1 = nose - 16;
+  const z0 = aft + Z(11), z1 = nose - Z(16);
   const per = lanes * tiers;
   const stations = Math.max(1, Math.ceil(count / per));
   const out: Socket[] = [];
@@ -1383,21 +1682,21 @@ const rack = (prof: readonly Station[], count: number,
     // between lane centres and a container's own depth between tiers, so the
     // stack is a stack rather than a pile.
     const u = lanes === 1 ? 0 : ((lane * 2 + 1 - lanes) / lanes) * 0.52;
-    const x = acrossFrom(CX, u, hw as number);
+    const x = acrossFrom(A.cx, u, hw as number);
     // The BOTTOM of the box rests one cell above the skin AT ITS OWN LANE.
     // A station is an ellipse, so the deck two thirds of the way out to the
     // rail is two cells lower than the deck on the centreline: measured from
     // the centreline the outboard boxes floated, and a floating box gets a
     // spar per outboard cell, which on a twelve box ship is sixteen hundred
     // cells of plate holding up cargo that should be sitting on the deck.
-    const deck = Math.floor(CY + deckAt(hw as number, hh as number,
-      x + 0.5 - CX) - 0.5);
+    const deck = Math.floor(A.cy + deckAt(hw as number, hh as number,
+      x + 0.5 - A.cx) - 0.5);
     const y = deck + 3 + tier * 6;
     out.push({
       id: `h${n}`, kind: 'rack',
       label: `hold, ${lanes > 1 ? (lane === 0 ? 'port' : 'starboard') + ' ' : ''}`
         + `tier ${tier + 1}, station ${k + 1}`,
-      at: [x, Math.min(NY - 4, y), z],
+      at: [x, Math.min(A.ny - 4, y), z],
     });
   }
   return out;
@@ -1431,10 +1730,14 @@ const rack = (prof: readonly Station[], count: number,
  * it, in all three dimensions, by construction rather than by tuning.
  */
 interface SectionDef {
-  /** Length in CELLS, the same at every warship rung of this navy. */
+  /**
+   * Length in REFERENCE cells: what this navy measures on a 32 x 32 x 64
+   * lattice. `profileFor` scales it to the class's own lattice, so a rung is
+   * bigger by having MORE cells rather than by being drawn longer.
+   */
   readonly cells: number;
-  /** Half beam and half depth at the waist, in cells. The whole of what makes
-   *  a navy recognisable from ahead. */
+  /** Half beam and half depth at the waist, in reference cells. The whole of
+   *  what makes a navy recognisable from ahead. */
   readonly halfBeam: number;
   readonly halfDepth: number;
   /**
@@ -1507,12 +1810,23 @@ const FULLNESS: Record<TierKey, number> = {
   tanker: 0.70, miner: 0.95, liner: 1.06,
 };
 
-/** How much of its navy's length a rung actually has. Only the corvette is
- *  short: every other warship rung is the same profile at a bigger cell,
- *  which is what makes the ladder exact. */
+/**
+ * How much of its own lattice a tier's body fills.
+ *
+ * Every warship is 1. It used to be the corvette's job to be short (0.50 of a
+ * frigate's profile on a frigate's lattice), and that was the whole problem:
+ * a corvette drawn that way is a frigate with its ends cut off, at a frigate's
+ * beam, carrying a frigate's cells. It has its own lattice now, 24 x 24 x 48,
+ * so it is three quarters of a frigate in all three dimensions and has
+ * three quarters of one in each of them, which is what a smaller ship is.
+ *
+ * What is left here is the civil trades, which do not have a ladder: they are
+ * told apart by what they carry, so a tanker is stubby and a liner is long on
+ * whichever lattice its tonnage puts it.
+ */
 const REACHES: Record<TierKey, number> = {
-  corvette: 0.50, frigate: 1, destroyer: 1, cruiser: 1,
-  freighter: 1, lighter: 0.74, hauler: 1, boxship: 1.06,
+  corvette: 1, frigate: 1, destroyer: 1, cruiser: 1,
+  freighter: 1.18, lighter: 0.74, hauler: 1, boxship: 1.06,
   tanker: 1, miner: 0.88, liner: 1.10,
 };
 
@@ -1528,628 +1842,673 @@ const REACHES: Record<TierKey, number> = {
 const profileFor = (faction: FactionKey, tier: TierKey): readonly Station[] => {
   const s = NAVY_SECTION[faction];
   const e = FULLNESS[tier];
-  const cells = Math.round(s.cells * REACHES[tier]);
-  const aft = Math.max(2, Math.round((NZ - cells) / 2));
+  // The section is authored on the REFERENCE lattice and cut to whichever one
+  // this class is drawn on, so a navy's proportions are one table and its four
+  // rungs are the same ship at four sizes. Scaling all three axes by the same
+  // lattice ratio is what makes the ladder exactly the lattice ratio.
+  const fz = A.nz / REF.nz, fx = A.nx / REF.nx, fy = A.ny / REF.ny;
+  const cells = Math.round(s.cells * fz * REACHES[tier]);
+  const aft = Math.max(2, Math.round((A.nz - cells) / 2));
   return s.waist.map(([t, w, h]) => [
     Math.round(aft + t * cells),
-    +(s.halfBeam * Math.pow(w, e)).toFixed(3),
-    +(s.halfDepth * Math.pow(h, e)).toFixed(3),
+    +(s.halfBeam * fx * Math.pow(w, e)).toFixed(3),
+    +(s.halfDepth * fy * Math.pow(h, e)).toFixed(3),
   ] as Station);
 };
 
-// The seventeen profiles, all of them cut from five sections. The names are
-// what `FRAMES` and every socket below already ask for, so a navy's shape is
-// edited in ONE place and the whole ladder follows.
-const PROF_TERRAN = profileFor('terran', 'frigate');
-const PROF_KARISEN = profileFor('karisen', 'frigate');
-const PROF_ROGUE = profileFor('rogue', 'frigate');
-const PROF_BENEFACTOR = profileFor('benefactor', 'frigate');
-const PROF_FREIGHTER = profileFor('civil', 'freighter');
-const PROF_LIGHTER = profileFor('civil', 'lighter');
-const PROF_HAULER = profileFor('civil', 'hauler');
-const PROF_BOXSHIP = profileFor('civil', 'boxship');
-const PROF_TANKER = profileFor('civil', 'tanker');
-const PROF_MINER = profileFor('civil', 'miner');
-const PROF_LINER = profileFor('civil', 'liner');
+/**
+ * The whole fleet, authored once and cut to four lattices.
+ *
+ * Every coordinate below is a REFERENCE cell, and `Z`, `RX`, `RY`, `UY`, `PX`,
+ * `SX`, `keel` and `slab` are what say so. This runs once per rung with `A`
+ * set to that rung's lattice, and each class keeps the pass that matches its
+ * own. Four hand written copies of a Terran would be four Terrans that drift,
+ * and the drift would be a navy that stops looking like itself somewhere up
+ * its own ladder.
+ */
+const buildFrames = (): FrameDef[] => {
+  // The seventeen profiles, all of them cut from five sections. The names are
+  // what `FRAMES` and every socket below already ask for, so a navy's shape is
+  // edited in ONE place and the whole ladder follows.
+  const PROF_TERRAN = profileFor('terran', 'frigate');
+  const PROF_KARISEN = profileFor('karisen', 'frigate');
+  const PROF_ROGUE = profileFor('rogue', 'frigate');
+  const PROF_BENEFACTOR = profileFor('benefactor', 'frigate');
+  const PROF_FREIGHTER = profileFor('civil', 'freighter');
+  const PROF_LIGHTER = profileFor('civil', 'lighter');
+  const PROF_HAULER = profileFor('civil', 'hauler');
+  const PROF_BOXSHIP = profileFor('civil', 'boxship');
+  const PROF_TANKER = profileFor('civil', 'tanker');
+  const PROF_MINER = profileFor('civil', 'miner');
+  const PROF_LINER = profileFor('civil', 'liner');
 
-const PROF_TERRAN_CV = profileFor('terran', 'corvette');
-const PROF_TERRAN_DD = profileFor('terran', 'destroyer');
-const PROF_TERRAN_CA = profileFor('terran', 'cruiser');
+  const PROF_TERRAN_CV = profileFor('terran', 'corvette');
+  const PROF_TERRAN_DD = profileFor('terran', 'destroyer');
+  const PROF_TERRAN_CA = profileFor('terran', 'cruiser');
 
-const PROF_KARISEN_CV = profileFor('karisen', 'corvette');
-const PROF_KARISEN_DD = profileFor('karisen', 'destroyer');
-const PROF_KARISEN_CA = profileFor('karisen', 'cruiser');
+  const PROF_KARISEN_CV = profileFor('karisen', 'corvette');
+  const PROF_KARISEN_DD = profileFor('karisen', 'destroyer');
+  const PROF_KARISEN_CA = profileFor('karisen', 'cruiser');
 
-const PROF_ROGUE_CV = profileFor('rogue', 'corvette');
-const PROF_ROGUE_DD = profileFor('rogue', 'destroyer');
-const PROF_ROGUE_CA = profileFor('rogue', 'cruiser');
+  const PROF_ROGUE_CV = profileFor('rogue', 'corvette');
+  const PROF_ROGUE_DD = profileFor('rogue', 'destroyer');
+  const PROF_ROGUE_CA = profileFor('rogue', 'cruiser');
 
-const PROF_BENEFACTOR_CV = profileFor('benefactor', 'corvette');
-const PROF_BENEFACTOR_DD = profileFor('benefactor', 'destroyer');
-const PROF_BENEFACTOR_CA = profileFor('benefactor', 'cruiser');
+  const PROF_BENEFACTOR_CV = profileFor('benefactor', 'corvette');
+  const PROF_BENEFACTOR_DD = profileFor('benefactor', 'destroyer');
+  const PROF_BENEFACTOR_CA = profileFor('benefactor', 'cruiser');
 
-export const FRAMES: readonly FrameDef[] = [
-  {
-    classKey: 'terran_frigate', name: 'Terran Frigate',
-    faction: 'terran', tier: 'frigate', rung: 'frigate',
-    radius: 3.6, massMax: 1.08, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_TERRAN,
-    spine: [keel(CY, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
-    sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 5, CY - 2, 4], label: 'drive, port lower' },
-      { id: 'd1', kind: 'drive', at: [CX, CY - 2, 4], label: 'drive, centre lower' },
-      { id: 'd2', kind: 'drive', at: [CX + 5, CY - 2, 4], label: 'drive, starboard lower' },
-      { id: 'd3', kind: 'drive', at: [CX - 5, CY + 3, 4], label: 'drive, port upper' },
-      { id: 'd4', kind: 'drive', at: [CX, CY + 3, 4], label: 'drive, centre upper' },
-      { id: 'd5', kind: 'drive', at: [CX + 5, CY + 3, 4], label: 'drive, starboard upper' },
-      seatAt(PROF_TERRAN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN, 0.86), 0, 0.62),
-      seatAt(PROF_TERRAN, 'gun', 'g1', 'gun ring, port', zAt(PROF_TERRAN, 0.54), -0.72, 0.32),
-      seatAt(PROF_TERRAN, 'gun', 'g2', 'gun ring, starboard', zAt(PROF_TERRAN, 0.54), 0.72, 0.32),
-      { id: 'r0', kind: 'retro', at: [CX - 7, CY, 50], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 7, CY, 50], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 48], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 10, CY, 48], label: 'rcs, starboard bow' },
-      { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 40], label: 'rcs, dorsal' },
-      { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 40], label: 'rcs, ventral' },
-      { id: 'b0', kind: 'bay', at: [CX, CY + 4, 44], label: 'bay, forward dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 5, CY, 28], label: 'bay, port' },
-      { id: 'b2', kind: 'bay', at: [CX + 5, CY, 28], label: 'bay, starboard' },
-      { id: 'b3', kind: 'bay', at: [CX, CY - 4, 22], label: 'bay, ventral' },
-      { id: 'b4', kind: 'bay', at: [CX, CY + 3, 16], label: 'bay, aft' },
-      { id: 'b5', kind: 'bay', at: [CX - 5, CY + 2, 20], label: 'bay, port aft' },
-      { id: 'b6', kind: 'bay', at: [CX + 5, CY + 2, 20], label: 'bay, starboard aft' },
-      { id: 'b7', kind: 'bay', at: [CX, CY - 3, 34], label: 'bay, ventral forward' },
-      { id: 'b8', kind: 'bay', at: [CX - 4, CY + 4, 28], label: 'bay, spare port' },
-      { id: 'b9', kind: 'bay', at: [CX + 4, CY + 4, 28], label: 'bay, spare starboard' },
-      { id: 'y2', kind: 'rcs', at: [CX - 9, CY, 20], label: 'rcs, port quarter' },
-      { id: 'y3', kind: 'rcs', at: [CX + 9, CY, 20], label: 'rcs, starboard quarter' },
-      { id: 'c0', kind: 'clamp', at: [CX - 9, CY - 4, 26], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 9, CY - 4, 26], label: 'clamp, starboard' },
-    ],
-    note: 'A slab body on one deep keel. Six small bells in a three by two block '
-      + 'on the transom and armour standing off the flanks, both read straight off '
-      + 'ship_1.fbx.',
-  },
-  {
-    classKey: 'karisen_frigate', name: 'Karisen Frigate',
-    faction: 'karisen', tier: 'frigate', rung: 'frigate',
-    radius: 3.7, massMax: 0.89, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    // Three parallel runs, and the ventral beam overruns the body at both ends
-    // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
-    profile: PROF_KARISEN,
-    spine: [keel(CY, 8, 54), keel(CY + 5, 12, 50, 8, 2), keel(CY - 5, 4, 58, 5, 3),
-      ...ribs(PROF_KARISEN, [12, 19, 26, 33, 40, 47])],
-    sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 6, CY - 1, 5], label: 'drive, port' },
-      { id: 'd1', kind: 'drive', at: [CX, CY - 1, 5], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 6, CY - 1, 5], label: 'drive, starboard' },
-      { id: 'd3', kind: 'drive', at: [CX, CY + 4, 5], label: 'drive, dorsal vernier' },
-      seatAt(PROF_KARISEN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN, 0.82), 0, 0.6),
-      seatAt(PROF_KARISEN, 'missile', 'm0', 'missile pad, ventral',
-        zAt(PROF_KARISEN, 0.46), 0, -0.5),
-      seatAt(PROF_KARISEN, 'gun', 's0', 'sponson, port', zAt(PROF_KARISEN, 0.32), -0.78, -0.2),
-      seatAt(PROF_KARISEN, 'gun', 's1', 'sponson, starboard',
-        zAt(PROF_KARISEN, 0.32), 0.78, -0.2),
-      { id: 'r0', kind: 'retro', at: [CX - 7, CY, 48], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 7, CY, 48], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 10, CY, 46], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 10, CY, 46], label: 'rcs, starboard bow' },
-      { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 38], label: 'rcs, dorsal' },
-      { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 38], label: 'rcs, ventral' },
-      { id: 'b0', kind: 'bay', at: [CX, CY + 4, 42], label: 'bay, dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 4, CY - 4, 26], label: 'bay, port keel' },
-      { id: 'b2', kind: 'bay', at: [CX + 4, CY - 4, 26], label: 'bay, starboard keel' },
-      { id: 'b3', kind: 'bay', at: [CX, CY + 2, 18], label: 'bay, aft' },
-      { id: 'b4', kind: 'bay', at: [CX - 5, CY + 3, 34], label: 'bay, port dorsal' },
-      { id: 'b5', kind: 'bay', at: [CX + 5, CY + 3, 34], label: 'bay, starboard dorsal' },
-      { id: 'c0', kind: 'clamp', at: [CX - 9, CY - 5, 24], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 9, CY - 5, 24], label: 'clamp, starboard' },
-    ],
-    note: 'A stacked spine rather than a slab: body run, dorsal stringer, and a '
-      + 'ventral keel beam longer than the ship. Two sponsons ship empty.',
-  },
-  {
-    classKey: 'rogue_frigate', name: 'Rogue Frigate',
-    faction: 'rogue', tier: 'frigate', rung: 'frigate',
-    radius: 3, massMax: 0.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    // The frame feature no other class has: a transverse boarding gallery
-    // crossing the keel, carrying the clamps and the collars as one structure.
-    profile: PROF_ROGUE,
-    spine: [keel(CY, 14, 48), [CX - 11, CY - 2, 26, 22, 4, 5] as const,
-      ...ribs(PROF_ROGUE, [18, 24, 30, 36, 42])],
-    sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 6, CY, 11], label: 'drive, port' },
-      { id: 'd1', kind: 'drive', at: [CX, CY, 11], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 6, CY, 11], label: 'drive, starboard' },
-      seatAt(PROF_ROGUE, 'gun', 'g0', 'gun ring, port', zAt(PROF_ROGUE, 0.74), -0.7, 0.4),
-      seatAt(PROF_ROGUE, 'gun', 'g1', 'gun ring, starboard', zAt(PROF_ROGUE, 0.74), 0.7, 0.4),
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 44], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 44], label: 'retro, starboard' },
-      { id: 'r2', kind: 'retro', at: [CX, CY + 5, 44], label: 'retro, dorsal' },
-      { id: 'y0', kind: 'rcs', at: [CX - 11, CY, 40], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 11, CY, 40], label: 'rcs, starboard bow' },
-      { id: 'y2', kind: 'rcs', at: [CX - 11, CY, 18], label: 'rcs, port quarter' },
-      { id: 'y3', kind: 'rcs', at: [CX + 11, CY, 18], label: 'rcs, starboard quarter' },
-      { id: 'p0', kind: 'rcs', at: [CX, CY + 8, 36], label: 'rcs, dorsal' },
-      { id: 'p1', kind: 'rcs', at: [CX, CY - 8, 36], label: 'rcs, ventral' },
-      { id: 'b0', kind: 'bay', at: [CX, CY + 4, 40], label: 'bay, bridge' },
-      { id: 'b1', kind: 'bay', at: [CX - 8, CY, 28], label: 'gallery bay, port outer' },
-      { id: 'b2', kind: 'bay', at: [CX - 4, CY, 28], label: 'gallery bay, port inner' },
-      { id: 'b3', kind: 'bay', at: [CX + 4, CY, 28], label: 'gallery bay, starboard inner' },
-      { id: 'b4', kind: 'bay', at: [CX + 8, CY, 28], label: 'gallery bay, starboard outer' },
-      { id: 'b5', kind: 'bay', at: [CX - 7, CY, 22], label: 'gallery bay, port aft' },
-      { id: 'b6', kind: 'bay', at: [CX + 7, CY, 22], label: 'gallery bay, starboard aft' },
-      { id: 'b7', kind: 'bay', at: [CX, CY - 4, 22], label: 'bay, ventral' },
-      { id: 'b8', kind: 'bay', at: [CX - 10, CY + 2, 26], label: 'collar, port' },
-      { id: 'b9', kind: 'bay', at: [CX + 10, CY + 2, 26], label: 'collar, starboard' },
-      { id: 'c0', kind: 'clamp', at: [CX - 12, CY, 30], label: 'clamp, port forward' },
-      { id: 'c1', kind: 'clamp', at: [CX + 12, CY, 30], label: 'clamp, starboard forward' },
-      { id: 'c2', kind: 'clamp', at: [CX - 12, CY, 24], label: 'clamp, port aft' },
-      { id: 'c3', kind: 'clamp', at: [CX + 12, CY, 24], label: 'clamp, starboard aft' },
-      { id: 'a0', kind: 'bay', at: [CX - 10, CY - 4, 30], label: 'collar, port forward' },
-      { id: 'a1', kind: 'bay', at: [CX + 10, CY - 4, 30], label: 'collar, starboard forward' },
-      { id: 'a2', kind: 'bay', at: [CX - 10, CY - 4, 24], label: 'collar, port aft' },
-      { id: 'a3', kind: 'bay', at: [CX + 10, CY - 4, 24], label: 'collar, starboard aft' },
-      { id: 'a4', kind: 'bay', at: [CX, CY - 6, 27], label: 'collar, ventral' },
-      { id: 'b10', kind: 'bay', at: [CX - 4, CY + 4, 36], label: 'bay, spare port' },
-      { id: 'b11', kind: 'bay', at: [CX + 4, CY + 4, 36], label: 'bay, spare starboard' },
-      { id: 'c4', kind: 'clamp', at: [CX - 12, CY + 4, 27], label: 'clamp, port upper' },
-      { id: 'c5', kind: 'clamp', at: [CX + 12, CY + 4, 27], label: 'clamp, starboard upper' },
-    ],
-    note: 'Short and wide, with a boarding gallery across its waist. The gear that '
-      + 'makes it a raider is roughly a third of its mass, which is also why it has '
-      + 'the least hull and the best turn rate.',
-  },
-  {
-    classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
-    faction: 'benefactor', tier: 'frigate', rung: 'frigate',
-    radius: 3.5, massMax: 0.92, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    // A deep aft drop keel, which is the one archived fact worth keeping from
-    // a prefab that is otherwise a single mesh.
-    profile: PROF_BENEFACTOR,
-    spine: [keel(CY, 14, 56), keel(CY - 7, 4, 20, 5, 4), keel(CY + 6, 4, 20, 5, 3),
-      ...ribs(PROF_BENEFACTOR, [18, 25, 32, 39, 46, 52])],
-    sockets: [
-      { id: 'd0', kind: 'drive', at: [CX, CY - 3, 5], label: 'drive, main' },
-      { id: 'd1', kind: 'drive', at: [CX + 6, CY - 3, 6], label: 'drive, starboard' },
-      { id: 'd2', kind: 'drive', at: [CX - 6, CY - 3, 6], label: 'drive, port' },
-      { id: 'd3', kind: 'drive', at: [CX, CY + 5, 6], label: 'drive, dorsal' },
-      seatAt(PROF_BENEFACTOR, 'gun', 'g0', 'gun ring, port',
-        zAt(PROF_BENEFACTOR, 0.72), -0.82, 0.46),
-      seatAt(PROF_BENEFACTOR, 'gun', 'g1', 'gun ring, starboard',
-        zAt(PROF_BENEFACTOR, 0.72), 0.82, 0.46),
-      seatAt(PROF_BENEFACTOR, 'missile', 'm0', 'missile pad, ventral',
-        zAt(PROF_BENEFACTOR, 0.44), 0, -0.5),
-      seatAt(PROF_BENEFACTOR, 'gun', 'k0', 'aft stack, ventral',
-        zAt(PROF_BENEFACTOR, 0.20), 0, -0.62),
-      seatAt(PROF_BENEFACTOR, 'gun', 'k1', 'aft stack, dorsal',
-        zAt(PROF_BENEFACTOR, 0.20), 0, 0.62),
-      { id: 'a0', kind: 'bay', at: [CX - 6, CY - 4, 34], label: 'collar, port' },
-      { id: 'a1', kind: 'bay', at: [CX + 6, CY - 4, 34], label: 'collar, starboard' },
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 50], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 50], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 9, CY, 46], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 9, CY, 46], label: 'rcs, starboard bow' },
-      { id: 'p0', kind: 'rcs', at: [CX, CY + 9, 38], label: 'rcs, dorsal' },
-      { id: 'p1', kind: 'rcs', at: [CX, CY - 9, 38], label: 'rcs, ventral' },
-      { id: 'b0', kind: 'bay', at: [CX, CY + 4, 42], label: 'bay, dorsal' },
-      { id: 'b1', kind: 'bay', at: [CX - 4, CY, 28], label: 'bay, port' },
-      { id: 'b2', kind: 'bay', at: [CX + 4, CY, 28], label: 'bay, starboard' },
-      { id: 'b3', kind: 'bay', at: [CX, CY - 5, 22], label: 'bay, ventral' },
-      { id: 'b4', kind: 'bay', at: [CX - 5, CY + 3, 34], label: 'bay, port dorsal' },
-      { id: 'b5', kind: 'bay', at: [CX + 5, CY + 3, 34], label: 'bay, starboard dorsal' },
-      { id: 'c0', kind: 'clamp', at: [CX - 8, CY - 4, 26], label: 'clamp, port' },
-      { id: 'c1', kind: 'clamp', at: [CX + 8, CY - 4, 26], label: 'clamp, starboard' },
-    ],
-    note: 'A long hull that steps down deeply aft, with a forward pair of cannon '
-      + 'rings and a ventral missile rack. The aft stack ships empty.',
-  },
-  {
-    classKey: 'freighter', name: 'Freighter',
-    faction: 'civil', tier: 'freighter', rung: 'escort',
-    radius: 4.9, massMax: 2.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_FREIGHTER,
-    spine: [keel(CY, 12, 48), keel(CY, 16, 44, 14, 1),
-      ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
-    // No gun ring anywhere. Every gun needs a barbette and every barbette needs
-    // a ring, so the authored empty mount table becomes geometry rather than a
-    // convention. No clamp seat either: its short reach is an absence.
-    sockets: [
-      { id: 'd0', kind: 'drive', at: [CX - 5, CY, 9], label: 'drive, port' },
-      { id: 'd1', kind: 'drive', at: [CX, CY, 9], label: 'drive, centre' },
-      { id: 'd2', kind: 'drive', at: [CX + 5, CY, 9], label: 'drive, starboard' },
-      { id: 'r0', kind: 'retro', at: [CX - 6, CY, 46], label: 'retro, port' },
-      { id: 'r1', kind: 'retro', at: [CX + 6, CY, 46], label: 'retro, starboard' },
-      { id: 'y0', kind: 'rcs', at: [CX - 8, CY, 44], label: 'rcs, port bow' },
-      { id: 'y1', kind: 'rcs', at: [CX + 8, CY, 44], label: 'rcs, starboard bow' },
-      { id: 'p0', kind: 'rcs', at: [CX, CY + 7, 38], label: 'rcs, dorsal' },
-      { id: 'p1', kind: 'rcs', at: [CX, CY - 7, 38], label: 'rcs, ventral' },
-      { id: 'h0', kind: 'bay', at: [CX, CY, 38], label: 'hold, forward' },
-      { id: 'h1', kind: 'bay', at: [CX, CY, 22], label: 'hold, aft' },
-      { id: 'b0', kind: 'bay', at: [CX, CY + 5, 46], label: 'bay, bridge' },
-      { id: 'b1', kind: 'bay', at: [CX - 6, CY, 14], label: 'bay, port aft' },
-      { id: 'b2', kind: 'bay', at: [CX + 6, CY, 14], label: 'bay, starboard aft' },
-      { id: 'b3', kind: 'bay', at: [CX, CY + 5, 30], label: 'bay, dorsal' },
-      { id: 'b4', kind: 'bay', at: [CX - 6, CY - 4, 30], label: 'collar, port' },
-      { id: 'b5', kind: 'bay', at: [CX + 6, CY - 4, 30], label: 'collar, starboard' },
-      { id: 'b6', kind: 'bay', at: [CX, CY - 5, 18], label: 'collar, ventral' },
-      { id: 'b7', kind: 'bay', at: [CX - 5, CY + 4, 22], label: 'bay, spare port' },
-      { id: 'b8', kind: 'bay', at: [CX + 5, CY + 4, 22], label: 'bay, spare starboard' },
-    ],
-    note: 'A long square brick with two holds under a dorsal door. No gun ring '
-      + 'exists on this frame, which is what the empty mount table looks like as '
-      + 'geometry.',
-  },
+    const table: FrameDef[] = [
+    {
+      classKey: 'terran_frigate', name: 'Terran Frigate',
+      faction: 'terran', tier: 'frigate', rung: 'frigate',
+      radius: 1.8, massMax: 0.61, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_TERRAN,
+      spine: [keel(0, 6, 56), ...ribs(PROF_TERRAN, [10, 17, 24, 31, 38, 45, 52])],
+      sockets: [
+        { id: 'd0', kind: 'drive', at: [PX(4), UY(-2), Z(4)], label: 'drive, port lower' },
+        { id: 'd1', kind: 'drive', at: [A.cx, UY(-2), Z(4)], label: 'drive, centre lower' },
+        { id: 'd2', kind: 'drive', at: [SX(4), UY(-2), Z(4)], label: 'drive, starboard lower' },
+        { id: 'd3', kind: 'drive', at: [PX(4), UY(3), Z(4)], label: 'drive, port upper' },
+        { id: 'd4', kind: 'drive', at: [A.cx, UY(3), Z(4)], label: 'drive, centre upper' },
+        { id: 'd5', kind: 'drive', at: [SX(4), UY(3), Z(4)], label: 'drive, starboard upper' },
+        seatAt(PROF_TERRAN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN, 0.86), 0, 0.62),
+        seatAt(PROF_TERRAN, 'gun', 'g1', 'gun ring, port', zAt(PROF_TERRAN, 0.54), -0.72, 0.32),
+        seatAt(PROF_TERRAN, 'gun', 'g2', 'gun ring, starboard', zAt(PROF_TERRAN, 0.54), 0.72, 0.32),
+        { id: 'r0', kind: 'retro', at: [PX(6), UY(0), Z(50)], label: 'retro, port' },
+        { id: 'r1', kind: 'retro', at: [SX(6), UY(0), Z(50)], label: 'retro, starboard' },
+        { id: 'y0', kind: 'rcs', at: [PX(9), UY(0), Z(48)], label: 'rcs, port bow' },
+        { id: 'y1', kind: 'rcs', at: [SX(9), UY(0), Z(48)], label: 'rcs, starboard bow' },
+        { id: 'p0', kind: 'rcs', at: [A.cx, UY(8), Z(40)], label: 'rcs, dorsal' },
+        { id: 'p1', kind: 'rcs', at: [A.cx, UY(-8), Z(40)], label: 'rcs, ventral' },
+        { id: 'b0', kind: 'bay', at: [A.cx, UY(4), Z(44)], label: 'bay, forward dorsal' },
+        { id: 'b1', kind: 'bay', at: [PX(4), UY(0), Z(28)], label: 'bay, port' },
+        { id: 'b2', kind: 'bay', at: [SX(4), UY(0), Z(28)], label: 'bay, starboard' },
+        { id: 'b3', kind: 'bay', at: [A.cx, UY(-4), Z(22)], label: 'bay, ventral' },
+        { id: 'b4', kind: 'bay', at: [A.cx, UY(3), Z(16)], label: 'bay, aft' },
+        { id: 'b5', kind: 'bay', at: [PX(4), UY(2), Z(20)], label: 'bay, port aft' },
+        { id: 'b6', kind: 'bay', at: [SX(4), UY(2), Z(20)], label: 'bay, starboard aft' },
+        { id: 'b7', kind: 'bay', at: [A.cx, UY(-3), Z(34)], label: 'bay, ventral forward' },
+        { id: 'b8', kind: 'bay', at: [PX(3), UY(4), Z(28)], label: 'bay, spare port' },
+        { id: 'b9', kind: 'bay', at: [SX(3), UY(4), Z(28)], label: 'bay, spare starboard' },
+        { id: 'y2', kind: 'rcs', at: [PX(8), UY(0), Z(20)], label: 'rcs, port quarter' },
+        { id: 'y3', kind: 'rcs', at: [SX(8), UY(0), Z(20)], label: 'rcs, starboard quarter' },
+        { id: 'c0', kind: 'clamp', at: [PX(8), UY(-4), Z(26)], label: 'clamp, port' },
+        { id: 'c1', kind: 'clamp', at: [SX(8), UY(-4), Z(26)], label: 'clamp, starboard' },
+      ],
+      note: 'A slab body on one deep keel. Six small bells in a three by two block '
+        + 'on the transom and armour standing off the flanks, both read straight off '
+        + 'ship_1.fbx.',
+    },
+    {
+      classKey: 'karisen_frigate', name: 'Karisen Frigate',
+      faction: 'karisen', tier: 'frigate', rung: 'frigate',
+      radius: 1.9, massMax: 0.56, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      // Three parallel runs, and the ventral beam overruns the body at both ends
+      // exactly as Ship_2_energy_1 overruns Ship_2_main in the archive.
+      profile: PROF_KARISEN,
+      spine: [keel(0, 8, 54), keel(5, 12, 50, 8, 2), keel(-5, 4, 58, 5, 3),
+        ...ribs(PROF_KARISEN, [12, 19, 26, 33, 40, 47])],
+      sockets: [
+        { id: 'd0', kind: 'drive', at: [PX(5), UY(-1), Z(5)], label: 'drive, port' },
+        { id: 'd1', kind: 'drive', at: [A.cx, UY(-1), Z(5)], label: 'drive, centre' },
+        { id: 'd2', kind: 'drive', at: [SX(5), UY(-1), Z(5)], label: 'drive, starboard' },
+        { id: 'd3', kind: 'drive', at: [A.cx, UY(4), Z(5)], label: 'drive, dorsal vernier' },
+        seatAt(PROF_KARISEN, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN, 0.82), 0, 0.6),
+        seatAt(PROF_KARISEN, 'missile', 'm0', 'missile pad, ventral',
+          zAt(PROF_KARISEN, 0.46), 0, -0.5),
+        // A sponson set into the flank, with the body of the ship both fore and
+        // aft of it: neither way along the keel is clear, so it rests trained
+        // out of its own recess.
+        seatAt(PROF_KARISEN, 'gun', 's0', 'sponson, port', zAt(PROF_KARISEN, 0.32), -0.78, -0.2, 1),
+        seatAt(PROF_KARISEN, 'gun', 's1', 'sponson, starboard',
+          zAt(PROF_KARISEN, 0.32), 0.78, -0.2),
+        { id: 'r0', kind: 'retro', at: [PX(6), UY(0), Z(48)], label: 'retro, port' },
+        { id: 'r1', kind: 'retro', at: [SX(6), UY(0), Z(48)], label: 'retro, starboard' },
+        { id: 'y0', kind: 'rcs', at: [PX(9), UY(0), Z(46)], label: 'rcs, port bow' },
+        { id: 'y1', kind: 'rcs', at: [SX(9), UY(0), Z(46)], label: 'rcs, starboard bow' },
+        { id: 'p0', kind: 'rcs', at: [A.cx, UY(8), Z(38)], label: 'rcs, dorsal' },
+        { id: 'p1', kind: 'rcs', at: [A.cx, UY(-8), Z(38)], label: 'rcs, ventral' },
+        { id: 'b0', kind: 'bay', at: [A.cx, UY(4), Z(42)], label: 'bay, dorsal' },
+        { id: 'b1', kind: 'bay', at: [PX(3), UY(-4), Z(26)], label: 'bay, port keel' },
+        { id: 'b2', kind: 'bay', at: [SX(3), UY(-4), Z(26)], label: 'bay, starboard keel' },
+        { id: 'b3', kind: 'bay', at: [A.cx, UY(2), Z(18)], label: 'bay, aft' },
+        { id: 'b4', kind: 'bay', at: [PX(4), UY(3), Z(34)], label: 'bay, port dorsal' },
+        { id: 'b5', kind: 'bay', at: [SX(4), UY(3), Z(34)], label: 'bay, starboard dorsal' },
+        { id: 'c0', kind: 'clamp', at: [PX(8), UY(-5), Z(24)], label: 'clamp, port' },
+        { id: 'c1', kind: 'clamp', at: [SX(8), UY(-5), Z(24)], label: 'clamp, starboard' },
+      ],
+      note: 'A stacked spine rather than a slab: body run, dorsal stringer, and a '
+        + 'ventral keel beam longer than the ship. Two sponsons ship empty.',
+    },
+    {
+      classKey: 'rogue_frigate', name: 'Rogue Frigate',
+      faction: 'rogue', tier: 'frigate', rung: 'frigate',
+      radius: 1.5, massMax: 0.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      // The frame feature no other class has: a transverse boarding gallery
+      // crossing the keel, carrying the clamps and the collars as one structure.
+      profile: PROF_ROGUE,
+      spine: [keel(0, 14, 48), slab(-11, -2, 26, 22, 4, 5),
+        ...ribs(PROF_ROGUE, [18, 24, 30, 36, 42])],
+      sockets: [
+        { id: 'd0', kind: 'drive', at: [PX(5), UY(0), Z(11)], label: 'drive, port' },
+        { id: 'd1', kind: 'drive', at: [A.cx, UY(0), Z(11)], label: 'drive, centre' },
+        { id: 'd2', kind: 'drive', at: [SX(5), UY(0), Z(11)], label: 'drive, starboard' },
+        seatAt(PROF_ROGUE, 'gun', 'g0', 'gun ring, port', zAt(PROF_ROGUE, 0.74), -0.7, 0.4),
+        seatAt(PROF_ROGUE, 'gun', 'g1', 'gun ring, starboard', zAt(PROF_ROGUE, 0.74), 0.7, 0.4),
+        { id: 'r0', kind: 'retro', at: [PX(5), UY(0), Z(44)], label: 'retro, port' },
+        { id: 'r1', kind: 'retro', at: [SX(5), UY(0), Z(44)], label: 'retro, starboard' },
+        { id: 'r2', kind: 'retro', at: [A.cx, UY(5), Z(44)], label: 'retro, dorsal' },
+        { id: 'y0', kind: 'rcs', at: [PX(10), UY(0), Z(40)], label: 'rcs, port bow' },
+        { id: 'y1', kind: 'rcs', at: [SX(10), UY(0), Z(40)], label: 'rcs, starboard bow' },
+        { id: 'y2', kind: 'rcs', at: [PX(10), UY(0), Z(18)], label: 'rcs, port quarter' },
+        { id: 'y3', kind: 'rcs', at: [SX(10), UY(0), Z(18)], label: 'rcs, starboard quarter' },
+        { id: 'p0', kind: 'rcs', at: [A.cx, UY(8), Z(36)], label: 'rcs, dorsal' },
+        { id: 'p1', kind: 'rcs', at: [A.cx, UY(-8), Z(36)], label: 'rcs, ventral' },
+        { id: 'b0', kind: 'bay', at: [A.cx, UY(4), Z(40)], label: 'bay, bridge' },
+        { id: 'b1', kind: 'bay', at: [PX(7), UY(0), Z(28)], label: 'gallery bay, port outer' },
+        { id: 'b2', kind: 'bay', at: [PX(3), UY(0), Z(28)], label: 'gallery bay, port inner' },
+        { id: 'b3', kind: 'bay', at: [SX(3), UY(0), Z(28)], label: 'gallery bay, starboard inner' },
+        { id: 'b4', kind: 'bay', at: [SX(7), UY(0), Z(28)], label: 'gallery bay, starboard outer' },
+        { id: 'b5', kind: 'bay', at: [PX(6), UY(0), Z(22)], label: 'gallery bay, port aft' },
+        { id: 'b6', kind: 'bay', at: [SX(6), UY(0), Z(22)], label: 'gallery bay, starboard aft' },
+        { id: 'b7', kind: 'bay', at: [A.cx, UY(-4), Z(22)], label: 'bay, ventral' },
+        { id: 'b8', kind: 'bay', at: [PX(9), UY(2), Z(26)], label: 'collar, port' },
+        { id: 'b9', kind: 'bay', at: [SX(9), UY(2), Z(26)], label: 'collar, starboard' },
+        { id: 'c0', kind: 'clamp', at: [PX(11), UY(0), Z(30)], label: 'clamp, port forward' },
+        { id: 'c1', kind: 'clamp', at: [SX(11), UY(0), Z(30)], label: 'clamp, starboard forward' },
+        { id: 'c2', kind: 'clamp', at: [PX(11), UY(0), Z(24)], label: 'clamp, port aft' },
+        { id: 'c3', kind: 'clamp', at: [SX(11), UY(0), Z(24)], label: 'clamp, starboard aft' },
+        { id: 'a0', kind: 'bay', at: [PX(9), UY(-4), Z(30)], label: 'collar, port forward' },
+        { id: 'a1', kind: 'bay', at: [SX(9), UY(-4), Z(30)], label: 'collar, starboard forward' },
+        { id: 'a2', kind: 'bay', at: [PX(9), UY(-4), Z(24)], label: 'collar, port aft' },
+        { id: 'a3', kind: 'bay', at: [SX(9), UY(-4), Z(24)], label: 'collar, starboard aft' },
+        { id: 'a4', kind: 'bay', at: [A.cx, UY(-6), Z(27)], label: 'collar, ventral' },
+        { id: 'b10', kind: 'bay', at: [PX(3), UY(4), Z(36)], label: 'bay, spare port' },
+        { id: 'b11', kind: 'bay', at: [SX(3), UY(4), Z(36)], label: 'bay, spare starboard' },
+        { id: 'c4', kind: 'clamp', at: [PX(11), UY(4), Z(27)], label: 'clamp, port upper' },
+        { id: 'c5', kind: 'clamp', at: [SX(11), UY(4), Z(27)], label: 'clamp, starboard upper' },
+      ],
+      note: 'Short and wide, with a boarding gallery across its waist. The gear that '
+        + 'makes it a raider is roughly a third of its mass, which is also why it has '
+        + 'the least hull and the best turn rate.',
+    },
+    {
+      classKey: 'benefactor_frigate', name: 'Benefactor Frigate',
+      faction: 'benefactor', tier: 'frigate', rung: 'frigate',
+      radius: 1.8, massMax: 0.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      // A deep aft drop keel, which is the one archived fact worth keeping from
+      // a prefab that is otherwise a single mesh.
+      profile: PROF_BENEFACTOR,
+      spine: [keel(0, 14, 56), keel(-7, 4, 20, 5, 4), keel(6, 4, 20, 5, 3),
+        ...ribs(PROF_BENEFACTOR, [18, 25, 32, 39, 46, 52])],
+      sockets: [
+        { id: 'd0', kind: 'drive', at: [A.cx, UY(-3), Z(5)], label: 'drive, main' },
+        { id: 'd1', kind: 'drive', at: [SX(5), UY(-3), Z(6)], label: 'drive, starboard' },
+        { id: 'd2', kind: 'drive', at: [PX(5), UY(-3), Z(6)], label: 'drive, port' },
+        { id: 'd3', kind: 'drive', at: [A.cx, UY(5), Z(6)], label: 'drive, dorsal' },
+        seatAt(PROF_BENEFACTOR, 'gun', 'g0', 'gun ring, port',
+          zAt(PROF_BENEFACTOR, 0.72), -0.82, 0.46),
+        seatAt(PROF_BENEFACTOR, 'gun', 'g1', 'gun ring, starboard',
+          zAt(PROF_BENEFACTOR, 0.72), 0.82, 0.46),
+        seatAt(PROF_BENEFACTOR, 'missile', 'm0', 'missile pad, ventral',
+          zAt(PROF_BENEFACTOR, 0.44), 0, -0.5),
+        seatAt(PROF_BENEFACTOR, 'gun', 'k0', 'aft stack, ventral',
+          zAt(PROF_BENEFACTOR, 0.20), 0, -0.62),
+        seatAt(PROF_BENEFACTOR, 'gun', 'k1', 'aft stack, dorsal',
+          zAt(PROF_BENEFACTOR, 0.20), 0, 0.62),
+        { id: 'a0', kind: 'bay', at: [PX(5), UY(-4), Z(34)], label: 'collar, port' },
+        { id: 'a1', kind: 'bay', at: [SX(5), UY(-4), Z(34)], label: 'collar, starboard' },
+        { id: 'r0', kind: 'retro', at: [PX(5), UY(0), Z(50)], label: 'retro, port' },
+        { id: 'r1', kind: 'retro', at: [SX(5), UY(0), Z(50)], label: 'retro, starboard' },
+        { id: 'y0', kind: 'rcs', at: [PX(8), UY(0), Z(46)], label: 'rcs, port bow' },
+        { id: 'y1', kind: 'rcs', at: [SX(8), UY(0), Z(46)], label: 'rcs, starboard bow' },
+        { id: 'p0', kind: 'rcs', at: [A.cx, UY(9), Z(38)], label: 'rcs, dorsal' },
+        { id: 'p1', kind: 'rcs', at: [A.cx, UY(-9), Z(38)], label: 'rcs, ventral' },
+        { id: 'b0', kind: 'bay', at: [A.cx, UY(4), Z(42)], label: 'bay, dorsal' },
+        { id: 'b1', kind: 'bay', at: [PX(3), UY(0), Z(28)], label: 'bay, port' },
+        { id: 'b2', kind: 'bay', at: [SX(3), UY(0), Z(28)], label: 'bay, starboard' },
+        { id: 'b3', kind: 'bay', at: [A.cx, UY(-5), Z(22)], label: 'bay, ventral' },
+        { id: 'b4', kind: 'bay', at: [PX(4), UY(3), Z(34)], label: 'bay, port dorsal' },
+        { id: 'b5', kind: 'bay', at: [SX(4), UY(3), Z(34)], label: 'bay, starboard dorsal' },
+        { id: 'c0', kind: 'clamp', at: [PX(7), UY(-4), Z(26)], label: 'clamp, port' },
+        { id: 'c1', kind: 'clamp', at: [SX(7), UY(-4), Z(26)], label: 'clamp, starboard' },
+      ],
+      note: 'A long hull that steps down deeply aft, with a forward pair of cannon '
+        + 'rings and a ventral missile rack. The aft stack ships empty.',
+    },
+    {
+      classKey: 'freighter', name: 'Freighter',
+      faction: 'civil', tier: 'freighter', rung: 'escort',
+      radius: 2.9, massMax: 1.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_FREIGHTER,
+      spine: [keel(0, 12, 48), keel(0, 16, 44, 14, 1),
+        ...ribs(PROF_FREIGHTER, [18, 26, 34, 40])],
+      // No gun ring anywhere. Every gun needs a barbette and every barbette needs
+      // a ring, so the authored empty mount table becomes geometry rather than a
+      // convention. No clamp seat either: its short reach is an absence.
+      sockets: [
+        { id: 'd0', kind: 'drive', at: [PX(4), UY(0), Z(9)], label: 'drive, port' },
+        { id: 'd1', kind: 'drive', at: [A.cx, UY(0), Z(9)], label: 'drive, centre' },
+        { id: 'd2', kind: 'drive', at: [SX(4), UY(0), Z(9)], label: 'drive, starboard' },
+        { id: 'r0', kind: 'retro', at: [PX(5), UY(0), Z(46)], label: 'retro, port' },
+        { id: 'r1', kind: 'retro', at: [SX(5), UY(0), Z(46)], label: 'retro, starboard' },
+        { id: 'y0', kind: 'rcs', at: [PX(7), UY(0), Z(44)], label: 'rcs, port bow' },
+        { id: 'y1', kind: 'rcs', at: [SX(7), UY(0), Z(44)], label: 'rcs, starboard bow' },
+        { id: 'p0', kind: 'rcs', at: [A.cx, UY(7), Z(38)], label: 'rcs, dorsal' },
+        { id: 'p1', kind: 'rcs', at: [A.cx, UY(-7), Z(38)], label: 'rcs, ventral' },
+        { id: 'h0', kind: 'bay', at: [A.cx, UY(0), Z(38)], label: 'hold, forward' },
+        { id: 'h1', kind: 'bay', at: [A.cx, UY(0), Z(22)], label: 'hold, aft' },
+        { id: 'b0', kind: 'bay', at: [A.cx, UY(5), Z(46)], label: 'bay, bridge' },
+        { id: 'b1', kind: 'bay', at: [PX(5), UY(0), Z(14)], label: 'bay, port aft' },
+        { id: 'b2', kind: 'bay', at: [SX(5), UY(0), Z(14)], label: 'bay, starboard aft' },
+        { id: 'b3', kind: 'bay', at: [A.cx, UY(5), Z(30)], label: 'bay, dorsal' },
+        { id: 'b4', kind: 'bay', at: [PX(5), UY(-4), Z(30)], label: 'collar, port' },
+        { id: 'b5', kind: 'bay', at: [SX(5), UY(-4), Z(30)], label: 'collar, starboard' },
+        { id: 'b6', kind: 'bay', at: [A.cx, UY(-5), Z(18)], label: 'collar, ventral' },
+        { id: 'b7', kind: 'bay', at: [PX(4), UY(4), Z(22)], label: 'bay, spare port' },
+        { id: 'b8', kind: 'bay', at: [SX(4), UY(4), Z(22)], label: 'bay, spare starboard' },
+      ],
+      note: 'A long square brick with two holds under a dorsal door. No gun ring '
+        + 'exists on this frame, which is what the empty mount table looks like as '
+        + 'geometry.',
+    },
 
-  // ------------------------------------------------------------ Terran --
-  //
-  // One ladder, four rungs, and nothing on it is a surprise. Every step adds
-  // another beam battery and another belt to the same slab body, because the
-  // fleet is built to be replaced rather than to be clever.
-  {
-    classKey: 'terran_corvette', name: 'Terran Corvette',
-    faction: 'terran', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_TERRAN_CV,
-    spine: [keel(CY, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
-    sockets: [
-      ...suite(PROF_TERRAN_CV, [[-0.5, -0.2], [0.5, -0.2]], 5, 2),
-      seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN_CV, 0.42), 0, 0.45),
-      seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', zAt(PROF_TERRAN_CV, 0.24), 0, 0.55),
-    ],
-    note: 'The frigate’s slab cut down to a bell, a nozzle and two rings. Short enough '
-      + 'that the whole hull turns inside a frigate’s circle, and thin enough on '
-      + 'the belt that the first cannon through it reaches the reactor.',
-  },
-  {
-    classKey: 'terran_destroyer', name: 'Terran Destroyer',
-    faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.6, massMax: 2.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_TERRAN_DD,
-    // The raised dorsal spine is what makes a Terran read as a Terran from
-    // above: a flat deck with a rail down the middle of it.
-    spine: [keel(CY, 4, 58), keel(CY + 5, 12, 48, 8, 2),
-      ...ribs(PROF_TERRAN_DD, [10, 18, 26, 34, 42, 50])],
-    sockets: [
-      ...suite(PROF_TERRAN_DD, [[-0.55, -0.28], [0, -0.28], [0.55, -0.28],
-        [-0.55, 0.35], [0, 0.35], [0.55, 0.35]], 11, 2),
-      seatAt(PROF_TERRAN_DD, 'gun', 'g0', 'gun ring, nose', 51, 0, 0.42),
-      seatAt(PROF_TERRAN_DD, 'gun', 'g1', 'gun ring, port waist', 36, -0.74, 0.26),
-      seatAt(PROF_TERRAN_DD, 'gun', 'g2', 'gun ring, starboard waist', 36, 0.74, 0.26),
-      seatAt(PROF_TERRAN_DD, 'gun', 'g3', 'gun ring, aft dorsal', 16, 0, 0.6),
-      seatAt(PROF_TERRAN_DD, 'gun', 'g4', 'gun ring, ventral', 30, 0, -0.6),
-    ],
-    note: 'Three heavy bells and three verniers on a parallel sided slab, and five '
-      + 'rings, four of them beams. '
-      + 'The ventral ring is the one exception to the doctrine: a projectile turret, '
-      + 'carried because a fleet of beams has nothing that goes through a belt.',
-  },
-  {
-    classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
-    faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.3, massMax: 5.5, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_TERRAN_CA,
-    spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
-      ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
-    sockets: [
-      ...suite(PROF_TERRAN_CA, [[-0.62, -0.3], [-0.21, -0.3], [0.21, -0.3], [0.62, -0.3],
-        [-0.62, 0.36], [-0.21, 0.36], [0.21, 0.36], [0.62, 0.36]], 15, 4),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g1', 'gun ring, port forward', 42, -0.76, 0.24),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g2', 'gun ring, starboard forward', 42, 0.76, 0.24),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g3', 'gun ring, port aft', 22, -0.76, 0.24),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g4', 'gun ring, starboard aft', 22, 0.76, 0.24),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g5', 'gun ring, aft dorsal', 12, 0, 0.6),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g6', 'gun ring, forward ventral', 34, 0, -0.62),
-      seatAt(PROF_TERRAN_CA, 'gun', 'g7', 'gun ring, aft ventral', 18, 0, -0.62),
-    ],
-    note: 'Eight rings on a broadside: two down each flank, one at the nose, one '
-      + 'over the quarterdeck and two under the keel. Four heavy bells and four '
-      + 'verniers push it and none of them make it quick. What it does is stand in a line and keep firing.',
-  },
+    // ------------------------------------------------------------ Terran --
+    //
+    // One ladder, four rungs, and nothing on it is a surprise. Every step adds
+    // another beam battery and another belt to the same slab body, because the
+    // fleet is built to be replaced rather than to be clever.
+    {
+      classKey: 'terran_corvette', name: 'Terran Corvette',
+      faction: 'terran', tier: 'corvette', rung: 'corvette',
+      radius: 1.4, massMax: 0.36, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_TERRAN_CV,
+      spine: [keel(0, 13, 49), ...ribs(PROF_TERRAN_CV, [18, 25, 32, 39, 45])],
+      sockets: [
+        ...suite(PROF_TERRAN_CV, [[-0.5, -0.2], [0.5, -0.2]], 5, 2),
+        // Rests FORWARD rather than abeam. It is a waist ring by position, and
+        // the waist default is abeam because the destroyer's ventral pair look
+        // at each other along the keel; on this hull the beam is what is
+        // blocked and the bow is clear.
+        seatAt(PROF_TERRAN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_TERRAN_CV, 0.42), 0, 0.45, 0),
+        seatAt(PROF_TERRAN_CV, 'gun', 'g1', 'gun ring, dorsal', zAt(PROF_TERRAN_CV, 0.24), 0, 0.55),
+      ],
+      note: 'The frigate’s slab cut down to a bell, a nozzle and two rings. Short enough '
+        + 'that the whole hull turns inside a frigate’s circle, and thin enough on '
+        + 'the belt that the first cannon through it reaches the reactor.',
+    },
+    {
+      classKey: 'terran_destroyer', name: 'Terran Destroyer',
+      faction: 'terran', tier: 'destroyer', rung: 'escort',
+      radius: 2.6, massMax: 1.18, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_TERRAN_DD,
+      // The raised dorsal spine is what makes a Terran read as a Terran from
+      // above: a flat deck with a rail down the middle of it.
+      spine: [keel(0, 4, 58), keel(5, 12, 48, 8, 2),
+        ...ribs(PROF_TERRAN_DD, [10, 18, 26, 34, 42, 50])],
+      sockets: [
+        ...suite(PROF_TERRAN_DD, [[-0.55, -0.28], [0, -0.28], [0.55, -0.28],
+          [-0.55, 0.35], [0, 0.35], [0.55, 0.35]], 11, 2),
+        seatAt(PROF_TERRAN_DD, 'gun', 'g0', 'gun ring, nose', Z(51), 0, 0.42),
+        seatAt(PROF_TERRAN_DD, 'gun', 'g1', 'gun ring, port waist', Z(36), -0.74, 0.26),
+        seatAt(PROF_TERRAN_DD, 'gun', 'g2', 'gun ring, starboard waist', Z(36), 0.74, 0.26),
+        seatAt(PROF_TERRAN_DD, 'gun', 'g3', 'gun ring, aft dorsal', Z(16), 0, 0.6),
+        seatAt(PROF_TERRAN_DD, 'gun', 'g4', 'gun ring, ventral', Z(30), 0, -0.6),
+      ],
+      note: 'Three heavy bells and three verniers on a parallel sided slab, and five '
+        + 'rings, four of them beams. '
+        + 'The ventral ring is the one exception to the doctrine: a projectile turret, '
+        + 'carried because a fleet of beams has nothing that goes through a belt.',
+    },
+    {
+      classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
+      faction: 'terran', tier: 'cruiser', rung: 'cruiser',
+      radius: 3.5, massMax: 2.1, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_TERRAN_CA,
+      spine: [keel(0, 3, 59), keel(6, 10, 52, 10, 2), keel(-5, 8, 50, 8, 2),
+        ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
+      sockets: [
+        ...suite(PROF_TERRAN_CA, [[-0.62, -0.3], [-0.21, -0.3], [0.21, -0.3], [0.62, -0.3],
+          [-0.62, 0.36], [-0.21, 0.36], [0.21, 0.36], [0.62, 0.36]], 15, 4),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g0', 'gun ring, nose', Z(53), 0, 0.4),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g1', 'gun ring, port forward', Z(42), -0.76, 0.24),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g2', 'gun ring, starboard forward', Z(42), 0.76, 0.24),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g3', 'gun ring, port aft', Z(22), -0.76, 0.24),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g4', 'gun ring, starboard aft', Z(22), 0.76, 0.24),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g5', 'gun ring, aft dorsal', Z(12), 0, 0.6),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g6', 'gun ring, forward ventral', Z(34), 0, -0.62),
+        seatAt(PROF_TERRAN_CA, 'gun', 'g7', 'gun ring, aft ventral', Z(18), 0, -0.62),
+      ],
+      note: 'Eight rings on a broadside: two down each flank, one at the nose, one '
+        + 'over the quarterdeck and two under the keel. Four heavy bells and four '
+        + 'verniers push it and none of them make it quick. What it does is stand in a line and keep firing.',
+    },
 
-  // ----------------------------------------------------------- Karisen --
-  //
-  // Every rung is the longest hull at that rung and the thinnest, and every
-  // rung adds missile cells rather than beams. Two beams is what a Karisen
-  // carries however big it gets: the ordnance is the ship.
-  {
-    classKey: 'karisen_corvette', name: 'Karisen Corvette',
-    faction: 'karisen', tier: 'corvette', rung: 'frigate',
-    radius: 2.4, massMax: 0.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_KARISEN_CV,
-    // The ventral rail overruns the body at both ends, which is the one
-    // Karisen habit that survives at every rung.
-    spine: [keel(CY, 13, 51), keel(CY - 4, 10, 54, 4, 2),
-      ...ribs(PROF_KARISEN_CV, [18, 25, 32, 39, 46])],
-    sockets: [
-      ...suite(PROF_KARISEN_CV, [[-0.55, -0.1], [0, -0.1], [0.55, -0.1]], 4, 2),
-      seatAt(PROF_KARISEN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN_CV, 0.44), 0, 0.45),
-      seatAt(PROF_KARISEN_CV, 'missile', 'm0', 'missile pad, ventral',
-        zAt(PROF_KARISEN_CV, 0.32), 0, -0.6),
-    ],
-    note: 'A needle with two overclocked bells, a vernier and one cell. Fastest hull in the game and the '
-      + 'least able to take a hit: it is a ship for arriving with a missile already '
-      + 'in the air and leaving before the answer.',
-  },
-  {
-    classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
-    faction: 'karisen', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_KARISEN_DD,
-    spine: [keel(CY, 3, 60), keel(CY - 5, 0, 63, 4, 2), keel(CY + 5, 10, 52, 5, 2),
-      ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
-    sockets: [
-      ...suite(PROF_KARISEN_DD, [[-0.6, -0.12], [0, -0.12], [0.6, -0.12], [0, 0.5]], 8, 2, 0.5),
-      seatAt(PROF_KARISEN_DD, 'gun', 'g0', 'gun ring, nose', 51, 0, 0.42),
-      seatAt(PROF_KARISEN_DD, 'gun', 'g1', 'gun ring, aft dorsal', 16, 0, 0.58),
-      seatAt(PROF_KARISEN_DD, 'missile', 'm0', 'missile pad, forward', 31, 0, -0.5),
-      seatAt(PROF_KARISEN_DD, 'missile', 'm1', 'missile pad, aft', 22, 0, -0.5),
-    ],
-    note: 'Sixty cells of hull and nine of beam: the longest thin thing at its rung. '
-      + 'A pair of ventral cells under a rail that runs past both ends of the body, '
-      + 'and two beams that are there to finish rather than to open.',
-  },
-  {
-    classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
-    faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 4.07, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_KARISEN_CA,
-    spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
-      ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
-    sockets: [
-      ...suite(PROF_KARISEN_CA, [[-0.62, -0.12], [-0.25, -0.12], [0.25, -0.12],
-        [0.62, -0.12], [0, 0.52]], 9, 2, 0.5, [6, 14, 32, 54]),
-      seatAt(PROF_KARISEN_CA, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
-      seatAt(PROF_KARISEN_CA, 'gun', 'g1', 'gun ring, aft dorsal', 14, 0, 0.58),
-      // Three pairs down the rail, evenly, because that is what the rail is.
-      // Four cells in a ROW down the keel rather than two abreast twice. A
-      // Karisen is the narrowest hull at its rung and a cell is five cells
-      // across: paired, the pair was pulled inboard until the two boxes met
-      // over the centreline and each stood in the other's sweep.
-      seatAt(PROF_KARISEN_CA, 'missile', 'm0', 'missile pad, first', 43, 0, -0.5),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm1', 'missile pad, second', 35, 0, -0.5),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm2', 'missile pad, third', 27, 0, -0.5),
-      seatAt(PROF_KARISEN_CA, 'missile', 'm3', 'missile pad, fourth', 19, 0, -0.5),
-    ],
-    note: 'The arsenal: four cells in two pairs along a keel rail longer than the '
-      + 'ship, and still only the two beams every Karisen carries. The berths are up '
-      + 'top because the keel is a magazine, and it is the one heavy that outruns a '
-      + 'frigate.',
-  },
+    // ----------------------------------------------------------- Karisen --
+    //
+    // Every rung is the longest hull at that rung and the thinnest, and every
+    // rung adds missile cells rather than beams. Two beams is what a Karisen
+    // carries however big it gets: the ordnance is the ship.
+    {
+      classKey: 'karisen_corvette', name: 'Karisen Corvette',
+      faction: 'karisen', tier: 'corvette', rung: 'corvette',
+      radius: 1.6, massMax: 0.37, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_KARISEN_CV,
+      // The ventral rail overruns the body at both ends, which is the one
+      // Karisen habit that survives at every rung.
+      spine: [keel(0, 13, 51), keel(-4, 10, 54, 4, 2),
+        ...ribs(PROF_KARISEN_CV, [18, 25, 32, 39, 46])],
+      sockets: [
+        ...suite(PROF_KARISEN_CV, [[-0.55, -0.1], [0, -0.1], [0.55, -0.1]], 4, 2),
+        seatAt(PROF_KARISEN_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_KARISEN_CV, 0.44), 0, 0.45),
+        seatAt(PROF_KARISEN_CV, 'missile', 'm0', 'missile pad, ventral',
+          zAt(PROF_KARISEN_CV, 0.32), 0, -0.6),
+      ],
+      note: 'A needle with two overclocked bells, a vernier and one cell. Fastest hull in the game and the '
+        + 'least able to take a hit: it is a ship for arriving with a missile already '
+        + 'in the air and leaving before the answer.',
+    },
+    {
+      classKey: 'karisen_destroyer', name: 'Karisen Destroyer',
+      faction: 'karisen', tier: 'destroyer', rung: 'escort',
+      radius: 2.8, massMax: 0.86, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_KARISEN_DD,
+      spine: [keel(0, 3, 60), keel(-5, 0, 63, 4, 2), keel(5, 10, 52, 5, 2),
+        ...ribs(PROF_KARISEN_DD, [9, 17, 25, 33, 41, 49, 56])],
+      sockets: [
+        ...suite(PROF_KARISEN_DD, [[-0.6, -0.12], [0, -0.12], [0.6, -0.12], [0, 0.5]], 8, 2, 0.5),
+        seatAt(PROF_KARISEN_DD, 'gun', 'g0', 'gun ring, nose', Z(51), 0, 0.42),
+        seatAt(PROF_KARISEN_DD, 'gun', 'g1', 'gun ring, aft dorsal', Z(16), 0, 0.58),
+        seatAt(PROF_KARISEN_DD, 'missile', 'm0', 'missile pad, forward', Z(31), 0, -0.5),
+        seatAt(PROF_KARISEN_DD, 'missile', 'm1', 'missile pad, aft', Z(22), 0, -0.5),
+      ],
+      note: 'Sixty cells of hull and nine of beam: the longest thin thing at its rung. '
+        + 'A pair of ventral cells under a rail that runs past both ends of the body, '
+        + 'and two beams that are there to finish rather than to open.',
+    },
+    {
+      classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
+      faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
+      radius: 3.8, massMax: 1.4, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_KARISEN_CA,
+      spine: [keel(0, 2, 61), keel(-6, 0, 63, 5, 2), keel(6, 8, 54, 6, 2),
+        ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
+      sockets: [
+        ...suite(PROF_KARISEN_CA, [[-0.62, -0.12], [-0.25, -0.12], [0.25, -0.12],
+          [0.62, -0.12], [0, 0.52]], 9, 2, 0.5, [6, 14, 32, 54].map(Z)),
+        seatAt(PROF_KARISEN_CA, 'gun', 'g0', 'gun ring, nose', Z(53), 0, 0.4),
+        seatAt(PROF_KARISEN_CA, 'gun', 'g1', 'gun ring, aft dorsal', Z(14), 0, 0.58),
+        // Three pairs down the rail, evenly, because that is what the rail is.
+        // Four cells in a ROW down the keel rather than two abreast twice. A
+        // Karisen is the narrowest hull at its rung and a cell is five cells
+        // across: paired, the pair was pulled inboard until the two boxes met
+        // over the centreline and each stood in the other's sweep.
+        seatAt(PROF_KARISEN_CA, 'missile', 'm0', 'missile pad, first', Z(43), 0, -0.5),
+        seatAt(PROF_KARISEN_CA, 'missile', 'm1', 'missile pad, second', Z(35), 0, -0.5),
+        seatAt(PROF_KARISEN_CA, 'missile', 'm2', 'missile pad, third', Z(27), 0, -0.5),
+        seatAt(PROF_KARISEN_CA, 'missile', 'm3', 'missile pad, fourth', Z(19), 0, -0.5),
+      ],
+      note: 'The arsenal: four cells in two pairs along a keel rail longer than the '
+        + 'ship, and still only the two beams every Karisen carries. The berths are up '
+        + 'top because the keel is a magazine, and it is the one heavy that outruns a '
+        + 'frigate.',
+    },
 
-  // ------------------------------------------------------------- Rogue --
-  //
-  // The ladder that grows in MARINES. Every rung has the least hull at that
-  // rung, the fewest guns, the most clamps and by some way the sharpest turn:
-  // a Rogue heavy cruiser still comes about faster than a Terran destroyer.
-  {
-    classKey: 'rogue_corvette', name: 'Rogue Corvette',
-    faction: 'rogue', tier: 'corvette', rung: 'frigate',
-    radius: 2, massMax: 0.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_ROGUE_CV,
-    // A cross beam through the keel, carrying the clamps and the collars as
-    // one structure, exactly as the frigate does.
-    spine: [keel(CY, 15, 47), [CX - 8, CY - 2, 26, 16, 3, 4] as const,
-      ...ribs(PROF_ROGUE_CV, [20, 26, 32, 38, 44])],
-    sockets: [
-      ...suite(PROF_ROGUE_CV, [[-0.5, 0], [0, 0], [0.5, 0]], 6, 2),
-      seatAt(PROF_ROGUE_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_ROGUE_CV, 0.42), 0, 0.4),
-    ],
-    note: 'A boarding launch: one gun, two overclocked bells and a hull wide enough '
-      + 'to put '
-      + 'clamps on. It cannot fight anything and it does not have to, because '
-      + 'everything it wants is already inside somebody else’s ship.',
-  },
-  {
-    classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
-    faction: 'rogue', tier: 'destroyer', rung: 'escort',
-    radius: 4.7, massMax: 1.48, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_ROGUE_DD,
-    spine: [keel(CY, 9, 51), [CX - 11, CY - 2, 24, 22, 4, 5] as const,
-      ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
-    sockets: [
-      ...suite(PROF_ROGUE_DD, [[-0.55, 0], [0, 0], [0.55, 0]], 17, 6),
-      seatAt(PROF_ROGUE_DD, 'gun', 'g0', 'gun ring, port', 36, -0.7, 0.3),
-      seatAt(PROF_ROGUE_DD, 'gun', 'g1', 'gun ring, starboard', 36, 0.7, 0.3),
-      seatAt(PROF_ROGUE_DD, 'gun', 'g2', 'gun ring, aft dorsal', 12, 0, 0.58),
-    ],
-    note: 'Short, very wide and mostly barracks. Six clamps on a cross beam and '
-      + 'forty five marines behind them: the guns exist to stop a hull running, not '
-      + 'to sink it, because a sunk hull is a hull nobody took.',
-  },
-  {
-    classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
-    faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
-    radius: 6.3, massMax: 2.88, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_ROGUE_CA,
-    spine: [keel(CY, 7, 53), [CX - 13, CY - 2, 22, 26, 4, 6] as const,
-      [CX - 13, CY - 2, 34, 26, 4, 6] as const,
-      ...ribs(PROF_ROGUE_CA, [14, 20, 26, 32, 38, 44, 50])],
-    sockets: [
-      ...suite(PROF_ROGUE_CA, [[-0.6, 0], [-0.2, 0], [0.2, 0], [0.6, 0]], 23, 8),
-      seatAt(PROF_ROGUE_CA, 'gun', 'g0', 'gun ring, port forward', 40, -0.72, 0.3),
-      seatAt(PROF_ROGUE_CA, 'gun', 'g1', 'gun ring, starboard forward', 40, 0.72, 0.3),
-      seatAt(PROF_ROGUE_CA, 'gun', 'g2', 'gun ring, port aft', 20, -0.72, 0.3),
-      seatAt(PROF_ROGUE_CA, 'gun', 'g3', 'gun ring, starboard aft', 20, 0.72, 0.3),
-    ],
-    note: 'The widest hull on the board and the shortest of the big ones: two cross '
-      + 'beams, eight clamps and berths for seventy. Four plasma is the whole '
-      + 'battery, and it is still the fastest turning heavy in the game.',
-  },
+    // ------------------------------------------------------------- Rogue --
+    //
+    // The ladder that grows in MARINES. Every rung has the least hull at that
+    // rung, the fewest guns, the most clamps and by some way the sharpest turn:
+    // a Rogue heavy cruiser still comes about faster than a Terran destroyer.
+    {
+      classKey: 'rogue_corvette', name: 'Rogue Corvette',
+      faction: 'rogue', tier: 'corvette', rung: 'corvette',
+      radius: 1.2, massMax: 0.36, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_ROGUE_CV,
+      // A cross beam through the keel, carrying the clamps and the collars as
+      // one structure, exactly as the frigate does.
+      spine: [keel(0, 15, 47), slab(-8, -2, 26, 16, 3, 4),
+        ...ribs(PROF_ROGUE_CV, [20, 26, 32, 38, 44])],
+      sockets: [
+        ...suite(PROF_ROGUE_CV, [[-0.5, 0], [0, 0], [0.5, 0]], 6, 2),
+        seatAt(PROF_ROGUE_CV, 'gun', 'g0', 'gun ring, nose', zAt(PROF_ROGUE_CV, 0.42), 0, 0.4),
+      ],
+      note: 'A boarding launch: one gun, two overclocked bells and a hull wide enough '
+        + 'to put '
+        + 'clamps on. It cannot fight anything and it does not have to, because '
+        + 'everything it wants is already inside somebody else’s ship.',
+    },
+    {
+      classKey: 'rogue_destroyer', name: 'Rogue Destroyer',
+      faction: 'rogue', tier: 'destroyer', rung: 'escort',
+      radius: 2.2, massMax: 1.01, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_ROGUE_DD,
+      spine: [keel(0, 9, 51), slab(-11, -2, 24, 22, 4, 5),
+        ...ribs(PROF_ROGUE_DD, [16, 22, 28, 34, 40, 46])],
+      sockets: [
+        ...suite(PROF_ROGUE_DD, [[-0.55, 0], [0, 0], [0.55, 0]], 17, 6),
+        seatAt(PROF_ROGUE_DD, 'gun', 'g0', 'gun ring, port', Z(36), -0.7, 0.3),
+        seatAt(PROF_ROGUE_DD, 'gun', 'g1', 'gun ring, starboard', Z(36), 0.7, 0.3),
+        seatAt(PROF_ROGUE_DD, 'gun', 'g2', 'gun ring, aft dorsal', Z(12), 0, 0.58),
+      ],
+      note: 'Short, very wide and mostly barracks. Six clamps on a cross beam and '
+        + 'forty five marines behind them: the guns exist to stop a hull running, not '
+        + 'to sink it, because a sunk hull is a hull nobody took.',
+    },
+    {
+      classKey: 'rogue_cruiser', name: 'Rogue Heavy Cruiser',
+      faction: 'rogue', tier: 'cruiser', rung: 'cruiser',
+      radius: 2.9, massMax: 1.51, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_ROGUE_CA,
+      spine: [keel(0, 7, 53), slab(-13, -2, 22, 26, 4, 6),
+        slab(-13, -2, 34, 26, 4, 6),
+        ...ribs(PROF_ROGUE_CA, [14, 20, 26, 32, 38, 44, 50])],
+      sockets: [
+        ...suite(PROF_ROGUE_CA, [[-0.6, 0], [-0.2, 0], [0.2, 0], [0.6, 0]], 23, 8),
+        seatAt(PROF_ROGUE_CA, 'gun', 'g0', 'gun ring, port forward', Z(40), -0.72, 0.3),
+        seatAt(PROF_ROGUE_CA, 'gun', 'g1', 'gun ring, starboard forward', Z(40), 0.72, 0.3),
+        seatAt(PROF_ROGUE_CA, 'gun', 'g2', 'gun ring, port aft', Z(20), -0.72, 0.3),
+        seatAt(PROF_ROGUE_CA, 'gun', 'g3', 'gun ring, starboard aft', Z(20), 0.72, 0.3),
+      ],
+      note: 'The widest hull on the board and the shortest of the big ones: two cross '
+        + 'beams, eight clamps and berths for seventy. Four plasma is the whole '
+        + 'battery, and it is still the fastest turning heavy in the game.',
+    },
 
-  // -------------------------------------------------------- Benefactor --
-  //
-  // Deep sectioned monitors, taller than they are wide at every rung. They
-  // grow by CALIBRE and by belt rather than by count, and each one is the
-  // slowest thing at its rung. The trade is that a cannon goes through a belt
-  // and a beam does not.
-  {
-    classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
-    faction: 'benefactor', tier: 'corvette', rung: 'frigate',
-    radius: 1.9, massMax: 0.49, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_BENEFACTOR_CV,
-    spine: [keel(CY, 13, 49), keel(CY - 5, 14, 28, 4, 3),
-      ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
-    sockets: [
-      ...suite(PROF_BENEFACTOR_CV, [[0, -0.1], [-0.55, 0.3], [0.55, 0.3]], 5, 2),
-      seatAt(PROF_BENEFACTOR_CV, 'gun', 'g0', 'gun ring, nose',
-        zAt(PROF_BENEFACTOR_CV, 0.42), 0, 0.4),
-      seatAt(PROF_BENEFACTOR_CV, 'missile', 'm0', 'missile pad, ventral',
-        zAt(PROF_BENEFACTOR_CV, 0.30), 0, -0.55),
-    ],
-    note: 'Deeper than it is wide, on a hull four metres long. One cannon and one '
-      + 'cell, and belts thick enough that a corvette of anybody else’s cannot '
-      + 'get through them inside a turn.',
-  },
-  {
-    classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
-    faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.2, massMax: 2.35, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_BENEFACTOR_DD,
-    // A deep aft drop keel and a shallower dorsal one: the section is the
-    // whole Benefactor idea and the spine says so from the inside.
-    spine: [keel(CY, 4, 58), keel(CY - 8, 6, 26, 5, 5), keel(CY + 7, 6, 24, 5, 3),
-      ...ribs(PROF_BENEFACTOR_DD, [11, 19, 27, 35, 43, 51])],
-    sockets: [
-      ...suite(PROF_BENEFACTOR_DD, [[0, -0.05], [-0.55, 0.28], [0.55, 0.28], [0, 0.55]], 11, 2),
-      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g0', 'gun ring, port', 38, -0.7, 0.52),
-      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g1', 'gun ring, starboard', 38, 0.7, 0.52),
-      seatAt(PROF_BENEFACTOR_DD, 'gun', 'g2', 'gun ring, aft dorsal', 16, 0, 0.58),
-      seatAt(PROF_BENEFACTOR_DD, 'missile', 'm0', 'missile pad, ventral', 28, 0, -0.6),
-    ],
-    note: 'Three cannon on a section deeper than it is wide, and two heavy bells '
-      + 'doing the pushing. Slowest hull at its rung, and the one that does not care '
-      + 'what is painted on the outside of a belt.',
-  },
-  {
-    classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
-    faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
-    radius: 7, massMax: 4.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_BENEFACTOR_CA,
-    spine: [keel(CY, 3, 60), keel(CY - 10, 6, 30, 6, 6), keel(CY + 8, 6, 28, 6, 4),
-      ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
-    sockets: [
-      ...suite(PROF_BENEFACTOR_CA, [[0, -0.05], [-0.6, 0.25], [0.6, 0.25],
-        [-0.35, 0.55], [0.35, 0.55]], 14, 4),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g0', 'gun ring, port forward', 42, -0.72, 0.52),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g1', 'gun ring, starboard forward', 42, 0.72, 0.52),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g2', 'gun ring, port aft', 22, -0.72, 0.52),
-      seatAt(PROF_BENEFACTOR_CA, 'gun', 'g3', 'gun ring, starboard aft', 22, 0.72, 0.52),
-      seatAt(PROF_BENEFACTOR_CA, 'missile', 'm0', 'missile pad, forward', 38, 0, -0.6),
-      seatAt(PROF_BENEFACTOR_CA, 'missile', 'm1', 'missile pad, aft', 27, 0, -0.6),
-    ],
-    note: 'Twelve cells to the keel and the heaviest berth in the game. Four cannon, '
-      + 'two cells and six layers of belt, on a hull that comes about at under two '
-      + 'degrees a second. Whatever it is pointed at, it stays pointed at.',
-  },
+    // -------------------------------------------------------- Benefactor --
+    //
+    // Deep sectioned monitors, taller than they are wide at every rung. They
+    // grow by CALIBRE and by belt rather than by count, and each one is the
+    // slowest thing at its rung. The trade is that a cannon goes through a belt
+    // and a beam does not.
+    {
+      classKey: 'benefactor_corvette', name: 'Benefactor Corvette',
+      faction: 'benefactor', tier: 'corvette', rung: 'corvette',
+      radius: 1.3, massMax: 0.31, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_BENEFACTOR_CV,
+      spine: [keel(0, 13, 49), keel(-5, 14, 28, 4, 3),
+        ...ribs(PROF_BENEFACTOR_CV, [18, 25, 32, 39, 45])],
+      sockets: [
+        ...suite(PROF_BENEFACTOR_CV, [[0, -0.1], [-0.55, 0.3], [0.55, 0.3]], 5, 2),
+        seatAt(PROF_BENEFACTOR_CV, 'gun', 'g0', 'gun ring, nose',
+          zAt(PROF_BENEFACTOR_CV, 0.42), 0, 0.4),
+        seatAt(PROF_BENEFACTOR_CV, 'missile', 'm0', 'missile pad, ventral',
+          zAt(PROF_BENEFACTOR_CV, 0.30), 0, -0.55),
+      ],
+      note: 'Deeper than it is wide, on a hull four metres long. One cannon and one '
+        + 'cell, and belts thick enough that a corvette of anybody else’s cannot '
+        + 'get through them inside a turn.',
+    },
+    {
+      classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
+      faction: 'benefactor', tier: 'destroyer', rung: 'escort',
+      radius: 2.5, massMax: 1.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_BENEFACTOR_DD,
+      // A deep aft drop keel and a shallower dorsal one: the section is the
+      // whole Benefactor idea and the spine says so from the inside.
+      spine: [keel(0, 4, 58), keel(-8, 6, 26, 5, 5), keel(7, 6, 24, 5, 3),
+        ...ribs(PROF_BENEFACTOR_DD, [11, 19, 27, 35, 43, 51])],
+      sockets: [
+        ...suite(PROF_BENEFACTOR_DD, [[0, -0.05], [-0.55, 0.28], [0.55, 0.28], [0, 0.55]], 11, 2),
+        seatAt(PROF_BENEFACTOR_DD, 'gun', 'g0', 'gun ring, port', Z(38), -0.7, 0.52),
+        seatAt(PROF_BENEFACTOR_DD, 'gun', 'g1', 'gun ring, starboard', Z(38), 0.7, 0.52),
+        seatAt(PROF_BENEFACTOR_DD, 'gun', 'g2', 'gun ring, aft dorsal', Z(16), 0, 0.58),
+        seatAt(PROF_BENEFACTOR_DD, 'missile', 'm0', 'missile pad, ventral', Z(28), 0, -0.6),
+      ],
+      note: 'Three cannon on a section deeper than it is wide, and two heavy bells '
+        + 'doing the pushing. Slowest hull at its rung, and the one that does not care '
+        + 'what is painted on the outside of a belt.',
+    },
+    {
+      classKey: 'benefactor_cruiser', name: 'Benefactor Heavy Cruiser',
+      faction: 'benefactor', tier: 'cruiser', rung: 'cruiser',
+      radius: 3.4, massMax: 1.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_BENEFACTOR_CA,
+      spine: [keel(0, 3, 60), keel(-10, 6, 30, 6, 6), keel(8, 6, 28, 6, 4),
+        ...ribs(PROF_BENEFACTOR_CA, [10, 18, 26, 34, 42, 50, 57])],
+      sockets: [
+        ...suite(PROF_BENEFACTOR_CA, [[0, -0.05], [-0.6, 0.25], [0.6, 0.25],
+          [-0.35, 0.55], [0.35, 0.55]], 14, 4),
+        seatAt(PROF_BENEFACTOR_CA, 'gun', 'g0', 'gun ring, port forward', Z(42), -0.72, 0.52),
+        seatAt(PROF_BENEFACTOR_CA, 'gun', 'g1', 'gun ring, starboard forward', Z(42), 0.72, 0.52),
+        seatAt(PROF_BENEFACTOR_CA, 'gun', 'g2', 'gun ring, port aft', Z(22), -0.72, 0.52),
+        seatAt(PROF_BENEFACTOR_CA, 'gun', 'g3', 'gun ring, starboard aft', Z(22), 0.72, 0.52),
+        seatAt(PROF_BENEFACTOR_CA, 'missile', 'm0', 'missile pad, forward', Z(38), 0, -0.6),
+        seatAt(PROF_BENEFACTOR_CA, 'missile', 'm1', 'missile pad, aft', Z(27), 0, -0.6),
+      ],
+      note: 'Twelve cells to the keel and the heaviest berth in the game. Four cannon, '
+        + 'two cells and six layers of belt, on a hull that comes about at under two '
+        + 'degrees a second. Whatever it is pointed at, it stays pointed at.',
+    },
 
-  // ------------------------------------------------------------- civil --
-  //
-  // Not a ladder. The four navies build the same ship four sizes; the civil
-  // yards build six different ships, and what a hull is FOR is its whole
-  // shape: a box ship is a rack with an engine, a tanker is a bulge round a
-  // cylinder, a liner is a hotel, and a mining ship is an arm with a hull
-  // behind it to hold the rock. None of them carries a gun ring, so none of
-  // them can be armed, which is the same rule the Freighter has always had
-  // written as geometry rather than as a convention.
-  {
-    classKey: 'civil_lighter', name: 'Lighter',
-    faction: 'civil', tier: 'lighter', rung: 'frigate',
-    radius: 2.6, massMax: 0.67, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_LIGHTER,
-    spine: [keel(CY, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],
-    sockets: [
-      ...suite(PROF_LIGHTER, [[-0.45, -0.1], [0.45, -0.1]], 5, 0),
-      ...rack(PROF_LIGHTER, 2, 1, 2),
-    ],
-    note: 'Two boxes and a bridge. The smallest thing anybody calls a ship: it '
-      + 'runs between a hull in orbit and a yard, and it has no reason to be '
-      + 'anywhere a shot is being fired.',
-  },
-  {
-    classKey: 'civil_hauler', name: 'Hauler',
-    faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.4, massMax: 2.65, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_HAULER,
-    spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
-      ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
-    sockets: [
-      ...suite(PROF_HAULER, [[-0.5, -0.15], [0, -0.15], [0.5, -0.15]], 7, 2),
-      ...rack(PROF_HAULER, 6, 2, 2),
-    ],
-    note: 'Six boxes on a rack, three tug bells and a berth for the crew who '
-      + 'ride with them. The hull most of everything anybody eats arrives on.',
-  },
-  {
-    classKey: 'civil_boxship', name: 'Container Ship',
-    faction: 'civil', tier: 'boxship', rung: 'cruiser',
-    radius: 7.3, massMax: 5.81, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_BOXSHIP,
-    spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
-      ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
-    sockets: [
-      ...suite(PROF_BOXSHIP, [[-0.55, -0.2], [0, -0.2], [0.55, -0.2],
-        [-0.3, 0.35], [0.3, 0.35]], 7, 2),
-      ...rack(PROF_BOXSHIP, 12, 2, 3),
-    ],
-    note: 'Twelve boxes in four tiers of three, and a bridge stuck on the front '
-      + 'of them because there was nowhere else to put it. Nothing about this '
-      + 'ship is for anything except the boxes.',
-  },
-  {
-    classKey: 'civil_tanker', name: 'Tanker',
-    faction: 'civil', tier: 'tanker', rung: 'cruiser',
-    radius: 6.9, massMax: 5.7, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_TANKER,
-    spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
-      ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
-    sockets: [
-      ...suite(PROF_TANKER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
-        [-0.28, 0.3], [0.28, 0.3]], 5, 0),
-      ...rack(PROF_TANKER, 6, 2, 1),
-    ],
-    note: 'Six pressure vessels with a walkway over the top of them and a hull '
-      + 'wrapped round the lot. The radiator slats down the flanks are what it '
-      + 'has instead of windows, because nobody lives in a tank.',
-  },
-  {
-    classKey: 'civil_miner', name: 'Mining Ship',
-    faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.5, massMax: 2.44, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_MINER,
-    spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
-      ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
-    sockets: [
-      ...suite(PROF_MINER, [[-0.45, -0.15], [0.45, -0.15]], 5, 2),
-      ...rack(PROF_MINER, 4, 2, 1),
-      // Rings, but not gun rings: a cutting head is a thing that TURNS, and a
-      // ring is the frame's own answer to that. Nothing armed can go here,
-      // because the class carries no mounts and the core reads the class.
-      seatAt(PROF_MINER, 'gun', 'g0', 'boom ring, port', 44, -0.62, 0.1),
-      seatAt(PROF_MINER, 'gun', 'g1', 'boom ring, starboard', 44, 0.62, 0.1),
-    ],
-    note: 'Two cutting booms on rings at the bow and four hoppers behind them. '
-      + 'It works a rock rather than a fleet, and the only thing it can do to '
-      + 'a warship is be in the way.',
-  },
-  {
-    classKey: 'civil_liner', name: 'Liner',
-    faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.5, massMax: 5.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
-    profile: PROF_LINER,
-    spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
-      ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
-    sockets: [
-      ...suite(PROF_LINER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
-        [-0.28, 0.28], [0.28, 0.28]], 13, 2),
-      ...rack(PROF_LINER, 2, 1, 2),
-    ],
-    note: 'Decks of people, lit from end to end. It is the one hull on the '
-      + 'field that is brighter than the sky behind it, and the only thing it '
-      + 'is carrying is passengers.',
-  },
-];
+    // ------------------------------------------------------------- civil --
+    //
+    // Not a ladder. The four navies build the same ship four sizes; the civil
+    // yards build six different ships, and what a hull is FOR is its whole
+    // shape: a box ship is a rack with an engine, a tanker is a bulge round a
+    // cylinder, a liner is a hotel, and a mining ship is an arm with a hull
+    // behind it to hold the rock. None of them carries a gun ring, so none of
+    // them can be armed, which is the same rule the Freighter has always had
+    // written as geometry rather than as a convention.
+    {
+      classKey: 'civil_lighter', name: 'Lighter',
+      faction: 'civil', tier: 'lighter', rung: 'escort',
+      radius: 2, massMax: 0.52, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_LIGHTER,
+      spine: [keel(0, 18, 46), ...ribs(PROF_LIGHTER, [22, 28, 34, 40])],
+      sockets: [
+        ...suite(PROF_LIGHTER, [[-0.45, -0.1], [0.45, -0.1]], 5, 0),
+        ...rack(PROF_LIGHTER, 2, 1, 2),
+      ],
+      note: 'Two boxes and a bridge. The smallest thing anybody calls a ship: it '
+        + 'runs between a hull in orbit and a yard, and it has no reason to be '
+        + 'anywhere a shot is being fired.',
+    },
+    {
+      classKey: 'civil_hauler', name: 'Hauler',
+      faction: 'civil', tier: 'hauler', rung: 'escort',
+      radius: 2.5, massMax: 1.24, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_HAULER,
+      spine: [keel(0, 8, 56), keel(7, 16, 44, 12, 1),
+        ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
+      sockets: [
+        ...suite(PROF_HAULER, [[-0.5, -0.15], [0, -0.15], [0.5, -0.15]], 7, 2),
+        ...rack(PROF_HAULER, 6, 2, 2),
+      ],
+      note: 'Six boxes on a rack, three tug bells and a berth for the crew who '
+        + 'ride with them. The hull most of everything anybody eats arrives on.',
+    },
+    {
+      classKey: 'civil_boxship', name: 'Container Ship',
+      faction: 'civil', tier: 'boxship', rung: 'cruiser',
+      radius: 3.5, massMax: 2.43, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_BOXSHIP,
+      spine: [keel(0, 4, 60), keel(8, 12, 52, 16, 1), keel(-7, 12, 52, 12, 1),
+        ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
+      sockets: [
+        ...suite(PROF_BOXSHIP, [[-0.55, -0.2], [0, -0.2], [0.55, -0.2],
+          [-0.3, 0.35], [0.3, 0.35]], 7, 2),
+        ...rack(PROF_BOXSHIP, 12, 2, 3),
+      ],
+      note: 'Twelve boxes in four tiers of three, and a bridge stuck on the front '
+        + 'of them because there was nowhere else to put it. Nothing about this '
+        + 'ship is for anything except the boxes.',
+    },
+    {
+      classKey: 'civil_tanker', name: 'Tanker',
+      faction: 'civil', tier: 'tanker', rung: 'cruiser',
+      radius: 3.3, massMax: 2.14, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_TANKER,
+      spine: [keel(0, 4, 60), keel(-8, 14, 50, 8, 1),
+        ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
+      sockets: [
+        ...suite(PROF_TANKER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
+          [-0.28, 0.3], [0.28, 0.3]], 5, 0),
+        ...rack(PROF_TANKER, 6, 2, 1),
+      ],
+      note: 'Six pressure vessels with a walkway over the top of them and a hull '
+        + 'wrapped round the lot. The radiator slats down the flanks are what it '
+        + 'has instead of windows, because nobody lives in a tank.',
+    },
+    {
+      classKey: 'civil_miner', name: 'Mining Ship',
+      faction: 'civil', tier: 'miner', rung: 'escort',
+      radius: 2.2, massMax: 1.32, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_MINER,
+      spine: [keel(0, 10, 52), keel(-6, 14, 48, 10, 1),
+        ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
+      sockets: [
+        ...suite(PROF_MINER, [[-0.45, -0.15], [0.45, -0.15]], 5, 2),
+        ...rack(PROF_MINER, 4, 2, 1),
+        // Rings, but not gun rings: a cutting head is a thing that TURNS, and a
+        // ring is the frame's own answer to that. Nothing armed can go here,
+        // because the class carries no mounts and the core reads the class.
+        seatAt(PROF_MINER, 'gun', 'g0', 'boom ring, port', Z(44), -0.62, 0.1),
+        seatAt(PROF_MINER, 'gun', 'g1', 'boom ring, starboard', Z(44), 0.62, 0.1),
+      ],
+      note: 'Two cutting booms on rings at the bow and four hoppers behind them. '
+        + 'It works a rock rather than a fleet, and the only thing it can do to '
+        + 'a warship is be in the way.',
+    },
+    {
+      classKey: 'civil_liner', name: 'Liner',
+      faction: 'civil', tier: 'liner', rung: 'cruiser',
+      radius: 3.6, massMax: 1.96, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+      profile: PROF_LINER,
+      spine: [keel(0, 2, 62), keel(7, 10, 54, 14, 1),
+        ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
+      sockets: [
+        ...suite(PROF_LINER, [[-0.5, -0.2], [0, -0.2], [0.5, -0.2],
+          [-0.28, 0.28], [0.28, 0.28]], 13, 2),
+        ...rack(PROF_LINER, 2, 1, 2),
+      ],
+      note: 'Decks of people, lit from end to end. It is the one hull on the '
+        + 'field that is brighter than the sky behind it, and the only thing it '
+        + 'is carrying is passengers.',
+    },
+  ];
+  return table;
+};
+
+/**
+ * The fleet, each class on its own lattice.
+ *
+ * Built once per rung and then picked apart: every pass produces the same
+ * classes in the same order, so frame n of the pass whose rung matches frame n
+ * is the one to keep. Grouping by rung instead would reorder the fleet in
+ * every picker that walks this list.
+ */
+export const FRAMES: readonly FrameDef[] = (() => {
+  const passes = {} as Record<RungKey, FrameDef[]>;
+  for (const r of Object.keys(RUNG) as RungKey[]) {
+    A = RUNG[r];
+    passes[r] = buildFrames();
+  }
+  A = REF;
+  return (passes.frigate as FrameDef[])
+    .map((f, n) => (passes[f.rung] as FrameDef[])[n] as FrameDef);
+})();
+
 
 /**
  * Seat a part inside the hull.
@@ -2170,8 +2529,10 @@ export const FRAMES: readonly FrameDef[] = [
  * let the nudge search walk a bay half out through the side of the ship and
  * still call it seated.
  */
-export function boxInside(prof: readonly Station[], x: number, y: number, z: number,
+export function boxInside(L: Lat, prof: readonly Station[],
+  x: number, y: number, z: number,
   hx: number, hy: number, hz: number, inset = 1): boolean {
+  const CX = L.cx, CY = L.cy;
   let hw = Infinity, hh = Infinity;
   for (let k = Math.round(z - hz); k <= Math.round(z + hz); k++) {
     const st = hullAt(prof, k);
@@ -2185,6 +2546,7 @@ export function boxInside(prof: readonly Station[], x: number, y: number, z: num
 
 export function seatOf(frame: FrameDef, sock: Socket,
   v: { sx: number; sy: number; sz: number }): readonly [number, number, number] {
+  const { cx: CX, cy: CY } = latOf(frame);
   const cx = sock.at[0] as number, cy = sock.at[1] as number, cz = sock.at[2] as number;
   if (isProud(sock.kind)) return [cx, cy, cz];
   const inset = seatInset(sock.kind);
@@ -2215,8 +2577,8 @@ export function seatOf(frame: FrameDef, sock: Socket,
     const s = onX ? (cx >= CX ? 1 : -1) : (cy >= CY ? 1 : -1);
     const face = onX ? hx : hy;
     const out = (t: number) => onX
-      ? !insideHull(prof, x + s * t, y, k)
-      : !insideHull(prof, x, y + s * t, k);
+      ? !insideHull(latOf(frame), prof, x + s * t, y, k)
+      : !insideHull(latOf(frame), prof, x, y + s * t, k);
     for (let n = 0; n < 64; n++) {
       const proud = out(face - 0.5);          // the outer face is past the skin
       const sunk = !out(face + 0.5);          // there is still hull beyond it
@@ -2243,10 +2605,45 @@ export function seatOf(frame: FrameDef, sock: Socket,
 
 const seated = new Map<string, FrameDef>();
 
+/**
+ * A frame the ARCHITECT is editing, standing in for the authored one.
+ *
+ * The architect is an authoring tool, not a second way to field a ship: what a
+ * class derives is in the core's table and that table is hashed into the match
+ * state, so a frame edited here and flown there would be one seat playing a
+ * different ship from the other. It previews and it EXPORTS; the edit reaches
+ * a match by going back into this file and through `measure_fleet.mjs --sync`,
+ * which is the same road every stock number already travels.
+ *
+ * So this is deliberately one frame at a time, set on the way into the screen
+ * and cleared on the way out, rather than a store the rest of the app reads.
+ */
+let override: FrameDef | null = null;
+/** Bumped on every change, because `rasterSig` keys a cache on the CLASS and
+ *  two different frames under one class key would otherwise share a raster. */
+let overrideGen = 0;
+
+/** Put a frame in front of its authored one, or `null` to take it away. */
+export function setFrameOverride(f: FrameDef | null): void {
+  override = f;
+  overrideGen++;
+  seated.clear();
+}
+
+/** Which class is being overridden, if any. For the signature and for screens
+ *  that have to say so out loud. */
+export function frameOverride(): FrameDef | null { return override; }
+export function frameGen(): number { return overrideGen; }
+
+/** The frame as this build authored it, whatever the architect is showing. */
+export const stockFrameFor = (classKey: string): FrameDef =>
+  FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+
 export const frameFor = (classKey: string): FrameDef => {
+  if (override && override.classKey === classKey) return override;
   const hit = seated.get(classKey);
   if (hit) return hit;
-  const f = FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+  const f = stockFrameFor(classKey);
   seated.set(classKey, f);
   return f;
 };
@@ -2260,7 +2657,9 @@ export const frameFor = (classKey: string): FrameDef => {
  * goes on its trunnion. A player cannot hang a beam on bare structure.
  */
 export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[] {
-  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s) : s));
+  const L = latOf(frame), CX = L.cx, CY = L.cy;
+  const rings = frame.sockets.filter(s => s.kind === 'gun');
+  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s, rings) : s));
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
     const base = out.find(s => s.id === p.socket);
@@ -2270,7 +2669,7 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
     // further INSIDE its own ship: the barrel was in the plating, and the arc
     // scan reported the whole sphere blocked, which is a mount that cannot
     // fire in any direction and looks like one that can.
-    const [ox, oy] = outwardAt(frame.profile, base.at);
+    const [ox, oy] = outwardAt(L, frame.profile, base.at);
     const [hw, hh] = hullAt(frame.profile, base.at[2] as number);
     // ON the skin, not two cells nearer to it. A barbette is a drum SET INTO
     // the plating and the gun sits on top of the drum, so the trunnion goes
@@ -2308,13 +2707,14 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
  * The face is taken before the move and the rest facing after it, so a ring
  * that slides out along its own face keeps that face.
  */
-const ringSeat = (frame: FrameDef, s: Socket): Socket => {
-  const [ox, oy] = outwardAt(frame.profile, s.at);
+const ringSeat = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
+  const { cx: CX, cy: CY } = latOf(frame);
+  const [ox, oy] = outwardAt(latOf(frame), frame.profile, s.at);
   const [hw, hh] = hullAt(frame.profile, s.at[2] as number);
   const at: [number, number, number] = ox
     ? [acrossFrom(CX, ox, (hw as number) - 1), s.at[1] as number, s.at[2] as number]
     : [s.at[0] as number, acrossFrom(CY, oy, (hh as number) - 1), s.at[2] as number];
-  return ringFacing(frame, { ...s, at });
+  return ringFacing(frame, { ...s, at }, rings);
 };
 
 /**
@@ -2325,11 +2725,11 @@ const ringSeat = (frame: FrameDef, s: Socket): Socket => {
  * a ring that the plate calls a flank ring is a flank ring here too.
  */
 export const outwardAt = (
-  prof: readonly Station[], at: readonly [number, number, number],
+  L: Lat, prof: readonly Station[], at: readonly [number, number, number],
 ): readonly [number, number] => {
   const [hw, hh] = hullAt(prof, at[2] as number);
-  const dx = ((at[0] as number) + 0.5 - CX) / Math.max(0.5, hw as number);
-  const dy = ((at[1] as number) + 0.5 - CY) / Math.max(0.5, hh as number);
+  const dx = ((at[0] as number) + 0.5 - L.cx) / Math.max(0.5, hw as number);
+  const dy = ((at[1] as number) + 0.5 - L.cy) / Math.max(0.5, hh as number);
   if (Math.abs(dy) > Math.abs(dx)) return [0, dy >= 0 ? 1 : -1];
   return [dx >= 0 ? 1 : -1, 0];
 };
@@ -2338,13 +2738,32 @@ export const outwardAt = (
  * A gun ring's rest facing, which is a traverse about the mount's OWN axis
  * and therefore reads differently on a deck than on a flank.
  *
- * A ring on the deck or the belly traverses in the horizontal plane, and it
- * rests trained ABEAM rather than along the keel, to opposite sides fore and
- * aft. Resting fore and aft, a pair of centreline mounts look straight at each
- * other: the Terran heavy cruiser's two ventral rings were each blocked in the
- * direction they were pointing by the other one, which is what a superfiring
- * position exists to solve and this lattice has no room for. Trained abeam,
- * both see out.
+ * A ring on the deck or the belly traverses in the horizontal plane, so it
+ * CAN rest along the keel, and along the keel is what a gun is for: a bow
+ * chaser resting broadside is a main battery pointing at nothing anybody was
+ * aiming at. So a centreline ring rests forward if it is forward of midships
+ * and aft if it is abaft, exactly as a flank ring does.
+ *
+ * ABEAM is for the WAIST, and that is the whole of the distinction. What a
+ * centreline ring can rest along is decided by how near an END of the hull it
+ * is, not by which half it is in: a ring in the bow has a clear run ahead of
+ * it and one on the transom has a clear run astern, while a ring amidships
+ * has most of its own ship in both directions and abeam is the only way it
+ * sees anything at all.
+ *
+ * Two cuts of this got it wrong in opposite directions, and the arc scan
+ * caught both. Resting every centreline ring abeam applied the heavy
+ * cruiser's fix to hulls with nothing to fix: the Terran frigate carries one
+ * dorsal ring at 0.85 of its length, with nothing in front of it, and it
+ * rested broadside. Resting them all along the keel by which half they sat in
+ * then pointed the Terran destroyer's ventral ring, at 0.46, straight down
+ * twenty six cells of its own hull, because "abaft midships" was true of it
+ * by a single cell.
+ *
+ * A pair on the same face is still a pair, and still goes abeam whatever band
+ * it is in: the cruiser's two ventral rings resting fore and aft looked
+ * straight at each other, which is what a superfiring position exists to
+ * solve and this lattice has no room for.
  *
  * A ring on a FLANK has its axis outboard, since that is the way its base
  * bolts down, so its traverse is the vertical plane along the hull and abeam
@@ -2354,14 +2773,42 @@ export const outwardAt = (
  * sides. Pointing outboard was right while every mount was drawn +y up and is
  * a barrel in the deck now.
  */
-const ringFacing = (frame: FrameDef, s: Socket): Socket => {
-  const [ox] = outwardAt(frame.profile, s.at);
+/** How near an end a centreline ring has to be to rest along the keel. A
+ *  ring outside these bands is in the waist, where the ship is in the way
+ *  both ways and abeam is the only clear rest. */
+const BOW_RING = 0.70, STERN_RING = 0.25;
+
+const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
+  // An authored facing wins. Where a ring sits decides which way it rests in
+  // almost every case, and in a handful it cannot: the Terran corvette's waist
+  // deck ring and the Terran destroyer's waist ventral ring are in the same
+  // band and want opposite answers, because what is actually in the way is the
+  // hull rather than the position. A rule that guessed from position alone
+  // would have to be wrong about one of them, so the frame gets the last word
+  // and `sim.test.mjs` is what proves the word was right.
+  if (s.facing !== undefined) return s;
   const prof = frame.profile;
-  const mid = (Math.round((prof[0] as Station)[0])
-    + Math.round((prof[prof.length - 1] as Station)[0])) / 2;
-  const fwd = (s.at[2] as number) >= mid;
+  const L = latOf(frame);
+  const [ox, oy] = outwardAt(L, prof, s.at);
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const t = ((s.at[2] as number) - aft) / Math.max(1, nose - aft);
+  const fwd = t >= 0.5;
+  // A flank ring's traverse is the vertical plane along the hull, so abeam is
+  // straight up its own barbette and not a rest at all: it takes the nearer
+  // end whatever band it is in.
   if (ox) return { ...s, facing: fwd ? 0 : 2 };
-  return { ...s, facing: fwd ? 1 : 3 };
+  const nearEnd = t >= BOW_RING || t <= STERN_RING;
+  // Another ring on the SAME face, ahead of this one if it would rest forward
+  // or astern of it if aft. Same face because a dorsal gun and a ventral one
+  // are on opposite sides of the ship and neither is in the other's line: the
+  // cruiser's clash was two rings on one belly.
+  const paired = rings.some(r => r.id !== s.id
+    && outwardAt(L, prof, r.at)[0] === 0 && outwardAt(L, prof, r.at)[1] === oy
+    && (fwd ? (r.at[2] as number) > (s.at[2] as number)
+      : (r.at[2] as number) < (s.at[2] as number)));
+  if (!nearEnd || paired) return { ...s, facing: fwd ? 1 : 3 };
+  return { ...s, facing: fwd ? 0 : 2 };
 };
 
 // --------------------------------------------------------------- armour --
@@ -2441,6 +2888,33 @@ export interface Design {
    */
   plate?: number[];
   cut?: number[];
+  /**
+   * Cells painted BY HAND, as `cell * 8 + slot`.
+   *
+   * The palette used to be a scheme picker: choosing a swatch set `paint` and
+   * every other role moved with it, so a player who wanted one panel a
+   * different colour repainted the whole ship instead. A slot picked here is
+   * a BRUSH, and this is where the strokes go.
+   *
+   * One integer per cell rather than a pair, because this is a wire format
+   * living in a design record beside `plate` and `cut` and it is measured
+   * against the same budget. Eight slots, so the low three bits are the slot
+   * and the rest is the cell.
+   */
+  tint?: number[];
+  /**
+   * The lattice `plate` and `cut` were drawn on, as [nx, ny, nz].
+   *
+   * A cell index means nothing without it: cell 5000 is one place on a
+   * corvette's 24 x 24 x 48 and another on a heavy cruiser's 64 x 64 x 128, so
+   * a record saved on one lattice and read on another is a hull with its
+   * hand drawn armour scattered through it.
+   *
+   * Optional, and absent means the one lattice there used to be, which is why
+   * `migrateDesign` can carry a design saved before this existed onto the
+   * hull it was drawn for instead of throwing it away.
+   */
+  lattice?: readonly [number, number, number];
   /** Which faction's swatches the paint bucket offers. */
   faction: string;
   /** Armour tint. Cosmetic only: never hashed, never sent to the core. */
@@ -2489,6 +2963,31 @@ export interface Design {
    */
   frameFinish?: string;
   partFinish?: string;
+  /**
+   * The decals a player painted, as `cell * DECAL_STRIDE + kind`.
+   *
+   * The same shape as `tint` and for the same reasons: one integer per cell
+   * rather than a pair, measured against the same 64 KB budget, and it
+   * migrates across a lattice change with its kind still on it. Absent means
+   * a hull decorated entirely by derivation, which is every design that
+   * predates this and every stock hull.
+   */
+  decal?: number[];
+  /**
+   * What the DRIVES and the GUNS are made of, apart from everything else.
+   *
+   * `partFinish` was ONE answer for all machinery, on the grounds that a
+   * player can already tell a drive from a gun by its colour and the
+   * distinction worth drawing was machinery against plate. That is still true
+   * of the COLOUR and it was never true of the SURFACE: a drive bell is a
+   * cast nozzle, a turret is a machined gun and a barracks is a box, and one
+   * greeble over all three says none of it.
+   *
+   * Optional, and absent means whatever `partFinish` says, which is what every
+   * design that predates them already has: nothing to migrate.
+   */
+  driveFinish?: string;
+  weaponFinish?: string;
   /** How metallic and how rough that armour is, 0 to 1. Presentation. */
   metal?: number;
   rough?: number;
@@ -2538,9 +3037,9 @@ export interface Derived {
    * hand drawn stroke left a block hanging in space, which is not a ship.
    */
   readonly orphans: number;
-  /** Cells inside a turret box that something else is standing in. Zero on
-   *  anything this rasteriser built; above zero means a part was placed into
-   *  one, or a design saved before the rule came in. */
+  /** Cells inside a turret box or a drive's throat that something else is
+   *  standing in. Zero on anything this rasteriser built; above zero means a
+   *  part was placed into one, or a design saved before the rule came in. */
   readonly fouled: number;
   readonly extent: readonly [number, number, number];
   readonly accelFwd: number;
@@ -2664,10 +3163,29 @@ export interface Raster {
    * would pass on every hull without ever being reachable.
    */
   readonly welded: Uint8Array;
-  /** Cells inside a turret box that something else is standing in. Zero on
-   *  anything this rasteriser built; above zero means a part was placed into
-   *  one, or a design saved before the rule came in. */
+  /** Cells inside a turret box or a drive's throat that something else is
+   *  standing in. Zero on anything this rasteriser built; above zero means a
+   *  part was placed into one, or a design saved before the rule came in. */
   readonly fouled: number;
+  /**
+   * The cavity inside every drive bell: claimed, and empty.
+   *
+   * A bell is a one cell wall round a throat and the throat is the engine's.
+   * Exposed so the armour pencil can refuse a stroke there with a reason,
+   * rather than letting a player draw a cell that makes the hull illegal and
+   * only finding out from the verdict.
+   */
+  readonly hollow: Uint8Array;
+  /**
+   * Cells of a DRIVE that some other part wanted.
+   *
+   * The same rule as a turret's sweep and for the same reason: the two are not
+   * the same kind of bad. A berth that lost a few cells to a neighbour came
+   * out small; a boarding clamp bolted through a drive bell is not a ship. A
+   * Karisen corvette carried twenty three cells of docking clamp in its
+   * engines, and most hulls in the fleet had a clamp or a barracks in theirs.
+   */
+  readonly bellFouled: number;
   readonly extent: readonly [number, number, number];
   /** The true bounding sphere, in cells, about the hull's own centre.
    *  A box diagonal is not one: it measures corners a long thin ship has
@@ -2675,12 +3193,22 @@ export interface Raster {
   readonly radiusCells: number;
 }
 
-const idx3 = (i: number, j: number, k: number) => i + j * NX + k * NX * NY;
+const idx3 = (L: Lat, i: number, j: number, k: number) =>
+  i + j * L.nx + k * L.nx * L.ny;
 
-/** A cell's index, and back again. The wire format for hand drawn armour. */
-export const cellIndex = (i: number, j: number, k: number): number => idx3(i, j, k);
-export const cellAt = (n: number): readonly [number, number, number] =>
-  [n % NX, ((n / NX) | 0) % NY, (n / (NX * NY)) | 0];
+/**
+ * A cell's index, and back again. The WIRE FORMAT for hand drawn armour.
+ *
+ * It depends on the lattice, so a design record written on one lattice cannot
+ * be read on another: `d.plate` and `d.cut` are indices, and index 5000 is a
+ * different cell on a corvette from what it is on a heavy cruiser. `saves.ts`
+ * and the library carry a lattice stamp for that reason, and a record from
+ * before the lattices existed is migrated on the way in rather than dropped.
+ */
+export const cellIndex = (L: Lat, i: number, j: number, k: number): number =>
+  idx3(L, i, j, k);
+export const cellAt = (L: Lat, n: number): readonly [number, number, number] =>
+  [n % L.nx, ((n / L.nx) | 0) % L.ny, (n / (L.nx * L.ny)) | 0];
 
 /** How many cells a player may draw. A frigate's whole skin is about 5,000,
  *  so this is room to work in, not a target, and it is what keeps a design
@@ -2690,13 +3218,21 @@ export const DRAWN_MAX = 20000;
 /** A design's identity for caching. Paint is not in it: the raster does not
  *  depend on it, and anything that draws colour keys on this plus the paint. */
 export const rasterSig = (d: Design): string =>
-  d.classKey + '|' + d.armour + '|'
+  // The override generation first, because the rest of this describes the
+  // DESIGN and a frame edited under the same class key would otherwise be
+  // handed the previous frame's raster out of the cache.
+  (override ? `f${overrideGen}|` : '')
+  + d.classKey + '|' + d.armour + '|'
   + d.parts.map(p => p.socket + ':' + p.module + ':' + facingKey(facingOf(p)))
     .sort().join(',') + '|'
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
-  + drawSig(d.plate) + '/' + drawSig(d.cut);
+  // The decals are in the key because the window mesh is built in the same
+  // pass the plating is: a hull differing only in a painted porthole would
+  // otherwise be handed the raster of the hull without one.
+  + drawSig(d.plate) + '/' + drawSig(d.cut) + '/' + drawSig(d.tint)
+  + '/' + drawSig(d.decal);
 
 const drawSig = (list: readonly number[] | undefined): string => {
   if (!list || !list.length) return '0';
@@ -2790,6 +3326,10 @@ export function rasterise(d: Design): Raster {
   if (rasterCache && rasterCache.sig === sig) return rasterCache.raster;
 
   const frame = frameFor(d.classKey);
+  const LAT = latOf(frame);
+  // Shadowed rather than spelt through `L` at each of the seventy odd uses
+  // below. This function IS the lattice walk, and it reads as one.
+  const { nx: NX, ny: NY, nz: NZ, cells: CELLS, cx: CX, cy: CY } = LAT;
   const prof = frame.profile;
   const grid = new Uint8Array(CELLS);
   const purp = new Uint8Array(CELLS);
@@ -2805,7 +3345,7 @@ export function rasterise(d: Design): Raster {
    *  owner map must never claim a cell another part is already standing in. */
   const set = (i: number, j: number, k: number, mat: number, code: number): boolean => {
     if (!mat || !inBounds(i, j, k)) return false;
-    const n = idx3(i, j, k);
+    const n = idx3(LAT, i, j, k);
     if (grid[n]) return false;
     grid[n] = mat;
     purp[n] = code;
@@ -2818,7 +3358,7 @@ export function rasterise(d: Design): Raster {
    *  two were written in five places between them and a plate cell with no
    *  role drew as role zero: a stern band the length of the ship. */
   const skin = (i: number, j: number, k: number, role: LiveryRole): void => {
-    const n = idx3(i, j, k);
+    const n = idx3(LAT, i, j, k);
     if (grid[n] === Mat.Frame) grid[n] = Mat.Skinned;
     else if (!set(i, j, k, Mat.Plate, STRUCT)) return;
     tone[n] = roleCode(role);
@@ -2849,7 +3389,7 @@ export function rasterise(d: Design): Raster {
   const outboard: number[] = [];
   /** The boxes turrets sweep, which nothing else may occupy. */
   const turrets: TurretBox[] = [];
-  let enclosedOutside = 0, flushProud = 0;
+  let enclosedOutside = 0, flushProud = 0, bellFouled = 0;
   // Guns first, then everything else.
   //
   // A turret's box is its own, and a box only exists once the turret is
@@ -2858,12 +3398,91 @@ export function rasterise(d: Design): Raster {
   // move left, because parts are fitted rather than dragged. Placing the
   // turrets first makes that unreachable rather than merely unlikely.
   const isGun = (n: number) => !!moduleById((d.parts[n] as Placement).module)?.weapon;
+  // Drives go second, for the same reason turrets go first: a drive's volume
+  // is its own and nothing may stand in it, and a volume only exists once the
+  // part is placed. A bay seated before the drive beside it means the drive
+  // arrives to find its own bell occupied.
+  const isDrive = (n: number) => {
+    const m = moduleById((d.parts[n] as Placement).module);
+    return !!m && (m.fits === 'drive' || m.fits === 'retro');
+  };
   const every = d.parts.map((_, n) => n);
-  const order = [...every.filter(isGun), ...every.filter(n => !isGun(n))];
+  const order = [
+    ...every.filter(isGun),
+    ...every.filter(n => !isGun(n) && isDrive(n)),
+    ...every.filter(n => !isGun(n) && !isDrive(n)),
+  ];
   const reserved = new Uint8Array(CELLS);
+  /**
+   * The drive bells, which are nobody else's to stand in.
+   *
+   * A part's cells are claimed first come first served and the nudge treats a
+   * cell another part is standing in as costing one point, so a clamp with
+   * nowhere better to go simply settled inside the engines: measured over the
+   * fleet, a Karisen corvette carried twenty three cells of docking clamp in
+   * its drive block and most hulls had a clamp or a barracks in theirs. A
+   * berth that lost a few cells to a neighbour is a berth that came out small;
+   * a boarding clamp bolted through a drive bell is not a ship.
+   *
+   * Weighted like a turret's sweep rather than like an occupied cell, so the
+   * nudge walks OUT of a drive instead of settling for the nearest hole
+   * whichever it is. That distinction is the one the turret boxes already
+   * taught: the two are not the same kind of bad.
+   */
+  const bells = new Uint8Array(CELLS);
+  /**
+   * The CAVITY inside a drive bell, which is the engine's and must stay empty.
+   *
+   * A bell is a one cell wall round a throat, and the throat is as much a part
+   * of the engine as the metal: a docking clamp bolted up the mouth of a
+   * nozzle is not a ship. So a cavity is reserved exactly as a turret's sweep
+   * is, and anything found standing in one is counted with the same number and
+   * fails the same gate.
+   */
+  const hollow = new Uint8Array(CELLS);
   // Which cells the weld pass grew, so the mount rule can ask whether a base
   // is on the SHIP rather than on a spar the weld grew to catch it.
   const welded = new Uint8Array(CELLS);
+
+  /**
+   * Where a placement ended up, and which placement is its mirror twin.
+   *
+   * A pair of fittings on exactly mirrored sockets still came out on cells
+   * that were not mirrored, because each one SEARCHED for its own hole. The
+   * search sees the grid the placements before it left, and one asymmetric
+   * part makes the next one's search asymmetric, so a single displaced fitting
+   * cascades down the whole list: the Terran frigate's clamps ended six cells
+   * inboard of their sockets, five cells apart in z, and every beacon window
+   * on the hull was on one side only.
+   *
+   * So a pair is placed AS a pair. The first of the two searches; the second
+   * takes the mirror of what the first found, and only falls back to its own
+   * search if the mirror does not fit. Symmetry by construction rather than by
+   * two searches happening to agree.
+   */
+  const placedAt = new Map<number, readonly [number, number, number]>();
+  const twinOf = new Map<number, number>();
+  {
+    const bySocket = new Map<string, number>();
+    d.parts.forEach((p, n) => bySocket.set(p.socket, n));
+    for (const s of allSockets) {
+      const mine = bySocket.get(s.id);
+      if (mine === undefined) continue;
+      const mx = 2 * CX - 1 - (s.at[0] as number);
+      if (mx === (s.at[0] as number)) continue;
+      const twin = allSockets.find(t => t.id !== s.id && t.kind === s.kind
+        && (t.at[0] as number) === mx && t.at[1] === s.at[1] && t.at[2] === s.at[2]);
+      if (!twin) continue;
+      const other = bySocket.get(twin.id);
+      if (other === undefined) continue;
+      // Only a pair carrying the SAME part is a mirror of the other: a
+      // barracks to port and a magazine to starboard occupy mirrored volumes
+      // and are still two different shapes.
+      if ((d.parts[other] as Placement).module !== (d.parts[mine] as Placement).module) continue;
+      twinOf.set(mine, other);
+    }
+  }
+
   for (const pi of order) {
     const p = d.parts[pi] as Placement;
     const sock = allSockets.find(k => k.id === p.socket);
@@ -2878,7 +3497,24 @@ export function rasterise(d: Design): Raster {
     const seat = seatOf(frame, sock, v);
     // The PIVOT lands on the socket, not the box centre.
     const pv = rotatedPivot(m, face);
-    const bx = Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
+    // Three cases about the centreline PLANE, which runs between columns 15
+    // and 16 rather than down the middle of column 16.
+    //
+    // A part was seated from its box's LOW edge in every case, so a fitting
+    // and its mirror twin, on sockets that really were exact mirrors, came out
+    // one cell apart: the port box grew outward from its origin and the
+    // starboard one grew outward from a mirrored origin, which is inward.
+    // Seated from the plane, a pair lands on mirrored cells, and a centreline
+    // part straddles rather than sitting to one side of it. An ODD width part
+    // on the centreline cannot be symmetric about a boundary at all and is
+    // simply put as near to it as a whole cell allows.
+    const MIRX = 2 * CX - 1;
+    const onCentre = (sock.at[0] as number) === CX - 1 || (sock.at[0] as number) === CX;
+    const bx = onCentre
+      ? CX - Math.ceil(v.sx / 2)
+      : (seat[0] as number) >= CX
+        ? MIRX - (Math.round((MIRX - (seat[0] as number)) - ((pv[0] as number) + 0.5)) + v.sx - 1)
+        : Math.round((seat[0] as number) - ((pv[0] as number) + 0.5));
     const by = Math.round((seat[1] as number) - ((pv[1] as number) + 0.5));
     const bz = Math.round((seat[2] as number) - ((pv[2] as number) + 0.5));
 
@@ -2891,7 +3527,7 @@ export function rasterise(d: Design): Raster {
         if (!v.data[i + j * v.sx + k * v.sx * v.sy]) continue;
         const x = ox + i, y = oy + j, z = oz + k;
         if (!inBounds(x, y, z)) { lost++; continue; }
-        const n = idx3(x, y, z);
+        const n = idx3(LAT, x, y, z);
         const at = grid[n] as number;
         // A cell inside a turret's box costs far more than a cell another
         // part is already standing in, because the two are not the same kind
@@ -2901,7 +3537,7 @@ export function rasterise(d: Design): Raster {
         // that came out a little small. Weighted equally, the nudge took the
         // nearest free hole whichever it was, and four heavy cruisers seated
         // a barracks inside their own gun rings.
-        if (reserved[n]) lost += FOUL_COST;
+        if (reserved[n] || bells[n]) lost += FOUL_COST;
         else if (at && at !== Mat.Frame) lost++;
       }
       return lost;
@@ -2912,17 +3548,67 @@ export function rasterise(d: Design): Raster {
     // the same cells: five of the Rogue's lost every cell they had and the
     // ship claimed boarding gear it did not visibly carry. The search is
     // bounded and ordered, so it is the same nudge on both seats.
+    // Walked MIRRORED on the starboard side. The list is in absolute lattice
+    // directions, so a port fitting and its starboard twin, meeting the same
+    // obstruction reflected, both took the first offset in the list that fit:
+    // the same absolute direction, which relative to the hull is opposite.
+    // One moved inboard while its twin moved outboard, and a pair authored on
+    // exactly mirrored sockets came out on cells that were not mirrored.
+    const flip = (seat[0] as number) >= CX ? -1 : 1;
     let ox = bx, oy = by, oz = bz, best = lossAt(bx, by, bz);
+    // The twin went first: take the mirror of where it landed, and only search
+    // if that will not do. `v.sx` is the part's own width, so the mirror of a
+    // box is its far edge reflected.
+    const twin = twinOf.get(pi);
+    const was = twin === undefined ? undefined : placedAt.get(twin);
+    if (was) {
+      const tx = (2 * CX - 1) - ((was[0] as number) + v.sx - 1);
+      const lost = lossAt(tx, was[1] as number, was[2] as number);
+      if (lost <= best) { best = lost; ox = tx; oy = was[1] as number; oz = was[2] as number; }
+    }
     if (best > 0) {
       for (const [dx, dy, dz] of NUDGE) {
-        const tx = bx + dx, ty = by + dy, tz = bz + dz;
-        if (exposureOf(sock.kind) === 'enclosed' && !boxInside(prof,
+        const tx = bx + dx * flip, ty = by + dy, tz = bz + dz;
+        if (exposureOf(sock.kind) === 'enclosed' && !boxInside(LAT, prof,
           tx + v.sx / 2, ty + v.sy / 2, tz + v.sz / 2, v.sx / 2, v.sy / 2, v.sz / 2)) continue;
         // (tx, ty, tz) is the box origin either way, so the box test is the
         // box test whatever the pivot is.
         const lost = lossAt(tx, ty, tz);
         if (lost < best) { best = lost; ox = tx; oy = ty; oz = tz; }
         if (best === 0) break;
+      }
+    }
+
+    placedAt.set(pi, [ox, oy, oz] as const);
+
+    // A drive claims its own bell. The FILLED cells rather than the box: a
+    // bell is a ring and a nozzle with space around them, and reserving the
+    // whole box would push the plating off the transom.
+    if (m.fits === 'drive' || m.fits === 'retro') {
+      for (let k = 0; k < v.sz; k++) for (let j = 0; j < v.sy; j++) for (let i = 0; i < v.sx; i++) {
+        const mat = v.data[i + j * v.sx + k * v.sx * v.sy] as number;
+        if (!mat) continue;
+        const x = ox + i, y = oy + j, z = oz + k;
+        if (!inBounds(x, y, z)) continue;
+        const n = idx3(LAT, x, y, z);
+        bells[n] = 1;
+        // The throat is claimed and left EMPTY. `reserved` is what every plate
+        // pass below already reads, so putting it there is what keeps the
+        // shell, the belts, the decor and the pencil out of an engine without
+        // five separate writers each remembering to check.
+        if (mat !== Mat.Void) continue;
+        hollow[n] = 1;
+        reserved[n] = 1;
+        // And it takes a FRAME cell if the keel runs through it, exactly as a
+        // part's solid cells already do. Four hulls in the fleet had a rib or
+        // a keel run standing in a bell's throat, and a frame member through
+        // an engine is the thing this rule exists to refuse rather than an
+        // exception to it. The weld pass below catches anything this leaves
+        // loose.
+        if (grid[n] === Mat.Frame && own[n] === 0) {
+          grid[n] = Mat.Empty;
+          purp[n] = 0;
+        }
       }
     }
 
@@ -2938,7 +3624,7 @@ export function rasterise(d: Design): Raster {
       for (let k = Math.max(0, box.k0); k <= Math.min(NZ - 1, box.k1); k++)
         for (let j = Math.max(0, box.j0); j <= Math.min(NY - 1, box.j1); j++)
           for (let i = Math.max(0, box.i0); i <= Math.min(NX - 1, box.i1); i++)
-            reserved[idx3(i, j, k)] = 1;
+            reserved[idx3(LAT, i, j, k)] = 1;
     }
 
     // A part mounts THROUGH the frame, so it takes a rib cell if it needs one.
@@ -2951,7 +3637,16 @@ export function rasterise(d: Design): Raster {
       if (!mat) continue;
       const x = ox + i, y = oy + j, z = oz + k;
       if (!inBounds(x, y, z)) continue;
-      const n = idx3(x, y, z);
+      const n = idx3(LAT, x, y, z);
+      // A cell of somebody else's DRIVE that this part still wants. Zero on
+      // anything this rasteriser places, because a bell costs the nudge as
+      // much as a turret's sweep; above zero means a part had nowhere legal
+      // to go and settled in the engines anyway.
+      if (bells[n] && own[n] !== pi + 1
+        && m.fits !== 'drive' && m.fits !== 'retro') bellFouled++;
+      // A cavity is claimed and left empty: it is drawn by nothing, including
+      // the part that owns it.
+      if (mat === Mat.Void) continue;
       if (grid[n] && grid[n] !== Mat.Frame) continue;
       grid[n] = mat;
       purp[n] = code;
@@ -2970,7 +3665,7 @@ export function rasterise(d: Design): Raster {
       // deck are two thousand cells of overhang, and a spar under each of
       // them buried the ship in plate that was holding up cargo which is
       // sitting on the deck already.
-      if (sock.kind !== 'rack' && !insideHull(prof, x, y, z)) {
+      if (sock.kind !== 'rack' && !insideHull(LAT, prof, x, y, z)) {
         outboard.push(x, y, z);
         const ex = exposureOf(sock.kind);
         if (ex === 'enclosed') enclosedOutside++;
@@ -3027,7 +3722,7 @@ export function rasterise(d: Design): Raster {
           const a = Math.max(0.5, hw - L), b = Math.max(0.5, hh - L);
           const ux = (i + 0.5 - CX) / a, uy = (j + 0.5 - CY) / b;
           if (ux * ux + uy * uy <= 1) continue;
-          if (reserved[idx3(i, j, k)]) continue;
+          if (reserved[idx3(LAT, i, j, k)]) continue;
           skin(i, j, k, roleOfCell((k - z0) / Math.max(1, z1 - z0), dx, dy));
         }
       }
@@ -3045,7 +3740,7 @@ export function rasterise(d: Design): Raster {
         for (let i = i0; i <= i1; i++) {
           const dx = (i + 0.5 - CX) / hw;
           if (dx * dx + dy * dy > 1) continue;
-          if (reserved[idx3(i, j, k)]) continue;
+          if (reserved[idx3(LAT, i, j, k)]) continue;
           skin(i, j, k, roleOfCell((k - z0) / Math.max(1, z1 - z0), dx, dy));
         }
       }
@@ -3095,7 +3790,7 @@ export function rasterise(d: Design): Raster {
         for (let t = 1; t <= layers; t++) {
           const x = i + dx * t, y = j + dy * t, z = k + dz * t;
           if (!inBounds(x, y, z)) break;
-          const n = idx3(x, y, z);
+          const n = idx3(LAT, x, y, z);
           if (reserved[n]) break;
           const at = grid[n] as number;
           if (at && at !== Mat.Plate) break;
@@ -3117,7 +3812,7 @@ export function rasterise(d: Design): Raster {
   for (const [x, y, z, w, h, l] of decorOf(frame)) {
     for (let k = 0; k < l; k++) for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const px = Math.round(x) + i, py = Math.round(y) + j, pz = Math.round(z) + k;
-      if (!inBounds(px, py, pz) || reserved[idx3(px, py, pz)]) continue;
+      if (!inBounds(px, py, pz) || reserved[idx3(LAT, px, py, pz)]) continue;
       skin(px, py, pz, 'decor');
     }
   }
@@ -3143,8 +3838,8 @@ export function rasterise(d: Design): Raster {
       if (Math.abs(ux) >= Math.abs(uy)) x += ux > 0 ? -1 : 1;
       else y += uy > 0 ? -1 : 1;
       if (!inBounds(x, y, k)) break;
-      if (grid[idx3(x, y, k)]) break;          // met the ship: attached
-      if (reserved[idx3(x, y, k)]) break;      // met a turret, which is also the ship
+      if (grid[idx3(LAT, x, y, k)]) break;          // met the ship: attached
+      if (reserved[idx3(LAT, x, y, k)]) break;      // met a turret, which is also the ship
       // A pylon is a strake rather than plating, and it wears the stripe: it
       // is the one piece of armour that is structure a player can see, and
       // painting it as hull made a spar read as a lump of the flank.
@@ -3271,7 +3966,7 @@ export function rasterise(d: Design): Raster {
           if (Math.abs(ux) >= Math.abs(uy)) x += ux > 0 ? -1 : 1;
           else y += uy > 0 ? -1 : 1;
           if (!inBounds(x, y, k)) break;
-          const n = idx3(x, y, k);
+          const n = idx3(LAT, x, y, k);
           if (reserved[n]) break;              // a turret's box is not a landing
           if (grid[n]) { landed = !here.has(n); break; }
           spar.push(n);
@@ -3289,7 +3984,7 @@ export function rasterise(d: Design): Raster {
           for (let step = 0; step < NZ; step++) {
             z2 += dz;
             if (!inBounds(from % NX, ((from / NX) | 0) % NY, z2)) break;
-            const n = idx3(from % NX, ((from / NX) | 0) % NY, z2);
+            const n = idx3(LAT, from % NX, ((from / NX) | 0) % NY, z2);
             if (reserved[n]) break;
             if (grid[n]) { landed = !here.has(n); break; }
             spar.push(n);
@@ -3347,6 +4042,21 @@ export function rasterise(d: Design): Raster {
     if (j < loY) loY = j; if (j > hiY) hiY = j;
     if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
   }
+  // --- the brush ----------------------------------------------------------
+  //
+  // Hand painted cells, last, over whatever the livery worked out. Only where
+  // there is ARMOUR to paint: a stroke that outlived the plate under it would
+  // colour a drive bell the day somebody moved a belt, and a part is coloured
+  // by what it DOES, which is the thing that makes an unfamiliar hull
+  // readable.
+  for (const v of d.tint ?? []) {
+    const n = (v / 8) | 0;
+    if (n < 0 || n >= CELLS) continue;
+    const m = grid[n] as number;
+    if (m !== Mat.Plate && m !== Mat.Skinned) continue;
+    tone[n] = PAINTED | (v & 7);
+  }
+
   const extent = [
     Math.max(1, hiX - loX + 1), Math.max(1, hiY - loY + 1), Math.max(1, hiZ - loZ + 1),
   ] as [number, number, number];
@@ -3367,11 +4077,16 @@ export function rasterise(d: Design): Raster {
   // carve round them, so anything here came in with the design: a part nudged
   // into one, or a save made before the rule existed.
   let fouled = 0;
+  // A drive's throat, judged the same way and counted with the same number.
+  // The two are one rule stated twice: a volume some part keeps clear, and
+  // anything else in it makes the whole hull illegal rather than merely
+  // costing somebody a few cells.
+  for (let n = 0; n < CELLS; n++) if (hollow[n] && grid[n]) fouled++;
   for (const t of turrets) {
     for (let k = Math.max(0, t.k0); k <= Math.min(NZ - 1, t.k1); k++)
       for (let j = Math.max(0, t.j0); j <= Math.min(NY - 1, t.j1); j++)
         for (let i = Math.max(0, t.i0); i <= Math.min(NX - 1, t.i1); i++) {
-          const n = idx3(i, j, k);
+          const n = idx3(LAT, i, j, k);
           if (!grid[n]) continue;
           const owner = own[n] as number;
           if (owner === t.part + 1) continue;          // the turret itself
@@ -3380,7 +4095,7 @@ export function rasterise(d: Design): Raster {
         }
   }
 
-  const raster: Raster = { grid, purp, own, tone, orphans, welded,
+  const raster: Raster = { grid, purp, own, tone, orphans, welded, bellFouled, hollow,
     plateCells, solidCells: cells.length / 3,
     enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
@@ -3398,7 +4113,8 @@ export function rasterise(d: Design): Raster {
  */
 export function mountsOf(d: Design): Array<{ key: string; at: [number, number, number] }> {
   const frame = frameFor(d.classKey);
-  const cell = RUNG[frame.rung];
+  const { nx: NX, ny: NY, nz: NZ } = latOf(frame);
+  const cell = VOXEL;
   const socks = socketsOf(frame, d.parts);
   const out: Array<{ key: string; at: [number, number, number] }> = [];
   for (const p of d.parts) {
@@ -3503,7 +4219,7 @@ export function arcMasks(d: Design): Uint32Array[] {
     // to see past is a fact about the picture, like the plate count.
     if (table && isProud(sock.kind)) {
       const box = r.turrets.find(t => t.part === pi);
-      scanFrom(mask, table, r, pi + 1, box,
+      scanFrom(latOf(frame), mask, table, r, pi + 1, box,
         (sock.at[0] as number) + 0.5, (sock.at[1] as number) + 0.5, (sock.at[2] as number) + 0.5);
     }
     masks.push(mask);
@@ -3524,8 +4240,9 @@ let arcCache: { sig: string; masks: Uint32Array[] } | null = null;
  * running it agree bit for bit, which they must: the mask crosses into the
  * simulation and decides whether a shot is taken.
  */
-function scanFrom(mask: Uint32Array, table: Float32Array, r: Raster, own: number,
+function scanFrom(L: Lat, mask: Uint32Array, table: Float32Array, r: Raster, own: number,
   box: TurretBox | undefined, ox: number, oy: number, oz: number): void {
+  const { nx: NX, ny: NY, nz: NZ } = L;
   const g = r.grid, owns = r.own;
   const cells = ARC_YAW * ARC_PITCH;
   for (let bit = 0; bit < cells; bit++) {
@@ -3615,6 +4332,7 @@ const GATES: ReadonlyArray<readonly [string, string, string]> = [
 
 export function derive(d: Design): Derived {
   const frame = frameFor(d.classKey);
+  const CELLS = latOf(frame).cells;
   const raster = rasterise(d);
   const ext = raster.extent as [number, number, number];
   const enclosed = ext[0] * ext[1] * ext[2];
@@ -3710,7 +4428,28 @@ function detailFor(id: string, s: CoreStats, r: Raster, frame: FrameDef): string
 function stock(classKey: string, parts: Placement[], sections: Partial<Sections>,
   faction: string, paint: number,
   finish: string, metal: number, rough: number): Design {
-  return { classKey, parts, sections: { ...zeroSections(), ...sections },
+  // Armour courses are authored in REFERENCE cells and cut to the class's own
+  // lattice, which is the whole of "a bigger ship can carry more armour".
+  //
+  // A course is a cell and a cell is the same size on every hull, so a heavy
+  // cruiser plated to the same six courses as a frigate is plated to the same
+  // THICKNESS as a frigate: twice the ship behind a third of the protection it
+  // used to have. That is not a balance opinion, it is what the ladder does to
+  // the arithmetic. Plate volume is skin area times thickness, so a hull whose
+  // courses do not scale has hull points going as the SQUARE of its length
+  // while its gun count goes as its length, and a heavy cruiser dies to
+  // another heavy cruiser in a single turn.
+  //
+  // Scaled, thickness goes as the length again and hull points go as the cube
+  // of it, which is the ladder the fleet has always had, arrived at by
+  // counting cells rather than by multiplying one.
+  //
+  // The SLIDER is untouched and stays in cells: a player asking for four
+  // courses gets four courses on any hull, because a course is a course.
+  const f = latOf(frameFor(classKey)).nx / REF.nx;
+  const cut = Object.fromEntries(Object.entries(sections)
+    .map(([k, v]) => [k, Math.round((v as number) * f)])) as Partial<Sections>;
+  return { classKey, parts, sections: { ...zeroSections(), ...cut },
     armour: 'wrapped', faction, paint, finish, metal, rough };
 }
 
@@ -3750,7 +4489,11 @@ export const STOCK: readonly Design[] = [
     // keel rail that overruns the body at both ends, so it looks into its own
     // ship BOTH ways: fore blocked, aft blocked, up and down clear. Turned a
     // quarter, it rests trained up and over the deck.
-    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'), P('s0/t', 'WPN-BM1', 1),
+    P('b3', 'UTL-AIR'), P('b5', 'UTL-AIR'), P('s0', 'WPN-BB1'),
+    // No quarter turn on the placement any more: the RING rests trained out
+    // of its recess now, and the turn that used to do that job was being
+    // added on top of it and carrying the barrel back into the hull.
+    P('s0/t', 'WPN-BM1'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
     'karisen', 0xFA6A0A, 'ribbed', 0.35, 0.45),
@@ -4091,6 +4834,77 @@ export const STOCK: readonly Design[] = [
     'civil', 0xF2F5F8, 'plate', 0.20, 0.48),
 ];
 
+/**
+ * A design record, on the lattice its class is actually drawn on.
+ *
+ * Every design that predates the per class lattices was drawn on 32 x 32 x 64,
+ * because that is all there was; a corvette's is 24 x 24 x 48 now and a heavy
+ * cruiser's 64 x 64 x 128. So a stored record's cell indices are re-read
+ * against the lattice they were written on and written back against the one
+ * they are being opened on, scaled about the centre, which is the same place
+ * on the hull because both lattices are centred on it.
+ *
+ * A remap rather than a refusal, and rather than dropping the arrays: hand
+ * drawn armour is the part of a design somebody actually spent an evening on.
+ * It is approximate on a corvette, whose profile changed when it stopped being
+ * a frigate with its ends cut off, and exact on everything else, whose hull
+ * scaled by exactly this factor.
+ *
+ * Everything that takes a design record from OUTSIDE this session calls it:
+ * the library, a save, a file and a draft.
+ */
+export function migrateDesign(d: Design): Design {
+  const to = latOf(frameFor(d.classKey));
+  const f = d.lattice
+    ? { nx: d.lattice[0], ny: d.lattice[1], nz: d.lattice[2] }
+    : { nx: REF.nx, ny: REF.ny, nz: REF.nz };
+  const stamp: readonly [number, number, number] = [to.nx, to.ny, to.nz];
+  if (f.nx === to.nx && f.ny === to.ny && f.nz === to.nz) {
+    return d.lattice ? d : { ...d, lattice: stamp };
+  }
+  const axis = (v: number, from: number, into: number): number =>
+    Math.max(0, Math.min(into - 1,
+      Math.round((v + 0.5 - from / 2) * (into / from) + into / 2 - 0.5)));
+  const move = (list: number[] | undefined): number[] | undefined => {
+    if (!list?.length) return list;
+    const out = new Set<number>();
+    for (const n of list) {
+      if (!Number.isInteger(n) || n < 0 || n >= f.nx * f.ny * f.nz) continue;
+      const i = n % f.nx, j = ((n / f.nx) | 0) % f.ny, k = (n / (f.nx * f.ny)) | 0;
+      out.add(idx3(to, axis(i, f.nx, to.nx), axis(j, f.ny, to.ny),
+        axis(k, f.nz, to.nz)));
+    }
+    return [...out].sort((a, b) => a - b);
+  };
+  // A tagged list carries its TAG with it: an entry is `cell * stride + tag`,
+  // so the cell moves onto the new lattice and the colour, or the decal, stays
+  // on it. One function for both, because two copies of this arithmetic are
+  // two chances to migrate a brush stroke correctly and a window not at all.
+  const moveTagged = (list: number[] | undefined, stride: number)
+  : number[] | undefined => {
+    if (!list?.length) return list;
+    const out = new Map<number, number>();
+    for (const v of list) {
+      const n = (v / stride) | 0;
+      if (!Number.isInteger(v) || v < 0 || n >= f.nx * f.ny * f.nz) continue;
+      const i = n % f.nx, j = ((n / f.nx) | 0) % f.ny, k = (n / (f.nx * f.ny)) | 0;
+      out.set(idx3(to, axis(i, f.nx, to.nx), axis(j, f.ny, to.ny),
+        axis(k, f.nz, to.nz)), v % stride);
+    }
+    return [...out].sort((a, b) => a[0] - b[0]).map(([n, tag]) => n * stride + tag);
+  };
+
+  const next: Design = { ...d, lattice: stamp };
+  const plate = move(d.plate), cut = move(d.cut);
+  const tint = moveTagged(d.tint, 8);
+  const decal = moveTagged(d.decal, DECAL_STRIDE);
+  if (plate) next.plate = plate;
+  if (cut) next.cut = cut;
+  if (tint) next.tint = tint;
+  if (decal) next.decal = decal;
+  return next;
+}
+
 export const stockFor = (classKey: string): Design => {
   const s = STOCK.find(d => d.classKey === classKey) ?? (STOCK[0] as Design);
   // The surface comes across too. A copy that rebuilt the record field by
@@ -4109,6 +4923,10 @@ export const stockFor = (classKey: string): Design => {
     partFinish: s.partFinish ?? DEFAULT_PART_FINISH,
     metal: s.metal ?? DEFAULT_METAL,
     rough: s.rough ?? DEFAULT_ROUGH,
+    // Stamped with the lattice it is on, like every design the app makes, so
+    // a hull saved from a stock start is a hull `migrateDesign` never has to
+    // guess about.
+    lattice: (l => [l.nx, l.ny, l.nz] as const)(latOf(frameFor(s.classKey))),
     plate: [], cut: [] };
 };
 
@@ -4139,7 +4957,21 @@ export const stockFor = (classKey: string): Design => {
  */
 export const Mat = {
   Empty: 0, Plate: 1, Frame: 2, Machine: 3, Glow: 4, Accent: 5, Case: 6, Skinned: 7,
+  Void: 8,
 } as const;
+
+/**
+ * `Void` is a cell a part CLAIMS AND LEAVES EMPTY, and it never reaches a hull.
+ *
+ * A drive bell is a shell round a cavity, and the cavity is as much a part of
+ * the engine as the metal: a docking clamp bolted up the throat of a nozzle is
+ * not a ship. So the bell marks it, `rasterise` reserves it, and nothing
+ * else may be written there.
+ *
+ * It lives in a `VoxelModel` only. Writing it into the hull grid would make it
+ * a solid cell to everything that walks the grid by truthiness: the mesher
+ * would draw quads across the mouth of every engine in the fleet.
+ */
 
 /**
  * `Skinned` is a frame member lying where the armour shell wants to be.
@@ -4210,7 +5042,24 @@ export function cellColour(mat: number, code: number, paint: number): number {
  * orange and a gun still red on anybody's ship. That is the part a player must
  * be able to read on an unfamiliar hull, and it is not paint.
  */
+/**
+ * A cell PAINTED BY HAND rides in the same byte the livery role does.
+ *
+ * `tone` is a role code, one to eight, and the high bit says "this is not a
+ * role, it is a slot somebody chose". Everything that draws armour already
+ * asks `armourColour` for a cell's colour, so putting it here is what gets the
+ * map, the shipyard, the schematic and the wound painting the same cell the
+ * same way without four of them learning about a brush.
+ */
+export const PAINTED = 0x80;
+export const paintedSlot = (tone: number): number => tone & 0x07;
+export const isPainted = (tone: number): boolean => (tone & PAINTED) !== 0;
+
 export function armourColour(faction: string, paint: number, tone = 0): number {
+  if (isPainted(tone)) {
+    const sw = paintFor(faction).swatches;
+    return (sw[paintedSlot(tone) % sw.length] ?? paint) as number;
+  }
   return tone ? roleColour(faction, paint, roleAt(tone)) : paint;
 }
 
@@ -4433,18 +5282,37 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
       // Aft is -z, so the throat is forward and the bell flares to the back.
       const rOuter = Math.min(sx, sy) / 2;
       const rThroat = m.art === 'bell' ? rOuter * 0.42 : rOuter * 0.55;
-      for (let z = 0; z < sz; z++) {
+      const radiusAt = (z: number) => {
         const t = z / Math.max(1, sz - 1);          // 0 aft, 1 forward
-        const r = rOuter + (rThroat - rOuter) * Math.min(1, t * 1.35);
+        return rOuter + (rThroat - rOuter) * Math.min(1, t * 1.35);
+      };
+      for (let z = 0; z < sz; z++) {
+        const t = z / Math.max(1, sz - 1);
+        const r = radiusAt(z);
         for (let y = 0; y < sy; y++) for (let x = 0; x < sx; x++) {
           const d = rad(x, y);
           if (d > r) continue;
-          // Hollow through the flare, solid at the forward plug, and a lit
-          // ring at the very back where the exhaust leaves. Every second
-          // course of the flare is banded, which is what tells one bell from
-          // another once they are all the same orange.
-          if (t > 0.72) put(x, y, z, Mat.Case);
-          else if (d > r - 1.35) put(x, y, z, z === 0 ? Mat.Glow : (z % 2 ? Mat.Accent : Mat.Machine));
+          // Solid at the forward plug, and a ONE CELL WALL round a cavity
+          // everywhere else, with a lit ring at the very back where the
+          // exhaust leaves. Every second course of the flare is banded, which
+          // is what tells one bell from another once they are all the same
+          // orange.
+          //
+          // A wall is where the cone ENDS, not a thickness: a fixed 1.35 cells
+          // is most of a small nozzle's radius, so the light nozzle, which is
+          // four cells across, came out very nearly solid and had no cavity to
+          // speak of. Asking whether a neighbour is outside the cone gives one
+          // cell of wall at any radius, so the smallest bell in the game is
+          // still a bell rather than a plug.
+          if (t > 0.72) { put(x, y, z, Mat.Case); continue; }
+          const wall = rad(x + 1, y) > r || rad(x - 1, y) > r
+            || rad(x, y + 1) > r || rad(x, y - 1) > r;
+          if (wall) put(x, y, z, z === 0 ? Mat.Glow : (z % 2 ? Mat.Accent : Mat.Machine));
+          // Inside the wall is the CAVITY, and it is the engine's as much as
+          // the metal is: `rasterise` reserves it and nothing else may sit in
+          // it. Marked rather than left empty, because "empty" is what every
+          // other part is looking for somewhere to go.
+          else put(x, y, z, Mat.Void);
         }
       }
       break;
@@ -4705,8 +5573,11 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
         put(x, y, z, y === sy - 1 ? Mat.Machine : Mat.Case);
   }
 
+  // A cavity is claimed and empty, so it is not FILLED: a bell that counted
+  // its own throat would report more cells than it draws, and everything that
+  // asks a part how big it is would be told the box rather than the metal.
   let filled = 0;
-  for (let i = 0; i < data.length; i++) if (data[i]) filled++;
+  for (let i = 0; i < data.length; i++) if (data[i] && data[i] !== Mat.Void) filled++;
   const model: VoxelModel = { sx, sy, sz, data, filled };
   voxCache.set(m.id, model);
   return model;
@@ -4747,6 +5618,8 @@ export function voxelsOf(m: ModuleDef): VoxelModel {
 export function mountFouling(
   d: Design, parts: readonly Placement[], socket: string,
 ): string {
+  const L = latOf(frameFor(d.classKey));
+  const { nx: NX, ny: NY, nz: NZ } = L;
   const at = parts.findIndex(p => p.socket === socket);
   if (at < 0) return '';
   if (!moduleById((parts[at] as Placement).module)) return '';
@@ -4758,7 +5631,7 @@ export function mountFouling(
     let cells = 0;
     let attached = false;
     for (let k = 0; k < NZ; k++) for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
-      const n = idx3(i, j, k);
+      const n = idx3(L, i, j, k);
       if (r.own[n] !== want) continue;
       cells++;
       if (attached) continue;
@@ -4776,7 +5649,7 @@ export function mountFouling(
       for (const [dx, dy, dz] of NEIGHBOURS) {
         const x = i + dx, y = j + dy, z = k + dz;
         if (x < 0 || y < 0 || z < 0 || x >= NX || y >= NY || z >= NZ) continue;
-        const o = idx3(x, y, z);
+        const o = idx3(L, x, y, z);
         if (r.grid[o] && r.own[o] !== want && !r.welded[o]) { attached = true; break; }
       }
     }

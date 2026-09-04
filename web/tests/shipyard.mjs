@@ -146,7 +146,11 @@ async function checkLayout(page, label) {
   await page.waitForTimeout(250);
   const pane = await page.evaluate(() => {
     const out = [];
-    for (const sel of ['#dzMode button', '#dzFactions button', '#dzPaint button',
+    for (const sel of ['#dzMode button', '#dzPaletteSel', '#dzPaint button',
+      // Twelve surface dropdowns in what is a bottom sheet on a phone. A list
+      // that grew from two rows to twelve is exactly how a control ends up
+      // below the fold with nothing on screen saying it is there.
+      '#dzInner select',
       '#dzArmour input', '#dzSliceAt', '#dzBrushAdd', '#dzBrushCut',
       '#dzMirrorX', '#dzMirrorY', '#dzOnion', '#dzDepth',
       '#dzSliceClear', '#dzDrawClear']) {
@@ -166,7 +170,7 @@ async function checkLayout(page, label) {
     return out;
   });
   for (const p of pane) fail(`${label} [armour]: ${p}`);
-  if (!pane.length) ok(`${label} [armour]: mode, faction, swatches and sliders all reachable`);
+  if (!pane.length) ok(`${label} [armour]: mode, palette, swatches and sliders all reachable`);
 }
 
 /**
@@ -217,6 +221,21 @@ async function checkShips(page) {
         + `${tones.map(t => '0x' + t.toString(16)).join(', ')}`);
     } else ok(`${name}: the whole ${d.faction} palette is on the hull, `
       + `the picked 0x${d.paint.toString(16)} among it`);
+    // The yard DRAWS the windows, which for a long time it did not.
+    //
+    // Three screens went through `hullMesh` and got them for free; the yard
+    // built its own boxes and asked nothing, so a player fitting a bridge saw
+    // no viewport appear and had no way to tell whether the room was doing
+    // anything. Counted off the MESHES rather than off the design, because a
+    // design whose rooms all carry windows is exactly what the broken screen
+    // had: asking the design reported healthy numbers throughout.
+    const panes = Object.values(d.windows ?? {}).reduce((a, c) => a + c, 0);
+    if (panes < 1) {
+      fail(`${name}: the yard drew no windows at all`);
+    } else {
+      ok(`${name}: ${panes} panes drawn in the yard, `
+        + Object.entries(d.windows).map(([k, n]) => `${k} ${n}`).join(', '));
+    }
     // Mounts live inside the frame. Only drives, retros, attitude thrusters, gun
     // rings and trunnions are allowed to stand proud of the hull.
     if (d.enclosedOutside > 0)
@@ -1102,6 +1121,220 @@ async function checkModesAndRotation(page) {
     await page.waitForTimeout(300);
   }
 
+  // A player can PAINT a window, which until now they could not: a viewport
+  // appeared where a room happened to sit behind the plating and nowhere else.
+  // Counted off the MESH rather than off the design, because a number going up
+  // in a record proves a list was appended to and not that anything is drawn.
+  await page.click('#dzTabDecor');
+  await page.waitForTimeout(300);
+  const kinds = await page.$$('#dzDecals button');
+  if (kinds.length < 3) fail(`only ${kinds.length} decals offered to paint with`);
+  else {
+    const faces = async () => page.evaluate(() =>
+      Object.values(window.ftDebug.designer().windows ?? {}).reduce((a, c) => a + c, 0));
+    const was = await faces();
+    // The bridge viewport, which this hull derives none of, so a face that
+    // turns up can only be the painted one.
+    const which = await page.evaluate(() => [...document.querySelectorAll('#dzDecals button')]
+      .findIndex(b => /bridge/i.test(b.textContent || '')));
+    if (which < 0) { fail('no bridge viewport in the decal picker'); }
+    else {
+      // Re-queried on every use. `#refresh` rebuilds the picker, so a handle
+      // taken before a click points at a button that no longer exists: the
+      // swatch check learned this the same way.
+      const arm = () => page.locator('#dzDecals button').nth(which).click();
+      await arm();
+      await page.waitForTimeout(300);
+      const armed = await page.evaluate(() => window.ftDebug.designer().decalArmed);
+      if (armed !== which) fail(`armed decal ${armed}, expected ${which}`);
+      const box = await page.locator('#dzCanvas').boundingBox();
+      // Walk out from the centre until a tap lands on plating: the middle of
+      // the view is the hull, but the exact pixel may be a part.
+      let painted = 0;
+      for (const [dx, dy] of [[0, 0], [26, 10], [-30, -12], [54, 22], [-58, 26]]) {
+        await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
+        await page.waitForTimeout(320);
+        painted = await page.evaluate(() => window.ftDebug.designer().decal);
+        if (painted) break;
+      }
+      const now = await faces();
+      if (!painted) fail('five taps on the hull with a decal armed painted nothing');
+      else if (now <= was)
+        fail(`${painted} cell(s) painted and the mesh still draws ${now} window faces`);
+      else {
+        ok(`a painted decal reaches the model: ${painted} cell(s), `
+          + `${was} window faces to ${now}`);
+        // And it comes off again, so the tool is reversible.
+        await page.click('#dzDecalClear');
+        await page.waitForTimeout(400);
+        const back = await faces();
+        const left = await page.evaluate(() => window.ftDebug.designer().decal);
+        if (left || back !== was)
+          fail(`clearing left ${left} painted cell(s) and ${back} faces, not ${was}`);
+        else ok(`and it comes off: back to ${back} derived window faces`);
+      }
+      // Put the tool down, or every later tap in this run paints.
+      await arm();
+      await page.waitForTimeout(200);
+    }
+  }
+  await page.click('#dzTabArmour');
+  await page.waitForTimeout(300);
+
+  // A rail is for controls. Nothing visible by default may run past a phrase,
+  // because a pane full of prose is a pane whose controls are below the fold:
+  // the armour rail carried 2082 characters of essay across five paragraphs,
+  // over the sliders somebody opened it to use.
+  const COPY_MAX = 50;
+  const prose = await page.evaluate(max => {
+    const out = [];
+    // Rows and cells count as containers too, or a ten row binding list is
+    // measured as one 260 character string and the rule punishes the very
+    // structure it is asking for.
+    const BLOCK = 'div,p,dl,ol,ul,table,section,figure,'
+      + 'dt,dd,li,tr,td,th,thead,tbody';
+    // A RUN OF PROSE is what the rule limits, so measure the paragraphs and
+    // not the container. A binding list of ten short rows is a reference
+    // somebody scans; measuring its container's whole textContent would call
+    // that a wall of text and push the fix in exactly the wrong direction.
+    const measure = (el) => {
+      const blocks = [...el.children].filter(c => c.matches(BLOCK));
+      if (blocks.length) { for (const c of blocks) measure(c); return; }
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > max) out.push({ t: t.slice(0, 70), n: t.length });
+    };
+    for (const el of document.querySelectorAll('.dznote, .hint, .dzmore')) {
+      if (el.closest('.hidden') || !el.offsetParent) continue;
+      // An opened footnote is allowed to be long: it was asked for.
+      if (el.classList.contains('dzmore')) continue;
+      measure(el);
+    }
+    return out;
+  }, COPY_MAX);
+  for (const b of prose) fail(`${b.n} characters of copy visible by default: "${b.t}..."`);
+  if (!prose.length) ok(`no block of copy over ${COPY_MAX} characters is visible by default`);
+
+  // And the elaboration is reachable by TAP, because a phone has no hover and
+  // a tooltip nothing can open is a tooltip that does not exist.
+  const why = await page.$$('#dzPaneArmour .dzwhy');
+  if (!why.length) fail('no way to reach the elaboration that used to be on screen');
+  else {
+    const before = await page.$$eval('#dzPaneArmour .dzmore', n => n.length);
+    await why[0].scrollIntoViewIfNeeded();
+    await why[0].click();
+    await page.waitForTimeout(200);
+    const opened = await page.evaluate(() => {
+      const m = document.querySelector('#dzPaneArmour .dzmore');
+      return m ? (m.textContent || '').trim().length : 0;
+    });
+    await why[0].click();
+    await page.waitForTimeout(200);
+    const closed = await page.$$eval('#dzPaneArmour .dzmore', n => n.length);
+    if (before) fail('a footnote is open before anything asked for it');
+    else if (!opened) fail('the ? opened nothing');
+    else if (closed) fail('the ? does not close again');
+    else ok(`${why.length} headings fold their elaboration away, and it opens on a `
+      + `tap (${opened} characters) and closes again`);
+  }
+
+  // WHICH palette is a dropdown, and every one of them is in it. Five chips
+  // read as five things a hull might combine; they are five presets and
+  // exactly one is in use, which is what a select says and a chip row does not.
+  const palette = await page.evaluate(() => {
+    const el = document.getElementById('dzPaletteSel');
+    if (!el) return null;
+    return { tag: el.tagName, opts: [...el.options].map(o => o.value), value: el.value };
+  });
+  if (!palette) fail('no palette dropdown on the armour tab');
+  else if (palette.tag !== 'SELECT')
+    fail(`the palette control is a ${palette.tag}, not a dropdown`);
+  else if (palette.opts.length < 5)
+    fail(`the palette dropdown offers ${palette.opts.length} palettes, not five`);
+  else {
+    // And swapping it actually repaints: a dropdown that changes a field
+    // nothing draws from is a dropdown with no effect.
+    const other = palette.opts.find(k => k !== palette.value);
+    const was = await page.evaluate(() => window.ftDebug.designer().hullTone);
+    await page.selectOption('#dzPaletteSel', other);
+    await page.waitForTimeout(500);
+    const now = await page.evaluate(() => window.ftDebug.designer());
+    if (now.faction !== other)
+      fail(`picked the ${other} palette and the design says ${now.faction}`);
+    else if (now.hullTone === was)
+      fail(`swapping to the ${other} palette left the plating 0x${was.toString(16)}`);
+    else ok(`the palette is a dropdown of ${palette.opts.length}: `
+      + `${palette.value} to ${other} repaints 0x${was.toString(16)} to `
+      + `0x${now.hullTone.toString(16)}`);
+    await page.selectOption('#dzPaletteSel', palette.value);
+    await page.waitForTimeout(500);
+  }
+
+  // A normal map per colour slot, and one for each thing that is not armour.
+  // There used to be TWO dropdowns, one of them about "the selected slot", so
+  // seven of the eight were unreachable and neither said which colour it was
+  // for. Every row is checked to carry the swatch it names.
+  const surf = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('#dzInner .dzrow')];
+    return rows.map(r => ({
+      label: r.querySelector('.k')?.textContent ?? '',
+      chip: r.querySelector('.dzsw')?.style.background ?? '',
+      opts: r.querySelector('select')?.options.length ?? 0,
+    }));
+  });
+  const slotRows = surf.filter(r => /^Slot \d+$/.test(r.label));
+  const named = surf.map(r => r.label);
+  const wantRows = ['Hull frame', 'Engines and thrusters', 'Weapons', 'Subsystems'];
+  const missing = wantRows.filter(w => !named.includes(w));
+  if (slotRows.length !== 8)
+    fail(`${slotRows.length} slot surface rows, not 8: ${named.join(', ')}`);
+  else if (missing.length)
+    fail(`no surface dropdown for ${missing.join(', ')}`);
+  else if (slotRows.some(r => !r.chip))
+    fail('a slot surface row has no colour on it, so nothing says which slot it is');
+  else if (surf.some(r => r.opts < 2))
+    fail('a surface row has no finishes to choose from');
+  else ok(`${surf.length} surface dropdowns: eight slots each beside its colour, `
+    + `then ${wantRows.join(', ').toLowerCase()}`);
+
+  // And they reach the MODEL. Three of these four used to change nothing you
+  // could see in this screen: the frame, the drives and the guns were all
+  // drawn out of the subsystems' material, so setting them was a dropdown
+  // whose effect was somewhere else. Read off the live materials, because a
+  // finish that never reached one draws exactly like a finish nobody picked.
+  const want = { 'Hull frame': 'Corrugated', 'Engines and thrusters': 'Ablative',
+    Weapons: 'Patched', Subsystems: 'Grip deck' };
+  const set = await page.evaluate(async (labels) => {
+    const rows = [...document.querySelectorAll('#dzInner .dzrow')];
+    const missed = [];
+    for (const [label, choice] of Object.entries(labels)) {
+      const row = rows.find(r => r.querySelector('.k')?.textContent === label);
+      const sel = row?.querySelector('select');
+      const opt = sel && [...sel.options].find(o => o.textContent === choice);
+      if (!opt) { missed.push(`${label}: no "${choice}" to pick`); continue; }
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return missed;
+  }, want);
+  for (const m of set) fail(m);
+  await page.waitForTimeout(700);
+  const MACHINERY = ['frame', 'drive', 'weapon', 'part'];
+  const drawn = await page.evaluate(keys => Object.fromEntries(
+    window.ftDebug.designer().surfaces
+      .filter(s => keys.includes(s.what)).map(s => [s.what, s])), MACHINERY);
+  const files = MACHINERY.map(k => drawn[k]?.finish);
+  if (files.some(f => !f || f === 'none'))
+    fail('the yard draws no normal map on '
+      + MACHINERY.filter((k, i) => !files[i] || files[i] === 'none').join(', '));
+  else if (new Set(files).size !== 4)
+    fail(`four different finishes were picked and the yard drew ${new Set(files).size}: `
+      + `${files.join(', ')}`);
+  else if (MACHINERY.some(k => !drawn[k].loaded))
+    fail(`a yard surface has a normal map with no pixels: `
+      + MACHINERY.filter(k => !drawn[k].loaded).join(', '));
+  else ok(`each machinery dropdown reaches its own surface in the yard: ${files.join(', ')}`);
+
   // A turret is on a swivel: turning it has to move CELLS, not just a label.
   // The barbette under it is a drum and a drum is the same drum at 90 degrees,
   // so the part to turn is the gun on its trunnion.
@@ -1174,6 +1407,96 @@ async function checkModesAndRotation(page) {
   else ok('and the socket comes back to the gun it started with');
 }
 
+
+/**
+ * The architect, at whatever size this pass is running.
+ *
+ * It is a MODE of this screen rather than a screen of its own, so it inherits
+ * the canvas, the orbit and the bottom sheet and is checked here with them.
+ * What is asked is the thing a picture cannot answer: that the controls take a
+ * tap at 390 px, that a nudge moves the HULL and not merely a number, and that
+ * leaving takes the edit with it.
+ */
+async function checkArchitect(page, label) {
+  await page.goto(new URL('architect/terran_frigate', BASE).href, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1600);
+  const opened = await page.evaluate(() => window.ftDebug?.architect?.());
+  if (!opened) { fail(`${label}: the architect did not open`); return; }
+  ok(`${label}: the architect opens on ${opened.classKey}, ${opened.sockets.length} stations`);
+
+  // Select a drive, which is a station with a part on it: moving one that
+  // holds nothing would move no cells and prove nothing about the hull.
+  await page.evaluate(() => [...document.querySelectorAll('#dzArchList button')]
+    .find(x => x.textContent.includes('drive'))?.click());
+  await page.waitForTimeout(400);
+
+  // Every control the architect adds has to ARRIVE, which on a phone is the
+  // whole question: the file row sat under twenty nine scrolling stations the
+  // first time and was off the screen at both sizes.
+  const probe = await page.evaluate(() => {
+    const ids = ['dzArchXDown', 'dzArchXUp', 'dzArchYDown', 'dzArchYUp',
+      'dzArchZDown', 'dzArchZUp', 'dzArchKind', 'dzArchExport', 'dzArchImport',
+      'dzArchRevert'];
+    const rows = [...document.querySelectorAll('#dzArchList button')];
+    const bad = [];
+    for (const el of [...ids.map(i => document.getElementById(i)), ...rows]) {
+      if (!el) { bad.push('missing'); continue; }
+      // A row in a scrolling box is reached by scrolling to it, which is what
+      // a person does. The station list always scrolls; the selected station's
+      // controls do too once the sheet is short enough to need it.
+      if (el.closest('#dzArchList, #dzArchFoot')) el.scrollIntoView({ block: 'nearest' });
+      const r = el.getBoundingClientRect();
+      const name = el.id || el.textContent.trim().slice(0, 18);
+      if (!r.width || !r.height) { bad.push(name + ': zero size'); continue; }
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) {
+        bad.push(name + ': off screen'); continue;
+      }
+      const hit = document.elementFromPoint(x, y);
+      if (!(el === hit || el.contains(hit))) {
+        bad.push(name + ': covered by ' + (hit?.id || hit?.tagName || 'nothing'));
+      }
+    }
+    return { bad, n: ids.length + rows.length };
+  });
+  if (probe.bad.length) fail(`${label}: architect controls unreachable: ${probe.bad.slice(0, 3).join('; ')}`);
+  else ok(`${label}: all ${probe.n} architect controls take a tap`);
+
+  // A nudge has to move the SHIP, not just the readout. The grid hash is over
+  // the occupancy lattice, so it changes when a cell does and not otherwise.
+  const before = await page.evaluate(() => window.ftDebug.designer()?.gridHash);
+  await page.click('#dzArchZUp');
+  await page.waitForTimeout(700);
+  const after = await page.evaluate(() => window.ftDebug.designer()?.gridHash);
+  const now = await page.evaluate(() => window.ftDebug.architect());
+  if (before === after) fail(`${label}: moving a station did not move the hull`);
+  else if (!now.edited) fail(`${label}: the frame does not read as edited`);
+  else ok(`${label}: a station moves and the hull follows (${before} to ${after})`);
+
+  // Export names a file. The download itself is the browser's business; what
+  // this asks is that the button is wired and the JSON is the frame.
+  const dl = page.waitForEvent('download', { timeout: 15000 }).catch(() => null);
+  await page.click('#dzArchExport');
+  const got = await dl;
+  if (!got) fail(`${label}: Export JSON produced no file`);
+  else ok(`${label}: exports ${got.suggestedFilename()}`);
+
+  // Revert puts the authored frame back, which is the way out of a bad edit.
+  await page.click('#dzArchRevert');
+  await page.waitForTimeout(700);
+  const back = await page.evaluate(() => window.ftDebug.architect());
+  if (back.edited) fail(`${label}: Revert left the frame edited`);
+  else ok(`${label}: Revert restores the frame this build authored`);
+
+  // And leaving must take the override with it, or a hull a player can SEE and
+  // the hull the core spawns would be two ships.
+  await page.goto(new URL('ship/terran_frigate', BASE).href, { waitUntil: 'networkidle' });
+  await page.waitForTimeout(1200);
+  const gone = await page.evaluate(() => window.ftDebug.architect());
+  if (gone !== null) fail(`${label}: the architect is still open after leaving it`);
+  else ok(`${label}: leaving the architect clears the frame it was showing`);
+}
+
 for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   [390, 844, 'phone 390x844'], [390, 560, 'phone landscape 390x560']]) {
   const ctx = await browser.newContext({ viewport: { width: w, height: h },
@@ -1238,6 +1561,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
     else ok(`${label}: the hint clears the tool row`);
     await checkLayout(page, label + ' with the card open');
   }
+  await checkArchitect(page, label);
   if (errs.length) { for (const e of errs.slice(0, 4)) fail(`page error: ${e}`); }
   else ok('no page errors');
   await ctx.close();

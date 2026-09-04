@@ -30,7 +30,7 @@ import {
 } from '../sim/types.js';
 import {
   DEFAULT_METAL, DEFAULT_ROUGH, finishesOf,
-  arcMasks, gunByKey, NX, NY, NZ, rasterise, stockFor, type Design,
+  arcMasks, gunByKey, rasterise, stockFor, type Design,
 } from './design.js';
 import {
   AT_REST, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
@@ -542,6 +542,7 @@ export class View {
     c: Carved, local: readonly [number, number, number], liveOnly: boolean,
   ): number {
     const cell = c.hull.cell;
+    const { nx: NX, ny: NY, nz: NZ } = c.hull.lat;
     let near = -1, best = Infinity;
     for (let q = 0; q < c.hull.quads; q++) {
       const from = c.hull.quadAt[q] as number, to = c.hull.quadAt[q + 1] as number;
@@ -579,6 +580,7 @@ export class View {
     const near = View.#nearestCell(c, local, false);
     if (near < 0) return null;
     const cell = c.hull.cell;
+    const { nx: NX, ny: NY, nz: NZ } = c.hull.lat;
     const i = near % NX, j = ((near / NX) | 0) % NY, k = (near / (NX * NY)) | 0;
     return [
       (i - NX / 2 + 0.5) * cell,
@@ -600,6 +602,7 @@ export class View {
     // standing is the cell the shot came in at, because the sphere point is in
     // the direction the shot arrived from.
     const cell = c.hull.cell;
+    const { nx: NX, ny: NY } = c.hull.lat;
     const near = View.#nearestCell(c, h.local, true);
     if (near < 0) return;
     const ai = near % NX, aj = ((near / NX) | 0) % NY, ak = (near / (NX * NY)) | 0;

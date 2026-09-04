@@ -90,13 +90,17 @@ fn the_catch_radius_is_a_turret_and_not_a_ship() {
     // A sphere of MOUNT_RADIUS must be small beside the hull it sits on, or
     // every hit anywhere damages every mount and a ship loses all its guns at
     // once, which is what happened at 1.1.
+    // The class's OWN catch radius, not the constant. `MOUNT_RADIUS` is
+    // authored at a fixed reference cell and `mount_radius` scales it by the
+    // rung, so the constant is only the real radius for a class at that
+    // reference: reading it directly reported a frigate as having a catch
+    // radius twice its actual one the moment the frigate rung moved.
     let sim = pair();
     let hull = sim.ships[0].radius;
+    let catch = data::mount_radius(sim.ships[0].class);
     assert!(
-        data::MOUNT_RADIUS < hull * 0.25,
-        "MOUNT_RADIUS {} is not small beside a hull of radius {}",
-        data::MOUNT_RADIUS,
-        hull,
+        catch < hull * 0.25,
+        "a catch radius of {catch} is not small beside a hull of radius {hull}",
     );
 }
 

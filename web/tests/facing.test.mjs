@@ -204,10 +204,16 @@ test('facingOf wraps, so a quarter past three is upright', () => {
 
 test('a rotation is refused only when the base lifts off or the body fouls', () => {
   // The rule, on a real hull rather than on a shape invented for the test.
-  // The Rogue corvette is the one to ask: least hull in the game with a third
-  // of its mass in boarding gear, so it is where a part actually runs out of
-  // room, and both halves of the rule fire on it.
-  const d = stockFor('rogue_corvette');
+  // The Rogue is the navy to ask: least hull in the game with a third of its
+  // mass in boarding gear, so it is where a part actually runs out of room.
+  //
+  // The DESTROYER rather than the corvette, and the move is what the lattice
+  // did. A corvette is 24 x 24 x 48 now and a part is the same handful of
+  // cells it is on every other hull, so a rotated fitting on one has hull all
+  // round it whichever way it is turned and nothing can be lifted off: 3448
+  // facings, 176 fouled, not one adrift. The destroyer is 48 x 48 x 96 with
+  // clamps and gantries out on the skin, and all three answers fire on it.
+  const d = stockFor('rogue_destroyer');
   let took = 0, hit = 0, off = 0;
   for (const p of d.parts) {
     for (const f of ALL) {
@@ -226,7 +232,7 @@ test('a rotation is refused only when the base lifts off or the body fouls', () 
   assert.ok(took > 0, 'every rotation of every part was refused');
   assert.ok(hit > 0, 'no rotation ever fouled anything');
   assert.ok(off > 0, 'no rotation ever lifted a base off the ship');
-  console.log(`  rogue corvette: ${took} facings taken, ${hit} fouled, ${off} adrift`);
+  console.log(`  rogue destroyer: ${took} facings taken, ${hit} fouled, ${off} adrift`);
 });
 
 test('a hull with room takes every facing', () => {
