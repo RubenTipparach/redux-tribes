@@ -1139,7 +1139,11 @@ async function checkModesAndRotation(page) {
       .findIndex(b => /bridge/i.test(b.textContent || '')));
     if (which < 0) { fail('no bridge viewport in the decal picker'); }
     else {
-      await kinds[which].click();
+      // Re-queried on every use. `#refresh` rebuilds the picker, so a handle
+      // taken before a click points at a button that no longer exists: the
+      // swatch check learned this the same way.
+      const arm = () => page.locator('#dzDecals button').nth(which).click();
+      await arm();
       await page.waitForTimeout(300);
       const armed = await page.evaluate(() => window.ftDebug.designer().decalArmed);
       if (armed !== which) fail(`armed decal ${armed}, expected ${which}`);
@@ -1170,7 +1174,7 @@ async function checkModesAndRotation(page) {
         else ok(`and it comes off: back to ${back} derived window faces`);
       }
       // Put the tool down, or every later tap in this run paints.
-      await kinds[which].click();
+      await arm();
       await page.waitForTimeout(200);
     }
   }
