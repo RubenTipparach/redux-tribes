@@ -62,6 +62,39 @@ request still needs following, the way to follow it is to end the turn and let i
 events arrive. If something genuinely needs a timer, ask for it rather than starting
 one.
 
+## A rail is for controls, not for reading
+
+**No block of copy that is visible by default may run past about 50
+characters.** Not a guideline to weigh against a good explanation: a screen
+full of prose is a screen nobody reads, and the parts of it that matter are
+buried by the parts that do not. The armour rail carried 2082 characters of
+essay across five paragraphs, explaining desync safety and what a cast nozzle
+is, above the controls somebody opened the pane to use.
+
+What survives is the LABEL: what this control does, in a phrase.
+"What each face of plate absorbs." "Each swatch is a whole scheme." "Drag to
+paint a run of plate."
+
+Everything else goes behind the **`?`** beside the heading, which is
+`.dzwhy` and is a real button. Three rules hold it together:
+
+- **It is a TAP, not a hover.** A phone has no hover, so a `title` alone is a
+  tooltip that cannot be opened on the device most likely to need it. `title`
+  stays on the button as the desktop fast path and the click handler in
+  `main.ts` is what actually opens it.
+- **It may only ever carry ELABORATION.** The label above it always says what
+  the control is, so nothing is discoverable only by opening this. That is the
+  hover rule in the mobile section holding rather than being worked round.
+- **It is one paragraph.** If the elaboration needs two, the thing it is
+  describing needs a different design, or it belongs in `docs/` where somebody
+  has actually chosen to read.
+
+The reasoning that used to sit on screen is not lost and was never the
+player's to carry: it belongs in a comment beside the code it explains, or in
+this file. A player wants to know what a button does. A person changing the
+code wants to know why it works that way. Those are different readers and
+only one of them is looking at the rail.
+
 ## Mobile stays supported
 
 **This section is the rule. It holds until someone deletes this section.** While it
@@ -1607,6 +1640,57 @@ So: a leading slash, and PROVE it rather than asserting it.
 finish's file name and whether that file has pixels, and the playthrough fails
 if a bound finish has none. Putting `./` back flips `loaded` to false on every
 hull, which is how the guard was checked.
+
+## A window is DERIVED, and now it can also be PAINTED
+
+Both halves, and both stay. The derivation is what gives every stock hull its
+viewports for free: a plate cell whose inner neighbour belongs to a bridge
+wears the bridge viewport, authored on `ModuleDef.window`, so a hull gets its
+windows from the rooms it already carries and a change to the rasteriser
+cannot take them away.
+
+What it could never do is let a player put one anywhere. Derive a hull with no
+room against a stretch of skin and that skin has no windows, and there was no
+way to say otherwise: the shipyard had a tab for armour, a tab for parts, and
+nothing for the things you STICK ON a hull. So there is a **Decorate** tab, and
+`Design.decal` is what it writes.
+
+**A wire format beside `plate`, `cut` and `tint`, and the same shape as
+`tint`.** One integer per cell as `cell * DECAL_STRIDE + kind`, so a record
+stays inside the library's 64 KB and a cell carries its decal across a lattice
+change. `moveTagged` migrates both, because two copies of that arithmetic are
+two chances to migrate a brush stroke correctly and a window not at all.
+
+**The INDEX is stored, so `DECALS` may be appended to and never reordered.**
+Moving a row turns every saved bridge viewport into a cargo door.
+
+**Painted is asked FIRST, and derived is the fallback.** A cell nobody painted
+falls through to `roomBehind` exactly as before, which is why every hull in the
+fleet looks precisely as it did: `sim.test.mjs` asserts both, that the painted
+cell appears AND that every derived count is unchanged.
+
+**A painted decal goes on every exposed face of its cell.** The derived pass is
+held to `WINDOW_FACE` so a room's decal does not tile over a whole hull, and a
+cabin does not get a window in the roof. A player placing one cell at a time is
+being deliberate, and a tool that silently drew nothing because that cell's only
+open face pointed the wrong way is a tool nobody can tell is working.
+
+**Plating only**, for the reason the brush is armour only: a porthole in a
+drive bell is a hole in an engine, and the frame is the class rather than the
+design. It says so when it refuses.
+
+**Cosmetic, like the paint**: never hashed, never sent to the core, so two
+players who decorated the same hull differently cannot read as a desync.
+
+**It is in `rasterSig`.** The window mesh is built in the same pass the plating
+is, so a hull differing only in a painted porthole would otherwise be handed
+the raster of the hull without one.
+
+**And the picker shows the DECAL, not a swatch.** Nine identical grey squares
+beside nine names is nine names doing all the work. `windowThumb` hands back the
+emissive strip, which is the lit panes, and the chip takes the first variant
+off it. Through `textures.ts` like every other path, so a caller has nowhere to
+spell `./` and hand the page an HTML file with no pixels in it.
 
 ## And a picked colour is a BRUSH, not a scheme
 

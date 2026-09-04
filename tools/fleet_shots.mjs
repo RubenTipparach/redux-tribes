@@ -71,6 +71,33 @@ page.on('pageerror', (e) => console.log('  page error: ' + e.message));
 /** Wait for FRAMES, never for a deadline: this runs on a software rasteriser
  *  where the yard draws single digits a second, and a wall clock wait there
  *  measures the machine rather than the picture settling. */
+/**
+ * Take the console's own furniture out of the photograph.
+ *
+ * A STYLE TAG rather than `el.style.visibility`, and that is the whole point:
+ * an inline style belongs to one element instance, and the picker is rebuilt
+ * on every refresh, so a hide set before a class was opened was gone by the
+ * time the shutter fired. Every shot in the fleet had the class picker, the
+ * tool row and the hint line printed across it, and because the chips are the
+ * BRIGHTEST thing in the frame, the bounding box `--ladder` crops to was a box
+ * round the panel rather than round the ship.
+ *
+ * A rule in the document survives any number of rebuilds, which is what makes
+ * it right rather than merely working today.
+ */
+const CHROME = ['#dzClasses', '#dzTools', '#dzHint', '#dzPick'];
+const hideChrome = (pg) => pg.addInitScript((sel) => {
+  const put = () => {
+    if (document.getElementById('shotChrome')) return;
+    const st = document.createElement('style');
+    st.id = 'shotChrome';
+    st.textContent = `${sel} { visibility:hidden !important; }`;
+    document.head.append(st);
+  };
+  if (document.head) put();
+  else document.addEventListener('DOMContentLoaded', put, { once: true });
+}, CHROME.join(','));
+
 const frames = (n) => page.evaluate(async (want) => {
   await new Promise((res) => {
     let seen = 0;
@@ -130,6 +157,17 @@ const closeTo = async (want) => {
   return c ? c.dist : 0;
 };
 
+// Armed BEFORE the first navigation and never touched again. The chips, the
+// tool row and the hint line are the brightest things in the frame, so a
+// bounding box taken with them in it is a box round the panel rather than
+// round the ship, and `--ladder` crops to exactly that box.
+//
+// An init script rather than a style tag or an inline style, and that is the
+// whole fix: this tool navigates once per hull, and BOTH of those die with the
+// document. The per hull loop never hid anything at all and the ladder path
+// hid it once, before the first `goto` threw it away, so every shot this tool
+// has ever written had the console's own furniture printed across it.
+await hideChrome(page);
 await page.goto(BASE, { waitUntil: 'networkidle' });
 await page.waitForTimeout(600);
 
@@ -163,16 +201,6 @@ async function ladder(faction) {
     await page.waitForTimeout(500);
     const grow = page.locator('#dzGrow');
     if (await grow.count() && await grow.isVisible()) await grow.click().catch(() => {});
-    // The chips and the tool row are BRIGHTER than the ship, so a bounding
-    // box taken over the shot with them in it is a box round the panel. They
-    // are hidden for the photograph and nothing else: this tool takes
-    // pictures, it does not drive the app.
-    await page.evaluate(() => {
-      for (const id of ['dzClasses', 'dzTools', 'dzHint', 'dzPick']) {
-        const el = document.getElementById(id);
-        if (el) el.style.visibility = 'hidden';
-      }
-    });
     await frames(40);
     // Playwright's own screenshot, not `canvas.toDataURL`. The yard is a WebGL
     // canvas without `preserveDrawingBuffer`, so reading it back after the

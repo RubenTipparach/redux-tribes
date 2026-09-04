@@ -196,6 +196,25 @@ export function windowMap(key: string): WindowMaps | null {
  * per hull difference is in the vertex colours and the UVs.
  */
 const windowMats = new Map<string, THREE.MeshStandardMaterial>();
+/**
+ * The decal's own picture, for a picker chip.
+ *
+ * The EMISSIVE map, because that is the lit panes: a chip showing the colour
+ * map would be a dark rectangle, and what a player is choosing between is the
+ * pattern of light. Through here rather than spelled at the call site for the
+ * reason every other path is: `textures.ts` owns them, so a caller has nowhere
+ * to write `./` and hand the page an HTML file with no pixels in it.
+ *
+ * The file is a STRIP of variants laid side by side, so a chip that wants one
+ * of them scales the strip by its width and takes the first slice; `variants`
+ * is what a caller needs to do that.
+ */
+export function windowThumb(key: string): { url: string; variants: number } | null {
+  const variants = WINDOW_VARIANTS[key];
+  if (!variants) return null;
+  return { url: at(`surf/window_${key}_e.png`), variants };
+}
+
 export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
   const had = windowMats.get(key);
   if (had) return had;

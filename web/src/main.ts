@@ -3809,6 +3809,48 @@ async function showRoute(r: route.Route): Promise<void> {
 // it is already showing, which is what makes it safe to call from both.
 route.onRoute(r => { void showRoute(r); });
 
+/**
+ * The "?" beside a heading, which folds a paragraph away.
+ *
+ * A rail is for controls. What a control DOES belongs on screen as a short
+ * label; WHY it works that way is elaboration, and elaboration that is always
+ * visible is a wall of prose nobody reads, which is what these panes had:
+ * 2082 characters of it in the armour rail alone.
+ *
+ * A TAP rather than a hover, because a phone has no hover and a tooltip
+ * nothing can open is a tooltip that does not exist. `title` stays on the
+ * button so a desktop still gets the fast path, and nothing here is the ONLY
+ * statement of what a control is: the label above it always says that much,
+ * which is the rule about hover discoverability holding rather than being
+ * worked around.
+ *
+ * Delegated, so a pane built at runtime gets it without asking.
+ */
+document.addEventListener('click', ev => {
+  const why = (ev.target as HTMLElement | null)?.closest?.('.dzwhy');
+  if (!(why instanceof HTMLElement)) return;
+  const head = why.parentElement;
+  const text = why.getAttribute('title') ?? '';
+  if (!head || !text) return;
+  const open = head.nextElementSibling?.nextElementSibling;
+  if (open?.classList.contains('dzmore')) {
+    open.remove();
+    why.classList.remove('on');
+    why.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  const p = document.createElement('p');
+  p.className = 'dzmore';
+  p.textContent = text;
+  // After the LABEL rather than after the heading, so the short answer stays
+  // first and the long one reads as a footnote to it.
+  const note = head.nextElementSibling;
+  if (note) note.insertAdjacentElement('afterend', p);
+  else head.insertAdjacentElement('afterend', p);
+  why.classList.add('on');
+  why.setAttribute('aria-expanded', 'true');
+});
+
 renderHelp();
 frame();
 // Sign in first so the lobby knows who it is, then go wherever the address

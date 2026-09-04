@@ -1121,6 +1121,104 @@ async function checkModesAndRotation(page) {
     await page.waitForTimeout(300);
   }
 
+  // A player can PAINT a window, which until now they could not: a viewport
+  // appeared where a room happened to sit behind the plating and nowhere else.
+  // Counted off the MESH rather than off the design, because a number going up
+  // in a record proves a list was appended to and not that anything is drawn.
+  await page.click('#dzTabDecor');
+  await page.waitForTimeout(300);
+  const kinds = await page.$$('#dzDecals button');
+  if (kinds.length < 3) fail(`only ${kinds.length} decals offered to paint with`);
+  else {
+    const faces = async () => page.evaluate(() =>
+      Object.values(window.ftDebug.designer().windows ?? {}).reduce((a, c) => a + c, 0));
+    const was = await faces();
+    // The bridge viewport, which this hull derives none of, so a face that
+    // turns up can only be the painted one.
+    const which = await page.evaluate(() => [...document.querySelectorAll('#dzDecals button')]
+      .findIndex(b => /bridge/i.test(b.textContent || '')));
+    if (which < 0) { fail('no bridge viewport in the decal picker'); }
+    else {
+      await kinds[which].click();
+      await page.waitForTimeout(300);
+      const armed = await page.evaluate(() => window.ftDebug.designer().decalArmed);
+      if (armed !== which) fail(`armed decal ${armed}, expected ${which}`);
+      const box = await page.locator('#dzCanvas').boundingBox();
+      // Walk out from the centre until a tap lands on plating: the middle of
+      // the view is the hull, but the exact pixel may be a part.
+      let painted = 0;
+      for (const [dx, dy] of [[0, 0], [26, 10], [-30, -12], [54, 22], [-58, 26]]) {
+        await page.mouse.click(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy);
+        await page.waitForTimeout(320);
+        painted = await page.evaluate(() => window.ftDebug.designer().decal);
+        if (painted) break;
+      }
+      const now = await faces();
+      if (!painted) fail('five taps on the hull with a decal armed painted nothing');
+      else if (now <= was)
+        fail(`${painted} cell(s) painted and the mesh still draws ${now} window faces`);
+      else {
+        ok(`a painted decal reaches the model: ${painted} cell(s), `
+          + `${was} window faces to ${now}`);
+        // And it comes off again, so the tool is reversible.
+        await page.click('#dzDecalClear');
+        await page.waitForTimeout(400);
+        const back = await faces();
+        const left = await page.evaluate(() => window.ftDebug.designer().decal);
+        if (left || back !== was)
+          fail(`clearing left ${left} painted cell(s) and ${back} faces, not ${was}`);
+        else ok(`and it comes off: back to ${back} derived window faces`);
+      }
+      // Put the tool down, or every later tap in this run paints.
+      await kinds[which].click();
+      await page.waitForTimeout(200);
+    }
+  }
+  await page.click('#dzTabArmour');
+  await page.waitForTimeout(300);
+
+  // A rail is for controls. Nothing visible by default may run past a phrase,
+  // because a pane full of prose is a pane whose controls are below the fold:
+  // the armour rail carried 2082 characters of essay across five paragraphs,
+  // over the sliders somebody opened it to use.
+  const COPY_MAX = 50;
+  const prose = await page.evaluate(max => {
+    const out = [];
+    for (const el of document.querySelectorAll('.dznote, .hint, .dzmore')) {
+      if (el.closest('.hidden') || !el.offsetParent) continue;
+      // An opened footnote is allowed to be long: it was asked for.
+      if (el.classList.contains('dzmore')) continue;
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t.length > max) out.push({ t: t.slice(0, 70), n: t.length });
+    }
+    return out;
+  }, COPY_MAX);
+  for (const b of prose) fail(`${b.n} characters of copy visible by default: "${b.t}..."`);
+  if (!prose.length) ok(`no block of copy over ${COPY_MAX} characters is visible by default`);
+
+  // And the elaboration is reachable by TAP, because a phone has no hover and
+  // a tooltip nothing can open is a tooltip that does not exist.
+  const why = await page.$$('#dzPaneArmour .dzwhy');
+  if (!why.length) fail('no way to reach the elaboration that used to be on screen');
+  else {
+    const before = await page.$$eval('#dzPaneArmour .dzmore', n => n.length);
+    await why[0].scrollIntoViewIfNeeded();
+    await why[0].click();
+    await page.waitForTimeout(200);
+    const opened = await page.evaluate(() => {
+      const m = document.querySelector('#dzPaneArmour .dzmore');
+      return m ? (m.textContent || '').trim().length : 0;
+    });
+    await why[0].click();
+    await page.waitForTimeout(200);
+    const closed = await page.$$eval('#dzPaneArmour .dzmore', n => n.length);
+    if (before) fail('a footnote is open before anything asked for it');
+    else if (!opened) fail('the ? opened nothing');
+    else if (closed) fail('the ? does not close again');
+    else ok(`${why.length} headings fold their elaboration away, and it opens on a `
+      + `tap (${opened} characters) and closes again`);
+  }
+
   // WHICH palette is a dropdown, and every one of them is in it. Five chips
   // read as five things a hull might combine; they are five presets and
   // exactly one is in use, which is what a select says and a chip row does not.

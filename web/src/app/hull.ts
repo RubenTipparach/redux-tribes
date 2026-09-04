@@ -32,7 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   latOf, VOXEL, type Lat, Mat, DEFAULT_METAL, DEFAULT_ROUGH, SECTIONS, stockFor,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
-  isPainted, paintedSlot, purposeAt,
+  isPainted, paintedSlot, purposeAt, decalMap,
   finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
@@ -544,6 +544,13 @@ export function hullMesh(d: Design, bare = false): HullMesh {
    * Plate only. A window in the middle of a drive bell would be a window on a
    * part that is standing outside the hull, which is a hole in an engine.
    */
+  /**
+   * What a player painted on, by cell. Built once per mesh rather than read
+   * off the design per face: this is asked six times for every cell of the
+   * hull.
+   */
+  const decals = decalMap(d);
+
   const roomBehind = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
@@ -618,6 +625,20 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     const n = idx(i, j, k);
     const mat = grid[n] as number;
     if (mat !== Mat.Plate && mat !== Mat.Skinned) return null;
+    // A HAND PAINTED decal wins, and it is asked first.
+    //
+    // The derivation below is what gives a stock hull its windows for free,
+    // and it can only ever answer for a cell with a room behind it. A player
+    // who wants a porthole somewhere else is not making a mistake the editor
+    // should argue with, so a painted cell is simply the answer.
+    //
+    // On EVERY exposed face of that cell, unlike the derived pass, which is
+    // held to `WINDOW_FACE` so a room's decal does not tile over a whole hull.
+    // A player placing one cell at a time is being deliberate, and a tool that
+    // silently drew nothing because the cell's only open face pointed the
+    // wrong way would be a tool nobody could tell was working.
+    const painted = decals.get(n);
+    if (painted) return painted;
     const mine = roomBehind(i, j, k, dx, dy, dz);
     if (mine) return mine;
     // The mirror of this cell, looking the mirrored way: a face whose normal

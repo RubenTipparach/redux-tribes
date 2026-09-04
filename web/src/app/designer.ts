@@ -18,7 +18,7 @@ import * as drafts from './drafts.js';
 // The same loaders the map uses, so the yard cannot spell a path its own way
 // and cannot drift onto a different surface than the thing being designed will
 // fly with.
-import { finishMap, partMap, windowMaterial } from './textures.js';
+import { finishMap, partMap, windowMaterial, windowThumb } from './textures.js';
 import {
   AT_REST, blockedPct, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
 } from './turret.js';
@@ -33,6 +33,7 @@ import {
   socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
+  DECALS, DECAL_STRIDE,
   DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf, purposeAt,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   ARMOUR_BANDS, ROLE_BAND, bandFinishes, roleAt, roleCode, seatedFacing,
@@ -193,7 +194,9 @@ export class Designer {
   #design: Design = stockFor('terran_frigate');
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
-  #tab: 'parts' | 'armour' | 'stats' | 'frame' = 'parts';
+  #tab: 'parts' | 'armour' | 'decor' | 'stats' | 'frame' = 'parts';
+  /** The decal armed for painting, by `DECALS` index, or null for none. */
+  #decal: number | null = null;
   /** Architect mode: the same canvas editing the FRAME rather than a fit. */
   #arch = false;
   /**
@@ -353,6 +356,11 @@ export class Designer {
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
       tint: Array.isArray(d.tint) ? d.tint.slice(0, DRAWN_MAX) : [],
+      // Same list, one entry further on. This rebuilds the record field by
+      // field, so a field left off it is a field a hull loses between the
+      // library and the editor, and Save writes this record back: the loss is
+      // permanent the first time anybody opens a decorated ship and saves it.
+      decal: Array.isArray(d.decal) ? d.decal.slice(0, DRAWN_MAX) : [],
       ...(Array.isArray(d.lattice) ? { lattice: [...d.lattice] as [number, number, number] } : {}),
     });
     this.#slot = slot;
@@ -434,7 +442,8 @@ export class Designer {
     // Land on a pane that exists in this mode. Staying on Parts in the
     // architect would show the fitting rail with its tab hidden, which is a
     // pane a player cannot leave.
-    if (on && (this.#tab === 'parts' || this.#tab === 'armour')) this.#tab = 'frame';
+    if (on && (this.#tab === 'parts' || this.#tab === 'armour'
+      || this.#tab === 'decor')) this.#tab = 'frame';
     if (!on && this.#tab === 'frame') this.#tab = 'parts';
     // Open the sheet on the way in. Collapsed is right for the yard, where the
     // model is the thing being edited and the rail is the tool; here the RAIL
@@ -580,6 +589,26 @@ export class Designer {
    * different way.
    */
   #surfaces: HullSurfaces | null = null;
+
+  /**
+   * Hang the elaboration off a heading, as the `?` that folds it away.
+   *
+   * A rail is for controls: what one DOES is the label, and why it works that
+   * way is a footnote nobody should have to scroll past to reach the next
+   * slider. `main.ts` owns the toggle, so this only has to put the button
+   * where the text used to be, and it replaces any `?` already there because
+   * `#refresh` runs on every edit.
+   */
+  #why(head: HTMLElement, text: string): void {
+    head.querySelector('.dzwhy')?.remove();
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dzwhy';
+    b.textContent = '?';
+    b.title = text;
+    b.setAttribute('aria-expanded', 'false');
+    head.appendChild(b);
+  }
 
   #surfaceFor(design: Design): HullSurfaces {
     if (!this.#surfaces) {
@@ -1023,6 +1052,9 @@ export class Designer {
     // The BRUSH takes the tap before anything else does. A player who has
     // picked up a colour is not asking what a cell is called.
     if (this.#brushSlot !== null) { this.#paintAt(n, grid[n] as number); return; }
+    // And a DECAL takes it before the brush would have, for the same reason:
+    // a tool that is armed is the answer to a tap.
+    if (this.#decal !== null) { this.#decalAt(n, grid[n] as number); return; }
     if (owner > 0) {
       const p = this.#design.parts[owner - 1];
       this.#socket = p ? p.socket : null;
@@ -1040,6 +1072,37 @@ export class Designer {
           : 'The frame. It is the class, not the design: it cannot be moved, cut '
             + 'or painted, and everything you fit hangs inside it.';
     }
+    this.#refresh();
+  }
+
+  /**
+   * Stick a decal on one cell of plating, or peel it off.
+   *
+   * Plating only, and for the same reason the brush is: a window is a hole in
+   * ARMOUR. A porthole in the middle of a drive bell is a hole in an engine,
+   * and a frame member is the class rather than the design.
+   *
+   * The same kind again lifts it off, which is what a second tap with the same
+   * tool means everywhere else in here.
+   */
+  #decalAt(n: number, mat: number): void {
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) {
+      this.#note = 'A decal goes on PLATING. A window in a drive bell is a hole '
+        + 'in an engine, and the frame is the class rather than the design.';
+      this.#refresh();
+      return;
+    }
+    const list = (this.#design.decal ??= []);
+    const at = list.findIndex(v => ((v / DECAL_STRIDE) | 0) === n);
+    const want = n * DECAL_STRIDE + (this.#decal as number);
+    if (at >= 0) {
+      if (list[at] === want) list.splice(at, 1);
+      else list[at] = want;
+    } else {
+      if (list.length >= DRAWN_MAX) return;
+      list.push(want);
+    }
+    this.#note = null;
     this.#refresh();
   }
 
@@ -1798,12 +1861,18 @@ export class Designer {
       };
       mode.appendChild(b);
     }
-    $('dzModeNote').textContent = this.#design.armour === 'wrapped'
+    // A label and a footnote, not a paragraph. The label says which exterior
+    // is on the bench; the rest is why, and it goes behind the `?`.
+    const wrapped = this.#design.armour === 'wrapped';
+    $('dzModeNote').textContent = wrapped
+      ? 'Plate on the class profile.'
+      : 'Plate grown off your own parts.';
+    this.#why($('dzModeHead'), wrapped
       ? 'The class hull: plate laid on the frame\u2019s own profile, which is what '
-        + 'gives the class its silhouette. What you are changing is its thickness.'
-      : 'Your own exterior: plate grown off the parts themselves and nothing else, '
-        + 'so it follows what you built rather than what the class is. It starts '
-        + 'bare and it still has to fit the mass budget.';
+        + 'gives the class its silhouette. What you change is its thickness.'
+      : 'Your own exterior: plate grown off the parts themselves, so it follows '
+        + 'what you built rather than what the class is. It starts bare and it '
+        + 'still has to fit the mass budget.');
 
     const host = $('dzArmour');
     host.innerHTML = '';
@@ -1881,9 +1950,9 @@ export class Designer {
     brushHead.textContent = 'Brush';
     const brushNote = document.createElement('p');
     brushNote.className = 'dznote';
-    brushNote.textContent = 'Pick a colour and tap the model to lay it on one '
-      + 'cell of armour. The same colour on the same cell lifts it off again. '
-      + 'Put the brush down to go back to tapping parts to name them.';
+    brushNote.textContent = 'Tap the model to paint one cell.';
+    this.#why(brushHead, 'Armour only. The same colour on the same cell lifts it '
+      + 'off again. Put the brush down to go back to tapping parts to name them.');
     const brushRow = document.createElement('div');
     brushRow.className = 'dzpaint';
     scheme.swatches.forEach((col, slot) => {
@@ -1895,6 +1964,7 @@ export class Designer {
         + (wears ? ` \u00b7 ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
       b.onclick = () => {
         this.#brushSlot = this.#brushSlot === slot ? null : slot;
+        if (this.#brushSlot !== null) this.#decal = null;
         this.#refresh();
       };
       brushRow.appendChild(b);
@@ -1927,6 +1997,40 @@ export class Designer {
     // eight cramped ones.
     //
     // The frame and the parts follow it because they are the same question
+    // --- decals, which are stuck ON the hull rather than part of it -------
+    // Rebuilt here with everything else, because `#refresh` is the one choke
+    // point every mutation already goes through and a second place that
+    // redraws a pane is a second place to forget to.
+    const dec = $('dzDecals');
+    dec.innerHTML = '';
+    DECALS.forEach((k, n) => {
+      const b = document.createElement('button');
+      b.className = this.#decal === n ? 'on' : '';
+      const g = document.createElement('span');
+      g.className = 'glyph';
+      // The decal itself, not a grey square: nine identical swatches beside
+      // nine names is nine names doing all the work.
+      const thumb = windowThumb(k.key);
+      if (thumb) {
+        g.style.backgroundImage = `url(${thumb.url})`;
+        // The file is a strip of variants side by side, so this shows the
+        // first one rather than all of them squashed into 20 pixels.
+        g.style.backgroundSize = `${thumb.variants * 100}% 100%`;
+      }
+      b.append(g, document.createTextNode(k.name));
+      b.onclick = () => {
+        // Arming a decal puts the brush down: two tools cannot both own a tap.
+        this.#decal = this.#decal === n ? null : n;
+        if (this.#decal !== null) this.#brushSlot = null;
+        this.#refresh();
+      };
+      dec.appendChild(b);
+    });
+    const painted = (this.#design.decal ?? []).length;
+    $('dzDecalCount').textContent = painted
+      ? `${painted} cell${painted === 1 ? '' : 's'}` : 'none';
+    ($('dzDecalClear') as HTMLButtonElement).disabled = !painted;
+
     // asked about the two surfaces nobody could choose before: the frame wore
     // the plating's finish and every part wore one hard coded greeble, which
     // did not matter while a hull was a sealed skin and does now, because a
@@ -2746,7 +2850,7 @@ export class Designer {
       for (const k of SECTIONS) this.#design.sections[k] = 0;
       this.#refresh();
     };
-    const tab = (id: string, which: 'parts' | 'armour' | 'stats' | 'frame') => {
+    const tab = (id: string, which: 'parts' | 'armour' | 'decor' | 'stats' | 'frame') => {
       $(id).onclick = () => {
         this.#tab = which;
         // A tab tapped while the sheet is collapsed opens it, because
@@ -2757,7 +2861,11 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
-    tab('dzTabFrame', 'frame');
+    tab('dzTabFrame', 'frame'); tab('dzTabDecor', 'decor');
+    $('dzDecalClear').onclick = () => {
+      this.#design.decal = [];
+      this.#refresh();
+    };
     this.#bindSlice();
     this.#syncSaveButton();
     // Collapse the sheet so the model has the screen. A phone control: at desk
@@ -2835,6 +2943,7 @@ export class Designer {
     for (const [id, pane, which] of [
       ['dzTabParts', 'dzPaneParts', 'parts'],
       ['dzTabArmour', 'dzPaneArmour', 'armour'],
+      ['dzTabDecor', 'dzPaneDecor', 'decor'],
       ['dzTabFrame', 'dzPaneFrame', 'frame'],
       ['dzTabStats', 'dzPaneStats', 'stats'],
     ] as const) {
@@ -2999,6 +3108,8 @@ export class Designer {
        *  harness never sets either. */
       brushSlot: this.#brushSlot,
       tint: (this.#design.tint ?? []).length,
+      decal: (this.#design.decal ?? []).length,
+      decalArmed: this.#decal,
       hist: this.#hist,
     };
   }

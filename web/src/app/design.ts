@@ -207,6 +207,60 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'crate', name: 'Container' },
 ];
 
+/**
+ * The decals a player can PAINT onto plating, and the order is a wire value.
+ *
+ * Windows have always been derived: a plate cell whose inner neighbour belongs
+ * to a bridge wears the bridge viewport, and that is what gives a stock hull
+ * its windows for free. What it cannot do is let anybody put one anywhere:
+ * derive a hull with no berth against its skin and it has no cabin panes, and
+ * there was no way to say otherwise.
+ *
+ * So this is the OTHER half, and both halves stay. A hand painted decal is
+ * consulted first and a cell without one falls through to the derivation, so
+ * every hull in the fleet looks exactly as it did and a player can still put a
+ * porthole where they want one.
+ *
+ * The INDEX is what a design stores, so rows may be appended and never
+ * reordered: moving one would turn every saved bridge into a cargo door.
+ * `key` is the same key `WINDOW_VARIANTS` and the texture files use.
+ */
+export const DECALS: ReadonlyArray<{ key: string; name: string }> = [
+  { key: 'panes', name: 'Cabin panes' },
+  { key: 'porthole', name: 'Porthole' },
+  { key: 'strip', name: 'Strip window' },
+  { key: 'bridge', name: 'Bridge viewport' },
+  { key: 'promenade', name: 'Promenade' },
+  { key: 'beacons', name: 'Running lights' },
+  { key: 'louvre', name: 'Radiator louvre' },
+  { key: 'cargo', name: 'Cargo door' },
+  { key: 'hangar', name: 'Hangar mouth' },
+];
+/** Room to append to `DECALS` without moving a stored entry's cell. */
+export const DECAL_STRIDE = 16;
+export const decalKey = (n: number): string | null =>
+  DECALS[n % DECAL_STRIDE]?.key ?? null;
+
+/**
+ * Which decal a player painted on each cell, if any.
+ *
+ * `Design.decal` is a wire format beside `plate`, `cut` and `tint`: one
+ * integer per cell as `cell * DECAL_STRIDE + kind`, so a cell carries its
+ * decal with it across a lattice change and a design record stays inside the
+ * library's budget. Cosmetic, exactly like the brush: never hashed, never
+ * sent to the core, so two players who decorated the same hull differently
+ * cannot read as a desync.
+ */
+export const decalMap = (d: Design): Map<number, string> => {
+  const out = new Map<number, string>();
+  for (const v of d.decal ?? []) {
+    if (!Number.isInteger(v) || v < 0) continue;
+    const key = decalKey(v % DECAL_STRIDE);
+    if (key) out.set((v / DECAL_STRIDE) | 0, key);
+  }
+  return out;
+};
+
 export const DEFAULT_FINISH = 'plate';
 /**
  * What the surfaces that are not armour wear until asked otherwise.
@@ -2910,6 +2964,16 @@ export interface Design {
   frameFinish?: string;
   partFinish?: string;
   /**
+   * The decals a player painted, as `cell * DECAL_STRIDE + kind`.
+   *
+   * The same shape as `tint` and for the same reasons: one integer per cell
+   * rather than a pair, measured against the same 64 KB budget, and it
+   * migrates across a lattice change with its kind still on it. Absent means
+   * a hull decorated entirely by derivation, which is every design that
+   * predates this and every stock hull.
+   */
+  decal?: number[];
+  /**
    * What the DRIVES and the GUNS are made of, apart from everything else.
    *
    * `partFinish` was ONE answer for all machinery, on the grounds that a
@@ -3164,7 +3228,11 @@ export const rasterSig = (d: Design): string =>
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
-  + drawSig(d.plate) + '/' + drawSig(d.cut) + '/' + drawSig(d.tint);
+  // The decals are in the key because the window mesh is built in the same
+  // pass the plating is: a hull differing only in a painted porthole would
+  // otherwise be handed the raster of the hull without one.
+  + drawSig(d.plate) + '/' + drawSig(d.cut) + '/' + drawSig(d.tint)
+  + '/' + drawSig(d.decal);
 
 const drawSig = (list: readonly number[] | undefined): string => {
   if (!list || !list.length) return '0';
@@ -4808,27 +4876,32 @@ export function migrateDesign(d: Design): Design {
     }
     return [...out].sort((a, b) => a - b);
   };
-  // The brush carries its SLOT with it: an entry is `cell * 8 + slot`, so the
-  // cell moves and the colour stays on it.
-  const moveTint = (list: number[] | undefined): number[] | undefined => {
+  // A tagged list carries its TAG with it: an entry is `cell * stride + tag`,
+  // so the cell moves onto the new lattice and the colour, or the decal, stays
+  // on it. One function for both, because two copies of this arithmetic are
+  // two chances to migrate a brush stroke correctly and a window not at all.
+  const moveTagged = (list: number[] | undefined, stride: number)
+  : number[] | undefined => {
     if (!list?.length) return list;
     const out = new Map<number, number>();
     for (const v of list) {
-      const n = (v / 8) | 0;
+      const n = (v / stride) | 0;
       if (!Number.isInteger(v) || v < 0 || n >= f.nx * f.ny * f.nz) continue;
       const i = n % f.nx, j = ((n / f.nx) | 0) % f.ny, k = (n / (f.nx * f.ny)) | 0;
       out.set(idx3(to, axis(i, f.nx, to.nx), axis(j, f.ny, to.ny),
-        axis(k, f.nz, to.nz)), v & 7);
+        axis(k, f.nz, to.nz)), v % stride);
     }
-    return [...out].sort((a, b) => a[0] - b[0]).map(([n, slot]) => n * 8 + slot);
+    return [...out].sort((a, b) => a[0] - b[0]).map(([n, tag]) => n * stride + tag);
   };
 
   const next: Design = { ...d, lattice: stamp };
   const plate = move(d.plate), cut = move(d.cut);
-  const tint = moveTint(d.tint);
+  const tint = moveTagged(d.tint, 8);
+  const decal = moveTagged(d.decal, DECAL_STRIDE);
   if (plate) next.plate = plate;
   if (cut) next.cut = cut;
   if (tint) next.tint = tint;
+  if (decal) next.decal = decal;
   return next;
 }
 

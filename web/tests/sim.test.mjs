@@ -1536,6 +1536,81 @@ test('a surface per colour slot, and machinery split by what it does', async () 
       .map(i => H.SURF_NAMES[i]).join(', ')})`);
 });
 
+test('a window can be painted where no room put one', async () => {
+  // Windows are DERIVED: a plate cell whose inner neighbour belongs to a
+  // bridge wears the bridge viewport, which is what gives every stock hull its
+  // viewports without anyone placing one. What that cannot do is let a player
+  // put a window anywhere, and there was no way to say otherwise.
+  //
+  // Both halves stay. A painted cell is consulted first and everything else
+  // falls through to the derivation, so this test asserts BOTH: the stock
+  // hull is unchanged, and the painted cell appears.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const D = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  D.useCore(() => null);
+
+  const base = D.stockFor('terran_frigate');
+  const before = H.hullMesh(base).windows;
+  const count = w => Object.fromEntries(w.map(x => [x.key, x.cellOf.length]));
+  const b = count(before);
+  assert.ok(!b.bridge, 'this hull was chosen because it derives no bridge viewport');
+  assert.ok(Object.keys(b).length, 'the derived pass drew nothing at all');
+
+  // A plate cell exposed to the outside that no derived window already claims,
+  // so what turns up afterwards can only be the painted one.
+  const L = D.latOf(D.frameFor('terran_frigate'));
+  const { grid } = D.rasterise(base);
+  const had = new Set(before.flatMap(w => [...w.cellOf]));
+  let cell = -1;
+  for (let n = 0; n < grid.length && cell < 0; n++) {
+    if (grid[n] !== D.Mat.Plate || had.has(n)) continue;
+    const i = n % L.nx;
+    if (i + 1 < L.nx && !grid[n + 1]) cell = n;
+  }
+  assert.ok(cell >= 0, 'no bare exposed plate cell to paint on');
+
+  const kind = D.DECALS.findIndex(k => k.key === 'bridge');
+  const painted = { ...base, decal: [cell * D.DECAL_STRIDE + kind] };
+  const after = count(H.hullMesh(painted).windows);
+  assert.ok(after.bridge > 0, 'a painted bridge viewport drew no faces');
+  assert.ok(H.hullMesh(painted).windows
+    .some(w => w.key === 'bridge' && [...w.cellOf].includes(cell)),
+    'the decal landed on a cell other than the one it was painted on');
+  // The derivation is untouched: every kind the stock hull had, it still has,
+  // at the same count.
+  for (const [k, n] of Object.entries(b)) {
+    assert.equal(after[k], n, `painting a decal changed the derived ${k} count`);
+  }
+
+  // The cache is keyed on the design, so a hull differing only in a decal
+  // cannot be handed the raster of the hull without one.
+  assert.notEqual(D.rasterSig(base), D.rasterSig(painted));
+
+  // A cell index means nothing without its lattice, so a decal migrates with
+  // its KIND still on it, exactly as a brush stroke migrates with its colour.
+  const moved = D.migrateDesign({ ...painted, classKey: 'terran_cruiser',
+    lattice: [L.nx, L.ny, L.nz] });
+  assert.equal(moved.decal.length, 1);
+  assert.equal(moved.decal[0] % D.DECAL_STRIDE, kind,
+    'a decal lost its kind crossing a lattice');
+  const to = D.latOf(D.frameFor('terran_cruiser'));
+  assert.ok(((moved.decal[0] / D.DECAL_STRIDE) | 0) < to.cells,
+    'a migrated decal points off the end of its new lattice');
+
+  console.log(`  decals: ${Object.entries(b).map(([k, n]) => `${k} ${n}`).join(', ')}`
+    + ` derived, and one painted bridge viewport adds ${after.bridge} faces`);
+});
+
 test('a design file carries every finish it was saved with', async () => {
   // A design file is written whole and read back FIELD BY FIELD, so the
   // reader's whitelist is the actual contract. A field left off it is a field
@@ -1561,6 +1636,7 @@ test('a design file carries every finish it was saved with', async () => {
     finish: 'hex', frameFinish: 'cracked', partFinish: 'tread',
     driveFinish: 'ribbed', weaponFinish: 'battered',
     slotFinish: ['plate', null, 'weave', null, null, null, null, 'crate'],
+    decal: [16 * 3 + 1, 16 * 900 + 5],
   };
   const back = F.designFromJson(F.designToJson(d, 'round trip'));
   assert.ok(back.design, `a file this build wrote came back refused: ${back.why}`);
@@ -1569,6 +1645,8 @@ test('a design file carries every finish it was saved with', async () => {
   }
   assert.deepEqual(back.design.slotFinish, d.slotFinish,
     'the per slot finishes were lost on the way through a file');
+  assert.deepEqual(back.design.decal, d.decal,
+    'the painted decals were lost on the way through a file');
 
   // And a file is untrusted input: a slot list full of rubbish comes back as
   // nulls rather than as whatever was in it, and one bad entry does not cost

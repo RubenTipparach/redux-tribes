@@ -23,7 +23,7 @@
  * lattice write off the end of an array.
  */
 import {
-  latOf, migrateDesign, paintFor,
+  latOf, migrateDesign, paintFor, DECAL_STRIDE, decalKey,
   type Lat, FRAMES, SECTIONS, SOCKET_KINDS, frameFor, moduleById,
   socketsOf, stockFor, stockFrameFor,
   type Design, type FrameDef, type Placement, type Socket, type SocketKind,
@@ -359,6 +359,15 @@ export function designFromJson(text: string): { design?: Design; name?: string; 
     ? [...new Set(tint.filter(n => typeof n === 'number' && Number.isInteger(n)
       && n >= 0 && n < L.cells * 8))].sort((a, b) => a - b)
     : [];
+  // The decals, bounded the same way against their own stride. A kind this
+  // build has never heard of is dropped rather than taken, because the index
+  // is what names the texture and an unknown one draws nothing.
+  const decal = src['decal'];
+  if (Array.isArray(decal)) {
+    out.decal = [...new Set(decal.filter(n => typeof n === 'number'
+      && Number.isInteger(n) && n >= 0 && n < L.cells * DECAL_STRIDE
+      && decalKey(n % DECAL_STRIDE) !== null))].sort((a, b) => a - b);
+  }
   if (typeof src['faction'] === 'string') out.faction = src['faction'];
   if (typeof src['paint'] === 'number' && Number.isFinite(src['paint']))
     out.paint = src['paint'] >>> 0;

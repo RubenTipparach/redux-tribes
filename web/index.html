@@ -925,6 +925,26 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
   letter-spacing:.2em; text-transform:uppercase; color:var(--muted); margin:14px 0 6px; }
 .dzgrp:first-child { margin-top:0; }
 .dznote { font-size:11px; line-height:1.5; color:var(--muted); margin:0 0 10px; }
+/* The elaboration, folded away.
+   A rail is for controls, not for reading. What a control DOES stays on
+   screen as a label; why it works that way goes behind this, which is a
+   TAP rather than a hover, because a phone has no hover and a tooltip
+   nothing can open is a tooltip that does not exist. */
+.dzwhy { display:inline-flex; align-items:center; justify-content:center;
+  width:14px; height:14px; margin-left:6px; border-radius:50%;
+  border:1px solid var(--line); color:var(--muted); background:none;
+  font-family:system-ui,sans-serif; font-size:9px; font-weight:700;
+  letter-spacing:0; line-height:1; cursor:help; vertical-align:middle;
+  padding:0; user-select:none; }
+/* Drawn at 14px and TAPPED at 32: a supplementary control still has to be
+   hittable by thumb, and growing the circle to suit a finger would make a
+   footnote marker louder than the heading it sits on. */
+.dzwhy { position:relative; }
+.dzwhy::after { content:''; position:absolute; inset:-9px; }
+.dzwhy:hover, .dzwhy:focus-visible { color:var(--cyan); border-color:var(--cyan); }
+.dzwhy.on { color:var(--cyan); border-color:var(--cyan); }
+.dzmore { font-size:11px; line-height:1.5; color:var(--muted); margin:-6px 0 10px;
+  padding:6px 8px; border-left:2px solid var(--line); background:#ffffff08; }
 .dzrow { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:4px; }
 .dzsock { padding:5px 8px; font-size:10px; letter-spacing:.04em;
   font-family:ui-monospace,Menlo,Consolas,monospace; text-transform:none;
@@ -955,6 +975,18 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzslider .pc { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
   color:var(--cyan); text-align:right; }
 
+/* One row per decal, because a decal has a NAME and a row of unlabelled
+   chips would be nine pictures nobody can tell apart at 20px. */
+.dzdecals { display:grid; gap:4px; }
+.dzdecals button { display:flex; align-items:center; gap:9px; width:100%;
+  text-align:left; padding:7px 9px; min-height:36px; text-transform:none;
+  letter-spacing:normal; font-size:12px; }
+.dzdecals button.on { border-color:var(--cyan); color:var(--cyan); }
+/* The decal's own lit pattern, on the dark ground it is drawn against, so a
+   player picks a picture rather than a word. */
+.dzdecals .glyph { flex:0 0 auto; width:26px; height:18px; border-radius:2px;
+  border:1px solid var(--line); background:#05070b no-repeat left center;
+  background-size:cover; }
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 /* A surface row carries the COLOUR it is about, so eight dropdowns are eight
    answers about eight swatches rather than eight rows called "Slot n". */
@@ -1279,6 +1311,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <nav id="dzTabs">
       <button id="dzTabParts">Parts</button>
       <button id="dzTabArmour">Armour</button>
+      <button id="dzTabDecor">Decorate</button>
       <!-- Architect only. The rail, its tab bar and its bottom sheet already
            work on a phone, so a fourth pane inherits that rather than being a
            second screen that has to learn it again. -->
@@ -1313,53 +1346,26 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     </div>
 
     <div id="dzPaneArmour" class="dzpane hidden">
-      <div class="dzgrp">Exterior</div>
+      <div class="dzgrp" id="dzModeHead">Exterior</div>
       <div id="dzMode" class="dzchips"></div>
       <p class="dznote" id="dzModeNote"></p>
-      <div class="dzgrp">Layers</div>
-      <p class="dznote">Plate is authored one face at a time. Layers set what a
-      face absorbs, and a gun with penetration is scored against fewer of them,
-      so a belt that stops a beam is porous to a shell. The frame under it is
-      not editable in either mode.</p>
+      <div class="dzgrp">Layers<button type="button" class="dzwhy" aria-expanded="false" title="Plate is authored one face at a time. A gun with penetration is scored against fewer layers, so a belt that stops a beam is porous to a shell. The frame under it is not editable.">?</button></div>
+      <p class="dznote">What each face of plate absorbs.</p>
       <div id="dzArmour"></div>
-      <div class="dzgrp">Faction palette</div>
-      <p class="dznote">Whose eight swatches this hull is painted from. Armour
-      only: everything else on the ship is coloured by what it DOES, so a drive
-      is orange and a gun is red whoever built them, which is what makes an
-      unfamiliar hull readable without a legend. Cosmetic either way: never
-      hashed, never sent to the core, so two players who painted the same hull
-      differently cannot read as a desync.</p>
+      <div class="dzgrp">Faction palette<button type="button" class="dzwhy" aria-expanded="false" title="Everything that is not armour is coloured by what it DOES, so a drive is orange and a gun is red on anybody's ship. Cosmetic: never hashed, never sent to the core.">?</button></div>
+      <p class="dznote">Armour only. Parts keep their job colour.</p>
       <div id="dzFactions" class="dzchips"></div>
-      <div class="dzgrp">Scheme preset</div>
-      <p class="dznote">Eight presets, one per swatch, and each is a WHOLE
-      scheme rather than one colour: the swatch you pick becomes the broad
-      plating and the deck, the belt, the bow flash and the rest move round the
-      palette with it. That is what makes every swatch land somewhere on the
-      ship. To colour ONE panel rather than the ship, use the brush below.</p>
+      <div class="dzgrp">Scheme preset<button type="button" class="dzwhy" aria-expanded="false" title="The swatch you pick becomes the broad plating, and the deck, belt, bow flash and the rest move round the palette with it, so every swatch lands somewhere. To colour one panel instead, use the brush.">?</button></div>
+      <p class="dznote">Each swatch is a whole scheme.</p>
       <div id="dzPaint"></div>
-      <div class="dzgrp">Surfaces</div>
-      <p class="dznote">A slot is a colour AND what it is made of, because the
-      two are one decision: the same pale grey is a composite panel or bare
-      rolled steel depending on the surface under it. Every slot has its own
-      row, next to the colour it is about, and "as hull" leaves it on whatever
-      the hull wide finish is. Under them are the four things that are not
-      armour: the frame, and machinery split by what it DOES, because a drive
-      bell is a cast nozzle, a turret is a machined gun and a barracks is a
-      box. Cosmetic like the paint: never hashed, never sent to the core.</p>
+      <div class="dzgrp">Surfaces<button type="button" class="dzwhy" aria-expanded="false" title="One row per colour slot, then the frame and the machinery. As hull leaves a slot on whatever the hull wide finish is. Cosmetic like the paint: never hashed, never sent to the core.">?</button></div>
+      <p class="dznote">What each colour is made of.</p>
       <div id="dzInner"></div>
       <div class="dzgrp">Colour key</div>
       <div id="dzKey" class="dzkeys"></div>
 
-      <div class="dzgrp">Draw armour</div>
-      <p class="dznote">One slab at a time, on top of whatever the sliders
-      built. Drag to paint a run. You are drawing plate and nothing else: the
-      frame and the fitted parts are shown so you can work around them, and
-      neither can be touched. Thick cuts the hull into deeper slabs rather than
-      overlapping slices, so there are fewer of them to walk through and a run
-      paints the whole depth. The slab you are standing in is boxed on the
-      model. Mirror is off until you ask for it, and only x and y. A turret
-      swings through its own box, hatched in red: nothing may be drawn there,
-      and the generated exterior carves round it.</p>
+      <div class="dzgrp">Draw armour<button type="button" class="dzwhy" aria-expanded="false" title="One slab at a time, over whatever the sliders built. Plate only: the frame and the fitted parts are shown so you can work round them and cannot be touched. Thick cuts deeper slabs, so a run paints the whole depth. The red hatched box is a turret's sweep and nothing may go in it.">?</button></div>
+      <p class="dznote">Drag to paint a run of plate.</p>
       <div class="dzslice">
         <div class="row">
           <button id="dzSliceDown">&lt;</button>
@@ -1391,6 +1397,21 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
           <span class="s" id="dzSliceSpan"></span>
         </div>
         <div class="s" id="dzDrawCount"></div>
+      </div>
+    </div>
+
+    <!-- Things STUCK ON the hull, as opposed to the hull itself. Windows are
+         derived from the room behind the plating and always will be, because
+         that is what gives a stock hull its viewports for free; this is the
+         other half, where a player puts one where they want it. -->
+    <div id="dzPaneDecor" class="dzpane hidden">
+      <div class="dzgrp">Decal<button type="button" class="dzwhy" aria-expanded="false" title="Windows are normally derived from the room behind the plating, which is what gives every stock hull its viewports. A painted decal overrides that on one cell, on every face of it that is exposed. Cosmetic: never hashed, never sent to the core.">?</button></div>
+      <p class="dznote">Pick one, then tap the hull.</p>
+      <div id="dzDecals" class="dzdecals"></div>
+      <div class="dzgrp">Painted</div>
+      <div class="dzrow">
+        <span class="k" id="dzDecalCount">none</span>
+        <button id="dzDecalClear">Clear all</button>
       </div>
     </div>
 
@@ -1453,11 +1474,9 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
        one part of a framed hull nothing needs. -->
   <div id="scCard" class="hidden"></div>
   <aside id="scSide">
-    <div class="sect">Hit volumes</div>
+    <div class="sect">Hit volumes<button type="button" class="dzwhy" aria-expanded="false" title="A volume soaks its own share of a hit and passes the rest through to the hull, so what is left of each one decides where the next shot lands.">?</button></div>
     <div id="scList"></div>
-    <p class="hint">Every shot goes into one of these. A volume soaks its own
-      share of the damage and passes the rest through to the hull, so what is
-      left of each one is what decides where the next hit lands.</p>
+    <p class="hint">Every shot goes into one of these.</p>
   </aside>
 </div>
 
