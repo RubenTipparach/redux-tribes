@@ -91,10 +91,13 @@ const WINDOW_DEPTH = 5;
  * skin. On a thin belt that is a one cell corridor between the plate and the
  * cabin, which is a real thing on a real ship and was a wall on this one:
  * the Rogue destroyer seated nine barracks against its flanks and drew
- * fifteen windows on them. One cell, and only after the plating has been
- * crossed, so a window still means a room immediately behind this skin.
+ * fifteen windows on them. Two cells, and only after the plating has been
+ * crossed: a corridor and a bulkhead, which is a fifth of a unit on a
+ * frigate, so a window still means a room immediately behind this skin.
+ * It was one cell until the owner asked for more windows on the flanks,
+ * and two lights the berths a lane could not quite seat against the belt.
  */
-const WINDOW_GAP = 1;
+const WINDOW_GAP = 2;
 
 export const SURF_NAMES: readonly string[] =
   ['plate', 'trim', 'structure', 'frame', 'part'];
@@ -452,7 +455,32 @@ export function hullMesh(d: Design, bare = false): HullMesh {
    * Plate only. A window in the middle of a drive bell would be a window on a
    * part that is standing outside the hull, which is a hole in an engine.
    */
+  /**
+   * Which window a face wears, with the two rules the owner set on top of
+   * the room rule below.
+   *
+   * No window looks UP or DOWN. A deck is walked on and a keel is what the
+   * ship stands on, and a Homeworld hull carries its lights along its flanks
+   * and its ends; the deck and belly used to carry more panes than the
+   * flanks put together, which is a ship lit like a greenhouse.
+   *
+   * A flank window has its TWIN on the other flank. The lanes seat a berth
+   * pair mirrored, but the stock fits are not always a pair (a barracks to
+   * port and an airlock to starboard on the Rogue destroyer), so one flank
+   * lit and the other dark. The rooms are laid out in pairs even where the
+   * fit is not: a flank face with no room behind it wears whatever the face
+   * across from it wears.
+   */
   const windowAt = (
+    i: number, j: number, k: number, dx: number, dy: number, dz: number,
+  ): string | null => {
+    if (dy !== 0) return null;
+    const own = roomBehind(i, j, k, dx, dy, dz);
+    if (own || dx === 0) return own;
+    return roomBehind(NX - 1 - i, j, k, -dx, dy, dz);
+  };
+  /** The room rule: what a PLATE cell has immediately behind it. */
+  const roomBehind = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
     const n = idx(i, j, k);

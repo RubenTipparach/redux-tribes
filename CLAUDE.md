@@ -1406,15 +1406,26 @@ and a container ship with twelve boxes in it showed six door panels.
 window still means "a room immediately behind this skin" rather than "a room
 somewhere along this line". Counts went from single digits to hundreds.
 
-**And it may look across ONE cell of corridor.** A room is a box and a hull
+**No window looks UP or DOWN, and every flank window has its twin.** The
+owner's rule: a deck is walked on and a keel is what the ship stands on, and a
+Homeworld hull carries its lights along its flanks and its ends. The deck and
+belly used to carry more panes than the flanks put together. And the stock
+fits are not always a pair (a barracks to port, an airlock to starboard), so
+one flank lit and the other stayed dark; a flank face with no room behind it
+now wears whatever the face across from it wears, because the rooms are laid
+out in pairs even where the fit is not. Both live in `windowAt`, on top of
+the room rule.
+
+**And it may look across TWO cells of corridor.** A room is a box and a hull
 is an ellipse, so a box seated against a curved flank touches it along one
 line and stands a cell off it above and below, and the enclosed seat pulls it
 inboard until its corners are inside the skin. On a thin belt that is a one
 cell void between the plate and the cabin, and a march that stopped at the
 first empty cell called it a wall: the Rogue destroyer seated nine barracks
-against its flanks and drew fifteen windows on them. `WINDOW_GAP` is one
-cell, allowed only after the plating has been crossed and never before a
-second skin, so a window still means a room immediately behind it.
+against its flanks and drew fifteen windows on them. `WINDOW_GAP` is two
+cells (a corridor and a bulkhead, a fifth of a unit on a frigate), allowed
+only after the plating has been crossed and never before a second skin, so a
+window still means a room immediately behind it.
 
 **Two decals are face specific, and `WINDOW_FACE` is what says so.** A
 container's doors are on its END and a radiator's slats run down a FLANK, so
