@@ -1,0 +1,289 @@
+<title>Homeworld Fleet Direction</title>
+<meta name="description" content="A direction for the four navies and the civil trades drawn from Homeworld's language: faceted sections, hard chines, stepped sterns, engine blocks and a striped livery, sketched in side and plan per navy on the real sections, with what each one costs the rasteriser. The decision is the direction, before a hull is cut.">
+<style>
+/* Self contained: no network, no remote fonts, no CDN (mockup rule 2.1). */
+:root{
+  --ground:#0A0E14; --panel:#111823; --panel2:#0D131D; --ink:#D8E2EC; --muted:#7C8B9D;
+  --cyan:#35C7FF; --orange:#FA6A0A; --green:#4CD97B; --amber:#FFC24B; --line:#1E2A3A;
+  --mono:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  --ui:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0 16px 96px;background:var(--ground);color:var(--ink);
+  font-family:var(--ui);font-size:15px;line-height:1.6;-webkit-text-size-adjust:100%}
+.wrap{max-width:1040px;margin:0 auto}
+header{padding:40px 0 20px;border-bottom:1px solid var(--line);margin-bottom:26px}
+h1{margin:0 0 6px;font-size:clamp(24px,5vw,38px);line-height:1.15;letter-spacing:-.02em}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:#1B6C8C;margin:0 0 12px}
+.lede{margin:0;color:var(--muted);font-size:17px;max-width:70ch}
+h2{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--cyan);margin:38px 0 6px}
+h2 .num{color:#1B6C8C;margin-right:8px}
+p.say{margin:0 0 14px;color:var(--muted);max-width:70ch}
+.note{border-left:2px solid var(--cyan);background:#0E1622;padding:10px 14px;margin:14px 0;
+  font-size:14px;color:var(--muted)}
+.note b{color:var(--ink)}
+.note.warn{border-left-color:var(--amber)}
+code{font-family:var(--mono);font-size:.9em;color:var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:10px 0}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);font-weight:400}
+td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+.scroll-x{overflow-x:auto}
+.navy{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px;margin:14px 0}
+.navy h3{margin:0 0 4px;font-size:17px}
+.navy .who{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.views{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+@media (max-width:720px){.views{grid-template-columns:1fr}}
+.view{background:#070a0f;border:1px solid var(--line);border-radius:6px;padding:6px}
+.view .cap{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:2px 4px 6px}
+svg{display:block;width:100%;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:8px 0 0}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:6px}
+ul{margin:6px 0 14px 22px;color:var(--muted)}
+li b{color:var(--ink)}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="kicker">Fallen Tribes &middot; the fleet's look &middot; for approval</p>
+  <h1>Homeworld fleet direction</h1>
+  <p class="lede">The Star Trek dress came off. The owner wants the ships designed by Homeworld's aesthetic instead: faceted hulls with hard chines, long spines, stepped sterns with exposed engine blocks, radiator fins, and a striped livery that reads at map range. This page is the direction, sketched on the real sections, before a hull is cut. Approve the direction and the navies get built; say which navy reads wrong and it is redrawn here first.</p>
+</header>
+
+<h2><span class="num">01</span>What Homeworld looks like, in five words</h2>
+<p class="say">Faceted, not rounded. Homeworld hulls are wedges and prisms: a flat deck meeting a flat flank on a hard chine, a prow that is a blade rather than a nose, a stern that steps down to a block of engine bells with radiator fins standing off it. Long. Every capital ship is a spine with modules bolted along it, so a hull reads as several boxes in a row rather than one lozenge. Striped: one base colour, one stripe colour, laid as a few long bands and a chevron on the prow, which is how a fleet is told apart at the distance the game is played at. Asymmetric where it is honest: a sensor mast on one side, a hangar mouth on the other. And nothing organic: no domes, no saucers, no cylinders on pylons.</p>
+
+<div class="note"><b>The reference.</b> <code>docs/homeworld-design.md</code> is the language read out of <i>The Art of Homeworld</i>: the two panelling methods (enhance the form, sabotage the form), colour as information against colour as pageantry, the forms (chamfered boxes, wedge prows, stepped sterns with engine blocks, small bridges aft, plate fins) and the navy mapping this page draws. The page is the picture; the document is why.</div>
+
+<div class="note"><b>Why the current fleet cannot get there by decor alone.</b> Every hull is an ELLIPSE at every station: the shell, the ribs and the seating all use one <code>insideHull</code> test with the same ellipse. Bolting facets onto a lozenge is a lozenge with facets stuck on. The section itself has to become a faceted one, which is a change to one predicate rather than to seventeen frames. The slab the owner pointed at on the Terran cruiser was this ellipse: wide and flat, its top twelve cells across quantises to a plateau, and painted as deck it is a block on top of the ship whatever colour it is.</div>
+
+<h2><span class="num">02</span>The section: a chamfered box, per navy</h2>
+<p class="say">One function replaces the ellipse. A station is a superellipse <code>|x/a|^n + |y/b|^n &le; 1</code> with a per navy exponent, plus an optional chamfer: Terran squarish with wide chamfers (a flat deck narrower than the beam, meeting the flank on a chine), Karisen a taller diamond, Rogue a broad low prism, Benefactor a tall hexagon, civil a plain box. The half extents stay what <code>NAVY_SECTION</code> says, so the ladder and every sphere gate stand.</p>
+<div class="scroll-x"><table>
+<tr><th>navy</th><th>half beam &times; half depth (cells)</th><th>section now</th><th>section proposed</th><th>reads as</th></tr>
+<tr><td>Terran</td><td class="n">12 &times; 6.2</td><td>flat ellipse</td><td>n = 4, deck chamfer 0.35 of the beam</td><td>a wide wedge with a chine, no plateau</td></tr>
+<tr><td>Karisen</td><td class="n">8 &times; 7.4</td><td>near circle</td><td>n = 1.4, keel edge</td><td>a diamond spine, blade below</td></tr>
+<tr><td>Rogue</td><td class="n">12.4 &times; 5.8</td><td>flat ellipse</td><td>n = 3, no chamfer</td><td>a broad low prism, a brick with attitude</td></tr>
+<tr><td>Benefactor</td><td class="n">6.8 &times; 11</td><td>tall ellipse</td><td>n = 2.5, flank chamfer 0.4 of the depth</td><td>a tall hexagon, a blade standing on edge</td></tr>
+<tr><td>Civil</td><td class="n">8.5 &times; 8</td><td>near square ellipse</td><td>n = 6</td><td>a box, which is what it is</td></tr>
+</table></div>
+
+<h2><span class="num">03</span>The navies, side and plan</h2>
+<p class="say">Sketched on the real proportions: every navy's length and beam are the section's, the stations are the same fractions the profile authors, and the guns are drawn where the frames put them so nothing here stands in front of one. Colours are the stock paints with a stripe swatch from each palette.</p>
+
+<div class="navy">
+  <h3>Terran</h3>
+  <p class="who">Hiigaran: a long flat wedge, chined, stepped stern, engine block, twin radiator fins</p>
+  <div class="views">
+    <div class="view"><div class="cap">side</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Terran side">
+        <polygon points="14,48 40,34 200,30 262,40 262,56 200,62 40,60" fill="#124E89" stroke="#0B2E52" stroke-width="1"/>
+        <polygon points="14,48 40,60 40,34" fill="#0B2E52"/>
+        <polygon points="200,30 262,40 262,56 200,62" fill="#0B7FC4"/>
+        <rect x="18" y="40" width="20" height="16" fill="#37475A"/>
+        <rect x="8" y="42" width="10" height="4" fill="#FA6A0A"/><rect x="8" y="50" width="10" height="4" fill="#FA6A0A"/>
+        <polygon points="44,34 70,22 96,22 96,34" fill="#0B2E52"/>
+        <polygon points="44,60 70,72 96,72 96,60" fill="#0B2E52"/>
+        <polygon points="120,30 200,30 200,36 120,36" fill="#D8E2EC"/>
+        <polygon points="236,38 262,40 262,44 236,44" fill="#F2A93B"/>
+        <rect x="150" y="44" width="30" height="5" fill="#0B2E52"/><rect x="100" y="44" width="30" height="5" fill="#0B2E52"/>
+        <circle cx="110" cy="47" r="1.2" fill="#FFF2CC"/><circle cx="118" cy="47" r="1.2" fill="#FFF2CC"/><circle cx="126" cy="47" r="1.2" fill="#FFF2CC"/>
+        <circle cx="158" cy="47" r="1.2" fill="#FFF2CC"/><circle cx="166" cy="47" r="1.2" fill="#FFF2CC"/><circle cx="174" cy="47" r="1.2" fill="#FFF2CC"/>
+        <rect x="128" y="26" width="8" height="5" fill="#F03B3B"/><rect x="216" y="30" width="8" height="5" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">plan</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Terran plan">
+        <polygon points="14,45 40,22 180,18 262,45 180,72 40,68" fill="#124E89" stroke="#0B2E52"/>
+        <polygon points="40,30 180,26 240,45 180,64 40,60" fill="#0B7FC4"/>
+        <polygon points="120,32 200,30 200,36 120,38" fill="#D8E2EC"/>
+        <polygon points="120,52 200,54 200,60 120,58" fill="#D8E2EC"/>
+        <polygon points="236,40 262,45 236,50" fill="#F2A93B"/>
+        <rect x="18" y="36" width="22" height="18" fill="#37475A"/>
+        <polygon points="60,22 100,10 104,22" fill="#0B2E52"/><polygon points="60,68 100,80 104,68" fill="#0B2E52"/>
+        <rect x="128" y="42" width="8" height="6" fill="#F03B3B"/><rect x="216" y="42" width="8" height="6" fill="#F03B3B"/>
+        <rect x="90" y="24" width="7" height="5" fill="#F03B3B"/><rect x="90" y="61" width="7" height="5" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">section</div>
+      <svg viewBox="0 0 120 70" role="img" aria-label="Terran section">
+        <polygon points="12,42 32,22 88,22 108,42 88,54 32,54" fill="#124E89" stroke="#0B2E52"/>
+        <polygon points="32,22 88,22 80,26 40,26" fill="#0B7FC4"/>
+        <polygon points="12,42 32,54 88,54 108,42 104,44 88,50 32,50 16,44" fill="#0B2E52"/>
+        <text x="60" y="66" fill="#7C8B9D" font-size="7" text-anchor="middle" font-family="monospace">12 x 6.2, n = 4, chamfered deck</text>
+      </svg></div>
+  </div>
+  <ul>
+    <li><b>Section:</b> the deck is 0.65 of the beam, meeting the flank on a chine. No plateau, so no slab, whatever the deck swatch is.</li>
+    <li><b>Stern:</b> steps down over the last sixth to an engine block in structure grey with the bells set INTO it, not hanging off a transom.</li>
+    <li><b>Fins:</b> two radiator fins swept back off the quarters, one course thick, the one thing that stands off the hull. Flat plates, not pylons.</li>
+    <li><b>Livery:</b> one long stripe down each flank at the waist, a chevron on the prow in the accent swatch. The fluting goes; the panel lines the greedy mesher already draws do the texture.</li>
+  </ul>
+</div>
+
+<div class="navy">
+  <h3>Karisen</h3>
+  <p class="who">Vaygr: a diamond spine, a blade prow, the keel rail as a real keel blade, a three bell stern</p>
+  <div class="views">
+    <div class="view"><div class="cap">side</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Karisen side">
+        <polygon points="10,46 30,36 200,32 270,44 200,58 30,56" fill="#D2560A" stroke="#73172D"/>
+        <polygon points="200,32 270,44 200,58" fill="#FA6A0A"/>
+        <polygon points="20,56 60,64 240,60 250,56" fill="#3E0F18"/>
+        <polygon points="120,34 200,32 200,37 120,39" fill="#E8D6C0"/>
+        <rect x="12" y="38" width="16" height="18" fill="#4A2A1A"/>
+        <rect x="4" y="40" width="8" height="4" fill="#FA6A0A"/><rect x="4" y="46" width="8" height="4" fill="#FA6A0A"/><rect x="4" y="52" width="8" height="4" fill="#FA6A0A"/>
+        <polygon points="60,36 80,18 96,18 92,36" fill="#73172D"/>
+        <rect x="140" y="46" width="34" height="4" fill="#3E0F18"/>
+        <circle cx="148" cy="48" r="1.2" fill="#FFF2CC"/><circle cx="156" cy="48" r="1.2" fill="#FFF2CC"/><circle cx="164" cy="48" r="1.2" fill="#FFF2CC"/>
+        <rect x="226" y="34" width="8" height="5" fill="#F03B3B"/><rect x="70" y="58" width="8" height="5" fill="#A574FF"/>
+      </svg></div>
+    <div class="view"><div class="cap">plan</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Karisen plan">
+        <polygon points="10,45 30,34 200,32 270,45 200,58 30,56" fill="#D2560A" stroke="#73172D"/>
+        <polygon points="30,38 200,36 250,45 200,54 30,52" fill="#FA6A0A"/>
+        <polygon points="120,40 200,38 200,42 120,44" fill="#E8D6C0"/><polygon points="120,46 200,48 200,52 120,50" fill="#E8D6C0"/>
+        <rect x="12" y="38" width="16" height="14" fill="#4A2A1A"/>
+        <polygon points="60,34 90,14 96,34" fill="#73172D"/><polygon points="60,56 90,76 96,56" fill="#73172D"/>
+        <rect x="226" y="42" width="8" height="6" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">section</div>
+      <svg viewBox="0 0 120 70" role="img" aria-label="Karisen section">
+        <polygon points="60,10 100,34 72,60 60,66 48,60 20,34" fill="#D2560A" stroke="#73172D"/>
+        <polygon points="48,60 60,66 72,60 60,56" fill="#3E0F18"/>
+        <text x="60" y="8" fill="#7C8B9D" font-size="7" text-anchor="middle" font-family="monospace">8 x 7.4, n = 1.4, keel edge</text>
+      </svg></div>
+  </div>
+  <ul>
+    <li><b>Section:</b> a diamond, so the keel rail it already carries becomes a true keel blade rather than a plank under a tube.</li>
+    <li><b>Prow:</b> a blade, the longest overhang in the fleet, which is what its length is for.</li>
+    <li><b>Fins:</b> two swept dorsal fins at the quarter, in the dark swatch. The shoulder strakes go.</li>
+    <li><b>Livery:</b> pale stripes down the flanks and a pale band across the prow blade, the accent on the missile doors.</li>
+  </ul>
+</div>
+
+<div class="navy">
+  <h3>Rogue</h3>
+  <p class="who">Turanic raider: a broad low prism, the crescent claws it already has, bolted on pods that do not match</p>
+  <div class="views">
+    <div class="view"><div class="cap">side</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Rogue side">
+        <polygon points="30,36 220,34 250,44 220,58 30,58" fill="#3A3466" stroke="#181425"/>
+        <polygon points="220,34 250,44 220,58" fill="#494182"/>
+        <polygon points="220,50 276,52 272,56 220,58" fill="#494182"/><rect x="266" y="52" width="8" height="4" fill="#FF9ECA"/>
+        <rect x="20" y="38" width="14" height="20" fill="#2A2440"/>
+        <rect x="10" y="42" width="10" height="5" fill="#FA6A0A"/><rect x="10" y="50" width="10" height="5" fill="#FA6A0A"/>
+        <rect x="90" y="24" width="40" height="12" fill="#2A2440"/><rect x="150" y="60" width="30" height="8" fill="#2A2440"/>
+        <polygon points="120,36 200,34 200,38 120,40" fill="#E0483C"/>
+        <rect x="70" y="46" width="90" height="4" fill="#181425"/>
+        <circle cx="80" cy="48" r="1.2" fill="#FFF2CC"/><circle cx="96" cy="48" r="1.2" fill="#FFF2CC"/><circle cx="112" cy="48" r="1.2" fill="#FFF2CC"/><circle cx="128" cy="48" r="1.2" fill="#FFF2CC"/>
+        <rect x="196" y="30" width="8" height="5" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">plan</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Rogue plan">
+        <polygon points="30,45 60,16 220,14 250,45 220,76 60,74" fill="#3A3466" stroke="#181425"/>
+        <polygon points="220,20 276,26 272,32 224,30" fill="#494182"/><polygon points="220,70 276,64 272,58 224,60" fill="#494182"/>
+        <rect x="266" y="26" width="8" height="5" fill="#FF9ECA"/><rect x="266" y="59" width="8" height="5" fill="#FF9ECA"/>
+        <rect x="90" y="20" width="40" height="14" fill="#2A2440"/><rect x="150" y="58" width="30" height="12" fill="#2A2440"/>
+        <polygon points="120,42 200,40 200,44 120,46" fill="#E0483C"/>
+        <rect x="20" y="30" width="14" height="30" fill="#2A2440"/>
+        <rect x="196" y="24" width="8" height="6" fill="#F03B3B"/><rect x="196" y="60" width="8" height="6" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">section</div>
+      <svg viewBox="0 0 120 70" role="img" aria-label="Rogue section">
+        <polygon points="8,40 20,24 100,24 112,40 100,54 20,54" fill="#3A3466" stroke="#181425"/>
+        <text x="60" y="66" fill="#7C8B9D" font-size="7" text-anchor="middle" font-family="monospace">12.4 x 5.8, n = 3</text>
+      </svg></div>
+  </div>
+  <ul>
+    <li><b>Section:</b> a broad low prism. The gantry across the waist and the crescent claws stay; they were always this navy's.</li>
+    <li><b>Pods:</b> two boxes welded on that do not match each other, one high and forward, one low and aft, in the dark swatch. Honest asymmetry, which the blisters were reaching for.</li>
+    <li><b>Livery:</b> one red slash down each flank in the accent swatch, and the grapple tips lit as now.</li>
+  </ul>
+</div>
+
+<div class="navy">
+  <h3>Benefactor</h3>
+  <p class="who">Bentusi: a tall hexagonal blade, a single tall fin, wings kept, gold on green</p>
+  <div class="views">
+    <div class="view"><div class="cap">side</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Benefactor side">
+        <polygon points="20,44 40,20 220,18 266,44 220,72 40,70" fill="#146032" stroke="#0E4423"/>
+        <polygon points="220,18 266,44 220,72" fill="#1A7A3E"/>
+        <polygon points="60,20 90,4 110,4 104,20" fill="#0E4423"/>
+        <polygon points="120,30 220,28 220,33 120,35" fill="#EDE7C8"/>
+        <polygon points="120,58 220,60 220,65 120,63" fill="#EDE7C8"/>
+        <polygon points="230,40 266,44 230,48" fill="#F9A31B"/>
+        <rect x="22" y="30" width="18" height="30" fill="#2F4A38"/>
+        <rect x="12" y="34" width="10" height="6" fill="#FA6A0A"/><rect x="12" y="50" width="10" height="6" fill="#FA6A0A"/>
+        <rect x="130" y="44" width="60" height="4" fill="#0E4423"/>
+        <circle cx="140" cy="46" r="1.2" fill="#FFF2CC"/><circle cx="152" cy="46" r="1.2" fill="#FFF2CC"/><circle cx="164" cy="46" r="1.2" fill="#FFF2CC"/><circle cx="176" cy="46" r="1.2" fill="#FFF2CC"/>
+        <rect x="200" y="24" width="8" height="5" fill="#F03B3B"/><rect x="100" y="66" width="8" height="5" fill="#A574FF"/>
+      </svg></div>
+    <div class="view"><div class="cap">plan</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Benefactor plan">
+        <polygon points="20,45 40,36 220,34 266,45 220,56 40,54" fill="#146032" stroke="#0E4423"/>
+        <polygon points="80,36 150,16 200,20 190,36" fill="#2FA85B"/><polygon points="80,54 150,74 200,70 190,54" fill="#2FA85B"/>
+        <polygon points="120,42 220,41 220,44 120,45" fill="#EDE7C8"/>
+        <polygon points="230,42 266,45 230,48" fill="#F9A31B"/>
+        <rect x="22" y="38" width="18" height="14" fill="#2F4A38"/>
+        <rect x="200" y="38" width="8" height="6" fill="#F03B3B"/><rect x="200" y="46" width="8" height="6" fill="#F03B3B"/>
+      </svg></div>
+    <div class="view"><div class="cap">section</div>
+      <svg viewBox="0 0 120 70" role="img" aria-label="Benefactor section">
+        <polygon points="60,4 82,20 82,50 60,66 38,50 38,20" fill="#146032" stroke="#0E4423"/>
+        <text x="106" y="36" fill="#7C8B9D" font-size="7" text-anchor="middle" font-family="monospace">6.8 x 11</text>
+      </svg></div>
+  </div>
+  <ul>
+    <li><b>Section:</b> a tall hexagon, the one section that stands on edge. The wings stay as they were and become flat plates off a flat flank.</li>
+    <li><b>Fin:</b> one tall fin at the quarter rather than the low ridge, swept, in the dark swatch.</li>
+    <li><b>Livery:</b> two pale stripes the length of the hull, gold chevron on the prow.</li>
+  </ul>
+</div>
+
+<div class="navy">
+  <h3>Civil</h3>
+  <p class="who">Resource collector: a box, a rack, an engine block, nothing pretending otherwise</p>
+  <div class="views">
+    <div class="view"><div class="cap">side</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Civil side">
+        <polygon points="24,30 232,30 256,44 232,64 24,64" fill="#5B6B7A" stroke="#333E4C"/>
+        <rect x="60" y="14" width="30" height="16" fill="#C9A23C"/><rect x="96" y="14" width="30" height="16" fill="#2F7BB5"/><rect x="132" y="14" width="30" height="16" fill="#B5472F"/><rect x="168" y="14" width="30" height="16" fill="#C9A23C"/>
+        <rect x="10" y="34" width="16" height="26" fill="#333E4C"/>
+        <rect x="2" y="38" width="8" height="6" fill="#FA6A0A"/><rect x="2" y="50" width="8" height="6" fill="#FA6A0A"/>
+        <polygon points="40,44 220,44 220,49 40,49" fill="#F2A93B"/>
+        <rect x="208" y="20" width="18" height="10" fill="#333E4C"/>
+      </svg></div>
+    <div class="view"><div class="cap">plan</div>
+      <svg viewBox="0 0 280 90" role="img" aria-label="Civil plan">
+        <polygon points="24,22 232,22 256,45 232,68 24,68" fill="#5B6B7A" stroke="#333E4C"/>
+        <rect x="60" y="26" width="30" height="16" fill="#C9A23C"/><rect x="96" y="26" width="30" height="16" fill="#2F7BB5"/><rect x="132" y="26" width="30" height="16" fill="#B5472F"/><rect x="168" y="26" width="30" height="16" fill="#C9A23C"/>
+        <rect x="60" y="48" width="30" height="16" fill="#2F7BB5"/><rect x="96" y="48" width="30" height="16" fill="#B5472F"/><rect x="132" y="48" width="30" height="16" fill="#C9A23C"/><rect x="168" y="48" width="30" height="16" fill="#2F7BB5"/>
+        <rect x="10" y="30" width="16" height="30" fill="#333E4C"/>
+        <rect x="208" y="26" width="18" height="10" fill="#333E4C"/>
+      </svg></div>
+    <div class="view"><div class="cap">section</div>
+      <svg viewBox="0 0 120 70" role="img" aria-label="Civil section">
+        <polygon points="18,14 102,14 102,58 18,58" fill="#5B6B7A" stroke="#333E4C"/>
+        <text x="60" y="66" fill="#7C8B9D" font-size="7" text-anchor="middle" font-family="monospace">8.5 x 8, n = 6</text>
+      </svg></div>
+  </div>
+  <ul>
+    <li><b>Section:</b> a box. The rack rails stay; the containers sit on a flat deck at last rather than on a curve with rails holding them up.</li>
+    <li><b>Livery:</b> a hazard band at the waist, the bridge block offset to one side.</li>
+  </ul>
+</div>
+
+<h2><span class="num">04</span>What it costs, and what it does not touch</h2>
+<ul>
+  <li><b>One predicate.</b> <code>insideHull</code>, the rib cutter and the shell's inline ellipse test become one superellipse test with the navy's exponent and chamfer. The sphere gates, the ladder, the class radii and the sockets seated by fraction stand: a chamfered box at the same half extents fits the same sphere.</li>
+  <li><b>The four frigates' raw sockets</b> are the risk: they were read off elliptical archive hulls in cells. A corner that the ellipse rounded off and the box keeps is room gained, not lost, so an enclosed part stays inside; the seating check in <code>sim.test.mjs</code> is what says so.</li>
+  <li><b>Livery:</b> <code>roleOfCell</code> gains the stripe and the chevron as two roles laid by station rather than by height. The permutation rule stands, eight swatches on every hull.</li>
+  <li><b>Decor:</b> fins as flat plates, engine blocks as stepped sterns, pods as boxes. All plate, all against the skin, all clear of the rings by the same arc scan.</li>
+  <li><b>Nothing crosses the boundary.</b> The core still derives from plate counts, extents and mount positions; a faceted hull is a different count, re-measured by <code>measure_fleet.mjs --sync</code>.</li>
+</ul>
+
+<div class="note warn"><b>What is being decided here.</b> The direction: faceted sections per navy, stepped sterns with engine blocks, flat fins, a striped livery, and the navy to Homeworld mapping above (Terran as Hiigaran, Karisen as Vaygr, Rogue as Turanic, Benefactor as Bentusi). Approved, the section predicate is built first and photographed on all twenty three hulls before any decor is cut. Not approved, the fleet stays as it is on this branch: nacelles off, decks clear, windows on every flank.</div>
+</div>
