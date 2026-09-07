@@ -772,7 +772,7 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     entryPoints: [resolve(root, 'src/app/hull.ts')],
     bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
   });
-  const { hullMesh } = await import('data:text/javascript;base64,'
+  const { hullMesh, WINDOW_ROWS } = await import('data:text/javascript;base64,'
     + Buffer.from(built.outputFiles[0].text).toString('base64'));
   const dsn = await build({
     entryPoints: [resolve(root, 'src/app/design.ts')],
@@ -787,6 +787,11 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     const d = stockFor(f.classKey);
     const h = hullMesh(d);
     const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // No window looks up or down: the owner's rule, read off the faces.
+    const nrm = (w, q) => w.geo.getAttribute('normal').array[q * (w.geo.getAttribute('normal').array.length / 3 / w.cellOf.length) * 3 + 1];
+    for (const w of h.windows) for (let q = 0; q < w.cellOf.length; q++) {
+      assert.ok(Math.abs(nrm(w, q)) < 0.5, `${f.classKey}: a ${w.key} window looks up or down`);
+    }
     // Twenty is not a taste: below that a hull reads as unlit at map range,
     // which is what every one of them did.
     assert.ok(faces >= 20,
@@ -794,7 +799,12 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     // And every decal drawn is one a part on this ship actually wears. A key
     // with no module behind it would be a texture bound to nothing, and
     // `windowMap` answers null for an unknown one without saying so.
-    const worn = new Set(d.parts.map(p => moduleById(p.module)?.window).filter(Boolean));
+    // A key with no module behind it would be a texture bound to nothing,
+    // and the navy's own decorative rows are the other thing a hull wears.
+    const worn = new Set([
+      ...d.parts.map(p => moduleById(p.module)?.window).filter(Boolean),
+      ...(WINDOW_ROWS[f.faction] ?? []).map(r => r.key),
+    ]);
     for (const w of h.windows) {
       assert.ok(worn.has(w.key),
         `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);

@@ -1416,6 +1416,17 @@ now wears whatever the face across from it wears, because the rooms are laid
 out in pairs even where the fit is not. Both live in `windowAt`, on top of
 the room rule.
 
+**And each navy paints its own ROWS along the flanks, over and above what the
+rooms derive.** The decals are the owner's decoration tools, and the room rule
+alone leaves a flank dark wherever a berth is not. `WINDOW_ROWS` in `hull.ts`
+lays a row per navy along its own line: panes every other cell on the Terran
+cheat line, portholes above the waist between a Karisen's bands, a few
+scattered portholes on a Rogue, a lit strip along the Benefactor's stripes,
+portholes on a civil hull. Flank faces only, and mirrored by construction,
+because a row is a height and a station rather than a cell. The windows test
+allows a navy's row kinds beside the kinds its parts wear. Terran frigate
+flank faces 66/65 to 158/133, Karisen cruiser 169/170 to 192/190.
+
 **And it may look across TWO cells of corridor.** A room is a box and a hull
 is an ellipse, so a box seated against a curved flank touches it along one
 line and stands a cell off it above and below, and the enclosed seat pulls it

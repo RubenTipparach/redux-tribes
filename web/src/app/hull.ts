@@ -32,7 +32,7 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
-  finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
+  finishesOf, frameFor, hullAt, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
   socketsOf, type Design,
 } from './design.js';
 import type { MountFace } from './turret.js';
@@ -98,6 +98,33 @@ const WINDOW_DEPTH = 5;
  * and two lights the berths a lane could not quite seat against the belt.
  */
 const WINDOW_GAP = 2;
+
+/**
+ * The window ROWS each navy paints along its flanks, over and above the
+ * windows its rooms derive.
+ *
+ * The decals are the owner's decoration tools, and a room rule alone leaves
+ * long stretches of flank dark wherever a berth is not. A Homeworld hull
+ * carries rows of small lights along a line (docs/homeworld-design.md), so
+ * each navy lays one along its own: a row of panes on the Terran cheat line,
+ * portholes above the waist on a Karisen between its bands, a few scattered
+ * portholes on a Rogue, a lit strip along the Benefactor's stripes, portholes
+ * on a civil hull. FLANK faces only, never a face that looks up or down, and
+ * mirrored by construction because a row is a height and a station rather
+ * than a cell. `every` is the pitch along the hull in cells; `v0..v1` is the
+ * band across the depth, as fractions of the half depth; `t0..t1` the run
+ * along the length.
+ */
+export const WINDOW_ROWS: Readonly<Record<string, ReadonlyArray<{
+  readonly key: string; readonly v0: number; readonly v1: number;
+  readonly every: number; readonly t0: number; readonly t1: number;
+}>>> = {
+  terran: [{ key: 'panes', v0: -0.12, v1: 0.12, every: 2, t0: 0.12, t1: 0.86 }],
+  karisen: [{ key: 'porthole', v0: 0.12, v1: 0.32, every: 3, t0: 0.15, t1: 0.85 }],
+  rogue: [{ key: 'porthole', v0: 0.05, v1: 0.30, every: 4, t0: 0.20, t1: 0.80 }],
+  benefactor: [{ key: 'strip', v0: 0.16, v1: 0.27, every: 1, t0: 0.15, t1: 0.85 }],
+  civil: [{ key: 'porthole', v0: 0.15, v1: 0.35, every: 3, t0: 0.15, t1: 0.85 }],
+};
 
 export const SURF_NAMES: readonly string[] =
   ['plate', 'trim', 'structure', 'frame', 'part'];
@@ -477,7 +504,26 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     if (dy !== 0) return null;
     const own = roomBehind(i, j, k, dx, dy, dz);
     if (own || dx === 0) return own;
-    return roomBehind(NX - 1 - i, j, k, -dx, dy, dz);
+    return roomBehind(NX - 1 - i, j, k, -dx, dy, dz) ?? rowAt(i, j, k);
+  };
+  /** The navy's decorative rows, on a plate cell of a flank face. */
+  const prof = frame.profile;
+  const zA = Math.round((prof[0] as [number, number, number])[0]);
+  const zB = Math.round((prof[prof.length - 1] as [number, number, number])[0]);
+  const rows = WINDOW_ROWS[frame.faction] ?? [];
+  const rowAt = (i: number, j: number, k: number): string | null => {
+    const n = idx(i, j, k);
+    const mat = grid[n] as number;
+    if ((mat !== Mat.Plate && mat !== Mat.Skinned) || own[n]) return null;
+    const t = (k - zA) / Math.max(1, zB - zA);
+    const hh = hullAt(prof, k)[1] as number;
+    const v = (j + 0.5 - NY / 2) / Math.max(0.5, hh);
+    for (const r of rows) {
+      if (t < r.t0 || t > r.t1 || v < r.v0 || v > r.v1) continue;
+      if ((k - zA) % r.every !== 0) continue;
+      return r.key;
+    }
+    return null;
   };
   /** The room rule: what a PLATE cell has immediately behind it. */
   const roomBehind = (
