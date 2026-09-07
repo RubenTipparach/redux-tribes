@@ -26,7 +26,7 @@ import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
-  socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
+  socketsOf, rasterise, cellColour, armourColour, hullAt, sectionOf, secTop, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
   DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
@@ -1807,9 +1807,23 @@ export class Designer {
     // class thinks its own skin is.
     ctx.strokeStyle = '#2b3d5288';
     ctx.lineWidth = 1;
+    // The class's own SECTION, not an ellipse: a Terran is a chamfered box
+    // and a Benefactor a hexagon on edge, and the line a player draws to has
+    // to be the line the shell is cut to.
+    const shape = sectionOf(prof);
     ctx.beginPath();
-    ctx.ellipse(NX / 2 * px, NY / 2 * px, (st[0] as number) * px, (st[1] as number) * px,
-      0, 0, Math.PI * 2);
+    for (let n = 0; n <= 64; n++) {
+      const u = -1 + (2 * n) / 64;
+      const v = Math.max(0, secTop(shape, u));
+      const x = (NX / 2 + u * (st[0] as number)) * px, y = (NY / 2 - v * (st[1] as number)) * px;
+      if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    for (let n = 64; n >= 0; n--) {
+      const u = -1 + (2 * n) / 64;
+      const v = Math.max(0, secTop(shape, u));
+      ctx.lineTo((NX / 2 + u * (st[0] as number)) * px, (NY / 2 + v * (st[1] as number)) * px);
+    }
+    ctx.closePath();
     ctx.stroke();
 
     // Onion skin: the SLABS either side, dimmer the further out, so a run

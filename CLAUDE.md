@@ -393,16 +393,44 @@ Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
 missile cells and keeps two beams forever, Rogue adds berths and clamps and
 almost no guns, Benefactor adds belt and calibre and gets slower at every step.
 
+**A section is a SHAPE, not an ellipse, and the shape is the navy's.** Every
+station was an ellipse for every navy, and an ellipse is the one shape
+Homeworld never draws (`docs/homeworld-design.md`). `Section` is a convex
+polygon in the unit square, given as cuts `a|u| + b|v| <= k` off the box,
+registered per navy on its profile (`sectionOf`) and read through three
+functions and nothing else: `secInside` for the shell, the ribs, the seating
+and the pylons; `secTop` for how high the skin is at an offset across the
+beam, which decor is bolted to; `secSide` for how far out it is at a height,
+which a berth's lane and a ring's seat are measured from. Terran is a
+chamfered box (deck 0.65 of the beam, meeting the flank on a 45 degree
+chine), Karisen a diamond on a keel edge, Rogue a broad low prism, Benefactor
+a hexagon standing on edge, civil a box. The half extents and the ladder are
+untouched. This is what finally took the slab off the Terran: a flat ellipse
+twelve cells across quantises to a plateau with stepped edges, and a box with
+a chine is a deck and a flank with one hard line between them.
+
+**The panel lines are the roles, and each navy panels its own way.** The greedy
+mesher turns every role boundary into a panel line, so `roleOfCell` takes
+the navy and authors its panelling: Terran ENHANCES the form (a cheat line
+down the waist, a darker midships band, the stern block, a chevron on the
+prow), Karisen SABOTAGES it (three maroon bands wrapping athwartships over
+deck and keel, a ring round the engine block), Rogue wears one slanted slash
+per flank, Benefactor two bone stripes along its flat flanks and a gold prow,
+civil a hazard band at the waist. Every hull still carries all eight roles,
+which `shipyard.mjs` reads off the cells.
+
 **A section alone is not a silhouette, so each navy BOLTS something on.** Four
-navies cut from four sections are still four smooth lozenges. `decorFor` is
-what makes a Terran a Terran across a battlefield: the fluting down a Terran
-flank, the swept wings and dorsal fin on a Benefactor, the rail that overruns
-a Karisen at both ends and the strakes on its shoulders, the gantry welded
-across a Rogue's beam and the crescent bow it grapples with, lit at the tips,
+navies cut from four sections are still four plain prisms. `decorFor` is what
+makes a Terran a Terran across a battlefield, and what it bolts on is plates
+and boxes, never anything round: radiator vanes low on a Terran's stern
+quarters, two swept dorsal fins on a Karisen in the band colour, the rail
+that overruns a Karisen at both ends, one tall swept fin and the wings on a
+Benefactor, the gantry welded across a Rogue's beam, the crescent bow it
+grapples with, lit at the tips, and two unmatched pods low on its flanks,
 and the rack rails a civil hull stacks its boxes on.
 
-Two things were tried and taken off, and both are banned rather than merely
-absent. Warp nacelles on pylons, wings carrying pods, a lit deflector in the
+Two things were tried and taken off before this, and both are banned rather
+than merely absent. Warp nacelles on pylons, wings carrying pods, a lit deflector in the
 bow: a Star Trek dress for the whole fleet, which the owner had removed. And
 the Terran's stepped deck strakes, two courses proud of the deck: at the
 cruiser rung they read as a slab bolted onto the top of the ship, and the
