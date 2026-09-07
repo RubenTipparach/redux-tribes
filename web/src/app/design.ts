@@ -653,6 +653,27 @@ export interface Socket {
    * mount still means turning it FROM where its ring puts it.
    */
   readonly facing?: number;
+  /**
+   * Where a berth or a clamp WANTS to be, for `socketsOf` to seat once it can
+   * see the frame's rings. `suite` lays the plumbing before the rings it has
+   * to clear are authored, so it seats these conservatively and leaves the
+   * hint; the final lane is chosen against the rings that are actually there.
+   */
+  readonly lane?: LaneHint;
+}
+
+/**
+ * A berth or clamp seated by LANE rather than by cell: the station, which of
+ * the pair it is, the depth fraction it rides at, and whether it is a berth
+ * (waist) or a clamp (quarter, low). Everything `laneOf` needs to seat it
+ * again once the rings are known.
+ */
+export interface LaneHint {
+  readonly z: number;
+  readonly first: boolean;
+  readonly v: number;
+  readonly kind: 'bay' | 'clamp';
+  readonly n: number;
 }
 
 /**
@@ -1006,7 +1027,26 @@ const RING_CLEAR = 6;
  * number is written here.
  */
 const inboardOf = (half: number): number =>
-  Math.max(0, Math.min(0.46, RING_AT - RING_CLEAR / Math.max(1, half)));
+  Math.max(0, Math.min(LANE_MAX, RING_AT - RING_CLEAR / Math.max(1, half)));
+
+/**
+ * The furthest out a berth may ride when nothing sweeps the station: its
+ * outer face then sits against the inside of a four course belt, which is
+ * what puts CABIN WINDOWS on a flank. A berth is five cells wide, so on a
+ * twelve cell half beam 0.46 puts its centre at five and a half and its outer
+ * face at eight, and the belt begins at eight.
+ */
+const LANE_MAX = 0.46;
+
+/**
+ * How far along the hull a ring's sweep reaches, in cells. A barbette is six
+ * cells long and a berth six and a half, so centres six apart are clear of
+ * each other; the gun lying along the keel reaches further, but only on the
+ * side it rests toward, and a berth that lands under it is nudged clear by
+ * the rasteriser rather than seated there. Nine here left the Terran heavy
+ * cruiser, whose flank rings are twenty cells apart, no clear station at all.
+ */
+const RING_REACH = 6;
 
 /** Below this a lane is not a lane: the two berths in it would overlap each
  *  other rather than the guns, which is the same part missing for a different
@@ -1023,13 +1063,80 @@ const LANE_MIN = 0.18;
  * necessary: paired abreast, its berths sat inside its own gun rings on every
  * rung above a frigate and the stock hull read as illegal.
  */
-const laneOf = (prof: readonly Station[], z: number):
-  { axis: 'x' | 'y' | 'z'; at: number } => {
-  const [hw, hh] = hullAt(prof, z);
-  const u = inboardOf(hw as number), v = inboardOf(hh as number);
-  if (u >= LANE_MIN && u >= v) return { axis: 'x', at: u };
-  if (v >= LANE_MIN) return { axis: 'y', at: v };
+/**
+ * Where a berth or a clamp rides at a station, as an axis and a fraction.
+ *
+ * Two things decide it, and until now only the first did. A ring SWEEPS its
+ * station, so a lane keeps `RING_CLEAR` inboard of any ring within
+ * `RING_REACH` cells; without the rings (the plumbing is laid before they are
+ * authored) every station is treated as swept, which is the old answer and
+ * the safe one. And a room belongs AGAINST THE PLATING: its outer face on
+ * the inside of the belt the class wears, because that is what a window is
+ * (`hull.ts` cuts one where a room is immediately behind the skin), and a
+ * berth seated for a ring that is somewhere else on the ship sat four cells
+ * inboard of the flank with a void between. That was why the Terran and
+ * Rogue ladders had a tenth of the Benefactor's flank windows: not fewer
+ * rooms, rooms nothing could see into.
+ *
+ * So the x lane puts the outer face against the belt at the depth it rides,
+ * pulled in only where a flank ring is near, and it is taken whenever the
+ * pair fits abreast. Otherwise the pair stacks on the centreline, high
+ * enough to clear each other and to meet the belt where the hull narrows,
+ * under the deck plating and any deck ring near. Neither, and the pair goes
+ * fore and aft along the keel.
+ */
+const laneOf = (prof: readonly Station[], z: number, v0: number,
+  halfW: number, halfH: number, plate: { flank: number; deck: number },
+  rings?: readonly Socket[]): { axis: 'x' | 'y' | 'z'; at: number } => {
+  const [hwRaw, hhRaw] = hullAt(prof, z);
+  const hw = hwRaw as number, hh = hhRaw as number;
+  const near = (want: 0 | 1): boolean => !rings || rings.some(r => {
+    const [ox, oy] = outwardAt(prof, r.at);
+    return (want === 0 ? ox !== 0 : oy !== 0) && Math.abs((r.at[2] as number) - z) <= RING_REACH;
+  });
+  // Abreast: the flank at the depth the berth rides, less the belt, less the
+  // berth's own half width, is where its centre goes.
+  const hwv = hw * Math.sqrt(Math.max(0, 1 - v0 * v0));
+  let u = (hwv - plate.flank - halfW) / Math.max(1, hw);
+  if (near(0)) u = Math.min(u, inboardOf(hw));
+  const uMin = Math.max(LANE_MIN, (halfW + 0.5) / Math.max(1, hw));
+  if (u >= uMin) return { axis: 'x', at: u };
+  // Stacked: high enough that the flank has narrowed onto the berth's edge,
+  // no lower than the pair needs to clear each other, and under the deck
+  // plating and any ring on it.
+  const reach = plate.flank + halfW + 0.5;
+  let v = hw > reach ? Math.sqrt(1 - (reach / hw) ** 2) : 0;
+  v = Math.max(v, (halfH + 0.5) / Math.max(1, hh), LANE_MIN);
+  v = Math.min(v, (hh - plate.deck - halfH) / Math.max(1, hh), LANE_MAX);
+  if (near(1)) v = Math.min(v, inboardOf(hh));
+  if (v >= Math.max(LANE_MIN, (halfH + 0.5) / Math.max(1, hh))) return { axis: 'y', at: v };
   return { axis: 'z', at: 0 };
+};
+
+/** Half the footprint of what a lane carries: a barracks is five cells by
+ *  three and a half, a clamp four and a half by the same. */
+const LANE_PART = {
+  bay: { halfW: 2.5, halfH: 1.75 },
+  clamp: { halfW: 2.25, halfH: 1.75 },
+} as const;
+
+/**
+ * The plating a class's own stock hull wears at a station, which is what its
+ * lanes are cut against. The frame's, not the design's: a player who thins a
+ * belt gets a gap behind the plate rather than a ship whose rooms move as
+ * the slider does, and the sockets a class offers stay the same sockets.
+ */
+const plateAt = (classKey: string, prof: readonly Station[], z: number,
+  side: 'upper' | 'lower' | 'either'): { flank: number; deck: number } => {
+  const sec = STOCK.find(d => d.classKey === classKey)?.sections;
+  if (!sec) return { flank: 4, deck: 2 };
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const t = (z - aft) / Math.max(1, nose - aft);
+  const flank = t > 0.66 ? sec.beltFwd : t > 0.33 ? sec.beltMid : sec.beltAft;
+  const deck = side === 'upper' ? sec.dorsal : side === 'lower' ? sec.ventral
+    : Math.max(sec.dorsal, sec.ventral);
+  return { flank, deck };
 };
 
 const suite = (prof: readonly Station[],
@@ -1073,20 +1180,7 @@ const suite = (prof: readonly Station[],
       ? (bayZ[Math.min(k, bayZ.length - 1)] as number)
       : Math.round(z0 + ((z1 - z0) * k) / Math.max(1, stations - 1));
     const first = (n - 1) % 2 === 0;
-    const lane = laneOf(prof, z);
-    if (lane.axis === 'x') {
-      out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${first ? 'port' : 'starboard'} ${k + 1}`,
-        z, first ? -lane.at : lane.at, bayV));
-    } else if (lane.axis === 'y') {
-      out.push(seatAt(prof, 'bay', `b${n}`, `bay, ${first ? 'upper' : 'lower'} ${k + 1}`,
-        z, 0, first ? lane.at : -lane.at));
-    } else {
-      // No lane either way, so the pair goes fore and aft of the station
-      // instead of abreast of it. A berth is seven cells long, so four clear
-      // of the station is the least that keeps two of them apart.
-      out.push(seatAt(prof, 'bay', `b${n}`, `bay, keel ${n}`,
-        z + (first ? -4 : 4), 0, bayV));
-    }
+    out.push(laned(prof, `b${n}`, { z, first, v: bayV, kind: 'bay', n: k + 1 }));
   }
 
   // Clamps go on the QUARTER, aft of the bays and aft of anything a missile
@@ -1096,17 +1190,36 @@ const suite = (prof: readonly Station[],
     const k = Math.floor(n / 2);
     const z = aft + 8 + k * 9;
     const port = n % 2 === 0;
-    const lane = laneOf(prof, z);
-    out.push(lane.axis === 'x'
-      ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'port' : 'starboard'} ${k + 1}`,
-        z, port ? -lane.at : lane.at, -0.42)
-      : lane.axis === 'y'
-        ? seatAt(prof, 'clamp', `c${n}`, `clamp, ${port ? 'upper' : 'lower'} ${k + 1}`,
-          z, 0, port ? lane.at : -lane.at)
-        : seatAt(prof, 'clamp', `c${n}`, `clamp, keel ${n + 1}`,
-          z + (port ? -4 : 4), 0, -0.42));
+    out.push(laned(prof, `c${n}`, { z, first: port, v: -0.42, kind: 'clamp', n: k + 1 }));
   }
   return out;
+};
+
+/**
+ * A berth or a clamp seated in its lane, from its hint, against whatever
+ * rings are known. ONE seating for both, and for both the provisional seat
+ * `suite` lays and the final one `socketsOf` lays over it: a second copy is
+ * how the two came to disagree about which side "port" was.
+ */
+const laned = (prof: readonly Station[], id: string, hint: LaneHint,
+  classKey?: string, rings?: readonly Socket[]): Socket => {
+  const { z, first, v, kind, n } = hint;
+  const part = LANE_PART[kind];
+  const plate = classKey ? plateAt(classKey, prof, z, 'either') : { flank: 4, deck: 2 };
+  const lane = laneOf(prof, z, v, part.halfW, part.halfH, plate, rings);
+  const what = kind === 'bay' ? 'bay' : 'clamp';
+  const seat = lane.axis === 'x'
+    ? seatAt(prof, kind, id, `${what}, ${first ? 'port' : 'starboard'} ${n}`,
+      z, first ? -lane.at : lane.at, v)
+    : lane.axis === 'y'
+      ? seatAt(prof, kind, id, `${what}, ${first ? 'upper' : 'lower'} ${n}`,
+        z, 0, first ? lane.at : -lane.at)
+      // No lane either way, so the pair goes fore and aft of the station
+      // instead of abreast of it. A berth is seven cells long, so four clear
+      // of the station is the least that keeps two of them apart.
+      : seatAt(prof, kind, id, `${what}, keel ${n * 2 - (first ? 1 : 0)}`,
+        z + (first ? -4 : 4), 0, v);
+  return { ...seat, lane: hint };
 };
 
 
@@ -1259,6 +1372,8 @@ const decorFor = (frame: FrameDef): Decor[] => {
   const BELT: DecorLook = { role: 'belt' };
   /** The bussard collector: the drive's own orange, in its lit tone. */
   const BUSSARD: DecorLook = { lit: 'propulsion', mat: Mat.Accent };
+  /** A nacelle's exhaust: the same orange, brightest. */
+  const EXHAUST: DecorLook = { lit: 'propulsion', mat: Mat.Glow };
   /** The warp grille and the deflector: the warp blue, brightest. */
   const WARP: DecorLook = { lit: 'warp', mat: Mat.Glow };
   /** A grapple's tip, lit the boarding pink. */
@@ -1335,12 +1450,12 @@ const decorFor = (frame: FrameDef): Decor[] => {
   /**
    * A warp nacelle: a tube of hull plate from z0 to z1 about (cx, cy), `r`
    * cells to each side with the corners knocked off when there is room, a
-   * bussard collector lit at its forward end, and a grille lit down the face
-   * that looks at the ship. `side` says which flank it hangs off, so the
-   * grille faces inboard where a player looking at the ship can see it.
+   * bussard collector lit at its forward end, a grille lit down BOTH flanks
+   * of the tube, and the exhaust lit at its tail. The grille was inboard only
+   * once, which is the face the ship itself hides from every camera a player
+   * has.
    */
-  const nacelle = (cx: number, cy: number, z0: number, z1: number, r: number,
-    side: number): void => {
+  const nacelle = (cx: number, cy: number, z0: number, z1: number, r: number): void => {
     const a = Math.round(z0), b = Math.round(z1);
     const capFrom = b - Math.max(1, Math.round((b - a) * 0.12));
     const gA = a + Math.round((b - a) * 0.22), gB = capFrom - Math.round((b - a) * 0.16);
@@ -1348,15 +1463,15 @@ const decorFor = (frame: FrameDef): Decor[] => {
       const cap = z >= capFrom;
       for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
         if (r >= 2 && Math.abs(dx) === r && Math.abs(dy) === r) continue;
-        const grille = !cap && dx === -side * r && Math.abs(dy) < Math.max(1, r)
+        const grille = !cap && Math.abs(dx) === r && Math.abs(dy) < Math.max(1, r)
           && z >= gA && z <= gB;
         put(cx + dx, cy + dy, z, cap ? BUSSARD : grille ? WARP : HULL);
       }
     }
-    // The exhaust: the aft face, one course of accent, so the tube has a
-    // back end rather than simply stopping.
+    // The exhaust: the aft face, lit the drive's own colour, so the tube has
+    // a back end that reads as an engine rather than as a pipe cut off.
     for (let dy = -r + 1; dy <= r - 1; dy++) for (let dx = -r + 1; dx <= r - 1; dx++) {
-      put(cx + dx, cy + dy, a - 1, DECOR);
+      put(cx + dx, cy + dy, a - 1, EXHAUST);
     }
   };
 
@@ -1503,7 +1618,7 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const width = total - sweep;
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
-      nacelle(cx, cy, z0, z1, r, side);
+      nacelle(cx, cy, z0, z1, r);
       for (let j = 0; j < width; j++) {
         const zr = lo + sweep + j;
         const [rw, rh] = hullAt(prof, zr);
@@ -1527,7 +1642,7 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const tA = 0.04, tM = 0.17, tB = 0.28;
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
-      nacelle(cx, cy, z0, z1, r, side);
+      nacelle(cx, cy, z0, z1, r);
       for (let z = zOf(tA); z <= zOf(tB); z++) {
         const t = (z - aft) / len;
         const s = Math.min(1, Math.max(0, (tB - t) / (tB - tM)));
@@ -1576,7 +1691,7 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const z0 = aft + 1, z1 = zOf(0.44);
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
-      nacelle(cx, cy, z0, z1, r, side);
+      nacelle(cx, cy, z0, z1, r);
       for (const tz of [0.12, 0.32]) {
         const z = zOf(tz);
         const [w, h] = hullAt(prof, z);
@@ -1597,7 +1712,7 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const tA = 0.26, tM = 0.46, tB = 0.60;
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
-      nacelle(cx, cy, z0, z1, r, side);
+      nacelle(cx, cy, z0, z1, r);
       for (let z = zOf(tA); z <= zOf(tB); z++) {
         const t = (z - aft) / len;
         const s = Math.min(1, Math.max(0, (t - tA) / (tM - tA)));
@@ -1619,7 +1734,7 @@ const decorFor = (frame: FrameDef): Decor[] => {
     const z0 = aft + 1, z1 = zOf(0.46);
     for (const side of [-1, 1]) {
       const cx = side > 0 ? cxS : mirror(cxS);
-      nacelle(cx, cy, z0, z1, r, side);
+      nacelle(cx, cy, z0, z1, r);
       for (const tz of [0.10, 0.30]) {
         const z = zOf(tz);
         const [w, h] = hullAt(prof, z);
@@ -2097,7 +2212,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_destroyer', name: 'Terran Destroyer',
     faction: 'terran', tier: 'destroyer', rung: 'escort',
-    radius: 5.8, massMax: 2.79, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.8, massMax: 2.75, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_DD,
     // The raised dorsal spine is what makes a Terran read as a Terran from
     // above: a flat deck with a rail down the middle of it.
@@ -2120,7 +2235,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_cruiser', name: 'Terran Heavy Cruiser',
     faction: 'terran', tier: 'cruiser', rung: 'cruiser',
-    radius: 7.8, massMax: 5.97, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.8, massMax: 5.95, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CA,
     spine: [keel(CY, 3, 59), keel(CY + 6, 10, 52, 10, 2), keel(CY - 5, 8, 50, 8, 2),
       ...ribs(PROF_TERRAN_CA, [9, 17, 25, 33, 41, 49, 56])],
@@ -2186,7 +2301,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'karisen_cruiser', name: 'Karisen Heavy Cruiser',
     faction: 'karisen', tier: 'cruiser', rung: 'cruiser',
-    radius: 8.1, massMax: 4.74, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 8.1, massMax: 4.77, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_KARISEN_CA,
     spine: [keel(CY, 2, 61), keel(CY - 6, 0, 63, 5, 2), keel(CY + 6, 8, 54, 6, 2),
       ...ribs(PROF_KARISEN_CA, [8, 16, 24, 32, 40, 48, 56])],
@@ -2298,7 +2413,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'benefactor_destroyer', name: 'Benefactor Destroyer',
     faction: 'benefactor', tier: 'destroyer', rung: 'escort',
-    radius: 5.3, massMax: 2.58, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.59, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BENEFACTOR_DD,
     // A deep aft drop keel and a shallower dorsal one: the section is the
     // whole Benefactor idea and the spine says so from the inside.
@@ -2363,7 +2478,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_hauler', name: 'Hauler',
     faction: 'civil', tier: 'hauler', rung: 'escort',
-    radius: 5.4, massMax: 2.79, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 5.3, massMax: 2.78, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_HAULER,
     spine: [keel(CY, 8, 56), keel(CY + 7, 16, 44, 12, 1),
       ...ribs(PROF_HAULER, [12, 20, 28, 36, 44, 52])],
@@ -2377,7 +2492,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_boxship', name: 'Container Ship',
     faction: 'civil', tier: 'boxship', rung: 'cruiser',
-    radius: 7.3, massMax: 6.15, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.3, massMax: 6.11, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_BOXSHIP,
     spine: [keel(CY, 4, 60), keel(CY + 8, 12, 52, 16, 1), keel(CY - 7, 12, 52, 12, 1),
       ...ribs(PROF_BOXSHIP, [8, 16, 24, 32, 40, 48, 56])],
@@ -2393,7 +2508,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_tanker', name: 'Tanker',
     faction: 'civil', tier: 'tanker', rung: 'cruiser',
-    radius: 6.9, massMax: 6.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 6.9, massMax: 6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TANKER,
     spine: [keel(CY, 4, 60), keel(CY - 8, 14, 50, 8, 1),
       ...ribs(PROF_TANKER, [10, 18, 26, 34, 42, 50, 57])],
@@ -2409,7 +2524,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_miner', name: 'Mining Ship',
     faction: 'civil', tier: 'miner', rung: 'escort',
-    radius: 4.8, massMax: 2.57, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 4.8, massMax: 2.56, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_MINER,
     spine: [keel(CY, 10, 52), keel(CY - 6, 14, 48, 10, 1),
       ...ribs(PROF_MINER, [14, 22, 30, 38, 46])],
@@ -2429,7 +2544,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'civil_liner', name: 'Liner',
     faction: 'civil', tier: 'liner', rung: 'cruiser',
-    radius: 7.5, massMax: 5.68, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 7.5, massMax: 5.63, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_LINER,
     spine: [keel(CY, 2, 62), keel(CY + 7, 10, 54, 14, 1),
       ...ribs(PROF_LINER, [8, 16, 24, 32, 40, 48, 56])],
@@ -2553,7 +2668,13 @@ export const frameFor = (classKey: string): FrameDef => {
  * goes on its trunnion. A player cannot hang a beam on bare structure.
  */
 export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[] {
-  const out: Socket[] = frame.sockets.map(s => (s.kind === 'gun' ? ringSeat(frame, s) : s));
+  // Rings seat on the skin, and berths and clamps seat in their lanes against
+  // those rings: the plumbing was laid before the rings were authored, so
+  // this is where a berth on a station no ring sweeps finally rides out to
+  // the belt, and where its cabin windows come from.
+  const rings = frame.sockets.filter(s => s.kind === 'gun');
+  const out: Socket[] = frame.sockets.map(s => s.kind === 'gun' ? ringSeat(frame, s)
+    : s.lane ? laned(frame.profile, s.id, s.lane, frame.classKey, rings) : s);
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
     const base = out.find(s => s.id === p.socket);

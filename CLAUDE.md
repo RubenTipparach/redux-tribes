@@ -467,6 +467,23 @@ bay, berths and clamps. What a class is FOR stays hand authored, which is its
 profile and its guns. The four frigates keep their original cell coordinates,
 read off the archived silhouettes.
 
+**A berth rides in a LANE, and the lane is cut against the belt and the
+rings.** `suite` lays berths and clamps before the frame's gun rings are
+authored, so it seats them with a `LaneHint` and `socketsOf` seats them for
+real, once, against the rings that are actually there (`laneOf`). Two things
+decide the lane. A ring SWEEPS its station, so a berth within `RING_REACH`
+cells of a flank ring keeps `RING_CLEAR` inboard of it; every other station is
+clear, and a berth there rides out to the belt. And a room belongs AGAINST
+the plating: the abreast lane puts the berth's outer face on the inside of
+the belt the class's own stock hull wears at that station (`plateAt`), and
+the stacked lane climbs until the narrowing flank meets the berth's edge.
+The class's belt rather than the design's, so a player thinning a belt gets
+a gap behind the plate rather than rooms that move with a slider. This is
+where flank windows come from: a berth seated for a ring somewhere else on
+the ship sat four cells inboard of the skin with a void between, and the
+Terran and Rogue ladders drew a tenth of the Benefactor's flank windows for
+no reason a picture could show.
+
 **Nothing may be buried and nothing may foul.** Cells are first come first
 served, so a socket seated inside another part is not an error anywhere: the
 part simply never appears while paying full mass. `sim.test.mjs` walks every
@@ -1367,6 +1384,16 @@ and a container ship with twelve boxes in it showed six door panels.
 `WINDOW_DEPTH` is five courses, and every cell crossed has to be plating, so a
 window still means "a room immediately behind this skin" rather than "a room
 somewhere along this line". Counts went from single digits to hundreds.
+
+**And it may look across ONE cell of corridor.** A room is a box and a hull
+is an ellipse, so a box seated against a curved flank touches it along one
+line and stands a cell off it above and below, and the enclosed seat pulls it
+inboard until its corners are inside the skin. On a thin belt that is a one
+cell void between the plate and the cabin, and a march that stopped at the
+first empty cell called it a wall: the Rogue destroyer seated nine barracks
+against its flanks and drew fifteen windows on them. `WINDOW_GAP` is one
+cell, allowed only after the plating has been crossed and never before a
+second skin, so a window still means a room immediately behind it.
 
 **Two decals are face specific, and `WINDOW_FACE` is what says so.** A
 container's doors are on its END and a radiator's slats run down a FLANK, so

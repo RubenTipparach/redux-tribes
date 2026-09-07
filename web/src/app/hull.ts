@@ -82,6 +82,19 @@ export const SURF_COUNT = ARMOUR_BANDS + 2;
  * armour does not have.
  */
 const WINDOW_DEPTH = 5;
+/**
+ * How much VOID a window may look across between the plating and the room.
+ *
+ * A room is a box and a hull is an ellipse, so a box seated against a curved
+ * flank touches it along one line and stands a cell off it above and below,
+ * and the enclosed seat pulls it inboard until its CORNERS are inside the
+ * skin. On a thin belt that is a one cell corridor between the plate and the
+ * cabin, which is a real thing on a real ship and was a wall on this one:
+ * the Rogue destroyer seated nine barracks against its flanks and drew
+ * fifteen windows on them. One cell, and only after the plating has been
+ * crossed, so a window still means a room immediately behind this skin.
+ */
+const WINDOW_GAP = 1;
 
 export const SURF_NAMES: readonly string[] =
   ['plate', 'trim', 'structure', 'frame', 'part'];
@@ -458,7 +471,8 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     // anything else it is inside the ship and whatever it met is the answer,
     // so a window still means "a room immediately behind this skin" rather
     // than "a room somewhere along this line".
-    for (let step = 1; step <= WINDOW_DEPTH; step++) {
+    let gap = 0;
+    for (let step = 1; step <= WINDOW_DEPTH + WINDOW_GAP; step++) {
       const bi = i - dx * step, bj = j - dy * step, bk = k - dz * step;
       if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
       const m = idx(bi, bj, bk);
@@ -473,7 +487,14 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         return key;
       }
       const inner = grid[m] as number;
-      if (inner !== Mat.Plate && inner !== Mat.Skinned) return null;
+      if (inner === Mat.Plate || inner === Mat.Skinned) {
+        // Plating again past a gap is a second skin, not a corridor.
+        if (gap) return null;
+        continue;
+      }
+      // A cell of nothing between the plate and the room: one is a corridor,
+      // two is a hold, and anything solid that is not plate is the ship.
+      if (inner !== Mat.Empty || ++gap > WINDOW_GAP) return null;
     }
     return null;
   };
