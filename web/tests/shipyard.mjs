@@ -217,6 +217,21 @@ async function checkShips(page) {
         + `${tones.map(t => '0x' + t.toString(16)).join(', ')}`);
     } else ok(`${name}: the whole ${d.faction} palette is on the hull, `
       + `the picked 0x${d.paint.toString(16)} among it`);
+    // The yard DRAWS the windows, which for a long time it did not.
+    //
+    // Three screens went through `hullMesh` and got them for free; the yard
+    // built its own boxes and asked nothing, so a player fitting a bridge saw
+    // no viewport appear and had no way to tell whether the room was doing
+    // anything. Counted off the MESHES rather than off the design, because a
+    // design whose rooms all carry windows is exactly what the broken screen
+    // had: asking the design reported healthy numbers throughout.
+    const panes = Object.values(d.windows ?? {}).reduce((a, c) => a + c, 0);
+    if (panes < 1) {
+      fail(`${name}: the yard drew no windows at all`);
+    } else {
+      ok(`${name}: ${panes} panes drawn in the yard, `
+        + Object.entries(d.windows).map(([k, n]) => `${k} ${n}`).join(', '));
+    }
     // Mounts live inside the frame. Only drives, retros, attitude thrusters, gun
     // rings and trunnions are allowed to stand proud of the hull.
     if (d.enclosedOutside > 0)
