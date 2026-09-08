@@ -71,6 +71,22 @@ let aimedAtAVolume = false;
 let aimedShotQueued = false;
 /** The most chunks of hull seen in the air at once. */
 let chunksSeen = 0;
+/**
+ * The fastest playback ran, in ticks of game time per second of wall clock.
+ *
+ * The core's tick is 1/60 of a second and a turn is 600 of them, so ten
+ * seconds of game is ten seconds on the wall at 1x. Playback used to advance
+ * one tick per FRAME, which is only real time on a sixty hertz display: a 120
+ * hertz screen played a turn in five seconds and a 144 hertz one in four, and
+ * the speed of the game was a property of the monitor.
+ *
+ * Measured as a ceiling rather than as a window, because slow is the honest
+ * answer on a machine that cannot draw sixty frames a second and this one
+ * cannot: a software rasteriser plays the same turn slowly and correctly. What
+ * may never happen is FASTER than the clock, which is the direction the defect
+ * was in.
+ */
+let playRate = 0;
 /** The worst blast seen, as how far it sat from the hull it was drawn on.
  *  A shot's explosion belongs ON the ship, and the event it comes from carries
  *  a point on the COLLISION sphere, which stands well proud of a hull. */
@@ -156,6 +172,41 @@ if (!chunksSeen) {
 }
 log(`hulls come apart: ${total} cells off ${carved.length} ships, `
   + `${chunksSeen} chunks in the air at once`);
+
+// A WINDOW GOES WITH THE PLATE IT WAS CUT INTO.
+//
+// A window face leaves the greedy pass entirely: the plate quad is dropped
+// where a pane goes, so the hull geometry has nothing in that cell at all and
+// collapsing its quads can never take the pane off. The panes were shared
+// meshes hung on the hull, so a shot that opened a hole left its viewport
+// hanging in the gap, lit, over the wound: the owner saw it on a torn civil
+// hull. Counted off the BUFFER rather than off the carve, because the defect
+// is exactly a pane the carve knows about and the mesh still draws.
+const panes = await page.evaluate(() => window.ftDebug.damage().panes ?? []);
+const stranded = panes.reduce((a, p) => a + p.stranded, 0);
+const drawnPanes = panes.reduce((a, p) => a + p.drawn, 0);
+if (stranded) {
+  console.log(`\nFAIL: ${stranded} window panes still drawn on cells that are gone`);
+  process.exit(1);
+}
+log(`windows go with the plate: ${drawnPanes} panes still standing on `
+  + `${panes.length} damaged hulls, none over a hole`);
+
+// PLAYBACK RUNS ON THE CLOCK, NOT ON THE FRAME RATE.
+//
+// A turn is 600 ticks at 60 a second, so 1x is ten seconds of wall clock. It
+// advanced one tick per frame, which made a 120 hertz display play it in five.
+// The ceiling is what is checked and not a window: this container rasterises
+// in software and plays the same turn slowly, which is correct. Faster than
+// the clock is the defect.
+const PLAY_MAX = 60 * 1.15;
+if (playRate > PLAY_MAX) {
+  console.log(`\nFAIL: playback ran at ${playRate.toFixed(1)} ticks a second, `
+    + `which is ${(playRate / 60).toFixed(2)}x real time`);
+  process.exit(1);
+}
+log(`playback keeps the clock: ${playRate.toFixed(1)} ticks a second at 1x, `
+  + `which is ${(playRate / 60).toFixed(2)}x real time`);
 
 // A TURRET IS NEVER PARTLY SHOT AWAY.
 //
@@ -1548,13 +1599,28 @@ async function playMatch() {
   // check reported "a whole match of hits and no blast was ever drawn" about a
   // match that drew fifty eight of them. Measuring the renderer's speed again,
   // in a third place.
+  let playAnchor = null;
   for (let s = 0; s < 400; s++) {
     const snap = await page.evaluate(() => ({
       chunks: window.ftDebug.damage().chunks,
       fx: window.ftDebug.fx(),
+      tick: window.ftDebug.playing(),
+      // The PAGE's clock, not this process's: the round trip through the
+      // driver is time this side would count and the app never spent, and it
+      // can only make the measured rate look slower than it is.
+      at: performance.now(),
       done: window.ftDebug.playing() === null,
     }));
     chunksSeen = Math.max(chunksSeen, snap.chunks);
+    // Anchored at the first sample of each turn and measured against it, so
+    // one noisy 200 ms gap cannot read as a rate. A tick that went BACKWARDS
+    // is the next turn starting, which is a new anchor rather than a rate.
+    if (snap.tick === null || playAnchor === null || snap.tick < playAnchor.tick) {
+      playAnchor = snap.tick === null ? null : { tick: snap.tick, at: snap.at };
+    } else if (snap.at - playAnchor.at > 700) {
+      playRate = Math.max(playRate,
+        (snap.tick - playAnchor.tick) / ((snap.at - playAnchor.at) / 1000));
+    }
     for (const b of snap.fx.onHull) {
       if (b.kill || !b.hullR) continue;
       blastsSeen++;

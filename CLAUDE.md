@@ -1319,6 +1319,34 @@ missing, which is why nothing caught it.
 pixels, and the playthrough fails on either. Dropping the `sUv` argument flips
 `uv` to false on the plate wound, which is how the guard was checked.
 
+## Playback runs on the CLOCK, not on the frame rate
+
+A turn is 600 ticks at sixty a second, so 1x is ten seconds of wall clock. The
+frame loop advanced ONE TICK PER FRAME, which is real time on exactly one kind
+of display: a 120 hertz screen played a ten second turn in five and a 144
+hertz one in four, so how fast the game ran was a property of the monitor. The
+owner saw it as 1x being too fast, and it was.
+
+The step is `dt * TICKS_PER_SECOND * speed`, with the fraction carried between
+frames, so a rate that is not a whole number of ticks per frame still adds up
+to exactly ten seconds a turn at any refresh rate.
+
+**`dt` is clamped at a tenth of a second, and that is the deliberate half.** A
+machine too slow to draw the playback would otherwise leap whole tenths
+between frames and skip the blasts and the chunks that only exist for a few
+ticks: that is a video dropping what somebody was looking at rather than
+dropping pixels. Below ten frames a second playback runs SLOW instead, which
+is the old behaviour with a bound on it, and above it a turn takes its ten
+seconds. It scales with `speed` for free, because a player who asked for 4x
+has asked to skip.
+
+The playthrough checks a CEILING rather than a window, and the difference
+matters: the harness runs in a software rasteriser that plays the same turn
+slowly and correctly, so "took ten seconds" would fail on a machine that is
+behaving. Faster than the clock is the defect, so that is what is asserted,
+anchored per turn and measured over at least 700 ms so one noisy sample cannot
+read as a rate.
+
 ## The camera has a goal and a position
 
 Two of everything: a GOAL that input writes and a value the camera is drawn
@@ -1614,11 +1642,43 @@ opens and closes.
 **What PR #32 changed about the ships and this port did NOT take.** The owner
 asked for this branch's ships to win, so the per class lattices (24 to 128
 cells at one voxel size), the symmetric part seating, the drive cavity
-reservation, the volume hit points as a share of hull, the ring rest facing
-by end nearness, and the heavies' window derivation stay as main has them.
-They are ship geometry and ship rules, and every one of them would have moved
-a hull the owner has already approved. The fleet handbook tool was left
+reservation, the volume hit points as a share of hull, and the heavies'
+window derivation stay as main has them. They are ship geometry and ship
+rules, and every one of them would have moved a hull the owner has already
+approved. The ring rest facing by end nearness was taken after all, because
+the owner asked for the bow guns to face forward. The fleet handbook tool was left
 behind with them, because its whole premise is the lattice ladder.
+
+## A window goes with the plate it was cut into
+
+A window face leaves the greedy pass entirely: the plate quad is DROPPED where
+a pane goes, so the hull geometry has nothing at all in that cell. Which means
+the carve cannot reach it. Collapsing a hull's quads takes the plating off and
+leaves the viewport hanging in the hole, lit, over the wound, which is what
+the owner photographed on a torn civil hull.
+
+So panes are carved by CELL, beside the plate: `collapsePanes` in `hull.ts`
+writes a pane's four corners onto one point when its cell is gone, and writes
+it back from the shared buffer when it is not, because a scrub backwards puts
+a cell home and the pane has to come with it. By cell rather than by quad,
+since a window quad is exactly one cell where a greedy plate quad is a
+rectangle of them.
+
+**One function, because two screens ask it.** The map carves a hull as it is
+hit and the schematic draws the same hole in the modal; two answers to "is
+this pane still standing on anything" would be the map's ship and the one the
+player opened to look at it, which is the divergence GUIDELINES 5.1 is about.
+
+**And each ship needs its own copy of them**, for the reason it already needs
+its own hull: designs are shared, so collapsing a pane on one ship would put a
+hole in the same window on every ship of that design. `Carved.panes` is that
+copy, made when a hull first takes damage and handed back on a reset. The
+schematic clones only when there is damage to draw.
+
+The playthrough counts them off the BUFFER rather than off the carve, because
+the defect is exactly a pane the carve knows about and the mesh still draws: a
+quad with four corners at one point is collapsed, anything else is standing,
+and a pane standing on a dead cell fails the run.
 
 ## Load every asset from the SITE ROOT
 
@@ -1720,10 +1780,21 @@ says the ring is on.
 **A ring has a REST FACING**, and the frame knows it where a placement cannot.
 A ring on the port flank is a broadside mount, and a broadside gun resting dead
 ahead is a gun looking down the length of its own ship. `ringFacing` rests a
-flank mount trained outboard and a centreline mount ABEAM, to opposite sides
-fore and aft, because a pair of centreline mounts resting fore and aft look
-straight at each other. The player's `rot` is added to it rather than replacing
-it, so turning a mount still means turning it FROM where its ring puts it.
+flank mount along the keel toward its nearer end, and a centreline mount by
+how near an END it is: in the bow it rests forward, on the transom aft, and
+in the waist ABEAM, because a ring amidships has most of its own ship both
+ways and abeam is the only way it sees out. Which HALF it sits in is the
+wrong question: the Terran destroyer's ventral ring at 0.46 of the length is
+"abaft midships" by one cell and would point down twenty six cells of its own
+hull. A pair on the same face still goes abeam whatever band it is in, since
+the heavy cruiser's two ventral rings resting fore and aft looked straight at
+each other. Where position cannot decide, the frame authors its own `facing`
+and wins: the four corvettes' nose rings sit at 0.42 of a needle and rest
+forward by authorship, and the arc scan proves each sees out that way. The
+owner's words for the old rule, on the Terran cruiser's bow turret resting
+broadside: it would make more sense facing forward. The player's `rot` is
+added to the rest rather than replacing it, so turning a mount still means
+turning it FROM where its ring puts it.
 
 **Mirrored sockets were not mirrored.** `CX` is 16 on a lattice of 32, which is
 a cell BOUNDARY rather than a cell: the plane a ship is symmetric about runs

@@ -35,7 +35,7 @@ import {
 import {
   AT_REST, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
 } from './turret.js';
-import { hullMaterials, hullMesh, hullTone, SURF_ARMOUR, SURF_NAMES, tintFar, tintHull, tintMix,
+import { collapsePanes, hullMaterials, hullMesh, hullTone, SURF_ARMOUR, SURF_NAMES, tintFar, tintHull, tintMix,
   type HullMesh } from './hull.js';
 import { buildWound, coolWound, heatKey, heatOf, type Wound } from './wound.js';
 
@@ -168,6 +168,15 @@ interface Rig {
   drawnPitch: number;
 }
 
+/** One decal kind's panes on one ship: the mesh drawing them, this ship's own
+ *  buffer, the shared one to restore from, and the cell each quad sits on. */
+interface Pane {
+  readonly mesh: THREE.Mesh;
+  readonly geo: THREE.BufferGeometry;
+  readonly src: THREE.BufferGeometry;
+  readonly cellOf: Int32Array;
+}
+
 interface Carved {
   readonly hull: HullMesh;
   readonly design: Design;
@@ -183,6 +192,19 @@ interface Carved {
    * that reached six cells of it. The tick is what the wound burns down from.
    */
   readonly cells: Map<number, number>;
+  /**
+   * This ship's own copy of each window decal mesh, and which cell each pane
+   * stands on.
+   *
+   * A window face leaves the greedy pass entirely: the plate quad is DROPPED
+   * where a pane goes, so the hull geometry has nothing there at all and
+   * carving it can never take the pane off. Panes were shared meshes hung on
+   * the hull, so a hole in the plating left its viewport hanging in the gap,
+   * lit, over a wound. They are carved with the cells now, by the same
+   * collapse, which is why each ship needs its own copy of them for the same
+   * reason it needs its own hull.
+   */
+  readonly panes: Pane[];
   /** The torn edges, rebuilt when a cell dies and repainted as they cool. */
   wound: Wound | null;
   woundSkin: THREE.Mesh | null;
@@ -470,8 +492,21 @@ export class View {
     const hull = hullMesh(design);
     const geo = hull.geo.clone();
     mesh.geometry = geo;
+    // The panes come across too, and for the same reason: they are children of
+    // this hull drawing shared buffers, so collapsing a pane on one ship would
+    // put a hole in the same window on every ship of the design.
+    const panes: Pane[] = [];
+    for (const w of hull.windows) {
+      const child = mesh.children.find(
+        o => (o as THREE.Mesh).isMesh && (o as THREE.Mesh).geometry === w.geo) as
+        THREE.Mesh | undefined;
+      if (!child) continue;
+      const own = w.geo.clone();
+      child.geometry = own;
+      panes.push({ mesh: child, geo: own, src: w.geo, cellOf: w.cellOf });
+    }
     const c: Carved = {
-      hull, design, geo, born: new Map(),
+      hull, design, geo, panes, born: new Map(),
       cells: new Map(), wound: null, woundSkin: null, woundInner: null,
       woundGlow: null, woundScorch: null, woundFor: -1,
       woundHeat: -1, upTo: -1,
@@ -487,6 +522,12 @@ export class View {
     const mesh = this.#hulls.get(id);
     if (mesh) mesh.geometry = c.hull.geo;
     c.geo.dispose();
+    // The panes go back on the shared buffers with it, or a hull put together
+    // again would be whole plating with its windows still collapsed.
+    for (const pane of c.panes) {
+      pane.mesh.geometry = pane.src;
+      pane.geo.dispose();
+    }
     this.#dropWound(c);
     this.#carved.delete(id);
     // The hull is back on the SHARED geometry, which is the unposed one, so
@@ -716,6 +757,15 @@ export class View {
         }
       }
       pos.needsUpdate = true;
+
+      // And the PANES, by cell rather than by quad: a window quad is exactly
+      // one cell, so a carved cell is a pane standing on nothing. The
+      // schematic draws the same hole, so the rule lives in `hull.ts` and both
+      // screens ask it.
+      for (const pane of c.panes) {
+        collapsePanes(pane.geo, pane.src, pane.cellOf, c.cells);
+      }
+
       // Restoring from the shared geometry has just put every turret back at
       // its rest facing, because the shared copy is the unposed one. Swing
       // them again before anything draws: a mount that had settled would
@@ -1787,6 +1837,13 @@ export class View {
    */
   setDesigns(designs: ReadonlyMap<number, Design>): void {
     this.#designs = new Map(designs);
+    // Every carve goes with the hulls it was cut into. A new set of designs is
+    // a new set of ships, so a carve held over is a hole measured on a hull
+    // that no longer exists: its cloned buffers would never be given back, and
+    // its pane meshes would be orphans still being written to while the fresh
+    // hull drew its windows whole. Reset before the meshes go, because that is
+    // what puts the shared geometry back on them.
+    for (const id of [...this.#carved.keys()]) this.#resetCarve(id);
     for (const [, mesh] of this.#hulls) {
       this.#scene.remove(mesh);
       // The geometry belongs to the design cache and is shared; the materials
@@ -2046,6 +2103,7 @@ export class View {
   damageState(): {
     carved: Array<[number, number]>;
     chunks: number;
+    panes: Array<{ ship: number; drawn: number; stranded: number }>;
     turrets: Array<{ ship: number; rig: number; gone: number; cells: number }>;
     exposed: Array<{ ship: number; plate: number; part: number }>;
   } {
@@ -2065,9 +2123,30 @@ export class View {
     for (const [id, c] of this.#carved) {
       if (c.wound) exposed.push({ ship: id, ...c.wound.exposed });
     }
+    // Panes still DRAWN, and how many of them stand on a cell that is gone.
+    // Read off the buffer rather than off the carve, because the defect this
+    // exists to catch is exactly a pane the carve knows about and the mesh
+    // still draws: a quad is collapsed when its four corners are one point.
+    const panes: Array<{ ship: number; drawn: number; stranded: number }> = [];
+    for (const [id, c] of this.#carved) {
+      let drawn = 0, stranded = 0;
+      for (const pane of c.panes) {
+        const pa = (pane.geo.getAttribute('position') as THREE.BufferAttribute)
+          .array as Float32Array;
+        for (let q = 0; q < pane.cellOf.length; q++) {
+          const b = q * 12;
+          const flat = (pa[b] === pa[b + 3] && pa[b + 1] === pa[b + 4] && pa[b + 2] === pa[b + 5]);
+          if (flat) continue;
+          drawn++;
+          if (c.cells.has(pane.cellOf[q] as number)) stranded++;
+        }
+      }
+      panes.push({ ship: id, drawn, stranded });
+    }
     return {
       carved: [...this.#carved].map(([id, c]) => [id, c.cells.size] as [number, number]),
       chunks: this.#debris?.visible ? this.#debris.count : 0,
+      panes,
       turrets,
       exposed,
     };

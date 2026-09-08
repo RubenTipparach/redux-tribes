@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { PURPOSE, arcMasks, finishesOf, gunByKey, partAtCell, type Design } from './design.js';
-import { hullMaterials, hullMesh, tintHull, type HullMesh } from './hull.js';
+import { collapsePanes, hullMaterials, hullMesh, tintHull, type HullMesh } from './hull.js';
 import { buildWound } from './wound.js';
 import { blockedPct } from './turret.js';
 import { finishMap, studioEnv, windowMaterial } from './textures.js';
@@ -301,7 +301,19 @@ export class Schematic {
     // bridge viewport was missing would be a schematic of a different ship.
     for (const w of hull.windows) {
       const wm = windowMaterial(w.key);
-      if (wm) this.#hull.add(new THREE.Mesh(w.geo, wm));
+      if (!wm) continue;
+      // Carved with the plate. A pane sits in a cell the greedy pass dropped,
+      // so collapsing the hull's quads can never take one off: a hull with a
+      // hole in it drew its viewport hanging in the gap. Its own copy only
+      // where there is damage to draw, because an untouched hull shares the
+      // mesher's buffer as it always did.
+      let geo = w.geo;
+      if (s.dead.size) {
+        geo = w.geo.clone();
+        this.#geoms.push(geo);
+        collapsePanes(geo, w.geo, w.cellOf, s.dead);
+      }
+      this.#hull.add(new THREE.Mesh(geo, wm));
     }
 
     // The armour, when it is being shown THROUGH rather than shown or hidden.

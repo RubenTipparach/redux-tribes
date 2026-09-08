@@ -1996,6 +1996,17 @@ function bindElev(el: HTMLElement, dir: -1 | 1): void {
  * been committed and must never gate End Turn.
  */
 let previewTick = TICKS_PER_TURN;
+/**
+ * The clock playback runs on: when the last frame was, and the fraction of a
+ * tick left over from it.
+ *
+ * A tenth of a second is the most one frame may advance, so a machine that
+ * cannot keep up plays SLOW rather than skipping what it is drawing. See the
+ * frame loop for why that is the right way round.
+ */
+const PLAY_DT_MAX = 0.1;
+let lastFrameAt = performance.now();
+let playOwed = 0;
 
 /**
  * Fly the plan and show where the ship would be, nose included.
@@ -2603,6 +2614,7 @@ async function endTurn(): Promise<void> {
   view.setShips(ships);
   recordTrails();
   playTick = 0;
+  playOwed = 0;
   playing = true;
   previewTick = TICKS_PER_TURN;
   view.setGhosts([]);
@@ -3149,6 +3161,7 @@ function watchTurn(index: number, auto: boolean): void {
   readShips();
   view.setShips(ships);
   playTick = 0;
+  playOwed = 0;
   playing = true;
   showTick(0);
   renderTrails();
@@ -3413,9 +3426,35 @@ function frame(): void {
 function frameBody(): void {
   view.resize();
   probeEnvelopeIfWanted();
+  // Playback is paced by the CLOCK, not by the frame.
+  //
+  // It advanced one tick per frame at 1x, which is only real time on a display
+  // that happens to run at sixty hertz: the core's tick is 1/60 of a second
+  // and a turn is 600 of them, so a 120 hertz screen played a ten second turn
+  // in five and a 144 hertz one in four. The owner saw it as 1x being too
+  // fast, and it was: the speed of the game depended on the monitor.
+  //
+  // The step is `dt * TICKS_PER_SECOND * speed`, carried between frames as a
+  // fraction so a rate that is not a whole number of ticks per frame still
+  // adds up to exactly ten seconds a turn.
+  //
+  // `dt` is CLAMPED, and that is the deliberate half of this. A machine too
+  // slow to draw the playback would otherwise leap whole tenths of a second
+  // between frames and skip the blasts and the chunks it is being watched for,
+  // which is a video dropping the frames somebody was looking at rather than
+  // the pixels. Below ten frames a second playback runs slow instead, which is
+  // the old behaviour bounded; at any frame rate above that a turn takes its
+  // ten seconds. It scales with `speed` for free, because a player who asked
+  // for 4x has asked to skip.
+  const now = performance.now();
+  const dt = Math.min(PLAY_DT_MAX, (now - lastFrameAt) / 1000);
+  lastFrameAt = now;
   if (playTick !== null && playing) {
     const end = TICKS_PER_TURN + tailFor(shownRecord()?.events ?? []);
-    playTick = Math.min(end, playTick + speed);
+    playOwed += dt * TICKS_PER_SECOND * speed;
+    const step = Math.floor(playOwed);
+    playOwed -= step;
+    if (step > 0) playTick = Math.min(end, playTick + step);
     showTick(playTick);
     if (playTick >= end) {
       // Auto runs on to the next recorded turn rather than handing the console
