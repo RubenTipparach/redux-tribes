@@ -1510,6 +1510,116 @@ the hull derives none of appears on its cell, an erased derived window is
 gone, every other count is unchanged, and an unknown kind from a newer build
 is left alone rather than drawn as something else.
 
+## The architect edits the FRAME, and it never reaches a match
+
+`/architect/<classKey>` is the layer under the shipyard: where the drives sit,
+where the gun rings are, which stations a class even has. Those are authored
+numbers in `design.ts` and they are wrong often enough to be worth a screen.
+
+**It is an authoring tool, and that is a safety property.** What a class
+derives is in the core's table and that table is hashed into a match, so a
+frame edited here and flown there would be one seat playing a different ship
+from the other, a desync with no message on it. So the architect previews and
+EXPORTS, and an edit reaches a match the road every stock number already
+travels: back into `design.ts` and through `measure_fleet.mjs --sync`.
+`setFrameOverride` is one frame at a time, set on the way in and cleared on
+the way out, folded into `rasterSig` so two frames under one class key cannot
+share a raster, and both browser harnesses check that leaving clears it.
+
+**A mode of the shipyard rather than a screen of its own**, so it inherits
+the canvas, the orbit, the picking and a rail that is a bottom sheet at 390px.
+The Frame tab carries `archonly` and `#syncTabs` TOGGLES classes rather than
+assigning `className`, or the tab leaks into the yard on every hull.
+
+**Both resources are files.** `frames.ts` reads and writes JSON for a frame
+and for a design, each with a format stamp and a reader that refuses what it
+does not understand. An imported file is untrusted input even when a player
+wrote it: a socket at z of 9000, a kind this build has never heard of, a part
+naming a socket the class does not have, a plate index off the end of the
+lattice, a decal kind from a newer build. A frame file is laid OVER the
+authored class rather than replacing it, so it cannot invent a hull shape or
+move a class onto another navy's ladder; the profile and the spine are not in
+it, for the reason the ladder is one number rather than twenty three tables.
+`FRAME_FORMAT` names the lattice as well as the shape: the sockets are cells
+on 32x32x64, and a file cut for another lattice is refused by name, because a
+frame is an authoring artefact with one copy and a hand to re-cut it.
+
+Sockets are written in ONE key order (`canonSocket`), because `edited`
+compares frames as files and a socket whose keys merely came out in another
+order read as a change: a frame read back from its own export said "edited"
+until they did.
+
+## The palette is a BRUSH as well as a scheme
+
+Choosing a swatch sets `paint`, and every livery role is an offset from
+`paint`, so picking a colour repaints the whole ship in a scheme built round
+it. That is worth having and it is not a brush: a player who wanted one panel
+a different colour had to repaint the ship to get it.
+
+So there are two controls where there was one. The scheme preset row still
+does what it did. The **brush** is a colour picked up: drag on the model and
+it goes on every cell of armour the stroke crosses, the eraser lifts painted
+cells off again, and "wipe" empties the list. It rides the same stroke gesture
+the decals do (`onStroke` in `bindOrbit`), and one tool owns a stroke at a
+time: arming the brush puts a decal down and the other way round.
+
+`Design.tint` is the strokes, as `cell * 8 + slot`, a wire format beside
+`plate`, `cut` and `decal` against the same budget. It rides into the raster
+on the HIGH BIT of `tone` (`PAINTED`), which is the byte the livery role
+already travels in, so the map, the shipyard, the schematic and the wound all
+paint the same cell the same way without four of them learning what a brush
+is. Armour only, and that is the rule rather than a limitation: a part is
+coloured by what it DOES, so a drive is orange and a gun is red on anybody's
+ship. `sim.test.mjs` holds it to exactly that: one cell painted, nought others
+moved.
+
+**A slot is a colour AND what it is made of.** `SURF_SLOT` is eight more
+surfaces, one per palette slot, so the finish a player put on a swatch is the
+finish a painted panel wears. That is the honest cost, because a normal map is
+a material and a material is a draw call, and it is why `ARMOUR_BANDS` has
+always been three: the bands are what the livery paints by itself on every
+hull, these are opt in, and a group is only emitted for a surface that has
+quads in it. Measured on a Terran frigate: 7 draws bare, 8 on one brush slot,
+10 on three, pinned in the test.
+
+**Machinery is three surfaces, by what it is for.** It was one greeble over
+every part, on the grounds that a player can tell a drive from a gun by its
+colour, which is true and is not the question a surface answers: a drive bell
+is a cast nozzle, a turret is a machined gun and a barracks is a box.
+`SURF_DRIVE`, `SURF_WEAPON` and `SURF_PART` are routed by `purposeAt`, the same
+answer the colour legend is cut from, with purpose code nought (no purpose
+recorded, a spar rather than a drive) going to the parts. `driveFinish` and
+`weaponFinish` fall back to `partFinish`, so every design that predates them
+loads as the hull it always was. The YARD draws all four machinery surfaces
+too, because it is the screen the dropdowns are in, and a control whose effect
+is somewhere else is a control nobody can tell the state of. Every surface has
+its own row in the rail: eight slots beside a chip in their own colour, then
+the frame, engines and thrusters, weapons and subsystems.
+
+## A rail is for controls, not for reading
+
+The armour rail carried 2082 characters of prose across five paragraphs,
+explaining desync safety and what a cast nozzle is, above the sliders somebody
+opened the pane to use. Every visible block is a phrase now, and the
+elaboration is behind a `?` on the heading (`.dzwhy`), which is a TAP rather
+than a hover because a phone has no hover, and which carries elaboration
+only, never the only statement of what a control is. Drawn at 14px and hit at
+32. The map's Help is a binding list rather than an essay, for the same
+reason: nobody reads a wall of text to find out which button orbits, they scan
+for the word "orbit". `shipyard.mjs` enforces it: no block of copy over 50
+characters visible by default, measured per paragraph rather than per
+container so a binding list is not punished for its structure, and the `?`
+opens and closes.
+
+**What PR #32 changed about the ships and this port did NOT take.** The owner
+asked for this branch's ships to win, so the per class lattices (24 to 128
+cells at one voxel size), the symmetric part seating, the drive cavity
+reservation, the volume hit points as a share of hull, the ring rest facing
+by end nearness, and the heavies' window derivation stay as main has them.
+They are ship geometry and ship rules, and every one of them would have moved
+a hull the owner has already approved. The fleet handbook tool was left
+behind with them, because its whole premise is the lattice ladder.
+
 ## Load every asset from the SITE ROOT
 
 The console is served from `/play/<id>` as well as from `/`, so `./ember.png`

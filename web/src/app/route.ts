@@ -26,7 +26,16 @@ export type Route =
   /** A room, before and during the match it becomes. */
   | { readonly kind: 'room'; readonly roomId: string }
   /** The shipyard, on a saved design or on a new one. */
-  | { readonly kind: 'ship'; readonly designId?: string };
+  | { readonly kind: 'ship'; readonly designId?: string }
+  /**
+   * The architect, on a base frame or on the list of them.
+   *
+   * A class key rather than a minted id, the same closed authored set
+   * `/ship/<classKey>` already addresses: a frame is not a resource a player
+   * creates, it is one of twenty three this build ships, so browsing them is
+   * a trail you can walk back and a link you can send.
+   */
+  | { readonly kind: 'architect'; readonly classKey?: string };
 
 /**
  * Ids that may appear in a path.
@@ -51,6 +60,8 @@ export function parse(path: string): Route {
   if (head === 'play' && id && ID.test(id)) return { kind: 'play', gameId: id };
   if (head === 'room' && id && ID.test(id)) return { kind: 'room', roomId: id };
   if (head === 'ship') return id && ID.test(id) ? { kind: 'ship', designId: id } : { kind: 'ship' };
+  if (head === 'architect')
+    return id && ID.test(id) ? { kind: 'architect', classKey: id } : { kind: 'architect' };
   return LOBBY;
 }
 
@@ -61,6 +72,8 @@ export function href(r: Route): string {
     case 'play': return `/play/${encodeURIComponent(r.gameId)}`;
     case 'room': return `/room/${encodeURIComponent(r.roomId)}`;
     case 'ship': return r.designId ? `/ship/${encodeURIComponent(r.designId)}` : '/ship';
+    case 'architect':
+      return r.classKey ? `/architect/${encodeURIComponent(r.classKey)}` : '/architect';
     default: return '/';
   }
 }

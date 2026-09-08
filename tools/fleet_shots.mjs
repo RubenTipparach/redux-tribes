@@ -66,6 +66,31 @@ const rows = JSON.parse(execSync('node ' + resolve(here, 'measure_fleet.mjs') + 
 
 const browser = await pw.chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
 const page = await browser.newPage({ viewport: WIDE, deviceScaleFactor: 1 });
+
+/**
+ * Take the console's own furniture out of the photograph.
+ *
+ * An INIT SCRIPT rather than `el.style.visibility` set after the load: an
+ * inline style belongs to one element instance, and this tool navigates once
+ * per hull, so a hide set on one page was gone the moment the next `goto`
+ * threw the document away. Every shot this tool had ever written had the
+ * class picker, the tool row and the hint line printed across it, and because
+ * the chips are the BRIGHTEST thing in the frame, the bounding box `--ladder`
+ * crops to was a box round the panel rather than round the ship. A rule put
+ * in the document at every load survives any number of navigations.
+ */
+const CHROME = ['#dzClasses', '#dzTools', '#dzHint', '#dzPick'];
+await page.addInitScript((sel) => {
+  const put = () => {
+    if (document.getElementById('shotChrome')) return;
+    const st = document.createElement('style');
+    st.id = 'shotChrome';
+    st.textContent = `${sel} { visibility:hidden !important; }`;
+    document.head.append(st);
+  };
+  if (document.head) put();
+  else document.addEventListener('DOMContentLoaded', put, { once: true });
+}, CHROME.join(','));
 page.on('pageerror', (e) => console.log('  page error: ' + e.message));
 
 /** Wait for FRAMES, never for a deadline: this runs on a software rasteriser
@@ -163,16 +188,6 @@ async function ladder(faction) {
     await page.waitForTimeout(500);
     const grow = page.locator('#dzGrow');
     if (await grow.count() && await grow.isVisible()) await grow.click().catch(() => {});
-    // The chips and the tool row are BRIGHTER than the ship, so a bounding
-    // box taken over the shot with them in it is a box round the panel. They
-    // are hidden for the photograph and nothing else: this tool takes
-    // pictures, it does not drive the app.
-    await page.evaluate(() => {
-      for (const id of ['dzClasses', 'dzTools', 'dzHint', 'dzPick']) {
-        const el = document.getElementById(id);
-        if (el) el.style.visibility = 'hidden';
-      }
-    });
     await frames(40);
     // Playwright's own screenshot, not `canvas.toDataURL`. The yard is a WebGL
     // canvas without `preserveDrawingBuffer`, so reading it back after the
