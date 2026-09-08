@@ -32,8 +32,8 @@ import { finishMap, WINDOW_FACE, WINDOW_VARIANTS } from './textures.js';
 import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
-  finishesOf, frameFor, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
-  socketsOf, type Design,
+  finishesOf, frameFor, hullAt, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
+  socketsOf, type Design, decalMap,
 } from './design.js';
 import type { MountFace } from './turret.js';
 
@@ -82,6 +82,49 @@ export const SURF_COUNT = ARMOUR_BANDS + 2;
  * armour does not have.
  */
 const WINDOW_DEPTH = 5;
+/**
+ * How much VOID a window may look across between the plating and the room.
+ *
+ * A room is a box and a hull is an ellipse, so a box seated against a curved
+ * flank touches it along one line and stands a cell off it above and below,
+ * and the enclosed seat pulls it inboard until its CORNERS are inside the
+ * skin. On a thin belt that is a one cell corridor between the plate and the
+ * cabin, which is a real thing on a real ship and was a wall on this one:
+ * the Rogue destroyer seated nine barracks against its flanks and drew
+ * fifteen windows on them. Two cells, and only after the plating has been
+ * crossed: a corridor and a bulkhead, which is a fifth of a unit on a
+ * frigate, so a window still means a room immediately behind this skin.
+ * It was one cell until the owner asked for more windows on the flanks,
+ * and two lights the berths a lane could not quite seat against the belt.
+ */
+const WINDOW_GAP = 2;
+
+/**
+ * The window ROWS each navy paints along its flanks, over and above the
+ * windows its rooms derive.
+ *
+ * The decals are the owner's decoration tools, and a room rule alone leaves
+ * long stretches of flank dark wherever a berth is not. A Homeworld hull
+ * carries rows of small lights along a line (docs/homeworld-design.md), so
+ * each navy lays one along its own: a row of panes on the Terran cheat line,
+ * portholes above the waist on a Karisen between its bands, a few scattered
+ * portholes on a Rogue, a lit strip along the Benefactor's stripes, portholes
+ * on a civil hull. FLANK faces only, never a face that looks up or down, and
+ * mirrored by construction because a row is a height and a station rather
+ * than a cell. `every` is the pitch along the hull in cells; `v0..v1` is the
+ * band across the depth, as fractions of the half depth; `t0..t1` the run
+ * along the length.
+ */
+export const WINDOW_ROWS: Readonly<Record<string, ReadonlyArray<{
+  readonly key: string; readonly v0: number; readonly v1: number;
+  readonly every: number; readonly t0: number; readonly t1: number;
+}>>> = {
+  terran: [{ key: 'panes', v0: -0.12, v1: 0.12, every: 2, t0: 0.12, t1: 0.86 }],
+  karisen: [{ key: 'porthole', v0: 0.12, v1: 0.32, every: 3, t0: 0.15, t1: 0.85 }],
+  rogue: [{ key: 'porthole', v0: 0.05, v1: 0.30, every: 4, t0: 0.20, t1: 0.80 }],
+  benefactor: [{ key: 'strip', v0: 0.16, v1: 0.27, every: 1, t0: 0.15, t1: 0.85 }],
+  civil: [{ key: 'porthole', v0: 0.15, v1: 0.35, every: 3, t0: 0.15, t1: 0.85 }],
+};
 
 export const SURF_NAMES: readonly string[] =
   ['plate', 'trim', 'structure', 'frame', 'part'];
@@ -439,7 +482,66 @@ export function hullMesh(d: Design, bare = false): HullMesh {
    * Plate only. A window in the middle of a drive bell would be a window on a
    * part that is standing outside the hull, which is a hole in an engine.
    */
+  /**
+   * Which window a face wears, with the two rules the owner set on top of
+   * the room rule below.
+   *
+   * No window looks UP or DOWN. A deck is walked on and a keel is what the
+   * ship stands on, and a Homeworld hull carries its lights along its flanks
+   * and its ends; the deck and belly used to carry more panes than the
+   * flanks put together, which is a ship lit like a greenhouse.
+   *
+   * A flank window has its TWIN on the other flank. The lanes seat a berth
+   * pair mirrored, but the stock fits are not always a pair (a barracks to
+   * port and an airlock to starboard on the Rogue destroyer), so one flank
+   * lit and the other dark. The rooms are laid out in pairs even where the
+   * fit is not: a flank face with no room behind it wears whatever the face
+   * across from it wears.
+   */
   const windowAt = (
+    i: number, j: number, k: number, dx: number, dy: number, dz: number,
+  ): string | null => {
+    if (dy !== 0) return null;
+    // A HAND PAINTED decal wins, and it is asked first.
+    //
+    // The derivation below is what gives a stock hull its windows for free,
+    // and it can only ever answer for a cell with a room behind it or on the
+    // navy's row. A player who wants a porthole somewhere else, or no
+    // porthole where the row put one, is not making a mistake the editor
+    // should argue with, so a painted cell is simply the answer: its decal
+    // on every exposed flank and end face, or nothing at all for the eraser.
+    // The up and down rule above still holds, because it is the owner's rule
+    // about windows and not about how they got there.
+    const painted = decals.get(idx(i, j, k));
+    if (painted !== undefined) return painted;
+    const own = roomBehind(i, j, k, dx, dy, dz);
+    if (own || dx === 0) return own;
+    return roomBehind(NX - 1 - i, j, k, -dx, dy, dz) ?? rowAt(i, j, k);
+  };
+  /** What a player painted on, by cell. Built once per mesh rather than read
+   *  off the design per face: this is asked six times for every cell. */
+  const decals = decalMap(d);
+  /** The navy's decorative rows, on a plate cell of a flank face. */
+  const prof = frame.profile;
+  const zA = Math.round((prof[0] as [number, number, number])[0]);
+  const zB = Math.round((prof[prof.length - 1] as [number, number, number])[0]);
+  const rows = WINDOW_ROWS[frame.faction] ?? [];
+  const rowAt = (i: number, j: number, k: number): string | null => {
+    const n = idx(i, j, k);
+    const mat = grid[n] as number;
+    if ((mat !== Mat.Plate && mat !== Mat.Skinned) || own[n]) return null;
+    const t = (k - zA) / Math.max(1, zB - zA);
+    const hh = hullAt(prof, k)[1] as number;
+    const v = (j + 0.5 - NY / 2) / Math.max(0.5, hh);
+    for (const r of rows) {
+      if (t < r.t0 || t > r.t1 || v < r.v0 || v > r.v1) continue;
+      if ((k - zA) % r.every !== 0) continue;
+      return r.key;
+    }
+    return null;
+  };
+  /** The room rule: what a PLATE cell has immediately behind it. */
+  const roomBehind = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
     const n = idx(i, j, k);
@@ -458,7 +560,8 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     // anything else it is inside the ship and whatever it met is the answer,
     // so a window still means "a room immediately behind this skin" rather
     // than "a room somewhere along this line".
-    for (let step = 1; step <= WINDOW_DEPTH; step++) {
+    let gap = 0;
+    for (let step = 1; step <= WINDOW_DEPTH + WINDOW_GAP; step++) {
       const bi = i - dx * step, bj = j - dy * step, bk = k - dz * step;
       if (bi < 0 || bj < 0 || bk < 0 || bi >= NX || bj >= NY || bk >= NZ) return null;
       const m = idx(bi, bj, bk);
@@ -473,7 +576,14 @@ export function hullMesh(d: Design, bare = false): HullMesh {
         return key;
       }
       const inner = grid[m] as number;
-      if (inner !== Mat.Plate && inner !== Mat.Skinned) return null;
+      if (inner === Mat.Plate || inner === Mat.Skinned) {
+        // Plating again past a gap is a second skin, not a corridor.
+        if (gap) return null;
+        continue;
+      }
+      // A cell of nothing between the plate and the room: one is a corridor,
+      // two is a hold, and anything solid that is not plate is the ship.
+      if (inner !== Mat.Empty || ++gap > WINDOW_GAP) return null;
     }
     return null;
   };

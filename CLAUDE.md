@@ -5,7 +5,10 @@ them before touching anything; the first one (no em dashes or en dashes, anywher
 enforced by CI and will fail the build.
 
 Design and architecture: `docs/DESIGN.md` reconstructs the archived Unity game,
-`docs/ARCHITECTURE.md` holds the ADRs for the rebuild.
+`docs/ARCHITECTURE.md` holds the ADRs for the rebuild, and
+`docs/homeworld-design.md` is the fleet's visual language, read out of *The Art
+of Homeworld* at the owner's request: how the navies are told apart by their
+panel lines and paint, what forms a hull is made of, and what is banned.
 
 ## Only this repository is ever modified
 
@@ -390,14 +393,64 @@ Their ladders differ in kind too: Terran adds beam batteries, Karisen adds
 missile cells and keeps two beams forever, Rogue adds berths and clamps and
 almost no guns, Benefactor adds belt and calibre and gets slower at every step.
 
-**A section alone is not a silhouette, so each navy BOLTS something on.** Four
-navies cut from four sections are still four smooth lozenges. `decorFor` is
-what makes a Terran a Terran across a battlefield: stepped strakes and vertical
-fluting on the deck and flanks, wings swept off a Benefactor's keel line, a
-rail overrunning a Karisen at both ends, a gantry welded across a Rogue's beam,
-rack rails a civil hull stacks its boxes on. Three rules hold it together:
+**A section is a SHAPE, not an ellipse, and the shape is the navy's.** Every
+station was an ellipse for every navy, and an ellipse is the one shape
+Homeworld never draws (`docs/homeworld-design.md`). `Section` is a convex
+polygon in the unit square, given as cuts `a|u| + b|v| <= k` off the box,
+registered per navy on its profile (`sectionOf`) and read through three
+functions and nothing else: `secInside` for the shell, the ribs, the seating
+and the pylons; `secTop` for how high the skin is at an offset across the
+beam, which decor is bolted to; `secSide` for how far out it is at a height,
+which a berth's lane and a ring's seat are measured from. Terran is a
+chamfered box (deck 0.65 of the beam, meeting the flank on a 45 degree
+chine), Karisen a diamond on a keel edge, Rogue a broad low prism, Benefactor
+a hexagon standing on edge, civil a box. The half extents and the ladder are
+untouched. This is what finally took the slab off the Terran: a flat ellipse
+twelve cells across quantises to a plateau with stepped edges, and a box with
+a chine is a deck and a flank with one hard line between them.
 
-- **It is a function of the navy and the profile**, not a field on a frame, so
+**The panel lines are the roles, and each navy panels its own way.** The greedy
+mesher turns every role boundary into a panel line, so `roleOfCell` takes
+the navy and authors its panelling: Terran ENHANCES the form (a cheat line
+down the waist, a darker midships band, the stern block, a chevron on the
+prow), Karisen SABOTAGES it (three maroon bands wrapping athwartships over
+deck and keel, a ring round the engine block), Rogue wears one slanted slash
+per flank, Benefactor two bone stripes along its flat flanks and a gold prow,
+civil a hazard band at the waist. Every hull still carries all eight roles,
+which `shipyard.mjs` reads off the cells.
+
+**A section alone is not a silhouette, so each navy BOLTS something on.** Four
+navies cut from four sections are still four plain prisms. `decorFor` is what
+makes a Terran a Terran across a battlefield, and what it bolts on is plates
+and boxes, never anything round: radiator vanes low on a Terran's stern
+quarters, two swept dorsal fins on a Karisen in the band colour, the rail
+that overruns a Karisen at both ends, one tall swept fin and the wings on a
+Benefactor, the gantry welded across a Rogue's beam, the crescent bow it
+grapples with, lit at the tips, and two unmatched pods low on its flanks,
+and the rack rails a civil hull stacks its boxes on.
+
+Two things were tried and taken off before this, and both are banned rather
+than merely absent. Warp nacelles on pylons, wings carrying pods, a lit deflector in the
+bow: a Star Trek dress for the whole fleet, which the owner had removed. And
+the Terran's stepped deck strakes, two courses proud of the deck: at the
+cruiser rung they read as a slab bolted onto the top of the ship, and the
+owner banned any big block feature on top of a Terran. So did the raised
+dorsal STRINGERS the Terran destroyer and heavy cruiser carried in their
+spines, eight and ten cells wide down the length of the deck: skinned, a
+frame member that wide is the same slab in structure grey, and it was the
+one the owner pointed at on the cruiser. And the PAINT could do it on its
+own: a Terran is a wide flat section, so its deck is a plateau twelve cells
+across, and the livery's deck swatch sat four round the palette from the
+plating, which for the heavy cruiser's stock blue was slate grey rimmed with
+light blue. Same slab, no geometry at all. The Terran deck is the swatch
+NEXT to its plating now (`LIVERY.terran`), and the contrast went to the trim
+stripe, which is thin enough to carry it. The Terran's language is its
+fluting, which is vertical lines on a horizontal ship, and its deck stays
+clear.
+
+Four rules hold it together:
+
+- **It is a function of the navy and the FRAME**, not a field on a frame, so
   a class added tomorrow gets its navy's habits for free and twenty three
   tables cannot drift about what a Terran looks like.
 - **Every cell is placed against the SKIN at its own point.** A hull station is
@@ -406,9 +459,17 @@ rack rails a civil hull stacks its boxes on. Three rules hold it together:
   `deckAt` and `flankAt` are the surface; `deckCell` and `flankCell` are the
   CELL, and it is the cell that matters, because a cell with a gap under it is
   a cell touching nothing.
-- **Nothing may stand in front of a gun.** The Terran's strakes leave the
-  deck's centreline open and the Rogue's blisters sit abaft its rings, and what
-  says so is the arc scan rather than a comment.
+- **Nothing may stand in front of a gun.** A ring on a flank rests along the
+  keel and one on the deck or the belly rests abeam (`ringFacing`), and decor
+  is laid clear of those lanes: the Rogue's chines run under its flank rings
+  and the Benefactor's wings under its. What holds it is the arc scan in
+  `sim.test.mjs`, not a comment.
+- **A LIT cell of decor is machinery, not paint.** A grapple's tip takes a
+  purpose colour the way a part's own lights do (`DecorLook`), in `Mat.Glow`
+  or `Mat.Accent`. It belongs to no placement, so `own` stays zero and a click
+  on it names the hull; it is COUNTED as plate, because a chine weighs what it
+  weighs whether or not the end of it glows; and `bareGrid` takes it off with
+  the armour.
 
 **The stock spawn and the stock design are the same ship.** A class's `hull`,
 `radius`, `mass`, flight envelope, marines, capacity and boarding range in
@@ -426,6 +487,23 @@ warship has in the same places: drives, retros, attitude blocks, the bridge
 bay, berths and clamps. What a class is FOR stays hand authored, which is its
 profile and its guns. The four frigates keep their original cell coordinates,
 read off the archived silhouettes.
+
+**A berth rides in a LANE, and the lane is cut against the belt and the
+rings.** `suite` lays berths and clamps before the frame's gun rings are
+authored, so it seats them with a `LaneHint` and `socketsOf` seats them for
+real, once, against the rings that are actually there (`laneOf`). Two things
+decide the lane. A ring SWEEPS its station, so a berth within `RING_REACH`
+cells of a flank ring keeps `RING_CLEAR` inboard of it; every other station is
+clear, and a berth there rides out to the belt. And a room belongs AGAINST
+the plating: the abreast lane puts the berth's outer face on the inside of
+the belt the class's own stock hull wears at that station (`plateAt`), and
+the stacked lane climbs until the narrowing flank meets the berth's edge.
+The class's belt rather than the design's, so a player thinning a belt gets
+a gap behind the plate rather than rooms that move with a slider. This is
+where flank windows come from: a berth seated for a ring somewhere else on
+the ship sat four cells inboard of the skin with a void between, and the
+Terran and Rogue ladders drew a tenth of the Benefactor's flank windows for
+no reason a picture could show.
 
 **Nothing may be buried and nothing may foul.** Cells are first come first
 served, so a socket seated inside another part is not an error anywhere: the
@@ -1328,6 +1406,38 @@ and a container ship with twelve boxes in it showed six door panels.
 window still means "a room immediately behind this skin" rather than "a room
 somewhere along this line". Counts went from single digits to hundreds.
 
+**No window looks UP or DOWN, and every flank window has its twin.** The
+owner's rule: a deck is walked on and a keel is what the ship stands on, and a
+Homeworld hull carries its lights along its flanks and its ends. The deck and
+belly used to carry more panes than the flanks put together. And the stock
+fits are not always a pair (a barracks to port, an airlock to starboard), so
+one flank lit and the other stayed dark; a flank face with no room behind it
+now wears whatever the face across from it wears, because the rooms are laid
+out in pairs even where the fit is not. Both live in `windowAt`, on top of
+the room rule.
+
+**And each navy paints its own ROWS along the flanks, over and above what the
+rooms derive.** The decals are the owner's decoration tools, and the room rule
+alone leaves a flank dark wherever a berth is not. `WINDOW_ROWS` in `hull.ts`
+lays a row per navy along its own line: panes every other cell on the Terran
+cheat line, portholes above the waist between a Karisen's bands, a few
+scattered portholes on a Rogue, a lit strip along the Benefactor's stripes,
+portholes on a civil hull. Flank faces only, and mirrored by construction,
+because a row is a height and a station rather than a cell. The windows test
+allows a navy's row kinds beside the kinds its parts wear. Terran frigate
+flank faces 66/65 to 158/133, Karisen cruiser 169/170 to 192/190.
+
+**And it may look across TWO cells of corridor.** A room is a box and a hull
+is an ellipse, so a box seated against a curved flank touches it along one
+line and stands a cell off it above and below, and the enclosed seat pulls it
+inboard until its corners are inside the skin. On a thin belt that is a one
+cell void between the plate and the cabin, and a march that stopped at the
+first empty cell called it a wall: the Rogue destroyer seated nine barracks
+against its flanks and drew fifteen windows on them. `WINDOW_GAP` is two
+cells (a corridor and a bulkhead, a fifth of a unit on a frigate), allowed
+only after the plating has been crossed and never before a second skin, so a
+window still means a room immediately behind it.
+
 **Two decals are face specific, and `WINDOW_FACE` is what says so.** A
 container's doors are on its END and a radiator's slats run down a FLANK, so
 tiling either over every exposed face of the module turns a box into a wall of
@@ -1355,6 +1465,50 @@ strip by a hash of its CELL, so a run of quarters down a flank is lit
 differently along its length instead of reading as one panel repeated. A hash
 rather than a counter, so adding a cabin elsewhere on the ship does not relight
 this one, and so both seats and a re-watch light it the same way.
+
+## A window can be painted, and a window can be rubbed out
+
+Windows are DERIVED: a plate cell with a room behind it wears that room's
+decal and each navy lays a row along its flanks, which is what gives every
+stock hull its windows for free. What that could never do is let a player put
+one anywhere, or take one away. The Decorate tab is the other half, and both
+halves stay.
+
+**`Design.decal` is one integer per cell, `cell * DECAL_STRIDE + kind`.** The
+same shape as `plate` and `cut`, measured against the same `DRAWN_MAX`, in
+`rasterSig` because the window mesh is built in the plating's own pass, and
+rebuilt field by field on load like every other field, because a field left
+off that list is a field a hull loses between the library and the editor.
+Cosmetic like the paint: never hashed, never sent to the core. The KIND is the
+index into `DECALS`, so that list is appended to and never reordered: moving
+one would turn every saved bridge into a cargo door.
+
+**A painted cell is asked FIRST, and the eraser is a kind.** `windowAt` in
+`hull.ts` reads `decalMap` before the room rule and the rows, so a painted
+cell wears its decal on every exposed flank and end face and a stock hull with
+nothing painted is exactly the hull it was. A painted decal comes off by
+dropping its entry, but a DERIVED window has no entry to drop, so rubbing one
+out has to be written down: `DECAL_BLANK` is the last slot of the stride and
+the mesher reads it as "nothing here". It is stored only where a window would
+otherwise be, so wiping a bare flank stores nothing. The owner's rule that no
+window looks up or down holds for painted ones too, because it is a rule about
+windows and not about how they got there.
+
+**A stroke, not a tap, and the model holds still under it.** An armed decal
+owns one finger on the model: `bindOrbit` hands the drag to `onStroke` rather
+than to the orbit, every cell crossed is painted once, and two fingers still
+pinch so a phone can zoom without putting the tool down. The mirrors are the
+armour pencil's mirrors shown twice, one state, so a flank mirrored for plate
+is mirrored for its windows. Plating only, for the pencil's reason: a window
+in a drive bell is a hole in an engine.
+
+`shipyard.mjs` strokes across a hull with the sheet open at all three sizes,
+reads the panes off the MESH (a list growing proves an append, not a window),
+checks the yaw did not move, erases the run and clears back to the derived
+count. `sim.test.mjs` pins the mesher half without a browser: a painted kind
+the hull derives none of appears on its cell, an erased derived window is
+gone, every other count is unchanged, and an unknown kind from a newer build
+is left alone rather than drawn as something else.
 
 ## Load every asset from the SITE ROOT
 

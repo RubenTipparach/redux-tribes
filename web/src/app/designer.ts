@@ -18,16 +18,20 @@ import * as drafts from './drafts.js';
 // The same loaders the map uses, so the yard cannot spell a path its own way
 // and cannot drift onto a different surface than the thing being designed will
 // fly with.
-import { finishMap, partMap } from './textures.js';
+import { finishMap, partMap, windowMaterial, windowThumb } from './textures.js';
 import {
   AT_REST, blockedPct, blockedShell, easeAngle, poseMatrix, turretGoal, type MountFace,
 } from './turret.js';
+// The map's own mesher, asked ONLY for its windows: where a window goes is a
+// fact about the design, and two answers to it would be two ships.
+import { hullMesh } from './hull.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
   derive, frameFor, moduleById, stockFor, blockPct, throughArmour,
-  socketsOf, rasterise, cellColour, armourColour, hullAt, paintFor, Mat, PURPOSE,
+  socketsOf, rasterise, cellColour, armourColour, hullAt, sectionOf, secTop, paintFor, Mat, PURPOSE,
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
+  DECALS, DECAL_STRIDE, DECAL_BLANK,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
   DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
@@ -176,7 +180,14 @@ export class Designer {
   #design: Design = stockFor('terran_frigate');
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
-  #tab: 'parts' | 'armour' | 'stats' = 'parts';
+  #tab: 'parts' | 'armour' | 'decor' | 'stats' = 'parts';
+  /** The decal armed for painting, by `DECALS` index or `DECAL_BLANK` for
+   *  the eraser, or null for none: a tap then names parts as it always did. */
+  #decal: number | null = null;
+  /** The cells this stroke has already visited, so dragging back over one
+   *  does not paint it twice. */
+  #strokeSeen = new Set<number>();
+  #decalSaid = '';
   /**
    * Which draft slot this hull's unsaved work belongs in, which is the same
    * string the URL carries: a design id for a saved hull, a class key for one
@@ -315,6 +326,13 @@ export class Designer {
       rough: typeof d.rough === 'number' ? d.rough : DEFAULT_ROUGH,
       plate: Array.isArray(d.plate) ? d.plate.slice(0, DRAWN_MAX) : [],
       cut: Array.isArray(d.cut) ? d.cut.slice(0, DRAWN_MAX) : [],
+      // Same list, one entry further on. This rebuilds the record field by
+      // field, so a field left off it is a field a hull loses between the
+      // library and the editor, and Save writes this record back: the loss
+      // would be permanent the first time anybody opened a decorated ship.
+      decal: Array.isArray(d.decal)
+        ? d.decal.filter((v): v is number => Number.isInteger(v) && v >= 0).slice(0, DRAWN_MAX)
+        : [],
     };
     this.#slot = slot;
     // The draft slot for a saved hull is its own id, which is also what the
@@ -422,7 +440,14 @@ export class Designer {
     // tap on a part rather than a turn of the camera. Shared with the
     // schematic modal, which orbits the same hulls and would otherwise be a
     // second copy of the same gestures.
-    bindOrbit(cv, this.#cam, { onTap: (x, y) => this.#pickAt(x, y) });
+    bindOrbit(cv, this.#cam, {
+      onTap: (x, y) => this.#pickAt(x, y),
+      // An armed decal owns the drag: a stroke paints, and the model holds
+      // still under it. Two fingers still zoom.
+      strokes: () => this.#decal !== null,
+      onStroke: (x, y, first) => this.#strokeAt(x, y, first),
+      onStrokeEnd: () => this.#strokeEnd(),
+    });
 
     if (window.ResizeObserver) new ResizeObserver(() => this.#resize()).observe($('dzView'));
     window.addEventListener('resize', () => this.#resize());
@@ -763,6 +788,28 @@ export class Designer {
     // a click through the ghost should reach the part you can see.
     place(ghost, surf.ghost,
       q => ghostCol[q] as number, false);
+    // The windows, which the yard drew none of until now.
+    //
+    // A player who fits a bridge should SEE the viewport appear, and three of
+    // the four screens that draw this hull already did: the map, the ship
+    // detail modal and the fleet chip all go through `hullMesh`, and the yard
+    // built its own boxes and never asked. That is the divergence CLAUDE.md's
+    // "three pictures of one hull, one surface" is about, and a second
+    // derivation here would be the same defect with extra steps: where a
+    // window goes is one question, so it is asked once. `hullMesh` is cached
+    // on the raster signature, so an edit that does not move a cell costs
+    // nothing and one that does pays a single surface pass.
+    //
+    // Neither the geometry nor the material goes through `#geo`/`#mat`: both
+    // are owned by those caches, and disposing one here would leave the next
+    // caller holding a released buffer.
+    if (this.#plate !== 'off') {
+      for (const w of hullMesh(this.#design).windows) {
+        const wm = windowMaterial(w.key);
+        if (wm) this.#hull.add(new THREE.Mesh(w.geo, wm));
+      }
+    }
+
     // Every gun in its own group, drawn about its pivot so a rotation of the
     // group is a rotation of the turret on its mount.
     this.#rigs.forEach((r, n) => {
@@ -837,23 +884,11 @@ export class Designer {
    */
   #pickAt(clientX: number, clientY: number): void {
     if (!this.#renderer || !this.#pickable.length) return;
-    const cv = $<HTMLCanvasElement>('dzCanvas');
-    const r = cv.getBoundingClientRect();
-    this.#ray.setFromCamera(new THREE.Vector2(
-      ((clientX - r.left) / r.width) * 2 - 1,
-      -((clientY - r.top) / r.height) * 2 + 1), this.#camera);
-    const hits = this.#ray.intersectObjects(this.#pickable.map(p => p.mesh), false);
-    const hit = hits[0];
-    if (!hit || hit.instanceId === undefined) {
+    const n = this.#cellUnder(clientX, clientY);
+    if (n === null) {
       this.#socket = null; this.#note = null; this.#refresh(); return;
     }
-    const entry = this.#pickable.find(p => p.mesh === hit.object);
-    if (!entry) return;
-    const q = hit.instanceId * 3;
-    const i = entry.cells[q] as number, j = entry.cells[q + 1] as number,
-      k = entry.cells[q + 2] as number;
     const { own, grid } = rasterise(this.#design);
-    const n = i + j * NX + k * NX * NY;
     const owner = own[n] as number;
     if (owner > 0) {
       const p = this.#design.parts[owner - 1];
@@ -873,6 +908,155 @@ export class Designer {
             + 'or painted, and everything you fit hangs inside it.';
     }
     this.#refresh();
+  }
+
+  /** The lattice cell under a point of the screen, or null for the void. */
+  #cellUnder(clientX: number, clientY: number): number | null {
+    if (!this.#renderer || !this.#pickable.length) return null;
+    const cv = $<HTMLCanvasElement>('dzCanvas');
+    const r = cv.getBoundingClientRect();
+    this.#ray.setFromCamera(new THREE.Vector2(
+      ((clientX - r.left) / r.width) * 2 - 1,
+      -((clientY - r.top) / r.height) * 2 + 1), this.#camera);
+    const hits = this.#ray.intersectObjects(this.#pickable.map(p => p.mesh), false);
+    const hit = hits[0];
+    if (!hit || hit.instanceId === undefined) return null;
+    const entry = this.#pickable.find(p => p.mesh === hit.object);
+    if (!entry) return null;
+    const q = hit.instanceId * 3;
+    return cellIndex(entry.cells[q] as number, entry.cells[q + 1] as number,
+      entry.cells[q + 2] as number);
+  }
+
+  /**
+   * One point of a decal stroke: the cell under the finger, and its mirror
+   * images if either axis is on, each stuck with the armed decal or rubbed
+   * out by the eraser.
+   *
+   * The same mirrors the armour pencil has, and the same meaning: a flank
+   * painted with X on is two flanks, which is how a hull stays the same on
+   * both sides without painting both.
+   */
+  #strokeAt(clientX: number, clientY: number, first: boolean): void {
+    if (first) this.#strokeSeen.clear();
+    const n = this.#cellUnder(clientX, clientY);
+    if (n === null || this.#strokeSeen.has(n)) return;
+    this.#strokeSeen.add(n);
+    const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+    const cells = new Set<number>([n]);
+    if (this.#mirrorX) cells.add(cellIndex(NX - 1 - i, j, k));
+    if (this.#mirrorY) cells.add(cellIndex(i, NY - 1 - j, k));
+    if (this.#mirrorX && this.#mirrorY) cells.add(cellIndex(NX - 1 - i, NY - 1 - j, k));
+    const { grid } = rasterise(this.#design);
+    let changed = false;
+    for (const c of cells) if (this.#decalAt(c, grid, c === n)) changed = true;
+    if (changed) this.#drawChanged();
+    this.#renderDecals();
+  }
+
+  /** The finger lifted: the stroke is one edit, and this is where it lands
+   *  in the draft. */
+  #strokeEnd(): void {
+    this.#strokeSeen.clear();
+    this.#refresh();
+  }
+
+  /**
+   * Stick the armed decal on one cell of plating, or rub a window out.
+   *
+   * Plating only, and for the same reason the pencil is: a window is a hole
+   * in ARMOUR. A porthole in the middle of a drive bell is a hole in an
+   * engine, and a frame member is the class rather than the design.
+   *
+   * The eraser is the one tool with two cases. A painted decal comes off by
+   * dropping its entry. A DERIVED window, from a room or the navy's row, has
+   * no entry to drop, so rubbing it out is written down as `DECAL_BLANK` and
+   * the mesher reads that as "nothing here". Written only where a window
+   * would otherwise be, so wiping a bare flank stores nothing.
+   */
+  #decalAt(n: number, grid: Uint8Array, told: boolean): boolean {
+    const mat = grid[n] as number;
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) {
+      if (told) this.#decalSaid = 'a decal goes on plating: that is a part, or the frame';
+      return false;
+    }
+    const list = (this.#design.decal ??= []);
+    const at = list.findIndex(v => ((v / DECAL_STRIDE) | 0) === n);
+    const kind = this.#decal as number;
+    if (kind === DECAL_BLANK) {
+      const had = at >= 0;
+      if (had) list.splice(at, 1);
+      const derived = hullMesh(this.#design).windows.some(w => w.cellOf.includes(n));
+      if (derived && list.length < DRAWN_MAX) list.push(n * DECAL_STRIDE + DECAL_BLANK);
+      if (told) this.#decalSaid = had || derived ? '' : 'no window there to rub out';
+      return had || derived;
+    }
+    const want = n * DECAL_STRIDE + kind;
+    if (at >= 0) {
+      if (list[at] === want) return false;
+      list[at] = want;
+    } else {
+      if (list.length >= DRAWN_MAX) {
+        if (told) this.#decalSaid = `${DRAWN_MAX} decals is the most a hull carries`;
+        return false;
+      }
+      list.push(want);
+    }
+    if (told) this.#decalSaid = '';
+    return true;
+  }
+
+  /**
+   * The Decorate pane: the decals to paint with, the eraser, the mirrors and
+   * what the hull carries. Rebuilt with everything else, because `#refresh`
+   * is the one choke point every mutation already goes through.
+   */
+  #renderDecals(): void {
+    const dec = $('dzDecals');
+    dec.innerHTML = '';
+    const chip = (label: string, kind: number, thumb: { url: string; variants: number } | null) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = this.#decal === kind ? 'on' : '';
+      b.dataset['kind'] = String(kind);
+      const g = document.createElement('span');
+      g.className = 'glyph' + (thumb ? '' : ' eraser');
+      // The decal itself, not a grey square: nine identical swatches beside
+      // nine names is nine names doing all the work. The file is a strip of
+      // variants side by side, so this shows the first one rather than all
+      // of them squashed into 26 pixels.
+      if (thumb) {
+        g.style.backgroundImage = `url(${thumb.url})`;
+        g.style.backgroundSize = `${thumb.variants * 100}% 100%`;
+      }
+      b.append(g, document.createTextNode(label));
+      b.onclick = () => {
+        this.#decal = this.#decal === kind ? null : kind;
+        this.#decalSaid = '';
+        this.#renderDecals();
+      };
+      dec.appendChild(b);
+    };
+    DECALS.forEach((k, n) => chip(k.name, n, windowThumb(k.key)));
+    chip('Eraser', DECAL_BLANK, null);
+    // The gesture changed, so the line that names the gestures says so. On
+    // the canvas rather than in the rail, because that is where the finger
+    // is about to go, and a status bar over the rail would sit on the very
+    // chips it is talking about at 390 wide.
+    $('dzHint').textContent = this.#decal === null
+      ? 'tap a part to name it \u00b7 drag to orbit \u00b7 pinch or wheel to zoom'
+      : this.#decal === DECAL_BLANK
+        ? 'eraser armed \u00b7 drag over windows to take them off \u00b7 two fingers zoom'
+        : `${DECALS[this.#decal]?.name.toLowerCase()} armed \u00b7 drag on the plating to paint \u00b7 two fingers zoom`;
+    $('dzDecalMirrorX').className = this.#mirrorX ? 'on' : '';
+    $('dzDecalMirrorY').className = this.#mirrorY ? 'on' : '';
+    const list = this.#design.decal ?? [];
+    const blank = list.filter(v => v % DECAL_STRIDE === DECAL_BLANK).length;
+    const painted = list.length - blank;
+    $('dzDecalCount').textContent = this.#decalSaid ? this.#decalSaid
+      : !list.length ? 'nothing painted: the windows are the rooms\' and the navy\'s'
+        : `${painted} painted, ${blank} rubbed out, of ${DRAWN_MAX}`;
+    ($('dzDecalClear') as HTMLButtonElement).disabled = !list.length;
   }
 
   /** The card that says what you just tapped, or what the menu just selected. */
@@ -1175,6 +1359,7 @@ export class Designer {
     this.#renderSlice();
     this.#renderSlabBox();
     this.#renderPick();
+    this.#renderDecals();
     this.#renderKey();
     this.#renderStats();
     this.#renderHeader();
@@ -1807,9 +1992,23 @@ export class Designer {
     // class thinks its own skin is.
     ctx.strokeStyle = '#2b3d5288';
     ctx.lineWidth = 1;
+    // The class's own SECTION, not an ellipse: a Terran is a chamfered box
+    // and a Benefactor a hexagon on edge, and the line a player draws to has
+    // to be the line the shell is cut to.
+    const shape = sectionOf(prof);
     ctx.beginPath();
-    ctx.ellipse(NX / 2 * px, NY / 2 * px, (st[0] as number) * px, (st[1] as number) * px,
-      0, 0, Math.PI * 2);
+    for (let n = 0; n <= 64; n++) {
+      const u = -1 + (2 * n) / 64;
+      const v = Math.max(0, secTop(shape, u));
+      const x = (NX / 2 + u * (st[0] as number)) * px, y = (NY / 2 - v * (st[1] as number)) * px;
+      if (n === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    for (let n = 64; n >= 0; n--) {
+      const u = -1 + (2 * n) / 64;
+      const v = Math.max(0, secTop(shape, u));
+      ctx.lineTo((NX / 2 + u * (st[0] as number)) * px, (NY / 2 + v * (st[1] as number)) * px);
+    }
+    ctx.closePath();
     ctx.stroke();
 
     // Onion skin: the SLABS either side, dimmer the further out, so a run
@@ -2087,6 +2286,7 @@ export class Designer {
         set(!get());
         this.#syncBrush();
         this.#renderSlice();
+        this.#renderDecals();
       };
     };
     mirror('dzMirrorX', v => { this.#mirrorX = v; }, () => this.#mirrorX);
@@ -2374,7 +2574,7 @@ export class Designer {
       for (const k of SECTIONS) this.#design.sections[k] = 0;
       this.#refresh();
     };
-    const tab = (id: string, which: 'parts' | 'armour' | 'stats') => {
+    const tab = (id: string, which: 'parts' | 'armour' | 'decor' | 'stats') => {
       $(id).onclick = () => {
         this.#tab = which;
         // A tab tapped while the sheet is collapsed opens it, because
@@ -2385,6 +2585,20 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
+    tab('dzTabDecor', 'decor');
+    // The decal mirrors are the pencil's mirrors, shown twice: one state, so a
+    // flank mirrored for plate is mirrored for its windows as well.
+    $('dzDecalMirrorX').onclick = () => {
+      this.#mirrorX = !this.#mirrorX; this.#syncBrush(); this.#renderSlice(); this.#renderDecals();
+    };
+    $('dzDecalMirrorY').onclick = () => {
+      this.#mirrorY = !this.#mirrorY; this.#syncBrush(); this.#renderSlice(); this.#renderDecals();
+    };
+    $('dzDecalClear').onclick = () => {
+      this.#design.decal = [];
+      this.#decalSaid = '';
+      this.#refresh();
+    };
     this.#bindSlice();
     this.#syncSaveButton();
     // Collapse the sheet so the model has the screen. A phone control: at desk
@@ -2462,6 +2676,7 @@ export class Designer {
     for (const [id, pane, which] of [
       ['dzTabParts', 'dzPaneParts', 'parts'],
       ['dzTabArmour', 'dzPaneArmour', 'armour'],
+      ['dzTabDecor', 'dzPaneDecor', 'decor'],
       ['dzTabStats', 'dzPaneStats', 'stats'],
     ] as const) {
       $(id).className = this.#tab === which ? 'on' : '';
@@ -2565,6 +2780,32 @@ export class Designer {
       depth: this.#depth,
       drawSaid: this.#drawSaid,
       armourTones: [...this.#armourTones],
+      /** The decal list as stored: painted entries, and the windows rubbed
+       *  out, which are entries too. */
+      decal: (this.#design.decal ?? []).filter(v => v % DECAL_STRIDE !== DECAL_BLANK).length,
+      decalBlank: (this.#design.decal ?? []).filter(v => v % DECAL_STRIDE === DECAL_BLANK).length,
+      decalArmed: this.#decal,
+      decalSaid: this.#decalSaid,
+      /**
+       * Window panes actually DRAWN in the yard, by decal, and the quads each
+       * came to.
+       *
+       * Counted off the meshes rather than off the design, because the defect
+       * this exists to catch is exactly a hull whose rooms all have windows
+       * and a screen that draws none of them: asking the design would have
+       * reported healthy numbers throughout.
+       */
+      windows: (() => {
+        const by: Record<string, number> = {};
+        for (const o of this.#hull.children) {
+          const m = o as THREE.Mesh;
+          const key = (m.material as THREE.Material | undefined)?.name;
+          if (!m.isMesh || !key?.startsWith('window:')) continue;
+          const n = (m.geometry.getIndex()?.count ?? 0) / 6;
+          by[key.slice(7)] = (by[key.slice(7)] ?? 0) + n;
+        }
+        return by;
+      })(),
       /** What the BROAD PLATING came out, as against the whole scheme. It is
        *  the picked swatch by construction (the livery makes the pick role
        *  `hull`), and that is the half of the rule a set of eight colours

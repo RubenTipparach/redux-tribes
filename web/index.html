@@ -851,6 +851,24 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
 .dzslider .pc { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px;
   color:var(--cyan); text-align:right; }
 
+/* One row per decal, because a decal has a NAME and a row of unlabelled
+   chips would be nine pictures nobody can tell apart at 20px. */
+.dzdecals { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr));
+  gap:4px; margin-bottom:8px; }
+.dzdecals button { display:flex; align-items:center; gap:9px; width:100%;
+  text-align:left; padding:7px 9px; min-height:36px; text-transform:none;
+  letter-spacing:normal; font-size:12px; }
+.dzdecals button.on { border-color:var(--cyan); color:var(--cyan); background:#0d2231; }
+/* The decal's own lit pattern, on the dark ground it is drawn against, so a
+   player picks a picture rather than a word. */
+.dzdecals .glyph { flex:0 0 auto; width:26px; height:18px; border-radius:2px;
+  border:1px solid var(--line); background:#05070b no-repeat left center;
+  background-size:cover; }
+/* The eraser has no picture, so it wears a cross through the same frame. */
+.dzdecals .glyph.eraser { background:
+  linear-gradient(45deg, transparent 45%, var(--muted) 45%, var(--muted) 55%, transparent 55%),
+  linear-gradient(-45deg, transparent 45%, var(--muted) 45%, var(--muted) 55%, transparent 55%),
+  #05070b; }
 .dzpaint { display:flex; flex-wrap:wrap; gap:6px; }
 .dzsw { width:34px; height:34px; padding:0; border-radius:5px; border:1px solid var(--line); }
 .dzsw.on { box-shadow:0 0 0 2px var(--cyan); }
@@ -1163,6 +1181,7 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
     <nav id="dzTabs">
       <button id="dzTabParts">Parts</button>
       <button id="dzTabArmour">Armour</button>
+      <button id="dzTabDecor">Decorate</button>
       <button id="dzTabStats">Readout</button>
       <button id="dzGrow" title="Give the model the whole screen">&#9650;</button>
     </nav>
@@ -1246,6 +1265,26 @@ kbd { background:var(--panel); border:1px solid var(--line); border-radius:3px;
           <span class="s" id="dzSliceSpan"></span>
         </div>
         <div class="s" id="dzDrawCount"></div>
+      </div>
+    </div>
+
+    <div id="dzPaneDecor" class="dzpane hidden">
+      <div class="dzgrp">Windows</div>
+      <p class="dznote">The rooms behind the plating and the navy's own rows put
+      the windows on every hull. Arm a decal and drag on the plating to add your
+      own, or arm the eraser and drag over any window to take it off, painted or
+      not. Plating only, and never on the deck or the keel. Cosmetic: never
+      hashed, never sent to the core.</p>
+      <div id="dzDecals" class="dzdecals"></div>
+      <div class="dzslice">
+        <div class="row">
+          <span class="k">Mirror</span>
+          <button id="dzDecalMirrorX">X</button>
+          <button id="dzDecalMirrorY">Y</button>
+          <span class="gap"></span>
+          <button id="dzDecalClear">Clear all</button>
+        </div>
+        <div class="s" id="dzDecalCount"></div>
       </div>
     </div>
 
