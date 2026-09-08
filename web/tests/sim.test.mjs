@@ -812,6 +812,100 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   }
 });
 
+test('a window can be painted where no room put one, and rubbed out where one was', async () => {
+  // Windows are DERIVED: a plate cell with a room behind it wears that room's
+  // decal, and each navy lays a row along its flanks. What that cannot do is
+  // let a player put a window anywhere, or take one away, and there was no
+  // way to say otherwise.
+  //
+  // Both halves stay. A painted cell is consulted first and everything else
+  // falls through to the derivation, so this asserts all three: the stock
+  // hull is unchanged, the painted cell appears, and the erased one is gone.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const D = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  D.useCore(() => null);
+
+  const base = D.stockFor('terran_frigate');
+  const before = H.hullMesh(base).windows;
+  const count = w => Object.fromEntries(w.map(x => [x.key, x.cellOf.length]));
+  const b = count(before);
+  assert.ok(Object.keys(b).length, 'the derived pass drew nothing at all');
+  // A kind this hull derives NONE of, so a face that turns up can only be the
+  // painted one.
+  const kind = D.DECALS.findIndex(k => !b[k.key]);
+  assert.ok(kind >= 0, 'the stock hull already wears every decal there is');
+  const key = D.DECALS[kind].key;
+
+  // A plate cell exposed on a FLANK that no derived window already claims, so
+  // what turns up afterwards can only be the painted one.
+  const { grid } = D.rasterise(base);
+  const had = new Set(before.flatMap(w => [...w.cellOf]));
+  let cell = -1;
+  for (let n = 0; n < grid.length && cell < 0; n++) {
+    if (grid[n] !== D.Mat.Plate || had.has(n)) continue;
+    const i = n % D.NX;
+    if (i + 1 < D.NX && !grid[n + 1]) cell = n;
+  }
+  assert.ok(cell >= 0, 'no bare exposed plate cell to paint on');
+
+  const painted = { ...base, decal: [cell * D.DECAL_STRIDE + kind] };
+  const afterMesh = H.hullMesh(painted);
+  const after = count(afterMesh.windows);
+  assert.ok(after[key] > 0, `a painted ${key} decal drew no faces`);
+  assert.ok(afterMesh.windows.some(w => w.key === key && [...w.cellOf].includes(cell)),
+    'the decal landed on a cell other than the one it was painted on');
+  // And never on the deck or the keel, whoever put it there.
+  for (const w of afterMesh.windows) {
+    const nrm = w.geo.getAttribute('normal').array;
+    for (let q = 0; q < nrm.length; q += 3) assert.ok(Math.abs(nrm[q + 1]) < 0.5,
+      `a painted ${w.key} window looks up or down`);
+  }
+  // The derivation is untouched: every kind the stock hull had, it still has,
+  // at the same count.
+  for (const [k, n] of Object.entries(b)) {
+    assert.equal(after[k], n, `painting a decal changed the derived ${k} count`);
+  }
+
+  // The eraser: a DERIVED window, which has no entry to drop, is rubbed out by
+  // a blank entry on its cell and nothing else on the hull moves.
+  const victim = before[0];
+  const gone = victim.cellOf[0];
+  const erased = { ...base, decal: [gone * D.DECAL_STRIDE + D.DECAL_BLANK] };
+  const e = count(H.hullMesh(erased).windows);
+  const lost = victim.cellOf.filter(c => c === gone).length;
+  assert.equal((e[victim.key] ?? 0), b[victim.key] - lost,
+    `rubbing out one ${victim.key} cell took ${b[victim.key] - (e[victim.key] ?? 0)} faces, not ${lost}`);
+  assert.ok(!H.hullMesh(erased).windows.some(w => [...w.cellOf].includes(gone)),
+    'the erased cell still wears a window');
+  for (const [k, n] of Object.entries(b)) {
+    if (k === victim.key) continue;
+    assert.equal(e[k], n, `erasing one window changed the derived ${k} count`);
+  }
+
+  // The cache is keyed on the design, so a hull differing only in a decal
+  // cannot be handed the mesh of the hull without one.
+  assert.notEqual(D.rasterSig(base), D.rasterSig(painted));
+  assert.notEqual(D.rasterSig(base), D.rasterSig(erased));
+  // A kind this build does not know is left alone rather than drawn as
+  // something else: a newer build's decal is not a cargo door here.
+  const unknown = { ...base, decal: [cell * D.DECAL_STRIDE + 12] };
+  assert.deepEqual(count(H.hullMesh(unknown).windows), b);
+
+  console.log(`  decals: ${Object.entries(b).map(([k, n]) => `${k} ${n}`).join(', ')}`
+    + ` derived; one painted ${key} adds ${after[key]} faces,`
+    + ` one erased ${victim.key} cell takes ${lost} off`);
+});
+
 test('no stock mount is blocked in the direction it rests', async () => {
   // The rule the user of a shipyard would state as "nothing should be standing
   // in front of a gun", checked the only way it can be: by scanning the hull.

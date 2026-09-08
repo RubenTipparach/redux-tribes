@@ -115,6 +115,69 @@ export const FINISHES: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'crate', name: 'Container' },
 ];
 
+/**
+ * The decals a player can PAINT onto plating, and the order is a wire value.
+ *
+ * Windows have always been derived: a plate cell with a room behind it wears
+ * that room's decal, and each navy lays a row of its own along the flanks.
+ * That is what gives a stock hull its windows for free, and what it cannot do
+ * is let anybody put one anywhere, or take one away: a stretch of skin with no
+ * room behind it had no window, and a row the navy laid could not be argued
+ * with.
+ *
+ * So this is the OTHER half, and both halves stay. A painted cell is consulted
+ * first and a cell without one falls through to the derivation, so every hull
+ * in the fleet looks exactly as it did until somebody paints on it.
+ *
+ * The INDEX is what a design stores, so rows may be appended and never
+ * reordered: moving one would turn every saved bridge into a cargo door. `key`
+ * is the same key `WINDOW_VARIANTS` and the texture files use.
+ */
+export const DECALS: ReadonlyArray<{ key: string; name: string }> = [
+  { key: 'panes', name: 'Cabin panes' },
+  { key: 'porthole', name: 'Porthole' },
+  { key: 'strip', name: 'Strip window' },
+  { key: 'bridge', name: 'Bridge viewport' },
+  { key: 'promenade', name: 'Promenade' },
+  { key: 'beacons', name: 'Running lights' },
+  { key: 'louvre', name: 'Radiator louvre' },
+  { key: 'cargo', name: 'Cargo door' },
+  { key: 'hangar', name: 'Hangar mouth' },
+];
+/** Room to append to `DECALS` without moving a stored entry's cell. */
+export const DECAL_STRIDE = 16;
+/**
+ * The ERASER, stored: "no window on this cell, whatever the rooms and the
+ * navy's rows say". A painted decal can be peeled off by dropping its entry,
+ * but a derived window has no entry to drop, so taking one away has to be
+ * written down. The last slot of the stride, well clear of the list above.
+ */
+export const DECAL_BLANK = DECAL_STRIDE - 1;
+/** The decal key a stored kind names, `null` for the eraser, `undefined` for
+ *  a kind this build does not know (an entry from a newer one, left alone). */
+export const decalKey = (kind: number): string | null | undefined =>
+  kind === DECAL_BLANK ? null : DECALS[kind]?.key;
+
+/**
+ * What a player painted on each cell: a decal key, or `null` where they
+ * rubbed a derived window out.
+ *
+ * `Design.decal` is a wire format beside `plate` and `cut`: one integer per
+ * cell as `cell * DECAL_STRIDE + kind`, so a design record stays one flat list
+ * inside the library's budget. Cosmetic, exactly like the paint: never hashed,
+ * never sent to the core, so two players who decorated the same hull
+ * differently cannot read as a desync.
+ */
+export const decalMap = (d: Design): Map<number, string | null> => {
+  const out = new Map<number, string | null>();
+  for (const v of d.decal ?? []) {
+    if (!Number.isInteger(v) || v < 0) continue;
+    const key = decalKey(v % DECAL_STRIDE);
+    if (key !== undefined) out.set((v / DECAL_STRIDE) | 0, key);
+  }
+  return out;
+};
+
 export const DEFAULT_FINISH = 'plate';
 /**
  * What the two surfaces that are not armour wear until asked otherwise.
@@ -2813,6 +2876,15 @@ export interface Design {
    */
   plate?: number[];
   cut?: number[];
+  /**
+   * The decals a player painted, as `cell * DECAL_STRIDE + kind`, with
+   * `DECAL_BLANK` for a window rubbed out.
+   *
+   * One integer per cell rather than a pair, measured against the same budget
+   * as the pencil. Absent means a hull decorated entirely by derivation, which
+   * is every design that predates this and every stock hull.
+   */
+  decal?: number[];
   /** Which faction's swatches the paint bucket offers. */
   faction: string;
   /** Armour tint. Cosmetic only: never hashed, never sent to the core. */
@@ -3068,7 +3140,11 @@ export const rasterSig = (d: Design): string =>
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
-  + drawSig(d.plate) + '/' + drawSig(d.cut);
+  + drawSig(d.plate) + '/' + drawSig(d.cut)
+  // The decals are in the key because the window mesh is built in the same
+  // pass the plating is: a hull differing only in a painted porthole would
+  // otherwise be handed the mesh of the hull without one.
+  + '/' + drawSig(d.decal);
 
 const drawSig = (list: readonly number[] | undefined): string => {
   if (!list || !list.length) return '0';

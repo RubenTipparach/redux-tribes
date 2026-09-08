@@ -181,6 +181,16 @@ export function windowMap(key: string): WindowMaps | null {
  * per hull difference is in the vertex colours and the UVs.
  */
 const windowMats = new Map<string, THREE.MeshStandardMaterial>();
+/**
+ * The decal's own picture, for a picker: the emissive strip, which is the lit
+ * panes, and how many variants sit side by side in it so a chip can show one.
+ */
+export function windowThumb(key: string): { url: string; variants: number } | null {
+  const variants = WINDOW_VARIANTS[key];
+  if (!variants) return null;
+  return { url: at(`surf/window_${key}_e.png`), variants };
+}
+
 export function windowMaterial(key: string): THREE.MeshStandardMaterial | null {
   const had = windowMats.get(key);
   if (had) return had;

@@ -252,6 +252,105 @@ async function checkShips(page) {
 }
 
 /** Ghost armour, and a tap that names what it landed on. */
+/**
+ * A player can PAINT a window and RUB one OUT, which until now they could not:
+ * a window sat where a room or the navy's row put it and nowhere else.
+ *
+ * Counted off the MESH rather than off the design, because a number going up
+ * in a record proves a list was appended to and not that anything is drawn.
+ * The strokes go through the real pointer, with the sheet open, at every size:
+ * a decal tool a phone cannot reach is a tool that does not exist there.
+ */
+async function checkDecals(page, label) {
+  const dbg = async () => page.evaluate(() => {
+    const d = window.ftDebug.designer();
+    return { decal: d.decal, blank: d.decalBlank, armed: d.decalArmed, said: d.decalSaid,
+      faces: Object.values(d.windows ?? {}).reduce((a, c) => a + c, 0) };
+  });
+  await page.click('#dzTabDecor');
+  await page.waitForTimeout(300);
+  // Selectors rather than handles: the pane is rebuilt on every refresh, so a
+  // handle taken before a click is detached by the time of the next one.
+  const kinds = await page.$$eval('#dzDecals button', b => b.length);
+  if (kinds < 10) { fail(`${label}: only ${kinds} decals offered, eraser included`); return; }
+  const which = await page.evaluate(() => [...document.querySelectorAll('#dzDecals button')]
+    .findIndex(b => /bridge/i.test(b.textContent || '')));
+  const eraser = await page.evaluate(() => [...document.querySelectorAll('#dzDecals button')]
+    .findIndex(b => /eraser/i.test(b.textContent || '')));
+  if (which < 0 || eraser < 0) { fail(`${label}: no bridge viewport or no eraser in the picker`); return; }
+  const was = await dbg();
+  if (was.decal || was.blank) fail(`${label}: a stock hull opened with ${was.decal} painted, ${was.blank} rubbed out`);
+
+  // Arm the viewport and STROKE across the hull with the sheet open.
+  await page.click(`#dzDecals button:nth-child(${which + 1})`);
+  await page.waitForTimeout(200);
+  if ((await dbg()).armed !== which) fail(`${label}: armed ${(await dbg()).armed}, expected ${which}`);
+  const box = await page.locator('#dzCanvas').boundingBox();
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  const stroke = async (dy = 0) => {
+    await page.mouse.move(cx - 50, cy + dy);
+    await page.mouse.down();
+    for (let x = -50; x <= 50; x += 5) { await page.mouse.move(cx + x, cy + dy + 3); await page.waitForTimeout(30); }
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+  };
+  const yaw0 = await page.evaluate(() => window.ftDebug.designer().cam.yaw);
+  // The middle of the view is the hull, but the exact run may be a turret,
+  // which rightly refuses a decal: try a line or two lower and higher.
+  let drawn = was;
+  for (const dy of [0, 40, -40]) {
+    await stroke(dy);
+    drawn = await dbg();
+    if (drawn.decal >= 2) break;
+  }
+  const yaw1 = await page.evaluate(() => window.ftDebug.designer().cam.yaw);
+  if (drawn.decal < 2) fail(`${label}: a stroke across the hull painted ${drawn.decal} cell(s)`);
+  else if (drawn.faces <= was.faces)
+    fail(`${label}: ${drawn.decal} cells painted and the yard still draws ${drawn.faces} window faces`);
+  else ok(`${label}: a stroke paints ${drawn.decal} cells, ${was.faces} window faces to ${drawn.faces}`);
+  if (Math.abs(yaw1 - yaw0) > 1e-6) fail(`${label}: the stroke turned the model (yaw ${yaw0} to ${yaw1})`);
+  else ok(`${label}: the model holds still under a stroke`);
+
+  // Mirror X: one tap, two cells, one each side.
+  await page.click('#dzDecalMirrorX');
+  const before = (await dbg()).decal;
+  await page.mouse.click(cx + 12, cy - 22);
+  await page.waitForTimeout(400);
+  const mirrored = (await dbg()).decal - before;
+  await page.click('#dzDecalMirrorX');
+  if (mirrored === 2) ok(`${label}: with X mirrored one tap paints both flanks`);
+  else if (mirrored === 0) ok(`${label}: mirrored tap landed off the plating, nothing painted`);
+  else fail(`${label}: with X mirrored one tap painted ${mirrored} cells`);
+
+  // The ERASER over the same run takes them off again, and can take a
+  // derived window with them: what it rubbed out is counted as blank.
+  await page.click(`#dzDecals button:nth-child(${eraser + 1})`);
+  await page.waitForTimeout(200);
+  for (const dy of [0, 40, -40]) await stroke(dy);
+  const wiped = await dbg();
+  if (wiped.faces >= drawn.faces) fail(`${label}: the eraser left ${wiped.faces} faces of ${drawn.faces}`);
+  else ok(`${label}: the eraser takes them off, ${drawn.faces} faces to ${wiped.faces}`
+    + (wiped.blank ? `, ${wiped.blank} derived window(s) rubbed out with them` : ''));
+
+  // Clear all puts the hull back exactly as the rooms and the rows drew it.
+  // The eraser may already have emptied the list, in which case the button
+  // is rightly disabled and there is nothing to press.
+  if (wiped.decal || wiped.blank) {
+    await page.click('#dzDecalClear');
+    await page.waitForTimeout(400);
+  }
+  const back = await dbg();
+  if (back.decal || back.blank || back.faces !== was.faces)
+    fail(`${label}: clearing left ${back.decal} painted, ${back.blank} blank, ${back.faces} faces, not ${was.faces}`);
+  else ok(`${label}: clear all returns to ${back.faces} derived window faces`);
+  // Put the tool down, or every later tap in this run paints.
+  await page.click(`#dzDecals button:nth-child(${eraser + 1})`);
+  await page.waitForTimeout(200);
+  if ((await dbg()).armed !== null) fail(`${label}: the eraser stayed armed`);
+  await page.click('#dzTabParts');
+  await page.waitForTimeout(200);
+}
+
 async function checkGhostAndPicking(page) {
   await toTerranFrigate(page);
   await page.waitForTimeout(450);
@@ -1206,6 +1305,7 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
   if (w > 800) await checkViewport(page, label, 85);
   if (w > 800) {
     await checkShips(page);
+    await checkDecals(page, label);
     await checkGhostAndPicking(page);
     await checkTurrets(page);
     await checkOrbitIsSteady(page);
@@ -1241,6 +1341,10 @@ for (const [w, h, label] of [[1280, 900, 'desktop 1280x900'],
       !document.getElementById('dzPick').classList.contains('hidden'));
     if (!open) fail(`${label}: a tap on the model said nothing`);
     else ok(`${label}: a tap on the model opens the card`);
+
+    // And a decal stroke arrives through the same open sheet, at both phone
+    // sizes: the model above the sheet is where the plating is.
+    await checkDecals(page, label);
 
     // The hint and the tool row share the bottom of the canvas, and at 390 the
     // hint wrapped to a second line that ran under the buttons.

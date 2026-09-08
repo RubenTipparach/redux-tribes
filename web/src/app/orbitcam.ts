@@ -100,6 +100,18 @@ export interface OrbitHooks {
   onHover?(clientX: number, clientY: number): void;
   /** The mouse left the canvas, so whatever it was over is no longer under it. */
   onLeave?(): void;
+  /**
+   * Whether one finger is a BRUSH right now rather than the orbit.
+   *
+   * A tool that is armed owns the drag: a stroke across the hull paints every
+   * cell it crosses, and the model does not turn under it. Two fingers still
+   * pinch, so a phone can zoom without putting the tool down.
+   */
+  strokes?(): boolean;
+  /** One point of a stroke, `first` on the press that started it. */
+  onStroke?(clientX: number, clientY: number, first: boolean): void;
+  /** The finger lifted, or the stroke was cancelled. */
+  onStrokeEnd?(): void;
   /** How far in and out the zoom multiplier may travel. */
   zoomMin?: number;
   zoomMax?: number;
@@ -124,6 +136,7 @@ export function bindOrbit(cv: HTMLCanvasElement, cam: OrbitState, hooks: OrbitHo
   let pinch = 0;
   let downAt: { x: number; y: number; t: number } | null = null;
   let moved = 0;
+  let stroke = false;
   const gap = () => {
     const v = [...pts.values()];
     const a = v[0], b = v[1];
@@ -133,6 +146,19 @@ export function bindOrbit(cv: HTMLCanvasElement, cam: OrbitState, hooks: OrbitHo
   cv.addEventListener('pointerdown', e => {
     cv.setPointerCapture(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pts.size === 1 && hooks.strokes?.() && hooks.onStroke) {
+      stroke = true;
+      drag = null;
+      downAt = null;
+      hooks.onStroke(e.clientX, e.clientY, true);
+      e.preventDefault();
+      return;
+    }
+    if (stroke) {
+      // A second finger during a stroke ends it and becomes a pinch.
+      stroke = false;
+      hooks.onStrokeEnd?.();
+    }
     if (pts.size === 1) {
       drag = { x: e.clientX, y: e.clientY };
       downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -153,6 +179,10 @@ export function bindOrbit(cv: HTMLCanvasElement, cam: OrbitState, hooks: OrbitHo
       return;
     }
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (stroke) {
+      if (hooks.onStroke) hooks.onStroke(e.clientX, e.clientY, false);
+      return;
+    }
     if (pts.size >= 2) {
       const d = gap();
       if (pinch > 0 && d > 0) { zoom(pinch / d); pinch = d; }
@@ -168,6 +198,12 @@ export function bindOrbit(cv: HTMLCanvasElement, cam: OrbitState, hooks: OrbitHo
   const up = (e: PointerEvent) => {
     const tap = downAt && pts.size === 1 && moved < 6 && performance.now() - downAt.t < 700;
     pts.delete(e.pointerId);
+    if (stroke) {
+      stroke = false;
+      hooks.onStrokeEnd?.();
+      if (pts.size === 0) { drag = null; downAt = null; }
+      return;
+    }
     if (pts.size < 2) pinch = 0;
     if (pts.size === 0) { drag = null; downAt = null; }
     if (tap && hooks.onTap) hooks.onTap(e.clientX, e.clientY);

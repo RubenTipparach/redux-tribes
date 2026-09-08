@@ -33,7 +33,7 @@ import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
   finishesOf, frameFor, hullAt, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
-  socketsOf, type Design,
+  socketsOf, type Design, decalMap,
 } from './design.js';
 import type { MountFace } from './turret.js';
 
@@ -502,10 +502,25 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
     if (dy !== 0) return null;
+    // A HAND PAINTED decal wins, and it is asked first.
+    //
+    // The derivation below is what gives a stock hull its windows for free,
+    // and it can only ever answer for a cell with a room behind it or on the
+    // navy's row. A player who wants a porthole somewhere else, or no
+    // porthole where the row put one, is not making a mistake the editor
+    // should argue with, so a painted cell is simply the answer: its decal
+    // on every exposed flank and end face, or nothing at all for the eraser.
+    // The up and down rule above still holds, because it is the owner's rule
+    // about windows and not about how they got there.
+    const painted = decals.get(idx(i, j, k));
+    if (painted !== undefined) return painted;
     const own = roomBehind(i, j, k, dx, dy, dz);
     if (own || dx === 0) return own;
     return roomBehind(NX - 1 - i, j, k, -dx, dy, dz) ?? rowAt(i, j, k);
   };
+  /** What a player painted on, by cell. Built once per mesh rather than read
+   *  off the design per face: this is asked six times for every cell. */
+  const decals = decalMap(d);
   /** The navy's decorative rows, on a plate cell of a flank face. */
   const prof = frame.profile;
   const zA = Math.round((prof[0] as [number, number, number])[0]);

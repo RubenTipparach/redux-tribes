@@ -1466,6 +1466,50 @@ differently along its length instead of reading as one panel repeated. A hash
 rather than a counter, so adding a cabin elsewhere on the ship does not relight
 this one, and so both seats and a re-watch light it the same way.
 
+## A window can be painted, and a window can be rubbed out
+
+Windows are DERIVED: a plate cell with a room behind it wears that room's
+decal and each navy lays a row along its flanks, which is what gives every
+stock hull its windows for free. What that could never do is let a player put
+one anywhere, or take one away. The Decorate tab is the other half, and both
+halves stay.
+
+**`Design.decal` is one integer per cell, `cell * DECAL_STRIDE + kind`.** The
+same shape as `plate` and `cut`, measured against the same `DRAWN_MAX`, in
+`rasterSig` because the window mesh is built in the plating's own pass, and
+rebuilt field by field on load like every other field, because a field left
+off that list is a field a hull loses between the library and the editor.
+Cosmetic like the paint: never hashed, never sent to the core. The KIND is the
+index into `DECALS`, so that list is appended to and never reordered: moving
+one would turn every saved bridge into a cargo door.
+
+**A painted cell is asked FIRST, and the eraser is a kind.** `windowAt` in
+`hull.ts` reads `decalMap` before the room rule and the rows, so a painted
+cell wears its decal on every exposed flank and end face and a stock hull with
+nothing painted is exactly the hull it was. A painted decal comes off by
+dropping its entry, but a DERIVED window has no entry to drop, so rubbing one
+out has to be written down: `DECAL_BLANK` is the last slot of the stride and
+the mesher reads it as "nothing here". It is stored only where a window would
+otherwise be, so wiping a bare flank stores nothing. The owner's rule that no
+window looks up or down holds for painted ones too, because it is a rule about
+windows and not about how they got there.
+
+**A stroke, not a tap, and the model holds still under it.** An armed decal
+owns one finger on the model: `bindOrbit` hands the drag to `onStroke` rather
+than to the orbit, every cell crossed is painted once, and two fingers still
+pinch so a phone can zoom without putting the tool down. The mirrors are the
+armour pencil's mirrors shown twice, one state, so a flank mirrored for plate
+is mirrored for its windows. Plating only, for the pencil's reason: a window
+in a drive bell is a hole in an engine.
+
+`shipyard.mjs` strokes across a hull with the sheet open at all three sizes,
+reads the panes off the MESH (a list growing proves an append, not a window),
+checks the yaw did not move, erases the run and clears back to the derived
+count. `sim.test.mjs` pins the mesher half without a browser: a painted kind
+the hull derives none of appears on its cell, an erased derived window is
+gone, every other count is unchanged, and an unknown kind from a newer build
+is left alone rather than drawn as something else.
+
 ## Load every asset from the SITE ROOT
 
 The console is served from `/play/<id>` as well as from `/`, so `./ember.png`
