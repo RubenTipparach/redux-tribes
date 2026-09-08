@@ -906,6 +906,238 @@ test('a window can be painted where no room put one, and rubbed out where one wa
     + ` one erased ${victim.key} cell takes ${lost} off`);
 });
 
+test('a picked colour paints one cell, not the whole scheme', async () => {
+  // The palette used to be a SCHEME picker: choosing a swatch set `paint`, and
+  // every livery role is an offset from it, so picking a colour repainted the
+  // entire ship in a scheme built round it. A player who wanted one panel a
+  // different colour had no way to say so.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const { hullMesh } = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, rasterise, paintFor, isPainted, paintedSlot, armourColour, Mat, useCore } = design;
+  useCore(() => null);
+
+  const base = stockFor('terran_frigate');
+  const plain = rasterise(base);
+
+  // A cell of armour to paint, and one the brush must refuse.
+  let armour = -1, machinery = -1;
+  for (let n = 0; n < plain.grid.length; n++) {
+    const m = plain.grid[n];
+    if (armour < 0 && (m === Mat.Plate || m === Mat.Skinned)) armour = n;
+    if (machinery < 0 && m === Mat.Machine) machinery = n;
+  }
+  assert.ok(armour >= 0 && machinery >= 0, 'the frigate has both armour and machinery');
+
+  const swatches = paintFor(base.faction).swatches;
+  const slot = 5;
+  const painted = { ...base, tint: [armour * 8 + slot] };
+  const r = rasterise(painted);
+
+  // The cell wears the slot's own colour...
+  assert.ok(isPainted(r.tone[armour]), 'the painted cell is marked as hand painted');
+  assert.equal(paintedSlot(r.tone[armour]), slot, 'and it remembers which slot');
+  assert.equal(armourColour(painted.faction, painted.paint, r.tone[armour]),
+    swatches[slot], 'a painted cell is the swatch that was picked, exactly');
+
+  // ...and NOTHING ELSE MOVED. This is the whole complaint: one cell changed,
+  // the ship did not.
+  let moved = 0;
+  for (let n = 0; n < r.tone.length; n++) {
+    if (n === armour) continue;
+    if (r.tone[n] !== plain.tone[n]) moved++;
+  }
+  assert.equal(moved, 0, `${moved} other cells changed colour when one was painted`);
+  assert.equal(painted.paint, base.paint, 'the brush did not change the hull colour');
+
+  // The mesh really draws it: the quad on that cell carries the slot's colour.
+  // three stores vertex colour in the LINEAR working space, so the swatch is
+  // converted the same way rather than compared as bytes: a raw comparison
+  // fails on a colour that is drawn perfectly.
+  const lin = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  const mesh = hullMesh(painted);
+  const col = mesh.geo.getAttribute('color');
+  const want = swatches[slot];
+  const wr = lin(((want >> 16) & 255) / 255), wg = lin(((want >> 8) & 255) / 255),
+    wb = lin((want & 255) / 255);
+  let seen = false;
+  for (let q = 0; q < mesh.quads && !seen; q++) {
+    if (mesh.cellOf[q] !== armour) continue;
+    seen = Math.abs(col.getX(q * 4) - wr) < 0.01
+      && Math.abs(col.getY(q * 4) - wg) < 0.01
+      && Math.abs(col.getZ(q * 4) - wb) < 0.01;
+  }
+  assert.ok(seen, 'the mesh does not draw the painted cell in the picked colour');
+
+  // Machinery is not paintable, and that is the rule rather than an oversight:
+  // a drive is orange and a gun is red on anybody's ship, which is what makes
+  // an unfamiliar hull readable without a legend.
+  const onPart = rasterise({ ...base, tint: [machinery * 8 + slot] });
+  assert.ok(!isPainted(onPart.tone[machinery]),
+    'the brush painted a part, so a drive can stop looking like a drive');
+
+  // A slot carries a FINISH as well as a colour, and a hull pays a draw call
+  // for each slot it actually paints with and none for the rest. Three bands
+  // is what the livery paints by itself on every hull; these are opt in.
+  const plainGroups = hullMesh(base).geo.groups.length;
+  const armourCells = [];
+  for (let n = 0; n < plain.grid.length && armourCells.length < 60; n++) {
+    if (plain.grid[n] === Mat.Plate) armourCells.push(n);
+  }
+  const oneSlot = hullMesh({ ...base, tint: armourCells.slice(0, 30).map(n => n * 8 + 4) });
+  const threeSlots = hullMesh({ ...base,
+    tint: armourCells.map((n, i) => n * 8 + [1, 4, 6][i % 3]) });
+  assert.equal(oneSlot.geo.groups.length, plainGroups + 1,
+    'painting from one slot did not cost exactly one more draw');
+  assert.equal(threeSlots.geo.groups.length, plainGroups + 3,
+    'painting from three slots did not cost exactly three more draws');
+  console.log(`  brush: one cell painted, ${moved} others moved; `
+    + `draws ${plainGroups} bare, ${oneSlot.geo.groups.length} on one slot, `
+    + `${threeSlots.geo.groups.length} on three`);
+});
+
+test('a surface per colour slot, and machinery split by what it does', async () => {
+  // Two complaints, one answer. The palette offered a normal map for "the
+  // selected slot", so seven of the eight were invisible and there was no
+  // saying which colour the dropdown was about. And every part on the ship
+  // shared ONE surface, on the grounds that a drive is already orange and a
+  // gun already red: true of the colour, and never true of the surface. A
+  // drive bell is a cast nozzle, a turret is a machined gun, a barracks is a
+  // box.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/hull.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const H = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  const { stockFor, finishesOf, paintFor, useCore } = design;
+  useCore(() => null);
+
+  // Every surface has a name, and the count is what `SURF_COUNT` says: a list
+  // spelled by hand somewhere else is how a trim band whose texture never
+  // loaded came to be reported as a healthy frame.
+  assert.equal(H.SURF_NAMES.length, H.SURF_COUNT);
+  for (const want of ['drive', 'weapon', 'part', 'frame']) {
+    assert.ok(H.SURF_NAMES.includes(want), `no surface called ${want}`);
+  }
+  assert.equal(H.SURF_NAMES.filter(n => n.startsWith('brush ')).length, H.PAINT_SLOTS,
+    'one surface per palette slot');
+
+  const base = stockFor('terran_frigate');
+  const groups = H.hullMesh(base).geo.groups;
+  const used = new Set(groups.map(g => g.materialIndex));
+  // A hull with engines, guns and berths on it draws all three, so the split
+  // is reachable rather than merely declared.
+  for (const which of ['drive', 'weapon', 'part']) {
+    assert.ok(used.has(H.SURF_NAMES.indexOf(which)),
+      `a stock frigate draws no ${which} surface`);
+  }
+
+  // And each one is a separate answer: setting the drives' finish must not
+  // move the guns'.
+  const mixed = { ...base, driveFinish: 'ribbed', weaponFinish: 'hex', partFinish: 'plate' };
+  const f = finishesOf(mixed);
+  assert.equal(f.drive, 'ribbed');
+  assert.equal(f.weapon, 'hex');
+  assert.equal(f.part, 'plate');
+  // A design that never set them falls back to the one answer it used to
+  // have, so nothing needs migrating.
+  const old = { ...base, partFinish: 'weave' };
+  delete old.driveFinish; delete old.weaponFinish;
+  const g = finishesOf(old);
+  assert.equal(g.drive, 'weave', 'an old design lost its machinery finish');
+  assert.equal(g.weapon, 'weave', 'an old design lost its machinery finish');
+
+  // Eight slots, and every one of them addressable.
+  assert.equal(paintFor(base.faction).swatches.length, H.PAINT_SLOTS,
+    'the palette and the slot surfaces disagree about how many there are');
+  console.log(`  surfaces: ${H.SURF_COUNT} named, `
+    + `${groups.length} drawn on a bare frigate (${[...used].sort((a, b) => a - b)
+      .map(i => H.SURF_NAMES[i]).join(', ')})`);
+});
+
+test('a design file carries every field it was saved with, and refuses rubbish', async () => {
+  // A design file is written whole and read back FIELD BY FIELD, so the
+  // reader's whitelist is the actual contract. A field left off it is a field
+  // a hull loses on the way through a file, silently, coming back wearing
+  // whatever the fallback says.
+  const built = await build({
+    entryPoints: [resolve(root, 'src/app/frames.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const F = await import('data:text/javascript;base64,'
+    + Buffer.from(built.outputFiles[0].text).toString('base64'));
+  const dsn = await build({
+    entryPoints: [resolve(root, 'src/app/design.ts')],
+    bundle: true, format: 'esm', write: false, target: 'es2022', logLevel: 'silent',
+  });
+  const design = await import('data:text/javascript;base64,'
+    + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
+  design.useCore(() => null);
+
+  const d = {
+    ...design.stockFor('terran_frigate'),
+    finish: 'hex', frameFinish: 'cracked', partFinish: 'tread',
+    driveFinish: 'ribbed', weaponFinish: 'battered',
+    slotFinish: ['plate', null, 'weave', null, null, null, null, 'crate'],
+    tint: [8 * 100 + 3, 8 * 2000 + 6],
+    decal: [16 * 3 + 1, 16 * 900 + 5, 16 * 950 + design.DECAL_BLANK],
+  };
+  const back = F.designFromJson(F.designToJson(d, 'round trip'));
+  assert.ok(back.design, `a file this build wrote came back refused: ${back.why}`);
+  for (const k of ['finish', 'frameFinish', 'partFinish', 'driveFinish', 'weaponFinish']) {
+    assert.equal(back.design[k], d[k], `${k} was lost on the way through a file`);
+  }
+  assert.deepEqual(back.design.slotFinish, d.slotFinish,
+    'the per slot finishes were lost on the way through a file');
+  assert.deepEqual(back.design.tint, d.tint, 'the brush strokes were lost on the way through a file');
+  assert.deepEqual(back.design.decal, d.decal, 'the painted decals were lost on the way through a file');
+
+  // And a file is untrusted input: a slot list full of rubbish comes back as
+  // nulls rather than as whatever was in it, and one bad entry does not cost
+  // the seven good ones. A cell off the lattice and a decal kind this build
+  // has never heard of are dropped the same way.
+  const junk = JSON.parse(F.designToJson(d, 'junk'));
+  junk.design.slotFinish = [{ x: 1 }, 'weave', 7, null, 'plate', [], 'hex', 'tread'];
+  junk.design.plate = [5, -1, 'x', design.CELLS + 4, 5];
+  junk.design.decal = [16 * 3 + 1, 16 * 3 + 12, 16 * (design.CELLS + 1) + 1];
+  const read = F.designFromJson(JSON.stringify(junk));
+  assert.ok(read.design, `a design with a bad slot list was refused whole: ${read.why}`);
+  assert.deepEqual(read.design.slotFinish,
+    [null, 'weave', null, null, 'plate', null, 'hex', 'tread']);
+  assert.deepEqual(read.design.plate, [5]);
+  assert.deepEqual(read.design.decal, [16 * 3 + 1]);
+
+  // A frame file is checked the same way, and a socket off the lattice is a
+  // message rather than a write past the end of an array.
+  const frame = design.stockFrameFor('terran_frigate');
+  const fb = F.fromFile(F.toJson(frame));
+  assert.ok(fb.frame, `a frame this build wrote came back refused: ${fb.why}`);
+  assert.ok(!F.edited(fb.frame), 'a frame read back from its own export reads as edited');
+  const bad = JSON.parse(F.toJson(frame));
+  bad.sockets[0].at = [0, 0, 9000];
+  assert.ok(F.fromFile(JSON.stringify(bad)).why, 'a socket at z 9000 was accepted');
+  const wrongFmt = JSON.parse(F.toJson(frame));
+  wrongFmt.format = 'fallen-tribes/frame@2';
+  assert.ok(F.fromFile(JSON.stringify(wrongFmt)).why, 'a frame from another lattice was accepted');
+  console.log('  design file: five finish fields, eight slots, the brush and the decals survive a round trip');
+});
+
 test('no stock mount is blocked in the direction it rests', async () => {
   // The rule the user of a shipyard would state as "nothing should be standing
   // in front of a gun", checked the only way it can be: by scanning the hull.

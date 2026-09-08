@@ -210,13 +210,24 @@ export function finishesOf(d: {
   faction: string; paint: number;
   finish?: string; slotFinish?: (string | null)[];
   frameFinish?: string; partFinish?: string;
-}): { armour: string; frame: string; part: string } {
+  driveFinish?: string; weaponFinish?: string;
+}): { armour: string; frame: string; part: string; drive: string; weapon: string } {
   const slot = paintFor(d.faction).swatches.indexOf(d.paint);
   const picked = slot >= 0 ? d.slotFinish?.[slot] : null;
   return {
     armour: picked || d.finish || DEFAULT_FINISH,
     frame: d.frameFinish || DEFAULT_FRAME_FINISH,
     part: d.partFinish || DEFAULT_PART_FINISH,
+    // Machinery split three ways. It was ONE finish for everything a part is
+    // made of, on the grounds that a player can already tell a drive from a
+    // gun by its COLOUR and the distinction worth having was machinery
+    // against plate. That is still true of the colour and it was never true
+    // of the SURFACE: a drive bell is a cast nozzle, a turret is a machined
+    // gun, and a barracks is a box, and one greeble over all three says none
+    // of it. Each falls back to the old single answer, so a design that never
+    // set them looks exactly as it did.
+    drive: d.driveFinish || d.partFinish || DEFAULT_PART_FINISH,
+    weapon: d.weaponFinish || d.partFinish || DEFAULT_PART_FINISH,
   };
 }
 
@@ -505,18 +516,26 @@ export function bandFinishes(d: {
 // ---------------------------------------------------------------- parts --
 
 /** What a socket will accept. A part never fits a socket of another kind. */
-export type SocketKind =
-  | 'drive' | 'retro' | 'rcs' | 'gun' | 'trunnion' | 'missile' | 'bay' | 'clamp'
-  /**
-   * A cargo station ON the hull rather than inside it.
-   *
-   * A container ship whose containers are enclosed bays is a grey slab with
-   * the cargo invisible inside it, which is what the first cut of the civil
-   * fleet came out as. A box is carried on deck, in tiers, and it is the boxes
-   * that make the ship read as a merchantman at all: this is the one socket
-   * kind whose whole point is that the part STANDS OUT.
-   */
-  | 'rack';
+/**
+ * Every kind of station a frame can carry.
+ *
+ * A runtime list with the type read OFF it, rather than a union beside an
+ * array somebody has to remember to extend twice. The architect reads untrusted
+ * JSON and has to be able to ask "is this a kind this build has", and the only
+ * way that answer stays true is if there is one list to ask.
+ *
+ * `rack` is a cargo station ON the hull rather than inside it. A container ship
+ * whose containers are enclosed bays is a grey slab with the cargo invisible
+ * inside it, which is what the first cut of the civil fleet came out as. A box
+ * is carried on deck, in tiers, and it is the boxes that make the ship read as
+ * a merchantman at all: this is the one socket kind whose whole point is that
+ * the part STANDS OUT.
+ */
+export const SOCKET_KINDS = [
+  'drive', 'retro', 'rcs', 'gun', 'trunnion', 'missile', 'bay', 'clamp', 'rack',
+] as const;
+
+export type SocketKind = typeof SOCKET_KINDS[number];
 
 export interface ModuleDef {
   readonly id: string;
@@ -2653,10 +2672,45 @@ export function seatOf(frame: FrameDef, sock: Socket,
 
 const seated = new Map<string, FrameDef>();
 
+/**
+ * A frame the ARCHITECT is editing, standing in for the authored one.
+ *
+ * The architect is an authoring tool, not a second way to field a ship: what a
+ * class derives is in the core's table and that table is hashed into the match
+ * state, so a frame edited here and flown there would be one seat playing a
+ * different ship from the other. It previews and it EXPORTS; the edit reaches
+ * a match by going back into this file and through `measure_fleet.mjs --sync`,
+ * which is the same road every stock number already travels.
+ *
+ * So this is deliberately one frame at a time, set on the way into the screen
+ * and cleared on the way out, rather than a store the rest of the app reads.
+ */
+let override: FrameDef | null = null;
+/** Bumped on every change, because `rasterSig` keys a cache on the CLASS and
+ *  two different frames under one class key would otherwise share a raster. */
+let overrideGen = 0;
+
+/** Put a frame in front of its authored one, or `null` to take it away. */
+export function setFrameOverride(f: FrameDef | null): void {
+  override = f;
+  overrideGen++;
+  seated.clear();
+}
+
+/** Which class is being overridden, if any. For the signature and for screens
+ *  that have to say so out loud. */
+export function frameOverride(): FrameDef | null { return override; }
+export function frameGen(): number { return overrideGen; }
+
+/** The frame as this build authored it, whatever the architect is showing. */
+export const stockFrameFor = (classKey: string): FrameDef =>
+  FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+
 export const frameFor = (classKey: string): FrameDef => {
+  if (override && override.classKey === classKey) return override;
   const hit = seated.get(classKey);
   if (hit) return hit;
-  const f = FRAMES.find(x => x.classKey === classKey) ?? (FRAMES[0] as FrameDef);
+  const f = stockFrameFor(classKey);
   seated.set(classKey, f);
   return f;
 };
@@ -2877,6 +2931,20 @@ export interface Design {
   plate?: number[];
   cut?: number[];
   /**
+   * Cells painted BY HAND, as `cell * 8 + slot`.
+   *
+   * The palette used to be a scheme picker: choosing a swatch set `paint` and
+   * every other role moved with it, so a player who wanted one panel a
+   * different colour repainted the whole ship instead. A slot picked here is
+   * a BRUSH, and this is where the strokes go.
+   *
+   * One integer per cell rather than a pair, because this is a wire format
+   * living in a design record beside `plate` and `cut` and it is measured
+   * against the same budget. Eight slots, so the low three bits are the slot
+   * and the rest is the cell.
+   */
+  tint?: number[];
+  /**
    * The decals a player painted, as `cell * DECAL_STRIDE + kind`, with
    * `DECAL_BLANK` for a window rubbed out.
    *
@@ -2933,6 +3001,21 @@ export interface Design {
    */
   frameFinish?: string;
   partFinish?: string;
+  /**
+   * What the DRIVES and the GUNS are made of, apart from everything else.
+   *
+   * `partFinish` was ONE answer for all machinery, on the grounds that a
+   * player can already tell a drive from a gun by its colour and the
+   * distinction worth drawing was machinery against plate. That is still true
+   * of the COLOUR and it was never true of the SURFACE: a drive bell is a
+   * cast nozzle, a turret is a machined gun and a barracks is a box, and one
+   * greeble over all three says none of it.
+   *
+   * Optional, and absent means whatever `partFinish` says, which is what every
+   * design that predates them already has: nothing to migrate.
+   */
+  driveFinish?: string;
+  weaponFinish?: string;
   /** How metallic and how rough that armour is, 0 to 1. Presentation. */
   metal?: number;
   rough?: number;
@@ -3134,13 +3217,17 @@ export const DRAWN_MAX = 20000;
 /** A design's identity for caching. Paint is not in it: the raster does not
  *  depend on it, and anything that draws colour keys on this plus the paint. */
 export const rasterSig = (d: Design): string =>
-  d.classKey + '|' + d.armour + '|'
+  // The override generation first, because the rest of this describes the
+  // DESIGN and a frame edited under the same class key would otherwise be
+  // handed the previous frame's raster out of the cache.
+  (override ? `f${overrideGen}|` : '')
+  + d.classKey + '|' + d.armour + '|'
   + d.parts.map(p => p.socket + ':' + p.module + ':' + facingKey(facingOf(p)))
     .sort().join(',') + '|'
   + SECTIONS.map(k => d.sections[k]).join(',') + '|'
   // A length and a sum: cheap, and it changes whenever a cell does. The cache
   // is a frame's worth of work, not a correctness boundary.
-  + drawSig(d.plate) + '/' + drawSig(d.cut)
+  + drawSig(d.plate) + '/' + drawSig(d.cut) + '/' + drawSig(d.tint)
   // The decals are in the key because the window mesh is built in the same
   // pass the plating is: a hull differing only in a painted porthole would
   // otherwise be handed the mesh of the hull without one.
@@ -3815,6 +3902,21 @@ export function rasterise(d: Design): Raster {
     if (j < loY) loY = j; if (j > hiY) hiY = j;
     if (k < loZ) loZ = k; if (k > hiZ) hiZ = k;
   }
+  // --- the brush ----------------------------------------------------------
+  //
+  // Hand painted cells, last, over whatever the livery worked out. Only where
+  // there is ARMOUR to paint: a stroke that outlived the plate under it would
+  // colour a drive bell the day somebody moved a belt, and a part is coloured
+  // by what it DOES, which is the thing that makes an unfamiliar hull
+  // readable.
+  for (const v of d.tint ?? []) {
+    const n = (v / 8) | 0;
+    if (n < 0 || n >= CELLS) continue;
+    const m = grid[n] as number;
+    if (m !== Mat.Plate && m !== Mat.Skinned) continue;
+    tone[n] = PAINTED | (v & 7);
+  }
+
   const extent = [
     Math.max(1, hiX - loX + 1), Math.max(1, hiY - loY + 1), Math.max(1, hiZ - loZ + 1),
   ] as [number, number, number];
@@ -4678,7 +4780,24 @@ export function cellColour(mat: number, code: number, paint: number): number {
  * orange and a gun still red on anybody's ship. That is the part a player must
  * be able to read on an unfamiliar hull, and it is not paint.
  */
+/**
+ * A cell PAINTED BY HAND rides in the same byte the livery role does.
+ *
+ * `tone` is a role code, one to eight, and the high bit says "this is not a
+ * role, it is a slot somebody chose". Everything that draws armour already
+ * asks `armourColour` for a cell's colour, so putting it here is what gets the
+ * map, the shipyard, the schematic and the wound painting the same cell the
+ * same way without four of them learning about a brush.
+ */
+export const PAINTED = 0x80;
+export const paintedSlot = (tone: number): number => tone & 0x07;
+export const isPainted = (tone: number): boolean => (tone & PAINTED) !== 0;
+
 export function armourColour(faction: string, paint: number, tone = 0): number {
+  if (isPainted(tone)) {
+    const sw = paintFor(faction).swatches;
+    return (sw[paintedSlot(tone) % sw.length] ?? paint) as number;
+  }
   return tone ? roleColour(faction, paint, roleAt(tone)) : paint;
 }
 

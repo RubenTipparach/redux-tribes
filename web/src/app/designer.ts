@@ -25,6 +25,7 @@ import {
 // The map's own mesher, asked ONLY for its windows: where a window goes is a
 // fact about the design, and two answers to it would be two ships.
 import { hullMesh } from './hull.js';
+import { designFromJson, designToJson } from './frames.js';
 import {
   NX, NY, NZ, RUNG, FRAMES, MODULES, GUNS, SECTIONS, STOCK,
   FACTION_PAINT, PURPOSE_ORDER,
@@ -33,7 +34,7 @@ import {
   gunByKey, allRound, zeroSections, cellIndex, inTurret, DRAWN_MAX,
   DECALS, DECAL_STRIDE, DECAL_BLANK,
   arcMasks, rasterSig, DEFAULT_FINISH, DEFAULT_METAL, DEFAULT_ROUGH,
-  DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf,
+  DEFAULT_FRAME_FINISH, DEFAULT_PART_FINISH, FINISHES, finishesOf, purposeAt,
   FACTION_ORDER, TIER_ORDER, TIER_NAMES,
   ARMOUR_BANDS, ROLE_BAND, bandFinishes, roleAt, roleCode, seatedFacing,
   type Design, type Derived, type SectionKey, type ArmourMode, type GunDef,
@@ -44,6 +45,9 @@ import {
 
 /** What the plate is doing: solid, see through, or off. */
 type PlateView = 'on' | 'ghost' | 'off';
+
+/** The brush's own eraser, as a slot number no palette has. */
+const BRUSH_ERASER = -1;
 
 /**
  * What a hull is drawn with in here: machinery, one material per BAND of
@@ -56,6 +60,9 @@ type PlateView = 'on' | 'ghost' | 'off';
  * divergence GUIDELINES 5.1 is about.
  */
 interface HullSurfaces {
+  frame: THREE.MeshStandardMaterial;
+  drive: THREE.MeshStandardMaterial;
+  weapon: THREE.MeshStandardMaterial;
   part: THREE.MeshStandardMaterial;
   plate: THREE.MeshStandardMaterial[];
   ghost: THREE.MeshStandardMaterial;
@@ -180,14 +187,30 @@ export class Designer {
   #design: Design = stockFor('terran_frigate');
   #derived: Derived = derive(this.#design);
   #socket: string | null = null;
-  #tab: 'parts' | 'armour' | 'decor' | 'stats' = 'parts';
+  #tab: 'parts' | 'armour' | 'decor' | 'stats' | 'frame' = 'parts';
+  /** Architect mode: the same canvas editing the FRAME rather than a fit. */
+  #arch = false;
   /** The decal armed for painting, by `DECALS` index or `DECAL_BLANK` for
    *  the eraser, or null for none: a tap then names parts as it always did. */
   #decal: number | null = null;
+  /**
+   * The colour slot the brush is holding, `BRUSH_ERASER` for the eraser, or
+   * null for no brush.
+   *
+   * Picking a swatch used to set `paint`, which is the base every livery role
+   * is an OFFSET from, so choosing a colour repainted the whole ship in a
+   * scheme built round it. That is a seed rather than a decision, and it is
+   * what a player means when they say the palette will not let them pick a
+   * colour to paint WITH. This is the brush; `paint` is still the hull's own
+   * colour and has its own control. One tool owns a stroke at a time, so
+   * arming the brush puts a decal down and the other way round.
+   */
+  #brushSlot: number | null = null;
   /** The cells this stroke has already visited, so dragging back over one
    *  does not paint it twice. */
   #strokeSeen = new Set<number>();
   #decalSaid = '';
+  #brushSaid = '';
   /**
    * Which draft slot this hull's unsaved work belongs in, which is the same
    * string the URL carries: a design id for a saved hull, a class key for one
@@ -333,6 +356,11 @@ export class Designer {
       decal: Array.isArray(d.decal)
         ? d.decal.filter((v): v is number => Number.isInteger(v) && v >= 0).slice(0, DRAWN_MAX)
         : [],
+      tint: Array.isArray(d.tint)
+        ? d.tint.filter((v): v is number => Number.isInteger(v) && v >= 0).slice(0, DRAWN_MAX)
+        : [],
+      ...(typeof d.driveFinish === 'string' ? { driveFinish: d.driveFinish } : {}),
+      ...(typeof d.weaponFinish === 'string' ? { weaponFinish: d.weaponFinish } : {}),
     };
     this.#slot = slot;
     // The draft slot for a saved hull is its own id, which is also what the
@@ -397,6 +425,68 @@ export class Designer {
   /** Move the draft slot, for when a hull acquires an id by being saved. */
   setDraftKey(key: string): void { this.#draftKey = key; }
 
+  /**
+   * The architect: the same yard, editing the FRAME rather than a fit.
+   *
+   * A mode rather than a second screen, because everything the architect needs
+   * is already here and correct: the canvas, the orbit, the picking, the
+   * derive readout, and a rail that is a bottom sheet on a phone. A second
+   * screen would be a second copy of all of that, and the copy is the one that
+   * would stop working at 390 px.
+   */
+  setArchitect(on: boolean): void {
+    this.#arch = on;
+    $('designer').classList.toggle('arch', on);
+    $('dzTitle').textContent = on ? 'Ship Architect' : 'Shipyard';
+    // Land on a pane that exists in this mode. Staying on Parts in the
+    // architect would show the fitting rail with its tab hidden, which is a
+    // pane a player cannot leave.
+    if (on && (this.#tab === 'parts' || this.#tab === 'armour' || this.#tab === 'decor')) {
+      this.#tab = 'frame';
+    }
+    if (!on && this.#tab === 'frame') this.#tab = 'parts';
+    // Open the sheet on the way in. Collapsed is right for the yard, where the
+    // model is the thing being edited and the rail is the tool; here the RAIL
+    // is the tool and the editor both, so arriving with it shut is arriving at
+    // a screen with no controls on it.
+    if (on) {
+      $('designer').classList.remove('wide');
+      $('dzGrow').innerHTML = '\u25B2';
+    }
+    this.#syncTabs();
+  }
+
+  get architect(): boolean { return this.#arch; }
+
+  /**
+   * Rebuild the hull from its FRAME, throwing away the fit on screen.
+   *
+   * `newDesign` is idempotent on the class it is already showing, which is
+   * right for browsing and wrong here: the architect changes the frame UNDER
+   * one class key, so what it wants back is a different ship at the same
+   * address and the early return would hand it the old one. It skips the
+   * design draft too, because a draft is a FIT and what just moved is the
+   * thing being fitted to.
+   */
+  reseed(classKey: string): void {
+    this.#design = stockFor(classKey);
+    this.#slot = { designId: null, name: '', mine: false };
+    this.#draftKey = classKey;
+    this.#syncDrawSets();
+    this.#note = null;
+    this.#syncSaveButton();
+    if (this.#renderer) this.#refresh();
+  }
+
+  /** Which station is selected, and a way to say so from the rail. The model
+   *  and the list are one selection: picking in either has to light both, or
+   *  a player nudges a socket that is not the one they can see outlined. */
+  get socket(): string | null { return this.#socket; }
+  selectSocket(id: string | null): void {
+    this.#socket = id;
+    if (this.#renderer) this.#refresh();
+  }
+
   /** Told when an unsaved hull's class changes, so whoever owns the address
    *  can point it at that stock ship. The designer does not own the router. */
   #onPickClass: ((classKey: string) => void) | null = null;
@@ -444,7 +534,7 @@ export class Designer {
       onTap: (x, y) => this.#pickAt(x, y),
       // An armed decal owns the drag: a stroke paints, and the model holds
       // still under it. Two fingers still zoom.
-      strokes: () => this.#decal !== null,
+      strokes: () => this.#decal !== null || this.#brushSlot !== null,
       onStroke: (x, y, first) => this.#strokeAt(x, y, first),
       onStrokeEnd: () => this.#strokeEnd(),
     });
@@ -512,17 +602,19 @@ export class Designer {
       const base = () => new THREE.MeshStandardMaterial({
         metalness: YARD_METAL, roughness: 0.62, dithering: true,
       });
-      const part = base();
-      // Machinery, once: it never depends on the design. A drive bell and an
-      // armour panel are not the same surface, and painting the plate's rivets
-      // onto a reactor made a ship one material with parts drawn on it.
-      part.normalMap = partMap();
+      // Machinery, four ways: the frame under the plating, what pushes, what
+      // shoots, and everything else. `partMap` is only the starting value;
+      // each is set from the design below. It was ONE surface over every cell
+      // that is not plating, which meant three of the four finish dropdowns
+      // in this very screen changed nothing you could see in it.
+      const frame = base(), drive = base(), weapon = base(), part = base();
+      for (const m of [frame, drive, weapon, part]) m.normalMap = partMap();
       const plate = Array.from({ length: ARMOUR_BANDS }, base);
       const ghost = base();
       ghost.transparent = true;
       ghost.opacity = 0.3;
       ghost.depthWrite = false;
-      this.#surfaces = { part, plate, ghost };
+      this.#surfaces = { frame, drive, weapon, part, plate, ghost };
     }
     const s = this.#surfaces;
     // The picked SLOT's surface, through the same resolver the map uses, so
@@ -539,10 +631,13 @@ export class Designer {
     // skin is: three ghosts would be three transparent draws over each other.
     const finish = finishMap(bands[0] as string);
     if (s.ghost.normalMap !== finish) { s.ghost.normalMap = finish; s.ghost.needsUpdate = true; }
-    const partFinish = finishMap(surf.part);
-    if (s.part.normalMap !== partFinish) {
-      s.part.normalMap = partFinish;
-      s.part.needsUpdate = true;
+    // Each of the four from the design, and `needsUpdate` only where the map
+    // actually moved: setting it every rebuild is the shader recompile the
+    // whole cache exists to avoid, spelled a different way.
+    for (const [m, key] of [[s.frame, surf.frame], [s.drive, surf.drive],
+      [s.weapon, surf.weapon], [s.part, surf.part]] as const) {
+      const map = finishMap(key);
+      if (m.normalMap !== map) { m.normalMap = map; m.needsUpdate = true; }
     }
     return s;
   }
@@ -637,7 +732,27 @@ export class Designer {
       this.#hull.add(group);
     });
 
-    const solid: number[] = [], solidCol: number[] = [];
+    // Machinery, in four lists because it is drawn in four surfaces: the
+    // frame, the drives, the guns and everything else. Same cells, same
+    // colours, sorted by what they are FOR so each can wear its own finish.
+    const SOLID = ['frame', 'drive', 'weapon', 'part'] as const;
+    const solid: Record<typeof SOLID[number], number[]> =
+      { frame: [], drive: [], weapon: [], part: [] };
+    const solidCol: Record<typeof SOLID[number], number[]> =
+      { frame: [], drive: [], weapon: [], part: [] };
+    const solidOf = (mat: number, code: number): typeof SOLID[number] => {
+      // Structure wears the frame's surface, which is what its COLOUR already
+      // says: `cellColour` gives a frame cell and a skinned one the same
+      // structure hue, so giving them different materials would be one cell
+      // painted two ways.
+      if (mat === Mat.Frame || mat === Mat.Skinned) return 'frame';
+      // Nought is no purpose recorded, which is a spar rather than a drive.
+      if (!code) return 'part';
+      const job = purposeAt(code);
+      if (job === 'propulsion' || job === 'attitude') return 'drive';
+      if (job === 'gun' || job === 'ordnance') return 'weapon';
+      return 'part';
+    };
     // One list per band of plating, because each band is its own material and
     // an instanced draw takes one.
     const skin: number[][] = Array.from({ length: ARMOUR_BANDS }, () => []);
@@ -664,8 +779,9 @@ export class Designer {
           (rigCells[rig] as number[]).push(i, j, k);
           (rigCols[rig] as number[]).push(col);
         } else {
-          solid.push(i, j, k);
-          solidCol.push(col);
+          const which = solidOf(mat, purp[n] as number);
+          (solid[which] as number[]).push(i, j, k);
+          (solidCol[which] as number[]).push(col);
         }
       }
     }
@@ -687,7 +803,7 @@ export class Designer {
     }
 
     let loX = NX, loY = NY, loZ = NZ, hiX = -1, hiY = -1, hiZ = -1;
-    for (const list of [solid, ...skin, ghost, ...rigCells]) {
+    for (const list of [...SOLID.map(k => solid[k] as number[]), ...skin, ghost, ...rigCells]) {
       for (let q = 0; q < list.length; q += 3) {
         const x = list[q] as number, y = list[q + 1] as number, z = list[q + 2] as number;
         if (x < loX) loX = x; if (x > hiX) hiX = x;
@@ -716,7 +832,8 @@ export class Designer {
     }
 
     const skinCells = skin.reduce((a, c) => a + c.length / 3, 0);
-    this.#voxelCount = solid.length / 3 + skinCells + ghost.length / 3
+    const solidCells = SOLID.reduce((a, k) => a + (solid[k] as number[]).length / 3, 0);
+    this.#voxelCount = solidCells + skinCells + ghost.length / 3
       + rigCells.reduce((a, c) => a + c.length / 3, 0);
     // Every distinct colour the armour actually came out.
     //
@@ -739,7 +856,7 @@ export class Designer {
     const hist: Record<number, number> = {};
     for (let n = 0; n < grid.length; n++)
       if (grid[n]) hist[grid[n] as number] = (hist[grid[n] as number] ?? 0) + 1;
-    this.#hist = { ...hist, solid: solid.length / 3, skin: skinCells,
+    this.#hist = { ...hist, solid: solidCells, skin: skinCells,
       ghost: ghost.length / 3 };
 
     const place = (cells: number[], material: THREE.Material,
@@ -775,8 +892,12 @@ export class Designer {
     // what a finish is.
     const surf = this.#surfaceFor(this.#design);
 
-    place(solid, surf.part,
-      q => solidCol[q] as number);
+    // One draw per machinery surface, so the frame dropdown, the engines
+    // dropdown and the weapons dropdown each reach something in here.
+    for (const k of SOLID) {
+      place(solid[k] as number[], surf[k],
+        q => (solidCol[k] as number[])[q] as number);
+    }
     // The plate over it, in the navy's whole scheme rather than one colour: a
     // deck, an underside, a waist belt, a flank stripe, a bow flash and a
     // transom band, every swatch in the palette on the hull at once, and one
@@ -813,7 +934,9 @@ export class Designer {
     // Every gun in its own group, drawn about its pivot so a rotation of the
     // group is a rotation of the turret on its mount.
     this.#rigs.forEach((r, n) => {
-      place(rigCells[n] as number[], surf.part,
+      // A rig IS a gun, so it wears the weapons surface by construction
+      // rather than by asking what its cells are for.
+      place(rigCells[n] as number[], surf.weapon,
         q => (rigCols[n] as number[])[q] as number, true, r.group, r.pivot);
     });
 
@@ -949,9 +1072,51 @@ export class Designer {
     if (this.#mirrorX && this.#mirrorY) cells.add(cellIndex(NX - 1 - i, NY - 1 - j, k));
     const { grid } = rasterise(this.#design);
     let changed = false;
-    for (const c of cells) if (this.#decalAt(c, grid, c === n)) changed = true;
+    for (const c of cells) {
+      const did = this.#brushSlot !== null
+        ? this.#tintAt(c, grid, c === n) : this.#decalAt(c, grid, c === n);
+      if (did) changed = true;
+    }
     if (changed) this.#drawChanged();
-    this.#renderDecals();
+    if (this.#brushSlot !== null) this.#renderBrush(); else this.#renderDecals();
+  }
+
+  /**
+   * Lay the brush on one cell of armour, or lift a stroke off it.
+   *
+   * Armour only, and that is not a limitation to work around: a part is
+   * coloured by what it DOES, so a drive is orange and a gun is red whoever
+   * built them, which is what makes an unfamiliar hull readable without a
+   * legend. Painting one would take that away for the sake of a panel.
+   */
+  #tintAt(n: number, grid: Uint8Array, told: boolean): boolean {
+    const mat = grid[n] as number;
+    if (mat !== Mat.Plate && mat !== Mat.Skinned) {
+      if (told) this.#brushSaid = 'the brush paints armour: that is a part, or the frame';
+      return false;
+    }
+    const list = (this.#design.tint ??= []);
+    const at = list.findIndex(v => ((v / 8) | 0) === n);
+    const slot = this.#brushSlot as number;
+    if (slot === BRUSH_ERASER) {
+      if (at < 0) { if (told) this.#brushSaid = 'nothing painted there'; return false; }
+      list.splice(at, 1);
+      if (told) this.#brushSaid = '';
+      return true;
+    }
+    const want = n * 8 + slot;
+    if (at >= 0) {
+      if (list[at] === want) return false;
+      list[at] = want;
+    } else {
+      if (list.length >= DRAWN_MAX) {
+        if (told) this.#brushSaid = `${DRAWN_MAX} painted cells is the most a hull carries`;
+        return false;
+      }
+      list.push(want);
+    }
+    if (told) this.#brushSaid = '';
+    return true;
   }
 
   /** The finger lifted: the stroke is one edit, and this is where it lands
@@ -1033,7 +1198,10 @@ export class Designer {
       b.onclick = () => {
         this.#decal = this.#decal === kind ? null : kind;
         this.#decalSaid = '';
+        // One tool owns a stroke: arming a decal puts the brush down.
+        if (this.#decal !== null) this.#brushSlot = null;
         this.#renderDecals();
+        this.#renderBrush();
       };
       dec.appendChild(b);
     };
@@ -1043,11 +1211,7 @@ export class Designer {
     // the canvas rather than in the rail, because that is where the finger
     // is about to go, and a status bar over the rail would sit on the very
     // chips it is talking about at 390 wide.
-    $('dzHint').textContent = this.#decal === null
-      ? 'tap a part to name it \u00b7 drag to orbit \u00b7 pinch or wheel to zoom'
-      : this.#decal === DECAL_BLANK
-        ? 'eraser armed \u00b7 drag over windows to take them off \u00b7 two fingers zoom'
-        : `${DECALS[this.#decal]?.name.toLowerCase()} armed \u00b7 drag on the plating to paint \u00b7 two fingers zoom`;
+    this.#syncHint();
     $('dzDecalMirrorX').className = this.#mirrorX ? 'on' : '';
     $('dzDecalMirrorY').className = this.#mirrorY ? 'on' : '';
     const list = this.#design.decal ?? [];
@@ -1057,6 +1221,106 @@ export class Designer {
       : !list.length ? 'nothing painted: the windows are the rooms\' and the navy\'s'
         : `${painted} painted, ${blank} rubbed out, of ${DRAWN_MAX}`;
     ($('dzDecalClear') as HTMLButtonElement).disabled = !list.length;
+  }
+
+  /**
+   * The gesture line on the canvas says what one finger does right now. On the
+   * canvas rather than in the rail, because that is where the finger is about
+   * to go, and a status bar over the rail would sit on the very chips it is
+   * talking about at 390 wide.
+   */
+  #syncHint(): void {
+    const scheme = paintFor(this.#design.faction);
+    $('dzHint').textContent = this.#decal !== null
+      ? (this.#decal === DECAL_BLANK
+        ? 'eraser armed \u00b7 drag over windows to take them off \u00b7 two fingers zoom'
+        : `${DECALS[this.#decal]?.name.toLowerCase()} armed \u00b7 drag on the plating to paint \u00b7 two fingers zoom`)
+      : this.#brushSlot !== null
+        ? (this.#brushSlot === BRUSH_ERASER
+          ? 'brush eraser armed \u00b7 drag over painted cells to lift them \u00b7 two fingers zoom'
+          : `brush #${(scheme.swatches[this.#brushSlot] ?? 0).toString(16).padStart(6, '0')} armed \u00b7 drag on the armour to paint \u00b7 two fingers zoom`)
+        : 'tap a part to name it \u00b7 drag to orbit \u00b7 pinch or wheel to zoom';
+  }
+
+  /**
+   * The brush row: which colour the pointer is holding, the eraser, and what
+   * the strokes so far amount to. Its own render because a stroke redraws it
+   * per cell and the whole palette pane is far more than that.
+   */
+  #renderBrush(): void {
+    const host = $('dzBrush');
+    host.innerHTML = '';
+    const scheme = paintFor(this.#design.faction);
+    const row = document.createElement('div');
+    row.className = 'dzpaint';
+    scheme.swatches.forEach((col, slot) => {
+      const b = document.createElement('button');
+      b.className = 'dzsw' + (this.#brushSlot === slot ? ' on' : '');
+      b.style.background = `#${col.toString(16).padStart(6, '0')}`;
+      const wears = this.#design.slotFinish?.[slot];
+      b.title = `Paint with #${col.toString(16).padStart(6, '0')}`
+        + (wears ? ` \u00b7 ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
+      b.onclick = () => { this.#armBrush(this.#brushSlot === slot ? null : slot); };
+      row.appendChild(b);
+    });
+    const eraser = document.createElement('button');
+    eraser.id = 'dzBrushEraser';
+    eraser.className = 'dzsw eraser' + (this.#brushSlot === BRUSH_ERASER ? ' on' : '');
+    eraser.title = 'Lift painted cells off again';
+    eraser.onclick = () => { this.#armBrush(this.#brushSlot === BRUSH_ERASER ? null : BRUSH_ERASER); };
+    row.appendChild(eraser);
+    host.appendChild(row);
+    const down = document.createElement('button');
+    down.id = 'dzBrushDown';
+    down.className = 'dzpart clear';
+    down.innerHTML = '<span class="sw"></span><span class="nm">'
+      + (this.#brushSlot === null ? 'No brush: a tap names the part it lands on'
+        : 'Put the brush down') + '</span>';
+    down.onclick = () => { this.#armBrush(null); };
+    const wipe = document.createElement('button');
+    wipe.id = 'dzTintClear';
+    wipe.className = 'dzpart clear';
+    const strokes = (this.#design.tint ?? []).length;
+    wipe.innerHTML = '<span class="sw"></span><span class="nm">'
+      + `Wipe ${strokes} hand painted cell${strokes === 1 ? '' : 's'}</span>`;
+    wipe.disabled = !strokes;
+    wipe.onclick = () => { this.#design.tint = []; this.#brushSaid = ''; this.#refresh(); };
+    host.append(down, wipe);
+    const said = document.createElement('div');
+    said.className = 's';
+    said.id = 'dzBrushSaid';
+    said.textContent = this.#brushSaid;
+    host.appendChild(said);
+    this.#syncHint();
+  }
+
+  #armBrush(slot: number | null): void {
+    this.#brushSlot = slot;
+    this.#brushSaid = '';
+    // One tool owns a stroke: picking up the brush puts a decal down.
+    if (slot !== null) this.#decal = null;
+    this.#renderBrush();
+    this.#renderDecals();
+  }
+
+  /**
+   * Hang the elaboration off a heading, as the `?` that folds it away.
+   *
+   * A rail is for controls: what one DOES is the label, and why it works that
+   * way is a footnote nobody should have to scroll past to reach the next
+   * slider. `main.ts` owns the toggle, so this only has to put the button
+   * where the text used to be, and it replaces any `?` already there because
+   * `#refresh` runs on every edit.
+   */
+  #why(head: HTMLElement, text: string): void {
+    head.querySelector('.dzwhy')?.remove();
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dzwhy';
+    b.textContent = '?';
+    b.title = text;
+    b.setAttribute('aria-expanded', 'false');
+    head.appendChild(b);
   }
 
   /** The card that says what you just tapped, or what the menu just selected. */
@@ -1744,12 +2008,18 @@ export class Designer {
       };
       mode.appendChild(b);
     }
-    $('dzModeNote').textContent = this.#design.armour === 'wrapped'
+    // A label and a footnote, not a paragraph. The label says which exterior
+    // is on the bench; the rest is why, and it goes behind the `?`.
+    const wrapped = this.#design.armour === 'wrapped';
+    $('dzModeNote').textContent = wrapped
+      ? 'Plate on the class profile.'
+      : 'Plate grown off your own parts.';
+    this.#why($('dzModeHead'), wrapped
       ? 'The class hull: plate laid on the frame\u2019s own profile, which is what '
-        + 'gives the class its silhouette. What you are changing is its thickness.'
-      : 'Your own exterior: plate grown off the parts themselves and nothing else, '
-        + 'so it follows what you built rather than what the class is. It starts '
-        + 'bare and it still has to fit the mass budget.';
+        + 'gives the class its silhouette. What you change is its thickness.'
+      : 'Your own exterior: plate grown off the parts themselves, so it follows '
+        + 'what you built rather than what the class is. It starts bare and it '
+        + 'still has to fit the mass budget.');
 
     const host = $('dzArmour');
     host.innerHTML = '';
@@ -1775,86 +2045,116 @@ export class Designer {
     }
 
     // --- paint, which reaches the armour and nothing else -----------------
+    // A DROPDOWN, because that is what swapping one whole palette for another
+    // is. Five chips read as five things you might combine; they are not, they
+    // are five presets and exactly one is in use.
     const fac = $('dzFactions');
     fac.innerHTML = '';
+    const pal = document.createElement('select');
+    pal.id = 'dzPaletteSel';
     for (const f of FACTION_PAINT) {
-      const b = document.createElement('button');
-      b.className = f.key === this.#design.faction ? 'on' : '';
-      b.textContent = f.name;
-      b.onclick = () => {
-        this.#design.faction = f.key;
-        // Land on the scheme's first swatch, because a faction whose colours
-        // are not on the ship is a menu rather than a choice.
-        this.#design.paint = f.swatches[0] as number;
-        this.#refresh();
-      };
-      fac.appendChild(b);
+      const o = document.createElement('option');
+      o.value = f.key;
+      o.textContent = `${f.name} palette`;
+      if (f.key === this.#design.faction) o.selected = true;
+      pal.appendChild(o);
     }
+    pal.onchange = () => {
+      const f = FACTION_PAINT.find(x => x.key === pal.value);
+      if (!f) return;
+      this.#design.faction = f.key;
+      // Land on the scheme's first swatch, because a palette whose colours are
+      // not on the ship is a menu rather than a choice.
+      this.#design.paint = f.swatches[0] as number;
+      this.#refresh();
+    };
+    fac.appendChild(pal);
 
+    // TWO controls, because they were one and it was the wrong one.
+    //
+    // The hull's own colour is the base every livery role is an OFFSET from,
+    // so setting it repaints the ship in a scheme built round it. That is
+    // worth having and it is not a brush: a player who wants one panel a
+    // different colour was repainting the whole ship to get it. The brush is
+    // the row under it (`#renderBrush`), and it lays a colour on the cells a
+    // stroke crosses.
     const paint = $('dzPaint');
     paint.innerHTML = '';
     const scheme = paintFor(this.#design.faction);
-    let picked = -1;
-    scheme.swatches.forEach((col, slot) => {
+    scheme.swatches.forEach(col => {
       const b = document.createElement('button');
       b.className = 'dzsw' + (col === this.#design.paint ? ' on' : '');
       b.style.background = `#${col.toString(16).padStart(6, '0')}`;
-      const wears = this.#design.slotFinish?.[slot];
-      b.title = `#${col.toString(16).padStart(6, '0')}`
-        + (wears ? ` · ${FINISHES.find(f => f.key === wears)?.name ?? wears}` : '');
+      b.title = `Paint the whole hull from #${col.toString(16).padStart(6, '0')}`;
       b.onclick = () => { this.#design.paint = col; this.#refresh(); };
-      if (col === this.#design.paint) picked = slot;
       paint.appendChild(b);
     });
+    this.#renderBrush();
 
     // The surfaces, one row each.
     //
     // A select PER swatch was the first cut and it was the wrong control: nine
     // finishes under each of eight 34px swatches is eight boxes too narrow to
     // read their own contents, and on a 390px phone they truncated to "As
-    // hu...". The slot is already selected by the swatch above, so the surface
-    // it wears is one full width row that edits the selected one, which is how
-    // the rest of this panel works and is one thumb sized target instead of
-    // eight cramped ones.
+    // hu...". One full width row per slot, each beside a chip in its own
+    // colour, is how the rest of this panel works and is one thumb sized
+    // target per row instead of eight cramped ones.
     //
-    // The frame and the parts follow it because they are the same question
-    // asked about the two surfaces nobody could choose before: the frame wore
-    // the plating's finish and every part wore one hard coded greeble, which
-    // did not matter while a hull was a sealed skin and does now, because a
-    // hole in the plating is a look at both of them.
+    // EVERY slot, and then the four things that are not armour. One row that
+    // edited "the selected slot" meant a player had to remember which swatch
+    // they last touched to know what the dropdown was about, and seven of the
+    // eight were invisible. Eight rows say which colour is which surface by
+    // standing next to it.
     const inner = $('dzInner');
     inner.innerHTML = '';
-    const rows: Array<[string, string, string | null, (k: string | null) => void, string?]> = [
-      ['Selected slot',
-        picked >= 0 ? `Surface of the swatch in use` : 'Pick a swatch first',
-        picked >= 0 ? (this.#design.slotFinish?.[picked] ?? null) : null,
-        key => {
-          if (picked < 0) return;
-          // Sparse until something is actually chosen, so a design that never
-          // touched this still falls back to the hull wide finish rather than
-          // freezing today's default into eight slots.
-          const list = (this.#design.slotFinish ?? []).slice();
-          while (list.length < scheme.swatches.length) list.push(null);
-          list[picked] = key;
-          this.#design.slotFinish = list;
-        },
-        'As hull'],
+    const rows: Array<[string, string, string | null, (k: string | null) => void,
+      string?, number?]> = scheme.swatches.map((col, slot) => [
+      `Slot ${slot + 1}`,
+      `What every cell painted in #${col.toString(16).padStart(6, '0')} is made of`,
+      this.#design.slotFinish?.[slot] ?? null,
+      (key: string | null) => {
+        // Sparse until something is actually chosen, so a design that never
+        // touched this still falls back to the hull wide finish rather than
+        // freezing today's default into eight slots.
+        const list = (this.#design.slotFinish ?? []).slice();
+        while (list.length < scheme.swatches.length) list.push(null);
+        list[slot] = key;
+        this.#design.slotFinish = list;
+      },
+      'As hull',
+      col,
+    ] as [string, string, string | null, (k: string | null) => void, string?, number?]);
+    rows.push(
       ['Hull frame', 'Surface of the frame under the plating',
         this.#design.frameFinish ?? DEFAULT_FRAME_FINISH,
         key => { this.#design.frameFinish = key ?? DEFAULT_FRAME_FINISH; }],
-      ['Subsystems', 'Surface of the fitted parts',
+      ['Engines and thrusters', 'Surface of every bell and attitude block',
+        this.#design.driveFinish ?? this.#design.partFinish ?? DEFAULT_PART_FINISH,
+        key => { this.#design.driveFinish = key ?? DEFAULT_PART_FINISH; }],
+      ['Weapons', 'Surface of the barbettes, turrets and missile pads',
+        this.#design.weaponFinish ?? this.#design.partFinish ?? DEFAULT_PART_FINISH,
+        key => { this.#design.weaponFinish = key ?? DEFAULT_PART_FINISH; }],
+      ['Subsystems', 'Surface of the bridge, the berths, the clamps and the holds',
         this.#design.partFinish ?? DEFAULT_PART_FINISH,
         key => { this.#design.partFinish = key ?? DEFAULT_PART_FINISH; }],
-    ];
-    for (const [label, title, cur, set, blank] of rows) {
+    );
+    for (const [label, title, cur, set, blank, swatch] of rows) {
       const row = document.createElement('div');
-      row.className = 'dzrow';
+      row.className = 'dzrow dzsurf';
+      // The colour this row is about, drawn on the row. Eight dropdowns
+      // labelled "Slot 1" to "Slot 8" is eight rows nobody can map onto the
+      // swatches above them, which is the complaint this is answering.
+      if (swatch !== undefined) {
+        const chip = document.createElement('span');
+        chip.className = 'dzsw sm';
+        chip.style.background = `#${swatch.toString(16).padStart(6, '0')}`;
+        row.appendChild(chip);
+      }
       const k = document.createElement('span');
       k.className = 'k';
       k.textContent = label;
       row.appendChild(k);
       const sel = this.#finishPick(cur, title, key => { set(key); this.#refresh(); }, blank);
-      if (label === 'Selected slot' && picked < 0) sel.disabled = true;
       row.appendChild(sel);
       inner.appendChild(row);
     }
@@ -2568,13 +2868,49 @@ export class Designer {
       this.#syncDrawSets();
       this.#refresh();
     };
+    // A hull as a FILE. The library needs a server and an account; this needs
+    // neither, which is what makes it the way to keep a design, send one, or
+    // put one back after a rebuild.
+    $('dzExport').onclick = () => {
+      const name = $<HTMLInputElement>('dzSaveName')?.value.trim()
+        || this.#slot.name || this.#design.classKey;
+      const url = URL.createObjectURL(new Blob([designToJson(this.#design, name)],
+        { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name.replace(/[^A-Za-z0-9_-]+/g, '-').toLowerCase()}.ship.json`;
+      a.click();
+      // Revoked on a later turn: revoking before the browser has begun the
+      // download cancels it.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      this.#said(`exported ${a.download}`);
+    };
+    $('dzImport').onclick = () => { $<HTMLInputElement>('dzDesignPick').click(); };
+    $<HTMLInputElement>('dzDesignPick').onchange = ev => {
+      const input = ev.target as HTMLInputElement;
+      const file = input.files?.[0];
+      // Cleared so the same file chosen twice fires again: `change` does not
+      // when the value is unchanged, and re-importing after an edit is the
+      // obvious thing to try.
+      input.value = '';
+      if (!file) return;
+      void file.text().then(text => {
+        const { design, name, why } = designFromJson(text);
+        if (!design) { this.#said(why ?? 'could not read that file', true); return; }
+        // Loaded as a NEW hull rather than over the row that happens to be
+        // open: a file is somebody's ship, not an edit to yours, and saving it
+        // should make a design rather than quietly rewrite one.
+        this.loadDesign(design, { designId: null, name: name ?? '', mine: true });
+        this.#said(`loaded ${name ?? 'a hull'} from ${file.name}`);
+      });
+    };
     // Take the plate off and leave the frame and its parts standing. The mode
     // is left alone: this zeroes whichever exterior is being edited.
     $('dzBare').onclick = () => {
       for (const k of SECTIONS) this.#design.sections[k] = 0;
       this.#refresh();
     };
-    const tab = (id: string, which: 'parts' | 'armour' | 'decor' | 'stats') => {
+    const tab = (id: string, which: 'parts' | 'armour' | 'decor' | 'stats' | 'frame') => {
       $(id).onclick = () => {
         this.#tab = which;
         // A tab tapped while the sheet is collapsed opens it, because
@@ -2585,7 +2921,7 @@ export class Designer {
       };
     };
     tab('dzTabParts', 'parts'); tab('dzTabArmour', 'armour'); tab('dzTabStats', 'stats');
-    tab('dzTabDecor', 'decor');
+    tab('dzTabDecor', 'decor'); tab('dzTabFrame', 'frame');
     // The decal mirrors are the pencil's mirrors, shown twice: one state, so a
     // flank mirrored for plate is mirrored for its windows as well.
     $('dzDecalMirrorX').onclick = () => {
@@ -2677,9 +3013,14 @@ export class Designer {
       ['dzTabParts', 'dzPaneParts', 'parts'],
       ['dzTabArmour', 'dzPaneArmour', 'armour'],
       ['dzTabDecor', 'dzPaneDecor', 'decor'],
+      ['dzTabFrame', 'dzPaneFrame', 'frame'],
       ['dzTabStats', 'dzPaneStats', 'stats'],
     ] as const) {
-      $(id).className = this.#tab === which ? 'on' : '';
+      // TOGGLE, never assign. `dzTabFrame` carries `archonly`, which is what
+      // keeps the architect's tab out of the shipyard, and assigning
+      // `className` would wipe it the first time this ran: from then on the
+      // Frame tab would stand in the yard's tab bar on every hull.
+      $(id).classList.toggle('on', this.#tab === which);
       $(pane).classList.toggle('hidden', this.#tab !== which);
     }
     this.#renderSlabBox();
@@ -2709,6 +3050,9 @@ export class Designer {
        */
       surfaces: [
         ...(this.#surfaces?.plate ?? []).map((m, b) => ({ what: `plate${b}`, m })),
+        { what: 'frame', m: this.#surfaces?.frame },
+        { what: 'drive', m: this.#surfaces?.drive },
+        { what: 'weapon', m: this.#surfaces?.weapon },
         { what: 'part', m: this.#surfaces?.part },
       ].map(({ what, m }) => {
         const img = m?.normalMap?.image as { src?: string; width?: number } | undefined;
@@ -2786,6 +3130,11 @@ export class Designer {
       decalBlank: (this.#design.decal ?? []).filter(v => v % DECAL_STRIDE === DECAL_BLANK).length,
       decalArmed: this.#decal,
       decalSaid: this.#decalSaid,
+      /** The brush, and what it has laid down. Observed by the harness; the
+       *  harness never sets either. */
+      brushSlot: this.#brushSlot,
+      tint: (this.#design.tint ?? []).length,
+      brushSaid: this.#brushSaid,
       /**
        * Window panes actually DRAWN in the yard, by decal, and the quads each
        * came to.
