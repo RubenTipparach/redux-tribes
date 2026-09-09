@@ -263,3 +263,76 @@ fn an_emergency_repair_lands_inside_the_bay_it_repairs() {
         "a repaired drive came out at {} of {}", sub.hp, sub.max_hp);
     assert!(!sub.offline(), "and it is above the line it would read offline at");
 }
+
+/// A breach does not leave a hull, it leaves two of them, and both are bodies.
+///
+/// The reactor going is the violent death in this model: a hull ground down by
+/// fire is a hulk, and a hull whose reactor let go comes apart. Both halves
+/// drift, both tumble, and both are in the contact pass, which is what makes a
+/// piece a hazard rather than scenery.
+#[test]
+fn a_breach_breaks_the_hull_in_two() {
+    let mut sim = pair();
+    let was = sim.ships.len();
+    let mass = sim.ships[0].mass;
+    let radius = sim.ships[0].radius;
+    let bi = volume_of(&sim, SubKind::Reactor);
+
+    let mut events = Vec::new();
+    // Enough to take the reactor out and the hull with it.
+    for _ in 0..40 {
+        if sim.ships[0].destroyed {
+            break;
+        }
+        sim.apply_damage(0, Some(bi), 40.0, None, &mut events, 0, None);
+    }
+    assert!(sim.ships[0].destroyed, "the hull survived its own reactor");
+    assert_eq!(sim.ships.len(), was + 1, "a breach left one body, not two");
+
+    let fore = &sim.ships[0];
+    let aft = &sim.ships[was];
+    assert_eq!(fore.piece, 1);
+    assert_eq!(aft.piece, 2);
+    assert_eq!(aft.piece_of, fore.id, "the aft half does not know whose it is");
+    assert!(aft.destroyed, "half a hull is not a live ship");
+    // Each half is half the mass and less than the whole radius.
+    assert!((fore.mass - mass * 0.5).abs() < 1e-3);
+    assert!((aft.mass - mass * 0.5).abs() < 1e-3);
+    assert!(aft.radius < radius && aft.radius > radius * 0.4);
+    // They are placed apart, and pointed apart: the drawn halves sit on their
+    // own bodies rather than both on the hull's old centre.
+    assert!(fore.piece_at > 0.0 && aft.piece_at < 0.0);
+    assert!(
+        fore.pos.dist(aft.pos) > 0.1,
+        "both halves are standing in the same place",
+    );
+    assert!(aft.spin.len() > 0.0, "a piece was left without a tumble");
+    // Neither half can break again.
+    let mut more = Vec::new();
+    sim.apply_damage(0, Some(bi), 500.0, None, &mut more, 0, None);
+    assert_eq!(sim.ships.len(), was + 1, "a piece of wreckage broke up again");
+
+    // And they drift apart on their own, at the speed the BREAK decided and
+    // not at one the geometry made up.
+    //
+    // The two halves are seated a fraction of the old radius either side of
+    // where the hull was, so they are born overlapping, and the contact pass
+    // reads a resolved overlap back as velocity: a breach threw its own halves
+    // apart at 55 units a second and put them half a kilometre apart inside
+    // one turn. Halves of one wreck are out of the pass against each other
+    // now, so what is left is the kick, which is 2 * KICK a second between
+    // them and nothing else. Both bounds matter: no separation is a break that
+    // does not read as one, and runaway separation is the defect.
+    let gap = sim.ships[0].pos.dist(sim.ships[was].pos);
+    let mut orders = vec![None, None, None];
+    sim.resolve_turn(&mut orders);
+    let apart = sim.ships[0].pos.dist(sim.ships[was].pos);
+    let drift = 2.0 * data::WRECK_PIECE_KICK * 10.0;
+    assert!(apart > gap, "the two halves are not separating");
+    assert!(
+        apart < gap + drift * 1.25,
+        "the halves flew apart at {:.1} units a turn, against a {:.1} unit kick",
+        apart - gap,
+        drift,
+    );
+}

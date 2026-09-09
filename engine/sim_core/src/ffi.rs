@@ -60,7 +60,7 @@ const SCRATCH_LEN: usize = 16384;
 static mut SCRATCH: [f32; SCRATCH_LEN] = [0.0; SCRATCH_LEN];
 
 const OUT: usize = 64;
-pub const SHIP_STRIDE: usize = 39;
+pub const SHIP_STRIDE: usize = 42;
 /// How many mounts a ship record carries a cooldown for. Not a limit on how
 /// many a hull may have: `s[b + 21]` says how many there are, and this says how
 /// many of them the record can describe the state of.
@@ -1297,6 +1297,14 @@ pub extern "C" fn ft_read_ships() -> u32 {
         s[b + 36] = ship.flight.max_speed;
         s[b + 37] = ship.ai_target.map(|t| t as f32).unwrap_or(-1.0);
         s[b + 38] = ship.boarding_range;
+        // Which half of a broken hull this body is, whose design it is a half
+        // OF, and how far its own half sits from this origin. The client draws
+        // a piece out of the parent's design shifted by that number: one
+        // answer to "where is this half", crossing the boundary, rather than
+        // the same arithmetic written on both sides of it.
+        s[b + 39] = ship.piece as f32;
+        s[b + 40] = ship.piece_of as f32;
+        s[b + 41] = ship.piece_at;
     }
     n as u32
 }

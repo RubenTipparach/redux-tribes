@@ -15,6 +15,31 @@ pub use crate::flight::{
 
 /// Collision: no interpenetration, impulse damage.
 pub const COLLISION_DAMAGE_K: f32 = 25.0;
+/// How fast a hulk turns once nobody is flying it, in radians a second.
+///
+/// A dead hull does not stop dead and it does not spin like a firework: what
+/// is left of it keeps the momentum the kill gave it. The band is slow enough
+/// to read as a derelict at map range (a tenth to a third of a turn a second)
+/// and fast enough that a hulk is obviously not a ship holding station.
+pub const WRECK_TUMBLE_MIN: f32 = 0.10;
+pub const WRECK_TUMBLE_MAX: f32 = 0.55;
+
+/// A breach breaks the hull in two, and these are the two halves.
+///
+/// `OFFSET` is where each half's own centre sits along the hull from the
+/// centre it broke at, as a fraction of the hull's radius: a half hull's mass
+/// is centred about halfway along itself. `RADIUS` is what each half then
+/// circumscribes, which is less than the whole and more than half, because a
+/// half hull is still as wide and as deep as it ever was. `KICK` is the speed
+/// the breach pushes them apart at, in units a second, and it is small on
+/// purpose: two halves that spring apart read as an explosion in a cartoon,
+/// and two that ease apart read as a ship that has come in half. It is also
+/// the ONLY thing that separates them, since halves of one wreck are out of
+/// the contact pass against each other.
+pub const WRECK_PIECE_OFFSET: f32 = 0.5;
+pub const WRECK_PIECE_RADIUS: f32 = 0.62;
+pub const WRECK_PIECE_KICK: f32 = 1.6;
+
 pub const COLLISION_PAIR_COOLDOWN_TICKS: i32 = 60;
 pub const COLLISION_RESTITUTION: f32 = 0.3;
 
@@ -506,12 +531,12 @@ static FREIGHTER_MOUNTS: [MountDef; 0] = [];
 
 static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.2, 80.0, 0.65);
 static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.6, 80.0, 1.9);
-static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.3, 80.0, 3.2);
+static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.4, 80.0, 3.2);
 static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 75.0, 0.6);
 static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 75.0, 1.75);
 static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 75.0, 2.9);
 static ROGUE_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.1, 90.0, 0.45);
-static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.3, 90.0, 1.3);
+static ROGUE_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.1, 90.0, 1.3);
 static ROGUE_CRUISER_SUBS: [SubDef; 6] = hull_subs(6.8, 90.0, 2.2);
 static BENEFACTOR_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.0, 80.0, 0.7);
 static BENEFACTOR_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.2, 80.0, 2.05);
@@ -604,19 +629,19 @@ static C_TERRAN_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::TerranFrigate,
     key: "terran_frigate",
     name: "Terran Frigate",
-    hull: 312.406,
+    hull: 313.188,
     radius: 3.6,
-    mass: 1.12,
+    mass: 1.13,
     rung_cell: 0.109375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.0173,
-        pitch_rate: 4.0316,
-        accel_fwd: 0.9461,
-        accel_retro: 0.3154,
-        accel_lat: 0.2102,
+        yaw_rate: 6.006,
+        pitch_rate: 4.024,
+        accel_fwd: 0.9443,
+        accel_retro: 0.3148,
+        accel_lat: 0.2098,
         max_speed: 8.0,
     },
     boarding_range: 20.0,
@@ -630,7 +655,7 @@ static C_KARISEN_FRIGATE: ShipClass = ShipClass {
     id: ShipClassId::KarisenFrigate,
     key: "karisen_frigate",
     name: "Karisen Frigate",
-    hull: 216.896,
+    hull: 216.828,
     radius: 3.8,
     mass: 0.85,
     rung_cell: 0.109375,
@@ -638,11 +663,11 @@ static C_KARISEN_FRIGATE: ShipClass = ShipClass {
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 7.5841,
-        pitch_rate: 5.0814,
-        accel_fwd: 1.3238,
-        accel_retro: 0.418,
-        accel_lat: 0.2787,
+        yaw_rate: 7.5858,
+        pitch_rate: 5.0825,
+        accel_fwd: 1.3241,
+        accel_retro: 0.4181,
+        accel_lat: 0.2788,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -739,7 +764,7 @@ static C_TERRAN_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::TerranCorvette,
     key: "terran_corvette",
     name: "Terran Corvette",
-    hull: 152.052,
+    hull: 152.562,
     radius: 2.2,
     mass: 0.59,
     rung_cell: 0.109375,
@@ -747,11 +772,11 @@ static C_TERRAN_CORVETTE: ShipClass = ShipClass {
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 11.5962,
-        pitch_rate: 7.7694,
-        accel_fwd: 0.9116,
-        accel_retro: 0.6077,
-        accel_lat: 0.2026,
+        yaw_rate: 11.5687,
+        pitch_rate: 7.751,
+        accel_fwd: 0.9095,
+        accel_retro: 0.6063,
+        accel_lat: 0.2021,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -765,19 +790,19 @@ static C_TERRAN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::TerranDestroyer,
     key: "terran_destroyer",
     name: "Terran Destroyer",
-    hull: 879.707,
+    hull: 882.805,
     radius: 5.6,
-    mass: 2.86,
+    mass: 2.87,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 4.7978,
-        pitch_rate: 3.2146,
-        accel_fwd: 0.8031,
-        accel_retro: 0.2471,
-        accel_lat: 0.1647,
+        yaw_rate: 4.7838,
+        pitch_rate: 3.2052,
+        accel_fwd: 0.8008,
+        accel_retro: 0.2464,
+        accel_lat: 0.1643,
         max_speed: 7.0,
     },
     boarding_range: 20.0,
@@ -791,19 +816,19 @@ static C_TERRAN_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::TerranCruiser,
     key: "terran_cruiser",
     name: "Terran Heavy Cruiser",
-    hull: 2108.64,
-    radius: 7.3,
-    mass: 6.39,
+    hull: 2116.528,
+    radius: 7.4,
+    mass: 6.41,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 2.1452,
-        pitch_rate: 1.4373,
-        accel_fwd: 0.4788,
-        accel_retro: 0.1105,
-        accel_lat: 0.0737,
+        yaw_rate: 2.1013,
+        pitch_rate: 1.4078,
+        accel_fwd: 0.4772,
+        accel_retro: 0.1101,
+        accel_lat: 0.0734,
         max_speed: 7.0,
     },
     boarding_range: 30.0,
@@ -820,7 +845,7 @@ static C_KARISEN_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::KarisenCorvette,
     key: "karisen_corvette",
     name: "Karisen Corvette",
-    hull: 115.856,
+    hull: 115.584,
     radius: 2.4,
     mass: 0.5,
     rung_cell: 0.109375,
@@ -828,11 +853,11 @@ static C_KARISEN_CORVETTE: ShipClass = ShipClass {
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 10.4495,
-        pitch_rate: 7.0011,
-        accel_fwd: 2.3681,
-        accel_retro: 0.2392,
-        accel_lat: 0.2392,
+        yaw_rate: 10.4651,
+        pitch_rate: 7.0116,
+        accel_fwd: 2.3717,
+        accel_retro: 0.2396,
+        accel_lat: 0.2396,
         max_speed: 9.5,
     },
     boarding_range: 20.0,
@@ -846,19 +871,19 @@ static C_KARISEN_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::KarisenDestroyer,
     key: "karisen_destroyer",
     name: "Karisen Destroyer",
-    hull: 581.081,
+    hull: 578.098,
     radius: 5.8,
-    mass: 1.9,
+    mass: 1.89,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.6459,
-        pitch_rate: 4.4528,
-        accel_fwd: 0.5895,
-        accel_retro: 0.3723,
-        accel_lat: 0.2482,
+        yaw_rate: 6.6743,
+        pitch_rate: 4.4718,
+        accel_fwd: 0.592,
+        accel_retro: 0.3739,
+        accel_lat: 0.2493,
         max_speed: 8.5,
     },
     boarding_range: 20.0,
@@ -872,18 +897,18 @@ static C_KARISEN_CRUISER: ShipClass = ShipClass {
     id: ShipClassId::KarisenCruiser,
     key: "karisen_cruiser",
     name: "Karisen Heavy Cruiser",
-    hull: 1226.808,
+    hull: 1225.992,
     radius: 7.8,
-    mass: 3.77,
+    mass: 3.76,
     rung_cell: 0.21875,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 3.2977,
-        pitch_rate: 2.2094,
-        accel_fwd: 0.5788,
-        accel_retro: 0.1877,
+        yaw_rate: 3.2996,
+        pitch_rate: 2.2107,
+        accel_fwd: 0.5792,
+        accel_retro: 0.1878,
         accel_lat: 0.1252,
         max_speed: 8.5,
     },
@@ -927,19 +952,19 @@ static C_ROGUE_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::RogueDestroyer,
     key: "rogue_destroyer",
     name: "Rogue Destroyer",
-    hull: 400.88,
-    radius: 5.3,
-    mass: 1.56,
+    hull: 399.274,
+    radius: 5.1,
+    mass: 1.55,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.2974,
-        pitch_rate: 4.2192,
-        accel_fwd: 0.7511,
-        accel_retro: 0.4552,
-        accel_lat: 0.2124,
+        yaw_rate: 6.5489,
+        pitch_rate: 4.3878,
+        accel_fwd: 0.7532,
+        accel_retro: 0.4565,
+        accel_lat: 0.213,
         max_speed: 9.5,
     },
     boarding_range: 40.0,
@@ -982,7 +1007,7 @@ static C_BENEFACTOR_CORVETTE: ShipClass = ShipClass {
     id: ShipClassId::BenefactorCorvette,
     key: "benefactor_corvette",
     name: "Benefactor Corvette",
-    hull: 124.666,
+    hull: 124.156,
     radius: 2.0,
     mass: 0.49,
     rung_cell: 0.109375,
@@ -990,11 +1015,11 @@ static C_BENEFACTOR_CORVETTE: ShipClass = ShipClass {
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 9.119,
-        pitch_rate: 6.1097,
-        accel_fwd: 0.6082,
-        accel_retro: 0.7298,
-        accel_lat: 0.1703,
+        yaw_rate: 9.145,
+        pitch_rate: 6.1272,
+        accel_fwd: 0.6099,
+        accel_retro: 0.7319,
+        accel_lat: 0.1708,
         max_speed: 8.0,
     },
     boarding_range: 20.0,
@@ -1008,19 +1033,19 @@ static C_BENEFACTOR_DESTROYER: ShipClass = ShipClass {
     id: ShipClassId::BenefactorDestroyer,
     key: "benefactor_destroyer",
     name: "Benefactor Destroyer",
-    hull: 707.324,
+    hull: 705.947,
     radius: 5.2,
-    mass: 2.32,
+    mass: 2.31,
     rung_cell: 0.1640625,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 6.1392,
-        pitch_rate: 4.1132,
-        accel_fwd: 0.6611,
-        accel_retro: 0.3051,
-        accel_lat: 0.2034,
+        yaw_rate: 6.149,
+        pitch_rate: 4.1199,
+        accel_fwd: 0.6621,
+        accel_retro: 0.3056,
+        accel_lat: 0.2037,
         max_speed: 7.0,
     },
     boarding_range: 20.0,

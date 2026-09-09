@@ -809,3 +809,80 @@ fn a_side_can_field_a_hull_the_scenario_did_not_author() {
     ft_match_new(0xdead_beef, 0xcafe_0001, 0, 0b01);
     assert_eq!(read(), authored, "clearing the pick restores the authored hulls");
 }
+
+// ---------------------------------------------------------------- wrecks --
+
+/// A killed hull keeps moving, keeps turning, and is still there.
+///
+/// It used to stop dead on the tick it died and drop out of contact
+/// resolution, which is two lies in one: nothing in space brakes for dying,
+/// and wreckage nobody is steering is the most dangerous thing on the field.
+#[test]
+fn a_killed_ship_drifts_on_and_keeps_tumbling() {
+    let mut sim = duel("wreck-drift", 60.0);
+    // Give it a velocity to inherit, then kill it outright mid flight.
+    let mut orders = vec![
+        Some(hold(V3::new(0.0, 0.0, 40.0))),
+        Some(hold(V3::new(0.0, 0.0, 40.0))),
+    ];
+    sim.resolve_turn(&mut orders);
+    assert!(sim.ships[0].vel.len() > 0.5, "the test ship never got moving");
+
+    let mut events = Vec::new();
+    let hull = sim.ships[0].hull;
+    sim.apply_damage(0, None, hull + 1.0, None, &mut events, 0, None);
+    assert!(sim.ships[0].destroyed, "it did not die");
+    let vel = sim.ships[0].vel;
+    assert!(vel.len() > 0.5, "a hulk stopped dead: {:?}", vel);
+    assert!(sim.ships[0].spin.len() > 0.0, "a hulk was left without a tumble");
+
+    let (was_pos, was_quat) = (sim.ships[0].pos, sim.ships[0].quat);
+    let mut orders = vec![None, None];
+    sim.resolve_turn(&mut orders);
+    let moved = sim.ships[0].pos.dist(was_pos);
+    // Ten seconds of the velocity it died with, give or take what a contact
+    // may have done to it.
+    assert!(moved > 1.0, "the hulk drifted {moved} units in a whole turn");
+    let turned = (sim.ships[0].quat.x - was_quat.x).abs()
+        + (sim.ships[0].quat.y - was_quat.y).abs()
+        + (sim.ships[0].quat.z - was_quat.z).abs()
+        + (sim.ships[0].quat.w - was_quat.w).abs();
+    assert!(turned > 1e-3, "the hulk is not turning");
+    // And the drift is the same on a replay of the same match.
+    assert!(sim.ships[0].vel.len() > 0.0);
+}
+
+/// A hulk is a hazard: a ship that flies into one is separated from it and
+/// pays for the contact, and the hulk is shoved rather than shot again.
+#[test]
+fn a_hulk_is_something_you_can_run_into() {
+    let mut sim = duel("wreck-hazard", 24.0);
+    // Kill the far ship where it stands, and take its drift off so the live
+    // hull is the one doing the closing.
+    let mut events = Vec::new();
+    let hull = sim.ships[1].hull;
+    sim.apply_damage(1, None, hull + 1.0, None, &mut events, 0, None);
+    sim.ships[1].vel = V3::ZERO;
+    sim.ships[1].spin = V3::ZERO;
+    let wreck_at = sim.ships[1].pos;
+    let live_hull = sim.ships[0].hull;
+
+    // Fly straight through where the wreck is standing.
+    let mut orders = vec![Some(hold(V3::new(0.0, 0.0, 48.0))), None];
+    sim.resolve_turn(&mut orders);
+
+    let gap = sim.ships[0].pos.dist(sim.ships[1].pos);
+    let touching = sim.ships[0].radius + sim.ships[1].radius;
+    assert!(
+        gap >= touching - 0.5,
+        "a ship ended the turn inside a hulk: {gap} against {touching}",
+    );
+    assert!(
+        sim.ships[0].hull < live_hull,
+        "flying into a derelict cost the living ship nothing",
+    );
+    assert!(
+        sim.ships[1].pos.dist(wreck_at) > 0.01,
+        "the hulk was not shoved by what hit it",
+    );
+}
