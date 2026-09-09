@@ -12,7 +12,7 @@
 
 use crate::data::{self, SubKind, WeaponKind};
 use crate::flight::{fly_span, Mode, TICKS_PER_SECOND, TICKS_PER_TURN, TURN_SECONDS};
-use crate::math::{arc_test_3d, bezier2, V3};
+use crate::math::{arc_test_3d, bezier2, Quat, V3};
 use crate::rng::{Rng, Stream};
 use crate::state::{
     BoardingParty, ProjKind, Projectile, ShipId, Sim, Winner,
@@ -285,6 +285,32 @@ impl Sim {
             // reading a pose the wreck no longer has.
             e.pos = ship.pos;
             events.push(e);
+        }
+
+        // A HULL THAT IS GONE IS A HULK, NOT A HOLE IN THE WORLD.
+        //
+        // A destroyed ship used to stop where it was killed and stop being
+        // collided with, which is two lies in one: nothing in space brakes for
+        // dying, and a few thousand tonnes of wreckage is the most dangerous
+        // thing on the field precisely because nobody is steering it. So the
+        // ship stays a body. It keeps the velocity it actually had at the tick
+        // it died, which the plan already knows, and it takes a tumble.
+        //
+        // The tumble is drawn from a stream keyed on the ship and the tick, so
+        // it is the same on both seats and the same on a replay: it is hashed
+        // state, not a flourish the client invented.
+        //
+        // The early return at the top of this function is what makes this run
+        // once: a hulk takes no further damage, so nothing can re-roll a spin
+        // that is already turning.
+        if self.ships[si].destroyed {
+            let drift = self.ships[si].vel_at_tick(tick);
+            let mut rng = self.stream(Stream::new(Stream::WRECK, si as u32, tick as u32, 0));
+            let axis = rng.on_unit_sphere();
+            let rate = rng.range(data::WRECK_TUMBLE_MIN as f64, data::WRECK_TUMBLE_MAX as f64);
+            let s = &mut self.ships[si];
+            s.vel = drift;
+            s.spin = axis.scale(rate as f32);
         }
 
         if reactor_breached {
@@ -841,9 +867,12 @@ impl Sim {
         let n = self.ships.len();
         for i in 0..n {
             for j in (i + 1)..n {
-                if self.ships[i].destroyed || self.ships[j].destroyed {
-                    continue;
-                }
+                // Wrecks are IN this pass, and that is the point of them: a
+                // hulk nobody is steering is a hazard, and a hazard that ships
+                // fly through is scenery. Both hulls still separate, the live
+                // one still takes the impact, and `apply_damage` returns early
+                // on a ship that is already dead, so ramming a derelict costs
+                // the rammer and cannot hurt the derelict twice.
                 let (ra, rb) = (self.ships[i].radius, self.ships[j].radius);
                 let delta = self.ships[j].pos.sub(self.ships[i].pos);
                 let dist = delta.len();
@@ -900,10 +929,18 @@ impl Sim {
                 let bounce = data::COLLISION_RESTITUTION;
                 let va2 = va.sub(nrm.scale((1.0 + bounce) * closing * wa));
                 let vb2 = vb.add(nrm.scale((1.0 + bounce) * closing * wb));
-                if !self.ships[i].destroyed {
+                // A crewed ship re-flies the rest of its order from the
+                // contact. A hulk has no order to re-fly, so the impulse goes
+                // straight onto the velocity it drifts with: shoving a wreck
+                // is how a wreck gets out of the way, and it is the only way.
+                if self.ships[i].destroyed {
+                    self.ships[i].vel = va2;
+                } else {
                     self.replan_from(i, tick, va2);
                 }
-                if !self.ships[j].destroyed {
+                if self.ships[j].destroyed {
+                    self.ships[j].vel = vb2;
+                } else {
                     self.replan_from(j, tick, vb2);
                 }
             }
@@ -1078,10 +1115,24 @@ impl Sim {
         for tick in 0..=(TICKS_PER_TURN as i32) {
             // 1. kinematics
             for si in 0..self.ships.len() {
+                prev_positions[si] = self.ships[si].pos;
+                // A hulk has no plan to read a pose out of, so it integrates:
+                // the velocity it died with, and the tumble the kill left it
+                // with. Nothing slows it down, because nothing out here does.
                 if self.ships[si].destroyed {
+                    let step = 1.0 / TICKS_PER_SECOND as f32;
+                    let s = &mut self.ships[si];
+                    s.pos = s.pos.add(s.vel.scale(step));
+                    let rate = s.spin.len();
+                    if rate > 1e-6 {
+                        // World space, so the axis is fixed in the field and
+                        // the hull turns under it: an axis carried in the
+                        // hull's own frame would precess for free.
+                        let w = Quat::axis_angle(s.spin.scale(1.0 / rate), rate * step);
+                        s.quat = w.mul(s.quat).norm();
+                    }
                     continue;
                 }
-                prev_positions[si] = self.ships[si].pos;
                 let p = self.ships[si].pos_at_tick(tick);
                 let q = self.ships[si].quat_at_tick(tick);
                 self.ships[si].pos = p;
@@ -1254,6 +1305,12 @@ impl Sim {
             int(s.side as i32, &mut byte);
             int(s.destroyed as i32, &mut byte);
             for v in [s.pos.x, s.pos.y, s.pos.z, s.vel.x, s.vel.y, s.vel.z] {
+                num(v, &mut byte);
+            }
+            // A hulk's tumble decides where it is pointing, and where it is
+            // pointing decides what a shot passing through it meets: it is a
+            // simulated quantity, so it is hashed like one.
+            for v in [s.spin.x, s.spin.y, s.spin.z] {
                 num(v, &mut byte);
             }
             for v in [s.quat.x, s.quat.y, s.quat.z, s.quat.w] {

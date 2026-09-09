@@ -15,6 +15,15 @@ pub use crate::flight::{
 
 /// Collision: no interpenetration, impulse damage.
 pub const COLLISION_DAMAGE_K: f32 = 25.0;
+/// How fast a hulk turns once nobody is flying it, in radians a second.
+///
+/// A dead hull does not stop dead and it does not spin like a firework: what
+/// is left of it keeps the momentum the kill gave it. The band is slow enough
+/// to read as a derelict at map range (a tenth to a third of a turn a second)
+/// and fast enough that a hulk is obviously not a ship holding station.
+pub const WRECK_TUMBLE_MIN: f32 = 0.10;
+pub const WRECK_TUMBLE_MAX: f32 = 0.55;
+
 pub const COLLISION_PAIR_COOLDOWN_TICKS: i32 = 60;
 pub const COLLISION_RESTITUTION: f32 = 0.3;
 

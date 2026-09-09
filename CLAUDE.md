@@ -1114,6 +1114,56 @@ at all: every shot landed in space beside the ship. The carve starts from the
 nearest cell to it instead, which is the cell the shot came in at, because the
 sphere point is in the direction the shot arrived from.
 
+## A killed ship is a HULK, not a deletion
+
+A destroyed hull used to stop dead on the tick it died, drop out of contact
+resolution, and be hidden by the client. Three things wrong in one: nothing in
+space brakes for dying, a few thousand tonnes of unsteered wreckage is the most
+dangerous object on the field, and the ship a player has just shot apart is the
+most interesting thing on screen at exactly the moment it vanished.
+
+**A wreck is still a body.** It keeps the velocity it actually had at the tick
+it died, which `vel_at_tick` already knows from the flown plan, and it takes a
+tumble: `Ship::spin` is angular velocity in WORLD space, radians a second, zero
+on anything with a crew. A flown ship has no use for it, because where a hull
+points is decided tick by tick by its plan; a hulk has no plan, so this is the
+whole of what turns it. It is hashed and snapshotted like any other state,
+because a wreck is a collision hazard and two seats that disagreed about where
+one was pointing would eventually disagree about who hit it.
+
+**The tumble is drawn from a stream keyed on the ship and the tick**
+(`Stream::WRECK`), so it is the same on both seats and on a replay. The early
+return at the top of `apply_damage` is what makes it happen once: a hulk takes
+no further damage, so nothing can re-roll a spin that is already turning.
+
+**Wrecks are in the contact pass, and that is the point of them.** A hazard
+ships fly through is scenery. Both hulls separate, the living one takes the
+impact, and `apply_damage` returns early on a ship that is already dead, so
+ramming a derelict costs the rammer and cannot hurt the derelict twice. A
+crewed ship re-flies the rest of its order from the contact; a hulk has no
+order to re-fly, so the impulse goes straight onto its velocity, which is the
+only way a wreck can be shoved out of the way.
+
+**The client stops hiding it, and nothing else.** What a wreck LOOKS like was
+already written and unreachable: `tintHull` has always taken `destroyed` and
+answers it with the lost wash and no emission. The one thing it could not reach
+is the windows, which are child meshes on a SHARED material, so a derelict kept
+its cabin lights on: they are hidden with the crew (`showHulk`). The pose comes
+free, because the track frames already carry position, orientation and
+`destroyed` for every tick.
+
+What a hulk is NOT: it is not swallowed by a gravity well, because
+`resolve_impacts` skips the dead and a well that killed a ship twice would be
+billing a corpse. The wells sit at 250 units and out, so a hulk has to drift a
+long way to find one.
+
+`tests/turn.rs` pins both halves: a killed ship keeps its velocity and its
+tumble across a whole turn, and a ship that flies into a derelict is separated
+from it, pays hull for the contact, and shoves it. The playthrough checks the
+picture, which is the half a Rust test cannot see: a killed hull is still drawn
+as hundreds of quads, with its lights out, and its position moves between
+samples.
+
 ## A mount is bolted on at an ORIENTATION, not at an angle
 
 A part used to carry `rot`, a quarter turn about the up axis, and that is only

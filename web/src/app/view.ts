@@ -107,6 +107,26 @@ function materialsOf(mesh: THREE.Mesh): THREE.MeshStandardMaterial[] {
 }
 
 /**
+ * A killed hull stays on the map as a HULK.
+ *
+ * It used to be hidden the tick it died, which threw away the most expensive
+ * object on the screen at the moment it became the most interesting one: the
+ * ship a player just shot apart, with every cell the shots took off it, simply
+ * blinked out. The core keeps it as a body that drifts and can be run into
+ * (`Ship::spin`), so this keeps drawing it.
+ *
+ * Nothing here says what a wreck LOOKS like, because that answer already
+ * existed and was unreachable: `tintHull` has always taken `destroyed` and
+ * answers it with the lost wash and no emission at all. The one thing it
+ * cannot reach is the windows, which are child meshes on a SHARED material, so
+ * a derelict would have kept its cabin lights on. They go out with the crew.
+ */
+function showHulk(mesh: THREE.Mesh, destroyed: boolean): void {
+  mesh.visible = true;
+  for (const child of mesh.children) child.visible = !destroyed;
+}
+
+/**
  * How much of its own colour a torn interior throws back as light.
  *
  * Not a full self lit surface: at 1.0 the inside of a hull is a flat cutout
@@ -2100,6 +2120,36 @@ export class View {
 
   /** What has come off the hulls, and what is in the air: cells carved per
    *  ship, and chunks currently drawn. Observation only. */
+  /**
+   * Every hulk on the map: still drawn, still somewhere.
+   *
+   * The defect this exists to catch is the one it replaced, which no suite
+   * could see: a killed hull was hidden on the tick it died, so the ship a
+   * player had just shot apart blinked out at the moment it was worth looking
+   * at. `visible` and the quad count come off the MESH rather than off the
+   * ship record, because "the core says it is still a body" and "the map draws
+   * it" are the two different claims and only the second one was broken.
+   */
+  hulkState(): Array<{ ship: number; visible: boolean; quads: number; lit: number; pos: Vec3 }> {
+    const out: Array<{ ship: number; visible: boolean; quads: number; lit: number; pos: Vec3 }> = [];
+    for (const s of this.#ships) {
+      if (!s.destroyed) continue;
+      const mesh = this.#hulls.get(s.id);
+      if (!mesh) continue;
+      const idx = mesh.geometry.getIndex();
+      out.push({
+        ship: s.id,
+        visible: mesh.visible,
+        quads: (idx?.count ?? 0) / 6,
+        // A derelict has its lights out: the windows are child meshes on a
+        // shared material, so they are hidden rather than dimmed.
+        lit: mesh.children.filter(c => c.visible).length,
+        pos: { x: mesh.position.x, y: mesh.position.y, z: mesh.position.z },
+      });
+    }
+    return out;
+  }
+
   damageState(): {
     carved: Array<[number, number]>;
     chunks: number;
@@ -2319,7 +2369,7 @@ export class View {
       }
       mesh.position.set(s.pos.x, s.pos.y, s.pos.z);
       mesh.quaternion.set(s.quat.x, s.quat.y, s.quat.z, s.quat.w);
-      mesh.visible = !s.destroyed;
+      showHulk(mesh, s.destroyed);
       this.#tintHull(mesh, s);
     }
     this.#trackFollow();
@@ -2332,7 +2382,7 @@ export class View {
       if (!mesh) continue;
       mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
       mesh.quaternion.set(p.quat.x, p.quat.y, p.quat.z, p.quat.w);
-      mesh.visible = !p.destroyed;
+      showHulk(mesh, p.destroyed);
     }
     this.#trackFollow();
   }

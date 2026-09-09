@@ -71,6 +71,10 @@ let aimedAtAVolume = false;
 let aimedShotQueued = false;
 /** The most chunks of hull seen in the air at once. */
 let chunksSeen = 0;
+/** Hulks seen on the map after a kill: how they were drawn, and whether the
+ *  one watched actually drifted. */
+let hulkSeen = null;
+let hulkDrift = 0;
 /**
  * The fastest playback ran, in ticks of game time per second of wall clock.
  *
@@ -191,6 +195,31 @@ if (stranded) {
 }
 log(`windows go with the plate: ${drawnPanes} panes still standing on `
   + `${panes.length} damaged hulls, none over a hole`);
+
+// A KILLED SHIP IS A HULK, NOT A DELETION.
+//
+// The core keeps it as a body that drifts and can be run into, so the map has
+// to keep drawing it. Both halves are asserted: something was drawn, and it
+// moved. `lit` is the cabin windows, which are children on a shared material
+// and so are hidden rather than dimmed: a derelict with its lights on is the
+// half of this that a screenshot would show and a count would not.
+if (!hulkSeen) {
+  console.log('\nNOTE: nothing was killed while the map was being watched, '
+    + 'so the hulk was not checked');
+} else if (!hulkSeen.visible || hulkSeen.quads < 50) {
+  console.log(`\nFAIL: a killed hull is drawn as ${hulkSeen.quads} quads, `
+    + `visible ${hulkSeen.visible}`);
+  process.exit(1);
+} else if (hulkSeen.lit > 0) {
+  console.log(`\nFAIL: a derelict still has ${hulkSeen.lit} lit fitting(s) on it`);
+  process.exit(1);
+} else if (hulkDrift <= 0) {
+  console.log('\nFAIL: a hulk held station rather than drifting');
+  process.exit(1);
+} else {
+  log(`a killed hull stays on the map: ${hulkSeen.quads} quads still drawn, `
+    + `lights out, drifting ${hulkDrift.toFixed(2)} units between samples`);
+}
 
 // PLAYBACK RUNS ON THE CLOCK, NOT ON THE FRAME RATE.
 //
@@ -1609,9 +1638,26 @@ async function playMatch() {
       // driver is time this side would count and the app never spent, and it
       // can only make the measured rate look slower than it is.
       at: performance.now(),
+      hulks: window.ftDebug.hulks(),
       done: window.ftDebug.playing() === null,
     }));
     chunksSeen = Math.max(chunksSeen, snap.chunks);
+    // A KILLED HULL STAYS ON THE MAP AND KEEPS MOVING.
+    //
+    // It used to be hidden on the tick it died: the ship a player had just
+    // shot apart blinked out at the moment it was worth looking at, and the
+    // core stopped it dead and took it out of contact, so nothing could run
+    // into the wreckage either. Read off the MESH, because "the core still
+    // has a body" and "the map draws it" are two claims and only the second
+    // one was broken. The drift is measured on one hulk across samples: a
+    // wreck that holds station is a wreck that is still being flown.
+    for (const h of snap.hulks) {
+      if (!hulkSeen || hulkSeen.ship !== h.ship) { hulkSeen = { ...h }; continue; }
+      const d = Math.hypot(h.pos.x - hulkSeen.pos.x, h.pos.y - hulkSeen.pos.y,
+        h.pos.z - hulkSeen.pos.z);
+      hulkDrift = Math.max(hulkDrift, d);
+      hulkSeen = { ...h, quads: Math.max(hulkSeen.quads, h.quads) };
+    }
     // Anchored at the first sample of each turn and measured against it, so
     // one noisy 200 ms gap cannot read as a rate. A tick that went BACKWARDS
     // is the next turn starting, which is a new anchor rather than a rate.

@@ -168,6 +168,15 @@ pub struct Ship {
     pub radius: f32,
     pub boarding_range: f32,
     pub boarding_capacity: i32,
+    /// Angular velocity in WORLD space, radians a second, and zero on
+    /// anything with a crew.
+    ///
+    /// A flown ship has no use for it: where a hull points is decided by its
+    /// plan, tick by tick. A HULK has no plan, so this is the whole of what
+    /// makes it turn, and it is state rather than a drawing trick because a
+    /// wreck is a collision hazard and two clients that disagreed about where
+    /// one was pointing would eventually disagree about who hit it.
+    pub spin: V3,
     pub subs: Vec<Sub>,
     pub weapons: Vec<WeaponSlot>,
 
@@ -267,6 +276,7 @@ impl Ship {
                 .collect(),
             marines: cls.marines,
             boarding_parties: Vec::new(),
+            spin: V3::ZERO,
             drift_active: false,
             drift_dir: V3::ZERO,
             mode: Mode::MoveAndTurn,

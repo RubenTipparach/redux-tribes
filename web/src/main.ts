@@ -3577,6 +3577,8 @@ Object.defineProperty(window, 'ftDebug', {
     camera: () => view.cameraState(),
     /** What has been shot off the hulls, and what is still in the air. */
     damage: () => view.damageState(),
+    /** The wrecks, as the map is actually drawing them. */
+    hulks: () => view.hulkState(),
     /** What the hulls are drawn WITH: material, finish, and whether the
      *  texture has pixels. A finish that never loaded draws exactly like one
      *  that was never applied. */
