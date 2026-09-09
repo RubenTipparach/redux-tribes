@@ -821,6 +821,12 @@ either side of the commit. Reading it off the shipped figure instead would have
 charged it 14002, which is gravity, the reach chart and the scenario table as
 well.
 
+Hulks cost **4847 bytes** for the break, measured as 167201 against 172048 on
+the SAME compiler either side of the commit, for the three piece fields on both
+sides of the boundary, `break_up`, the wider ship record and the sibling skip
+in the contact pass. CI shipped that source at **170241**, which is the figure
+to quote.
+
 ## The field is somewhere: sky, sun, three lights and bloom
 
 The map used to be a flat `0x0a0e14` clear colour, one near vertical key and a
