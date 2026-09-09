@@ -127,6 +127,25 @@ function showHulk(mesh: THREE.Mesh, destroyed: boolean): void {
 }
 
 /**
+ * Quads with area left in them.
+ *
+ * A carve does not remove a quad, it collapses one: four vertices onto a
+ * single point, which draws two degenerate triangles and nothing else. So the
+ * length of the index buffer answers the same number on a pristine hull and
+ * on one shot away to nothing, and the same number on both halves of a break,
+ * since the halves share a design and therefore a source geometry. What
+ * separates them is which quads are still open.
+ */
+function standingQuads(geo: THREE.BufferGeometry): number {
+  const pa = (geo.getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
+  let n = 0;
+  for (let b = 0; b + 11 < pa.length; b += 12) {
+    if (pa[b] !== pa[b + 3] || pa[b + 1] !== pa[b + 4] || pa[b + 2] !== pa[b + 5]) n++;
+  }
+  return n;
+}
+
+/**
  * How much of its own colour a torn interior throws back as light.
  *
  * Not a full self lit surface: at 1.0 the inside of a hull is a flat cutout
@@ -508,9 +527,24 @@ export class View {
     const mesh = this.#hulls.get(id);
     const s = this.#ships.find(x => x.id === id);
     if (!mesh || !s) return null;
-    const design = this.#designs.get(id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    const design = this.#designs.get(s.piece ? s.pieceOf : id)
+      ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
     const hull = hullMesh(design);
     const geo = hull.geo.clone();
+    // HALF A HULL IS THE OTHER HALF CARVED AWAY.
+    //
+    // A broken ship is two bodies, and each one draws the design's cells on
+    // its own side of the break. That is the carve's job already: it collapses
+    // the quads on cells that are gone and tears an edge along what is left,
+    // so a break comes out looking like a break rather than like a clean slice
+    // through a model. Seeding it here rather than meshing a second geometry
+    // is also what keeps the fore half's battle damage: those cells are in the
+    // same map, and the ship never stopped being the ship it was.
+    //
+    // The geometry is shifted the other way by what the core says: the body
+    // sits on the half's own centre so the collision sphere is where the mass
+    // is, and the picture has to sit on the body.
+    if (s.piece) geo.translate(0, 0, -s.pieceAt);
     mesh.geometry = geo;
     // The panes come across too, and for the same reason: they are children of
     // this hull drawing shared buffers, so collapsing a pane on one ship would
@@ -531,6 +565,18 @@ export class View {
       woundGlow: null, woundScorch: null, woundFor: -1,
       woundHeat: -1, upTo: -1,
     };
+    // Everything on the far side of the break is gone from this half. The
+    // lattice runs aft to fore in k, so the fore half keeps the top of it.
+    if (s.piece) {
+      const { grid } = rasterise(design);
+      const half = NZ / 2;
+      for (let n = 0; n < grid.length; n++) {
+        if (!grid[n]) continue;
+        const k = (n / (NX * NY)) | 0;
+        const mine = s.piece === 1 ? k >= half : k < half;
+        if (!mine) c.cells.set(n, -1);
+      }
+    }
     this.#carved.set(id, c);
     return c;
   }
@@ -1829,7 +1875,14 @@ export class View {
     let best = -1;
     let bestT = Infinity;
     for (const s of this.#ships) {
-      if (s.destroyed) continue;
+      // A HULK is pickable, and it was not while a killed ship was hidden: the
+      // skip here read `destroyed`, which was the same question as "is there
+      // anything on screen" right up until a wreck stayed on the map. It is
+      // asked of the MESH now, so what a player can click is what a player can
+      // see, and the drifting half of a broken hull can be looked at like
+      // anything else out there.
+      const drawn = this.#hulls.get(s.id);
+      if (!drawn?.visible) continue;
       // Where the hull IS, not where its turn started. `setPoses` moves the
       // meshes every tick of a playback without touching `ShipState`, so a
       // sphere placed from the state sits in the space a ship has left: the
@@ -2016,7 +2069,10 @@ export class View {
    * a Karisen stripe and still says whose it is.
    */
   #buildHull(s: ShipState): THREE.Mesh {
-    const design = this.#designs.get(s.id) ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
+    // A piece of a broken hull is drawn out of the design it is half OF: half
+    // a ship is not a class and has nothing of its own to be meshed from.
+    const design = this.#designs.get(s.piece ? s.pieceOf : s.id)
+      ?? stockFor(CLASS_KEYS[s.cls] ?? 'terran_frigate');
     const hull: HullMesh = hullMesh(design);
     // Standard rather than Lambert, because a finish is a normal map and a
     // palette colour now says what it is MADE of: metalness and roughness are
@@ -2094,6 +2150,14 @@ export class View {
   setDamage(hits: ReadonlyArray<HullHit>, tick: number): void {
     const live = new Set<number>();
     for (const h of hits) live.add(h.ship);
+    // A half hull is carved by its BREAK as much as by anything that shot it,
+    // and nothing shot the half that was appended: it would be reset back to
+    // a whole hull on the first frame with no hits on it.
+    for (const s of this.#ships) {
+      if (!s.piece) continue;
+      live.add(s.id);
+      this.#carveOf(s.id);
+    }
     for (const [id, c] of this.#carved) {
       if (!live.has(id) || tick < c.upTo) this.#resetCarve(id);
     }
@@ -2130,17 +2194,27 @@ export class View {
    * ship record, because "the core says it is still a body" and "the map draws
    * it" are the two different claims and only the second one was broken.
    */
-  hulkState(): Array<{ ship: number; visible: boolean; quads: number; lit: number; pos: Vec3 }> {
-    const out: Array<{ ship: number; visible: boolean; quads: number; lit: number; pos: Vec3 }> = [];
+  hulkState(): Array<{ ship: number; piece: number; of: number; visible: boolean;
+    quads: number; lit: number; pos: Vec3 }> {
+    const out: Array<{ ship: number; piece: number; of: number; visible: boolean;
+      quads: number; lit: number; pos: Vec3 }> = [];
     for (const s of this.#ships) {
       if (!s.destroyed) continue;
       const mesh = this.#hulls.get(s.id);
       if (!mesh) continue;
-      const idx = mesh.geometry.getIndex();
+      // Quads STANDING, read off the buffer, not the length of the index. A
+      // carve collapses a quad onto one point and leaves its indices where
+      // they were, so the index count is the same on a pristine hull and on
+      // one shot to nothing. It is also the same on both halves of a break,
+      // because the two share a design and therefore a source geometry: the
+      // only thing that says a fore half is not an aft half is which of its
+      // quads still have area.
       out.push({
         ship: s.id,
+        piece: s.piece,
+        of: s.pieceOf,
         visible: mesh.visible,
-        quads: (idx?.count ?? 0) / 6,
+        quads: standingQuads(mesh.geometry),
         // A derelict has its lights out: the windows are child meshes on a
         // shared material, so they are hidden rather than dimmed.
         lit: mesh.children.filter(c => c.visible).length,
@@ -2377,12 +2451,21 @@ export class View {
 
   /** Pose ships from a recorded track rather than their turn end state. */
   setPoses(poses: ReadonlyArray<{ id: number; destroyed: boolean; pos: Vec3; quat: Vec3 & { w: number } }>): void {
+    const shown = new Set<number>();
     for (const p of poses) {
       const mesh = this.#hulls.get(p.id);
       if (!mesh) continue;
+      shown.add(p.id);
       mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
       mesh.quaternion.set(p.quat.x, p.quat.y, p.quat.z, p.quat.w);
       showHulk(mesh, p.destroyed);
+    }
+    // A hull that broke in two APPENDED a body partway through the turn, so
+    // the frames before the break have no pose for it. It did not exist then
+    // and it is not drawn then: scrubbing back to before a breach shows the
+    // ship, not the half that is about to come off it.
+    for (const [id, mesh] of this.#hulls) {
+      if (!shown.has(id) && poses.length) mesh.visible = false;
     }
     this.#trackFollow();
   }

@@ -684,8 +684,13 @@ function renderFleet(): void {
       host.appendChild(chip);
     }
   };
-  rows(ships.filter(mine), $('fleet'), false);
-  rows(ships.filter(s => !mine(s)), $('hostiles'), true);
+  // Half a hull is not a ship, so it is not a row. A broken wreck appends a
+  // body to the match and it belongs on the MAP, where it is a hazard; a chip
+  // for it in the fleet rail would be a fifth ship in a four ship fight, with
+  // a hull bar and a name and nothing a player could do about any of it.
+  const listed = ships.filter(s => s.piece !== 2);
+  rows(listed.filter(mine), $('fleet'), false);
+  rows(listed.filter(s => !mine(s)), $('hostiles'), true);
   restoreHoverCard();
 }
 
@@ -3596,6 +3601,11 @@ Object.defineProperty(window, 'ftDebug', {
     cameraReport: () => cameraReport(),
     /** Who is in the match and what they are flying. */
     ships: () => ships.map(s => ({ id: s.id, side: s.side, cls: s.cls, hull: s.hull,
+      destroyed: s.destroyed,
+      /** Which half of a broken hull this body is, and whose half it is. 0 on
+       *  anything that is still one ship. A breach appends a body rather than
+       *  editing one, so a harness needs both to tell the two apart. */
+      piece: s.piece, pieceOf: s.pieceOf,
       /** What this ship's CLASS has, so a harness can say whether a hull is
        *  flying a design by comparing the two rather than by guessing from
        *  whether the number looks round. */

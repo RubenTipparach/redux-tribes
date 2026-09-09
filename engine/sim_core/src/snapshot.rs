@@ -163,6 +163,9 @@ impl Sim {
             w.quat(s.quat);
             w.v3(s.vel);
             w.v3(s.spin);
+            w.i(s.piece as i32);
+            w.i(s.piece_of as i32);
+            w.f(s.piece_at);
             w.f(s.flight.yaw_rate);
             w.f(s.flight.pitch_rate);
             w.f(s.flight.accel_fwd);
@@ -271,6 +274,9 @@ impl Sim {
             s.quat = r.quat();
             s.vel = r.v3();
             s.spin = r.v3();
+            s.piece = r.i() as u8;
+            s.piece_of = r.i() as crate::state::ShipId;
+            s.piece_at = r.f();
             s.flight.yaw_rate = r.f();
             s.flight.pitch_rate = r.f();
             s.flight.accel_fwd = r.f();

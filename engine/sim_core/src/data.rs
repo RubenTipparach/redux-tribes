@@ -24,6 +24,22 @@ pub const COLLISION_DAMAGE_K: f32 = 25.0;
 pub const WRECK_TUMBLE_MIN: f32 = 0.10;
 pub const WRECK_TUMBLE_MAX: f32 = 0.55;
 
+/// A breach breaks the hull in two, and these are the two halves.
+///
+/// `OFFSET` is where each half's own centre sits along the hull from the
+/// centre it broke at, as a fraction of the hull's radius: a half hull's mass
+/// is centred about halfway along itself. `RADIUS` is what each half then
+/// circumscribes, which is less than the whole and more than half, because a
+/// half hull is still as wide and as deep as it ever was. `KICK` is the speed
+/// the breach pushes them apart at, in units a second, and it is small on
+/// purpose: two halves that spring apart read as an explosion in a cartoon,
+/// and two that ease apart read as a ship that has come in half. It is also
+/// the ONLY thing that separates them, since halves of one wreck are out of
+/// the contact pass against each other.
+pub const WRECK_PIECE_OFFSET: f32 = 0.5;
+pub const WRECK_PIECE_RADIUS: f32 = 0.62;
+pub const WRECK_PIECE_KICK: f32 = 1.6;
+
 pub const COLLISION_PAIR_COOLDOWN_TICKS: i32 = 60;
 pub const COLLISION_RESTITUTION: f32 = 0.3;
 

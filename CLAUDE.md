@@ -1164,6 +1164,60 @@ picture, which is the half a Rust test cannot see: a killed hull is still drawn
 as hundreds of quads, with its lights out, and its position moves between
 samples.
 
+### And a hull whose reactor went comes apart
+
+A hull ground down by fire is a hulk. A hull whose REACTOR let go is wreckage in
+two pieces, and both of them are hazards, which is the whole reason to have
+them: an unsteered half hull is the most dangerous object left on the field.
+
+**A break APPENDS a body, it does not edit one.** The fore half keeps the
+ship's own id and index, so its orders, its events and its place in every list
+are where they were, and the aft half is appended, which is safe for exactly
+the reason the rest of the core relies on: ships are never removed and an index
+is an id. `piece` is 0 whole, 1 fore, 2 aft; `piece_of` names the hull both
+came from; `piece_at` is the signed offset along the old local z that the drawn
+half sits at. A piece carries no volumes, no mounts and no boarding parties: a
+piece of wreckage is not a ship with everything broken, and a screen offering
+to aim at its engines would be lying.
+
+**It breaks athwartships, not lengthwise.** A break across the hull leaves two
+halves a player can read as a bow and a stern; one down the middle leaves two
+slabs nobody can name.
+
+**Splitting happens once**, and `piece` is what says so: a half hull cannot
+break again, and a hulk takes no further damage anyway.
+
+**Two halves of ONE wreck are out of the contact pass against each other.**
+They are seated a fraction of the old radius either side of where the hull was,
+so they are born overlapping, and the separation pass reads a resolved overlap
+back as velocity: a breach launched its own halves apart at 55 units a second
+and put them half a kilometre apart inside one turn. What separates them is
+`WRECK_PIECE_KICK`, which is a decision, and not an impulse out of the geometry
+they inherited. Everything else still collides: a half against a live ship,
+against another wreck, against somebody else's half.
+
+**The client draws each half as its own half**, by seeding the carve with the
+cells that belong to the OTHER one. So the fore half keeps every scar it earned
+before it died, both halves show a torn interior along the break, and neither
+is a copy of the whole ship. `standingQuads` is how that is read back: a carve
+COLLAPSES a quad rather than removing it, so the length of the index buffer is
+the same on a pristine hull and on one shot away to nothing, and the same on
+both halves, since they share a design and therefore a source geometry. What
+separates them is which quads still have area.
+
+**And a hulk is pickable.** `pickShip` skipped `destroyed`, which was the same
+question as "is there anything on screen" right up until a wreck stayed on the
+map: a player could not click the thing they could see. It asks the MESH now.
+
+`tests/subsystems.rs` pins the break itself: one body became two, the halves
+are half the mass and a fraction of the radius, each knows whose half it is,
+neither can break again, and they part at the kick's own speed rather than at
+one the geometry made up. The playthrough asks the question only a browser can:
+whether both halves reached the screen, with quads standing on each, parting.
+A breach is not guaranteed in a match, so it says nothing at all on a run where
+nobody's reactor went, because a check that demanded one would fail on a clean
+win.
+
 ## A mount is bolted on at an ORIENTATION, not at an angle
 
 A part used to carry `rot`, a quarter turn about the up axis, and that is only

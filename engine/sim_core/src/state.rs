@@ -177,6 +177,30 @@ pub struct Ship {
     /// wreck is a collision hazard and two clients that disagreed about where
     /// one was pointing would eventually disagree about who hit it.
     pub spin: V3,
+    /// Which half of a broken hull this body is: 0 for a whole ship, 1 for the
+    /// fore half, 2 for the aft half.
+    ///
+    /// A breach does not leave a hull, it leaves two of them, and each one is
+    /// its own body because each one is its own hazard. The FORE half keeps
+    /// the original ship's id and index, so nothing that ever named this ship
+    /// has to learn a new number; the aft half is appended, which is safe
+    /// precisely because ships are never removed and an index is an id.
+    pub piece: u8,
+    /// Whose geometry this piece is a half of. Itself for a whole hull.
+    ///
+    /// The client draws a piece out of the PARENT's design, because that is
+    /// the ship somebody built: a half hull is not a class and has no design
+    /// of its own.
+    pub piece_of: ShipId,
+    /// Where the drawn half sits along its own local z from this body's
+    /// origin, in world units, signed fore positive.
+    ///
+    /// The core places the body at the half's own centre so the collision
+    /// sphere is where the mass is; the client shifts the geometry by the same
+    /// number the other way so the picture sits on the sphere. One number
+    /// crossing the boundary rather than the same arithmetic on both sides of
+    /// it, because two answers to "where is this half" is two ships.
+    pub piece_at: f32,
     pub subs: Vec<Sub>,
     pub weapons: Vec<WeaponSlot>,
 
@@ -277,6 +301,9 @@ impl Ship {
             marines: cls.marines,
             boarding_parties: Vec::new(),
             spin: V3::ZERO,
+            piece: 0,
+            piece_of: id,
+            piece_at: 0.0,
             drift_active: false,
             drift_dir: V3::ZERO,
             mode: Mode::MoveAndTurn,

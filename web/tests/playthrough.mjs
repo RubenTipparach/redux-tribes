@@ -75,6 +75,10 @@ let chunksSeen = 0;
  *  one watched actually drifted. */
 let hulkSeen = null;
 let hulkDrift = 0;
+/** A hull broken in two by its own reactor: both halves, and how far apart
+ *  they were at their nearest and their furthest. A breach is not guaranteed
+ *  in a match, so this stays null on a run where nobody's reactor went. */
+let splitSeen = null;
 /**
  * The fastest playback ran, in ticks of game time per second of wall clock.
  *
@@ -219,6 +223,35 @@ if (!hulkSeen) {
 } else {
   log(`a killed hull stays on the map: ${hulkSeen.quads} quads still drawn, `
     + `lights out, drifting ${hulkDrift.toFixed(2)} units between samples`);
+}
+
+// AND A HULL WHOSE REACTOR WENT COMES APART.
+//
+// Two bodies where there was one, each drawn as its own half: the fore keeps
+// the ship's id and the aft is appended, and each carves away the cells that
+// belong to the other, so a half with nothing standing is a half nobody can
+// see. How FAST they part is pinned in the core, where the kick is a number
+// (`a_breach_breaks_the_hull_in_two`); what is asked here is the thing only a
+// browser can answer, which is whether both halves reached the screen.
+if (!splitSeen) {
+  console.log('\nNOTE: no reactor went while the map was being watched, '
+    + 'so the break was not checked');
+} else if (!splitSeen.fore.visible || !splitSeen.aft.visible) {
+  console.log(`\nFAIL: half of a broken hull is not drawn (fore `
+    + `${splitSeen.fore.visible}, aft ${splitSeen.aft.visible})`);
+  process.exit(1);
+} else if (splitSeen.fore.quads < 20 || splitSeen.aft.quads < 20) {
+  console.log(`\nFAIL: a half of a broken hull has nothing standing `
+    + `(fore ${splitSeen.fore.quads} quads, aft ${splitSeen.aft.quads})`);
+  process.exit(1);
+} else if (splitSeen.far <= splitSeen.near) {
+  console.log(`\nFAIL: the two halves of a broken hull never separated `
+    + `(${splitSeen.near.toFixed(2)} units throughout)`);
+  process.exit(1);
+} else {
+  log(`a breached hull came apart: two halves drawn, `
+    + `${splitSeen.fore.quads} and ${splitSeen.aft.quads} quads, `
+    + `parting from ${splitSeen.near.toFixed(2)} to ${splitSeen.far.toFixed(2)} units`);
 }
 
 // PLAYBACK RUNS ON THE CLOCK, NOT ON THE FRAME RATE.
@@ -1657,6 +1690,27 @@ async function playMatch() {
         h.pos.z - hulkSeen.pos.z);
       hulkDrift = Math.max(hulkDrift, d);
       hulkSeen = { ...h, quads: Math.max(hulkSeen.quads, h.quads) };
+    }
+    // AND A HULL WHOSE REACTOR WENT IS TWO OF THEM.
+    //
+    // A breach appends a body rather than editing one, so the two halves are
+    // told apart by `piece` and joined by `of`. Nobody's reactor is guaranteed
+    // to go in a given match, so this records what it finds and the verdict
+    // says nothing at all when it finds none: a check that demanded a breach
+    // would fail on a clean win.
+    const halves = snap.hulks.filter(h => h.piece);
+    for (const a of halves) {
+      const b = halves.find(x => x.of === a.of && x.piece !== a.piece);
+      if (!b || a.piece !== 1) continue;
+      const gap = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y, a.pos.z - b.pos.z);
+      if (!splitSeen || splitSeen.of !== a.of) {
+        splitSeen = { of: a.of, fore: a, aft: b, near: gap, far: gap };
+      } else {
+        splitSeen.near = Math.min(splitSeen.near, gap);
+        splitSeen.far = Math.max(splitSeen.far, gap);
+        splitSeen.fore = { ...a, quads: Math.max(splitSeen.fore.quads, a.quads) };
+        splitSeen.aft = { ...b, quads: Math.max(splitSeen.aft.quads, b.quads) };
+      }
     }
     // Anchored at the first sample of each turn and measured against it, so
     // one noisy 200 ms gap cannot read as a rate. A tick that went BACKWARDS

@@ -315,7 +315,95 @@ impl Sim {
 
         if reactor_breached {
             self.detonate(si, tick, events);
+            // After the blast, because the blast is measured from where the
+            // ship was and breaking it up moves both halves off that point.
+            self.break_up(si, tick, events);
         }
+    }
+
+    /// A breach does not leave a hull. It leaves two of them.
+    ///
+    /// The reactor going is the violent death in this model, and it is the one
+    /// that should come apart: a hull ground down by fire is a hulk, a hull
+    /// whose reactor let go is wreckage in two pieces. Both are bodies, both
+    /// drift, both tumble, and both are in the contact pass, which is the
+    /// whole point of the owner's ask: a piece nobody is steering is a hazard
+    /// for everybody left alive.
+    ///
+    /// The FORE half keeps the ship's own id and index, so nothing that ever
+    /// named this ship has to learn a new number: its orders, its events and
+    /// its place in every list are where they were. The aft half is APPENDED,
+    /// which is safe for exactly the reason the rest of this file relies on,
+    /// that ships are never removed and an index is an id.
+    ///
+    /// Splitting once is enforced by `piece`: a half hull is already a piece
+    /// and cannot break again, and a hulk takes no further damage anyway.
+    fn break_up(&mut self, si: usize, tick: i32, events: &mut Vec<Event>) {
+        if !self.ships[si].destroyed || self.ships[si].piece != 0 {
+            return;
+        }
+        let (pos, quat, vel, radius, mass) = {
+            let s = &self.ships[si];
+            (s.pos, s.quat, s.vel, s.radius, s.mass)
+        };
+        // Along the hull, because a ship breaks its BACK: a break athwartships
+        // leaves two halves a player can still read as a bow and a stern, and
+        // one lengthwise leaves two slabs nobody can name.
+        let fwd = quat.rot(V3::new(0.0, 0.0, 1.0));
+        let off = radius * data::WRECK_PIECE_OFFSET;
+        let mut rng = self.stream(Stream::new(Stream::WRECK, si as u32, tick as u32, 1));
+        let kick = fwd.scale(data::WRECK_PIECE_KICK);
+        let spin_fore = rng
+            .on_unit_sphere()
+            .scale(rng.range(data::WRECK_TUMBLE_MIN as f64, data::WRECK_TUMBLE_MAX as f64) as f32);
+        let spin_aft = rng
+            .on_unit_sphere()
+            .scale(rng.range(data::WRECK_TUMBLE_MIN as f64, data::WRECK_TUMBLE_MAX as f64) as f32);
+
+        // The aft half is cloned off the ship BEFORE the ship becomes the fore
+        // half, so both halves start from the same hull rather than from each
+        // other. It carries no volumes and no mounts: a piece of wreckage is
+        // not a ship with everything broken, it is a piece of wreckage, and a
+        // screen that offered to aim at its engines would be lying.
+        let mut aft = self.ships[si].clone();
+        aft.id = self.ships.len() as ShipId;
+        aft.piece = 2;
+        aft.piece_of = self.ships[si].id;
+        aft.piece_at = -off;
+        aft.pos = pos.sub(fwd.scale(off));
+        aft.vel = vel.sub(kick);
+        aft.spin = spin_aft;
+        aft.mass = mass * 0.5;
+        aft.radius = radius * data::WRECK_PIECE_RADIUS;
+        aft.subs.clear();
+        aft.weapons.clear();
+        aft.boarding_parties.clear();
+        aft.plan.clear();
+        aft.ai_enabled = false;
+        aft.ai_target = None;
+
+        {
+            let fore = &mut self.ships[si];
+            fore.piece = 1;
+            fore.piece_of = fore.id;
+            fore.piece_at = off;
+            fore.pos = pos.add(fwd.scale(off));
+            fore.vel = vel.add(kick);
+            fore.spin = spin_fore;
+            fore.mass = mass * 0.5;
+            fore.radius = radius * data::WRECK_PIECE_RADIUS;
+        }
+
+        // One event for the break, carrying the id of the half that was
+        // appended, so a client can find the new body without diffing two
+        // ship lists to work out what turned up.
+        let mut e = Event::new(EventKind::ShipDestroyed, tick);
+        e.ship = si as i32;
+        e.other = aft.id as i32;
+        e.aux = 1;
+        e.pos = pos;
+        events.push(e);
+        self.ships.push(aft);
     }
 
     /// The blast that follows a breach.
@@ -873,6 +961,21 @@ impl Sim {
                 // one still takes the impact, and `apply_damage` returns early
                 // on a ship that is already dead, so ramming a derelict costs
                 // the rammer and cannot hurt the derelict twice.
+                // Two halves of ONE wreck are not two things that can hit
+                // each other. They are born overlapping by construction, since
+                // a break seats them a fraction of the old radius either side
+                // of where the hull was, and the separation pass reads a
+                // resolved overlap back as velocity: a breach launched its own
+                // halves apart at 55 units a second and put them half a
+                // kilometre apart inside one turn. What separates them is the
+                // kick the break gives them, which is a decision, and not an
+                // impulse out of the geometry they inherited.
+                if self.ships[i].piece != 0
+                    && self.ships[j].piece != 0
+                    && self.ships[i].piece_of == self.ships[j].piece_of
+                {
+                    continue;
+                }
                 let (ra, rb) = (self.ships[i].radius, self.ships[j].radius);
                 let delta = self.ships[j].pos.sub(self.ships[i].pos);
                 let dist = delta.len();
@@ -1113,6 +1216,14 @@ impl Sim {
         let mut prev_positions: Vec<V3> = self.ships.iter().map(|s| s.pos).collect();
 
         for tick in 0..=(TICKS_PER_TURN as i32) {
+            // A hull that broke in two APPENDED a body mid turn, so the array
+            // that remembers where everything was last tick is one short. It
+            // grows here rather than at the split, because this is the loop
+            // that indexes it and a piece's first tick starts where it was
+            // put.
+            while prev_positions.len() < self.ships.len() {
+                prev_positions.push(self.ships[prev_positions.len()].pos);
+            }
             // 1. kinematics
             for si in 0..self.ships.len() {
                 prev_positions[si] = self.ships[si].pos;
@@ -1313,6 +1424,12 @@ impl Sim {
             for v in [s.spin.x, s.spin.y, s.spin.z] {
                 num(v, &mut byte);
             }
+            // Which half of a broken hull this is, and where its own half
+            // sits: both decide where the body is and what it can be run
+            // into, so both are the simulation's rather than the picture's.
+            int(s.piece as i32, &mut byte);
+            int(s.piece_of as i32, &mut byte);
+            num(s.piece_at, &mut byte);
             for v in [s.quat.x, s.quat.y, s.quat.z, s.quat.w] {
                 num(v, &mut byte);
             }
