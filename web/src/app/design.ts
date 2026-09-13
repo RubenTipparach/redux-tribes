@@ -1540,10 +1540,10 @@ const decorFor = (frame: FrameDef): Decor[] => {
   const BELT: DecorLook = { role: 'belt' };
   /** A grapple's tip, lit the boarding pink. */
   const GRAPPLE: DecorLook = { lit: 'boarding', mat: Mat.Accent };
-  /** A launch bay's mouth, lit the propulsion orange a fighter leaves on.
-   *  `Mat.Accent` and not `Mat.Glow`: the glow slot of a purpose is its near
-   *  white highlight, which on a blue Terran flank came out as a cream panel
-   *  rather than as light coming out of a hole. */
+  /** The lit rim round a bay's mouth, in the propulsion orange a craft leaves
+   *  on. `Mat.Accent` and not `Mat.Glow`: the glow slot of a purpose is its
+   *  near white highlight, which on a blue Terran flank came out as a cream
+   *  panel rather than as light coming out of a hole. */
   const LAUNCH: DecorLook = { lit: 'propulsion', mat: Mat.Accent };
 
   /** One cell of decor, at a lattice position. */
@@ -1604,32 +1604,28 @@ const decorFor = (frame: FrameDef): Decor[] => {
           }
         }
       }
-      // And the one thing a Terran gets for being a CARRIER: two launch bays
-      // a side, cut into the flank at the waist. It is the only cue available
-      // and the ban is what picks it: a big block on top of a Terran is out,
-      // so an island is out, and a groove down the deck is out too because
-      // decor adds cells and never takes them away. A Homeworld carrier
-      // launches from its flanks anyway.
-      //
-      // The recess is made rather than painted. Two lips stand two cells
-      // proud, above and below, and the lit mouth sits one cell back between
-      // them, so what reads is a slot in shadow with light in it rather than
-      // an orange stripe down a blue ship. Both lip courses are filled to the
-      // skin, because a cell two proud with nothing under it is a cell
-      // touching nothing and the weld pass would take it off.
-      if (frame.tier === 'carrier'
-        && ((t > 0.30 && t < 0.46) || (t > 0.52 && t < 0.68))) {
-        const yb = Math.round(CY + hh * 0.05);
-        for (const side of [-1, 1]) {
-          for (let dy = -1; dy <= 1; dy++) {
-            const y = yb + dy;
-            put(flankCell(hw, hh, y + 0.5 - CY, side) + side, y, z, LAUNCH);
+      // A CARRIER's openings are cut by `voidsFor`, and what marks them is a
+      // light. Both are a lit cell standing one course proud of the plating
+      // rather than set into it: `put` writes where a cell is FREE, and the
+      // skin of a mouth's rim is plating that is very much taken. One cell,
+      // which is a runway light and not the block on top of a Terran the
+      // owner banned; and it is what makes an opening read as an opening
+      // rather than as a dark patch, at the range this ship is usually drawn.
+      if (frame.tier === 'carrier') {
+        // Two strips down the berth's own edges, the length of the slot.
+        if (t > BERTH.z0 && t < BERTH.z1) {
+          for (const side of [-1, 1]) {
+            const x = side < 0 ? CX - BERTH.half - 1 : CX + BERTH.half;
+            put(x, deckCell(hw, hh, x + 0.5 - CX, 1) + 1, z, LAUNCH);
           }
-          for (const dy of [-3, -2, 2, 3]) {
-            const y = yb + dy;
-            const root = flankCell(hw, hh, y + 0.5 - CY, side);
-            const proud = Math.abs(dy) === 2 ? 2 : 1;
-            for (let n = 1; n <= proud; n++) put(root + side * n, y, z, HULL);
+        }
+        // And one over and under each tube's mouth, which is the only thing
+        // that says a two cell bore in a flank is a door rather than damage.
+        for (const tube of TUBES) {
+          const k = zOf(tube);
+          if (z !== k && z !== k + 1) continue;
+          for (const side of [-1, 1]) for (const y of [CY + 1, CY - 2]) {
+            put(flankCell(hw, hh, y + 0.5 - CY, side) + side, y, z, LAUNCH);
           }
         }
       }
@@ -1795,6 +1791,92 @@ export const decorOf = (frame: FrameDef): readonly Decor[] => {
 };
 
 /**
+ * What a CLASS has cut OUT of its own plating, as boxes in lattice cells.
+ *
+ * `decorFor` is the other half of a silhouette and it can only ever add: every
+ * hull in the fleet is a shell grown on a profile with fittings laid inside
+ * it, and nothing until now took a cell back off one. A carrier needs that,
+ * because the two things that say carrier are both HOLES. A berth is a place a
+ * hull is built in and flies out of, and a launch tube is a bore a fighter
+ * leaves through, and neither can be drawn by adding plate: a mouth painted on
+ * a flank is a mouth nobody believes.
+ *
+ * It is a function of the FRAME for the reason `decorFor` is: a class added
+ * tomorrow gets its navy's habits and its tier's for free, and no table
+ * anywhere can drift about what a carrier has cut into it.
+ *
+ * The carve keeps the hand drawn cut's own semantics exactly (plate goes,
+ * skinned plate goes back to bare frame) so a frame member crossing a bay
+ * survives as a grey spar, which is what a gantry over a dock is. A part is
+ * never touched: a berth full of the modules it services is a berth, and a
+ * cut that ate a drive bell would be a hole where an engine was.
+ */
+type Void = readonly [number, number, number, number, number, number];
+
+/**
+ * Where a carrier's openings are, in fractions of its own length and cells off
+ * the centreline.
+ *
+ * Read by `voidsFor`, which cuts them, and by `decorFor`, which lights their
+ * rims: two passes about one opening, and a second copy of these numbers is
+ * the copy that would drift the day a bay moved and leave a lit outline
+ * round a piece of solid plating.
+ */
+const BERTH = { z0: 0.50, z1: 1.0, half: 4, floor: 3 } as const;
+const TUBES = [0.30, 0.38, 0.46] as const;
+
+const voidsFor = (frame: FrameDef): Void[] => {
+  if (frame.tier !== 'carrier') return [];
+  const prof = frame.profile;
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  const len = Math.max(1, nose - aft);
+  const zOf = (t: number): number => Math.round(aft + t * len);
+  const out: Void[] = [];
+
+  // THE BERTH, and it is cut down through the DECK rather than in at an end.
+  // Three reasons, and the first is the only one that had a choice in it: a
+  // Terran is a wide flat section, so its deck is the one face with room for
+  // an opening ten cells across, and both ends taper to about a third of that.
+  // The camera in the game this hull is for looks down at a three quarter
+  // pitch, so a mouth in the deck is the mouth it can actually see. And the
+  // owner's ban on this navy is a big BLOCK on top of a Terran: a slot cut
+  // into the deck is the opposite of one, and the fluting a Terran's language
+  // is made of is vertical lines on a horizontal ship, which a bay wall is.
+  //
+  // And it runs out through the BOW, which is what makes it a mouth rather
+  // than a tray. Cut into the deck alone it is an open hold with the yard's
+  // own modules sitting in it and a hull built in one would have nowhere to
+  // go; open at an end as well, a ship is assembled in the slot and leaves
+  // through the opening, and from ahead the mouth is most of the silhouette.
+  //
+  // The BOW and not the transom, because the transom is where eight drive
+  // bells are and a bell standing in the middle of a bay is a bay nothing can
+  // fly out of. Moving them outboard to clear it put four of them proud of
+  // the skin with a spar under each, which is the slop the pylon pass exists
+  // to catch rather than a thing to aim for. The nose carries one gun ring
+  // and nothing else, so it cost a ring's station and no geometry at all.
+  out.push([CX - BERTH.half, CX + BERTH.half - 1, CY - BERTH.floor, NY - 1,
+    zOf(BERTH.z0), zOf(BERTH.z1)] as const);
+
+  // THE LAUNCH TUBES, three a side, bored clean through the flank forward of
+  // the berth. Square and small, because what leaves through one is a fighter
+  // and a tube a capital ship could fit through is a second berth.
+  //
+  // They start OUTSIDE the hull and run inboard: a bore written from the skin
+  // would need the skin's own line at that station, and the flank of a
+  // chamfered box moves with both z and y. Carving from beyond it and letting
+  // the box clip to whatever is solid is the same hole with nothing to get
+  // wrong.
+  for (const t of TUBES) {
+    const z = zOf(t);
+    out.push([CX + BERTH.half - 1, NX - 1, CY - 1, CY, z, z + 1] as const);
+    out.push([0, CX - BERTH.half, CY - 1, CY, z, z + 1] as const);
+  }
+  return out;
+};
+
+/**
  * Cargo stations: holds in a RACK rather than in a line.
  *
  * A container is eleven cells long, so six of them nose to tail is sixty six
@@ -1956,10 +2038,14 @@ const NAVY_SECTION: Record<FactionKey, SectionDef> = {
  */
 const FULLNESS: Record<TierKey, number> = {
   corvette: 1.34, frigate: 1, destroyer: 0.86, cruiser: 0.72,
-  // Blunter than a heavy cruiser, because a carrier is not a gun platform
-  // that got bigger: it is a yard with engines, and what it is mostly made of
-  // is the volume amidships that the hangars and the holds sit in.
-  carrier: 0.62,
+  // Far blunter than a heavy cruiser, and it is the mouth that sets the
+  // figure rather than taste. A carrier is a yard with engines, so most of it
+  // is the volume amidships the bays sit in; and the berth is cut out through
+  // the BOW, so the bow has to be a face wide enough to put an opening in. At
+  // the cruiser's 0.72 the nose tapers to nine cells and a ten cell mouth ate
+  // the whole of it, which reads as a hull with a bite out of it rather than
+  // as a ship with a door. Blunt, the same cut lands in a face.
+  carrier: 0.40,
   // The civil trades vary by what they carry rather than by rung, and the
   // shape follows the cargo: a tanker is a bulge round a cylinder, a liner is
   // fine because it is mostly people, a hopper ship is square because rock is.
@@ -2623,7 +2709,7 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_carrier', name: 'Terran Fleet Carrier',
     faction: 'terran', tier: 'carrier', rung: 'capital',
-    radius: 14.8, massMax: 40.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 14.4, massMax: 38.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CVN,
     // The cruiser's spine at the capital cell, and no dorsal stringer for the
     // reason the cruiser has none: a frame member that wide down the length of
@@ -2634,7 +2720,12 @@ export const FRAMES: readonly FrameDef[] = [
     sockets: [
       ...suite(PROF_TERRAN_CVN, [[-0.66, -0.3], [-0.22, -0.3], [0.22, -0.3], [0.66, -0.3],
         [-0.66, 0.36], [-0.22, 0.36], [0.22, 0.36], [0.66, 0.36]], 22, 6),
-      seatAt(PROF_TERRAN_CVN, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
+      // The deck ring sits ABAFT the mouth rather than over the nose, which
+      // is where a bow gun goes on every other hull in this navy: the nose is
+      // the berth now, and a turret standing over an open bay has nothing
+      // under it. It is still the ship's forward most centreline deck mount,
+      // so it is still the one `bowRing` trains down the keel.
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g0', 'gun ring, dorsal', 30, 0, 0.6),
       seatAt(PROF_TERRAN_CVN, 'gun', 'g1', 'gun ring, port waist', 34, -0.78, 0.24),
       seatAt(PROF_TERRAN_CVN, 'gun', 'g2', 'gun ring, starboard waist', 34, 0.78, 0.24),
       seatAt(PROF_TERRAN_CVN, 'gun', 'g3', 'gun ring, aft dorsal', 14, 0, 0.6),
@@ -3835,6 +3926,24 @@ export function rasterise(d: Design): Raster {
       const vx = (x + 0.5 - CX) / hw, vy = (y + 0.5 - CY) / hh;
       if (secInside(shape, vx, vy)) break;      // reached the hull line
     }
+  }
+
+  // --- what the CLASS cut out of itself -----------------------------------
+  //
+  // After the plate, the decor and the pylons, because it has to be able to
+  // take back anything any of them laid across a mouth, and before the hand
+  // drawn cut, which is the player's and therefore last. Same semantics as
+  // that cut and never a part: see `voidsFor`.
+  for (const [x0, x1, y0, y1, k0, k1] of voidsFor(frame)) {
+    for (let k = Math.max(0, k0); k <= Math.min(NZ - 1, k1); k++)
+      for (let j = Math.max(0, y0); j <= Math.min(NY - 1, y1); j++)
+        for (let i = Math.max(0, x0); i <= Math.min(NX - 1, x1); i++) {
+          const n = idx3(i, j, k);
+          if (own[n]) continue;
+          const at = grid[n] as number;
+          if (at === Mat.Plate) { grid[n] = Mat.Empty; purp[n] = 0; tone[n] = 0; }
+          else if (at === Mat.Skinned) { grid[n] = Mat.Frame; tone[n] = 0; }
+        }
   }
 
   // --- hand drawn armour, last, over the top of everything ----------------

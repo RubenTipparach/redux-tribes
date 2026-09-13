@@ -514,7 +514,7 @@ static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.4, 80.0, 3.2);
 // is the one relation worth keeping on a hull six times deeper: volumes left
 // at a cruiser's hit points behind a carrier's plating are belts that fail
 // while the ship they are protecting is barely marked.
-static TERRAN_CARRIER_SUBS: [SubDef; 6] = hull_subs(14.8, 80.0, 21.9);
+static TERRAN_CARRIER_SUBS: [SubDef; 6] = hull_subs(14.4, 80.0, 20.5);
 static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 75.0, 0.6);
 static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 75.0, 1.75);
 static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 75.0, 2.9);
@@ -1241,19 +1241,19 @@ static C_TERRAN_CARRIER: ShipClass = ShipClass {
     id: ShipClassId::TerranCarrier,
     key: "terran_carrier",
     name: "Terran Fleet Carrier",
-    hull: 14486.944,
-    radius: 14.8,
-    mass: 40.6,
+    hull: 13531.68,
+    radius: 14.4,
+    mass: 38.03,
     rung_cell: 0.4375,
     base_reach: 10.0,
     base_marines: 0,
     base_capacity: 0,
     flight: Flight {
-        yaw_rate: 0.3317,
-        pitch_rate: 0.2223,
-        accel_fwd: 0.0753,
-        accel_retro: 0.0174,
-        accel_lat: 0.0116,
+        yaw_rate: 0.3604,
+        pitch_rate: 0.2415,
+        accel_fwd: 0.0804,
+        accel_retro: 0.0186,
+        accel_lat: 0.0124,
         max_speed: 7.0,
     },
     boarding_range: 40.0,

@@ -357,26 +357,83 @@ about the size is authored. It measures 25.38 units long against the frigate's
 6.34, which is 4.00x, and against the cruiser's 12.69, which is 2.00x, and
 `tools/fleet_shots.mjs --ladder terran` is the picture that says so.
 
+One honest number moved when the berth was cut through the nose: it measures
+24.94 units rather than 25.38, so 3.93x the frigate rather than 4.00x. The
+envelope is still exactly twice the cruiser's and the carve is what took the
+last cell of the bow.
+
 **Six rings and not ten, which is what makes it a carrier rather than a bigger
 cruiser.** The volume goes on holds, berths, airlocks and clamps instead: it is
 a yard with engines, and what defends it is the wing standing off it. `FULLNESS`
 is 0.62, blunter than the cruiser's 0.72, for the same reason: it is mostly the
 volume amidships that the hangars sit in.
 
-**Its one silhouette cue is a pair of LAUNCH BAYS a side, and the ban is what
-picked them.** A carrier wants an island and an island is a big block on top of
-a Terran, which the owner banned; a groove down the deck is out too, because
-`decorFor` adds cells and can never take one away. So the bays are cut into the
-flanks, which is where a Homeworld carrier launches from anyway. The recess is
-MADE rather than painted: two lips stand two cells proud above and below and the
-lit mouth sits one cell back between them, so what reads is a slot in shadow
-with light in it rather than an orange stripe down a blue ship. Both lip courses
-are filled to the skin, because a cell two proud with nothing under it is a cell
-touching nothing and the weld pass would take it straight off again.
+## `voidsFor`: the first thing in this fleet that CUTS
 
-The mouth is `Mat.Accent` and not `Mat.Glow`. A purpose's glow slot is its near
-white highlight, and on a blue Terran flank that came out as a cream panel
-rather than as light coming out of a hole.
+Every hull here is a shell grown on a profile with fittings laid inside it and
+armour drawn over the top, and until the carrier nothing ever took a cell back
+off one: `decorFor` is the other half of a silhouette and it can only ever add.
+A carrier needs the opposite, because the two things that say carrier are both
+HOLES. A berth is a place a hull is built in and flies out of and a launch tube
+is a bore a fighter leaves through, and neither can be drawn by adding plate: a
+mouth painted on a flank is a mouth nobody believes, which is exactly what the
+first cut of this hull shipped.
+
+`voidsFor(frame)` is boxes in lattice cells, a function of the FRAME for the
+reason `decorFor` is: a class added tomorrow gets its navy's habits and its
+tier's for free, and no table can drift about what a carrier has cut into it.
+It runs after the plate, the decor and the pylons, so it can take back anything
+any of them laid across a mouth, and before the hand drawn cut, which is the
+player's and therefore last.
+
+**It keeps the hand drawn cut's own semantics exactly** (plate goes, skinned
+plate goes back to bare frame) so a frame member crossing a bay survives as a
+grey spar, which is what a gantry over a dock is. A part is never touched: a
+berth full of the modules it services is a berth, and a cut that ate a drive
+bell would be a hole where an engine was.
+
+**The berth is a SLIPWAY**, cut down through the deck from amidships and out
+through the bow, eight cells wide, with a lit rail down each edge. Cut into the
+deck alone it is an open hold with the yard's own modules sitting in it and a
+hull built in one has nowhere to go; open at an end as well, a ship is
+assembled in the slot and leaves through the opening.
+
+**The bow and not the transom, and that was the one real decision.** The stern
+is where eight drive bells are, and a bell standing in the middle of a bay is a
+bay nothing can fly out of. Moving them outboard to clear it put four of them
+proud of the skin with a spar welded under each, which is the slop the pylon
+pass exists to catch rather than a thing to aim for. The nose carried one gun
+ring and nothing else, so the bow cost a ring's station and no geometry at all:
+the ring moved aft and is still the ship's forward most centreline deck mount,
+so `bowRing` still trains it down the keel.
+
+**And `FULLNESS` went to 0.40 for the tier, which the MOUTH set rather than
+taste.** At the heavy cruiser's 0.72 the nose tapers to nine cells and an eight
+cell mouth ate the whole of it, which reads as a hull with a bite out of it
+rather than as a ship with a door. Blunt, the same cut lands in a face. It
+cannot touch the ladder, because one raised to any power is one.
+
+**The tubes are three a side**, bored clean through the flank amidships, two
+cells square. Small on purpose: what leaves through one is a fighter, and a
+tube a capital ship could fit through is a second berth. They are carved from
+OUTSIDE the hull inward, because a bore written from the skin would need the
+skin's own line at that station and the flank of a chamfered box moves with
+both z and y: starting beyond it and letting the box clip to whatever is solid
+is the same hole with nothing to get wrong.
+
+**What marks an opening is a light standing one course PROUD of the plating**,
+and that is `put`'s own rule rather than a taste: it writes where a cell is
+free, and the skin of a mouth's rim is plating that is very much taken. One
+cell, which is a runway light and not the block on top of a Terran the owner
+banned, and it is what makes an opening read as an opening rather than as a
+dark patch at the range this ship is usually drawn. `Mat.Accent` and not
+`Mat.Glow`: a purpose's glow slot is its near white highlight, and on a blue
+Terran flank that came out as a cream panel rather than as light out of a hole.
+
+**`BERTH` and `TUBES` are written once**, beside `voidsFor`, and `decorFor`
+reads them to place the rims. Two passes about one opening, and a second copy
+of those numbers is the copy that would drift the day a bay moved and leave a
+lit outline round a piece of solid plating.
 
 **And it is a hull swarm-demo exports.** That project's base building mode needs
 a carrier to build and research from, and a ship is authored in one place: the
