@@ -335,6 +335,21 @@ export interface ShipState {
   readonly maxSpeed: number;
   readonly aiTarget: number;
   readonly boardingRange: number;
+  /**
+   * Which half of a broken hull this body is: 0 a whole ship, 1 the fore half,
+   * 2 the aft half.
+   *
+   * A reactor breach leaves two bodies rather than one, and each is its own
+   * hazard. The fore half keeps the ship's id; the aft half is a new one.
+   */
+  readonly piece: number;
+  /** Whose design this piece is a half OF: a half hull is not a class and has
+   *  no design of its own. Itself on a whole ship. */
+  readonly pieceOf: number;
+  /** Where the drawn half sits along its own local z from this body's origin,
+   *  in world units, fore positive. The core places the body on the half's own
+   *  centre, so the picture is shifted by this to sit on it. */
+  readonly pieceAt: number;
 }
 
 export interface Pose {

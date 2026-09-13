@@ -27,7 +27,7 @@ const DERIVE_PARTS = OUT + 32;
  *  editor has three guns; the core also knows plasma, which is a cannon with
  *  different effects and nothing fits. */
 const WEAPON_KEY: Record<string, number> = { beam: 0, projectile: 1, missile: 3 };
-const SHIP_STRIDE = 39;
+const SHIP_STRIDE = 42;
 /** How many mounts a ship record carries a cooldown for. Mirrors
  *  `ffi::SHIP_COOLDOWNS`; positional, like everything else in the record. */
 const SHIP_COOLDOWNS = 8;
@@ -347,6 +347,9 @@ export class Match {
         maxSpeed: s[b + 36] ?? 8,
         aiTarget: s[b + 37] ?? -1,
         boardingRange: s[b + 38] ?? 20,
+        piece: s[b + 39] ?? 0,
+        pieceOf: s[b + 40] ?? (s[b] ?? i),
+        pieceAt: s[b + 41] ?? 0,
       });
     }
     return out;

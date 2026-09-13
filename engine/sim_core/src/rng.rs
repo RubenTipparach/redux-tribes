@@ -62,6 +62,7 @@ impl Stream {
     pub const MISSILE_SPAWN: u32 = 3;
     pub const MISSILE_HOP: u32 = 4;
     pub const BOARDING: u32 = 5;
+    pub const WRECK: u32 = 6;
 
     pub const fn new(tag: u32, a: u32, b: u32, c: u32) -> Self {
         Self { tag, a, b, c }

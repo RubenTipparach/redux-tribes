@@ -39,7 +39,7 @@ use crate::state::{
 /// edited, and the stats are what a turn is flown with, so a snapshot that
 /// restored without it could come back into a match that accepts changes the
 /// original refused.
-pub const SNAPSHOT_VERSION: f32 = 4.0;
+pub const SNAPSHOT_VERSION: f32 = 5.0;
 
 struct Writer<'a> {
     buf: &'a mut [f32],
@@ -162,6 +162,10 @@ impl Sim {
             w.v3(s.pos);
             w.quat(s.quat);
             w.v3(s.vel);
+            w.v3(s.spin);
+            w.i(s.piece as i32);
+            w.i(s.piece_of as i32);
+            w.f(s.piece_at);
             w.f(s.flight.yaw_rate);
             w.f(s.flight.pitch_rate);
             w.f(s.flight.accel_fwd);
@@ -269,6 +273,10 @@ impl Sim {
             s.pos = r.v3();
             s.quat = r.quat();
             s.vel = r.v3();
+            s.spin = r.v3();
+            s.piece = r.i() as u8;
+            s.piece_of = r.i() as crate::state::ShipId;
+            s.piece_at = r.f();
             s.flight.yaw_rate = r.f();
             s.flight.pitch_rate = r.f();
             s.flight.accel_fwd = r.f();

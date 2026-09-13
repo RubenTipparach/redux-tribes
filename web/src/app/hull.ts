@@ -419,6 +419,48 @@ const CACHE_MAX = 12;
  * either of which drifting would draw a player a ship that is not the one they
  * built (GUIDELINES 5.1).
  */
+/**
+ * Collapse the window panes standing on cells that are GONE.
+ *
+ * A window face leaves the greedy pass entirely: the plate quad is dropped
+ * where a pane goes, so the hull geometry has nothing at all in that cell and
+ * carving the hull can never take the pane off with it. Panes were drawn from
+ * shared buffers hung on the hull, so a shot that opened a hole left its
+ * viewport hanging in the gap, lit, over the wound.
+ *
+ * One function because two screens ask it. The map carves a hull as it is hit
+ * and the schematic redraws the same hole in the modal, and two answers to
+ * "is this pane still standing on anything" would be two ships: the map's and
+ * the one the player opened to look at it.
+ *
+ * `dst` is written from `src` every time rather than in place, so a scrub
+ * BACKWARDS puts a pane back when its cell comes home. The collapse is the
+ * hull's own: four corners onto one point, which is a quad with no area and
+ * therefore nothing to draw and nothing to pick. The index is left alone,
+ * because renumbering the quads would break `cellOf` under it.
+ */
+export function collapsePanes(
+  dst: THREE.BufferGeometry, src: THREE.BufferGeometry,
+  cellOf: Int32Array, dead: ReadonlyMap<number, number>,
+): void {
+  const pos = dst.getAttribute('position') as THREE.BufferAttribute;
+  const a = pos.array as Float32Array;
+  const from = (src.getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
+  for (let q = 0; q < cellOf.length; q++) {
+    const b = q * 12;
+    if (dead.has(cellOf[q] as number)) {
+      for (let v = 1; v < 4; v++) {
+        a[b + v * 3] = a[b] as number;
+        a[b + v * 3 + 1] = a[b + 1] as number;
+        a[b + v * 3 + 2] = a[b + 2] as number;
+      }
+    } else {
+      for (let v = 0; v < 12; v++) a[b + v] = from[b + v] as number;
+    }
+  }
+  pos.needsUpdate = true;
+}
+
 export function hullMesh(d: Design, bare = false): HullMesh {
   const key = rasterSig(d) + '|' + d.faction + '|' + d.paint + (bare ? '|bare' : '');
   const hit = cache.get(key);

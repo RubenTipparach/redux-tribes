@@ -71,6 +71,30 @@ let aimedAtAVolume = false;
 let aimedShotQueued = false;
 /** The most chunks of hull seen in the air at once. */
 let chunksSeen = 0;
+/** Hulks seen on the map after a kill: how they were drawn, and whether the
+ *  one watched actually drifted. */
+let hulkSeen = null;
+let hulkDrift = 0;
+/** A hull broken in two by its own reactor: both halves, and how far apart
+ *  they were at their nearest and their furthest. A breach is not guaranteed
+ *  in a match, so this stays null on a run where nobody's reactor went. */
+let splitSeen = null;
+/**
+ * The fastest playback ran, in ticks of game time per second of wall clock.
+ *
+ * The core's tick is 1/60 of a second and a turn is 600 of them, so ten
+ * seconds of game is ten seconds on the wall at 1x. Playback used to advance
+ * one tick per FRAME, which is only real time on a sixty hertz display: a 120
+ * hertz screen played a turn in five seconds and a 144 hertz one in four, and
+ * the speed of the game was a property of the monitor.
+ *
+ * Measured as a ceiling rather than as a window, because slow is the honest
+ * answer on a machine that cannot draw sixty frames a second and this one
+ * cannot: a software rasteriser plays the same turn slowly and correctly. What
+ * may never happen is FASTER than the clock, which is the direction the defect
+ * was in.
+ */
+let playRate = 0;
 /** The worst blast seen, as how far it sat from the hull it was drawn on.
  *  A shot's explosion belongs ON the ship, and the event it comes from carries
  *  a point on the COLLISION sphere, which stands well proud of a hull. */
@@ -156,6 +180,95 @@ if (!chunksSeen) {
 }
 log(`hulls come apart: ${total} cells off ${carved.length} ships, `
   + `${chunksSeen} chunks in the air at once`);
+
+// A WINDOW GOES WITH THE PLATE IT WAS CUT INTO.
+//
+// A window face leaves the greedy pass entirely: the plate quad is dropped
+// where a pane goes, so the hull geometry has nothing in that cell at all and
+// collapsing its quads can never take the pane off. The panes were shared
+// meshes hung on the hull, so a shot that opened a hole left its viewport
+// hanging in the gap, lit, over the wound: the owner saw it on a torn civil
+// hull. Counted off the BUFFER rather than off the carve, because the defect
+// is exactly a pane the carve knows about and the mesh still draws.
+const panes = await page.evaluate(() => window.ftDebug.damage().panes ?? []);
+const stranded = panes.reduce((a, p) => a + p.stranded, 0);
+const drawnPanes = panes.reduce((a, p) => a + p.drawn, 0);
+if (stranded) {
+  console.log(`\nFAIL: ${stranded} window panes still drawn on cells that are gone`);
+  process.exit(1);
+}
+log(`windows go with the plate: ${drawnPanes} panes still standing on `
+  + `${panes.length} damaged hulls, none over a hole`);
+
+// A KILLED SHIP IS A HULK, NOT A DELETION.
+//
+// The core keeps it as a body that drifts and can be run into, so the map has
+// to keep drawing it. Both halves are asserted: something was drawn, and it
+// moved. `lit` is the cabin windows, which are children on a shared material
+// and so are hidden rather than dimmed: a derelict with its lights on is the
+// half of this that a screenshot would show and a count would not.
+if (!hulkSeen) {
+  console.log('\nNOTE: nothing was killed while the map was being watched, '
+    + 'so the hulk was not checked');
+} else if (!hulkSeen.visible || hulkSeen.quads < 50) {
+  console.log(`\nFAIL: a killed hull is drawn as ${hulkSeen.quads} quads, `
+    + `visible ${hulkSeen.visible}`);
+  process.exit(1);
+} else if (hulkSeen.lit > 0) {
+  console.log(`\nFAIL: a derelict still has ${hulkSeen.lit} lit fitting(s) on it`);
+  process.exit(1);
+} else if (hulkDrift <= 0) {
+  console.log('\nFAIL: a hulk held station rather than drifting');
+  process.exit(1);
+} else {
+  log(`a killed hull stays on the map: ${hulkSeen.quads} quads still drawn, `
+    + `lights out, drifting ${hulkDrift.toFixed(2)} units between samples`);
+}
+
+// AND A HULL WHOSE REACTOR WENT COMES APART.
+//
+// Two bodies where there was one, each drawn as its own half: the fore keeps
+// the ship's id and the aft is appended, and each carves away the cells that
+// belong to the other, so a half with nothing standing is a half nobody can
+// see. How FAST they part is pinned in the core, where the kick is a number
+// (`a_breach_breaks_the_hull_in_two`); what is asked here is the thing only a
+// browser can answer, which is whether both halves reached the screen.
+if (!splitSeen) {
+  console.log('\nNOTE: no reactor went while the map was being watched, '
+    + 'so the break was not checked');
+} else if (!splitSeen.fore.visible || !splitSeen.aft.visible) {
+  console.log(`\nFAIL: half of a broken hull is not drawn (fore `
+    + `${splitSeen.fore.visible}, aft ${splitSeen.aft.visible})`);
+  process.exit(1);
+} else if (splitSeen.fore.quads < 20 || splitSeen.aft.quads < 20) {
+  console.log(`\nFAIL: a half of a broken hull has nothing standing `
+    + `(fore ${splitSeen.fore.quads} quads, aft ${splitSeen.aft.quads})`);
+  process.exit(1);
+} else if (splitSeen.far <= splitSeen.near) {
+  console.log(`\nFAIL: the two halves of a broken hull never separated `
+    + `(${splitSeen.near.toFixed(2)} units throughout)`);
+  process.exit(1);
+} else {
+  log(`a breached hull came apart: two halves drawn, `
+    + `${splitSeen.fore.quads} and ${splitSeen.aft.quads} quads, `
+    + `parting from ${splitSeen.near.toFixed(2)} to ${splitSeen.far.toFixed(2)} units`);
+}
+
+// PLAYBACK RUNS ON THE CLOCK, NOT ON THE FRAME RATE.
+//
+// A turn is 600 ticks at 60 a second, so 1x is ten seconds of wall clock. It
+// advanced one tick per frame, which made a 120 hertz display play it in five.
+// The ceiling is what is checked and not a window: this container rasterises
+// in software and plays the same turn slowly, which is correct. Faster than
+// the clock is the defect.
+const PLAY_MAX = 60 * 1.15;
+if (playRate > PLAY_MAX) {
+  console.log(`\nFAIL: playback ran at ${playRate.toFixed(1)} ticks a second, `
+    + `which is ${(playRate / 60).toFixed(2)}x real time`);
+  process.exit(1);
+}
+log(`playback keeps the clock: ${playRate.toFixed(1)} ticks a second at 1x, `
+  + `which is ${(playRate / 60).toFixed(2)}x real time`);
 
 // A TURRET IS NEVER PARTLY SHOT AWAY.
 //
@@ -1548,13 +1661,66 @@ async function playMatch() {
   // check reported "a whole match of hits and no blast was ever drawn" about a
   // match that drew fifty eight of them. Measuring the renderer's speed again,
   // in a third place.
+  let playAnchor = null;
   for (let s = 0; s < 400; s++) {
     const snap = await page.evaluate(() => ({
       chunks: window.ftDebug.damage().chunks,
       fx: window.ftDebug.fx(),
+      tick: window.ftDebug.playing(),
+      // The PAGE's clock, not this process's: the round trip through the
+      // driver is time this side would count and the app never spent, and it
+      // can only make the measured rate look slower than it is.
+      at: performance.now(),
+      hulks: window.ftDebug.hulks(),
       done: window.ftDebug.playing() === null,
     }));
     chunksSeen = Math.max(chunksSeen, snap.chunks);
+    // A KILLED HULL STAYS ON THE MAP AND KEEPS MOVING.
+    //
+    // It used to be hidden on the tick it died: the ship a player had just
+    // shot apart blinked out at the moment it was worth looking at, and the
+    // core stopped it dead and took it out of contact, so nothing could run
+    // into the wreckage either. Read off the MESH, because "the core still
+    // has a body" and "the map draws it" are two claims and only the second
+    // one was broken. The drift is measured on one hulk across samples: a
+    // wreck that holds station is a wreck that is still being flown.
+    for (const h of snap.hulks) {
+      if (!hulkSeen || hulkSeen.ship !== h.ship) { hulkSeen = { ...h }; continue; }
+      const d = Math.hypot(h.pos.x - hulkSeen.pos.x, h.pos.y - hulkSeen.pos.y,
+        h.pos.z - hulkSeen.pos.z);
+      hulkDrift = Math.max(hulkDrift, d);
+      hulkSeen = { ...h, quads: Math.max(hulkSeen.quads, h.quads) };
+    }
+    // AND A HULL WHOSE REACTOR WENT IS TWO OF THEM.
+    //
+    // A breach appends a body rather than editing one, so the two halves are
+    // told apart by `piece` and joined by `of`. Nobody's reactor is guaranteed
+    // to go in a given match, so this records what it finds and the verdict
+    // says nothing at all when it finds none: a check that demanded a breach
+    // would fail on a clean win.
+    const halves = snap.hulks.filter(h => h.piece);
+    for (const a of halves) {
+      const b = halves.find(x => x.of === a.of && x.piece !== a.piece);
+      if (!b || a.piece !== 1) continue;
+      const gap = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y, a.pos.z - b.pos.z);
+      if (!splitSeen || splitSeen.of !== a.of) {
+        splitSeen = { of: a.of, fore: a, aft: b, near: gap, far: gap };
+      } else {
+        splitSeen.near = Math.min(splitSeen.near, gap);
+        splitSeen.far = Math.max(splitSeen.far, gap);
+        splitSeen.fore = { ...a, quads: Math.max(splitSeen.fore.quads, a.quads) };
+        splitSeen.aft = { ...b, quads: Math.max(splitSeen.aft.quads, b.quads) };
+      }
+    }
+    // Anchored at the first sample of each turn and measured against it, so
+    // one noisy 200 ms gap cannot read as a rate. A tick that went BACKWARDS
+    // is the next turn starting, which is a new anchor rather than a rate.
+    if (snap.tick === null || playAnchor === null || snap.tick < playAnchor.tick) {
+      playAnchor = snap.tick === null ? null : { tick: snap.tick, at: snap.at };
+    } else if (snap.at - playAnchor.at > 700) {
+      playRate = Math.max(playRate,
+        (snap.tick - playAnchor.tick) / ((snap.at - playAnchor.at) / 1000));
+    }
     for (const b of snap.fx.onHull) {
       if (b.kill || !b.hullR) continue;
       blastsSeen++;

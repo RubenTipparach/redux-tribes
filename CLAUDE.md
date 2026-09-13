@@ -821,6 +821,12 @@ either side of the commit. Reading it off the shipped figure instead would have
 charged it 14002, which is gravity, the reach chart and the scenario table as
 well.
 
+Hulks cost **4847 bytes** for the break, measured as 167201 against 172048 on
+the SAME compiler either side of the commit, for the three piece fields on both
+sides of the boundary, `break_up`, the wider ship record and the sibling skip
+in the contact pass. CI shipped that source at **170241**, which is the figure
+to quote.
+
 ## The field is somewhere: sky, sun, three lights and bloom
 
 The map used to be a flat `0x0a0e14` clear colour, one near vertical key and a
@@ -1114,6 +1120,110 @@ at all: every shot landed in space beside the ship. The carve starts from the
 nearest cell to it instead, which is the cell the shot came in at, because the
 sphere point is in the direction the shot arrived from.
 
+## A killed ship is a HULK, not a deletion
+
+A destroyed hull used to stop dead on the tick it died, drop out of contact
+resolution, and be hidden by the client. Three things wrong in one: nothing in
+space brakes for dying, a few thousand tonnes of unsteered wreckage is the most
+dangerous object on the field, and the ship a player has just shot apart is the
+most interesting thing on screen at exactly the moment it vanished.
+
+**A wreck is still a body.** It keeps the velocity it actually had at the tick
+it died, which `vel_at_tick` already knows from the flown plan, and it takes a
+tumble: `Ship::spin` is angular velocity in WORLD space, radians a second, zero
+on anything with a crew. A flown ship has no use for it, because where a hull
+points is decided tick by tick by its plan; a hulk has no plan, so this is the
+whole of what turns it. It is hashed and snapshotted like any other state,
+because a wreck is a collision hazard and two seats that disagreed about where
+one was pointing would eventually disagree about who hit it.
+
+**The tumble is drawn from a stream keyed on the ship and the tick**
+(`Stream::WRECK`), so it is the same on both seats and on a replay. The early
+return at the top of `apply_damage` is what makes it happen once: a hulk takes
+no further damage, so nothing can re-roll a spin that is already turning.
+
+**Wrecks are in the contact pass, and that is the point of them.** A hazard
+ships fly through is scenery. Both hulls separate, the living one takes the
+impact, and `apply_damage` returns early on a ship that is already dead, so
+ramming a derelict costs the rammer and cannot hurt the derelict twice. A
+crewed ship re-flies the rest of its order from the contact; a hulk has no
+order to re-fly, so the impulse goes straight onto its velocity, which is the
+only way a wreck can be shoved out of the way.
+
+**The client stops hiding it, and nothing else.** What a wreck LOOKS like was
+already written and unreachable: `tintHull` has always taken `destroyed` and
+answers it with the lost wash and no emission. The one thing it could not reach
+is the windows, which are child meshes on a SHARED material, so a derelict kept
+its cabin lights on: they are hidden with the crew (`showHulk`). The pose comes
+free, because the track frames already carry position, orientation and
+`destroyed` for every tick.
+
+What a hulk is NOT: it is not swallowed by a gravity well, because
+`resolve_impacts` skips the dead and a well that killed a ship twice would be
+billing a corpse. The wells sit at 250 units and out, so a hulk has to drift a
+long way to find one.
+
+`tests/turn.rs` pins both halves: a killed ship keeps its velocity and its
+tumble across a whole turn, and a ship that flies into a derelict is separated
+from it, pays hull for the contact, and shoves it. The playthrough checks the
+picture, which is the half a Rust test cannot see: a killed hull is still drawn
+as hundreds of quads, with its lights out, and its position moves between
+samples.
+
+### And a hull whose reactor went comes apart
+
+A hull ground down by fire is a hulk. A hull whose REACTOR let go is wreckage in
+two pieces, and both of them are hazards, which is the whole reason to have
+them: an unsteered half hull is the most dangerous object left on the field.
+
+**A break APPENDS a body, it does not edit one.** The fore half keeps the
+ship's own id and index, so its orders, its events and its place in every list
+are where they were, and the aft half is appended, which is safe for exactly
+the reason the rest of the core relies on: ships are never removed and an index
+is an id. `piece` is 0 whole, 1 fore, 2 aft; `piece_of` names the hull both
+came from; `piece_at` is the signed offset along the old local z that the drawn
+half sits at. A piece carries no volumes, no mounts and no boarding parties: a
+piece of wreckage is not a ship with everything broken, and a screen offering
+to aim at its engines would be lying.
+
+**It breaks athwartships, not lengthwise.** A break across the hull leaves two
+halves a player can read as a bow and a stern; one down the middle leaves two
+slabs nobody can name.
+
+**Splitting happens once**, and `piece` is what says so: a half hull cannot
+break again, and a hulk takes no further damage anyway.
+
+**Two halves of ONE wreck are out of the contact pass against each other.**
+They are seated a fraction of the old radius either side of where the hull was,
+so they are born overlapping, and the separation pass reads a resolved overlap
+back as velocity: a breach launched its own halves apart at 55 units a second
+and put them half a kilometre apart inside one turn. What separates them is
+`WRECK_PIECE_KICK`, which is a decision, and not an impulse out of the geometry
+they inherited. Everything else still collides: a half against a live ship,
+against another wreck, against somebody else's half.
+
+**The client draws each half as its own half**, by seeding the carve with the
+cells that belong to the OTHER one. So the fore half keeps every scar it earned
+before it died, both halves show a torn interior along the break, and neither
+is a copy of the whole ship. `standingQuads` is how that is read back: a carve
+COLLAPSES a quad rather than removing it, so the length of the index buffer is
+the same on a pristine hull and on one shot away to nothing, and the same on
+both halves, since they share a design and therefore a source geometry. What
+separates them is which quads still have area.
+
+**And a hulk is pickable.** `pickShip` skipped `destroyed`, which was the same
+question as "is there anything on screen" right up until a wreck stayed on the
+map: a player could not click the thing they could see. It asks the MESH now.
+
+`tests/subsystems.rs` pins the break itself: one body became two, the halves
+are half the mass and a fraction of the radius, each knows whose half it is,
+neither can break again, and they part at the kick's own speed rather than at
+one the geometry made up. The playthrough asks the question only a browser can:
+whether both halves reached the screen, with quads standing on each, parting.
+A breach is not guaranteed in a match, so it says nothing at all on a run where
+nobody's reactor went, because a check that demanded one would fail on a clean
+win.
+
 ## A mount is bolted on at an ORIENTATION, not at an angle
 
 A part used to carry `rot`, a quarter turn about the up axis, and that is only
@@ -1318,6 +1428,34 @@ missing, which is why nothing caught it.
 `ftDebug.surfaces()` reports each torn surface's UVs and whether its map has
 pixels, and the playthrough fails on either. Dropping the `sUv` argument flips
 `uv` to false on the plate wound, which is how the guard was checked.
+
+## Playback runs on the CLOCK, not on the frame rate
+
+A turn is 600 ticks at sixty a second, so 1x is ten seconds of wall clock. The
+frame loop advanced ONE TICK PER FRAME, which is real time on exactly one kind
+of display: a 120 hertz screen played a ten second turn in five and a 144
+hertz one in four, so how fast the game ran was a property of the monitor. The
+owner saw it as 1x being too fast, and it was.
+
+The step is `dt * TICKS_PER_SECOND * speed`, with the fraction carried between
+frames, so a rate that is not a whole number of ticks per frame still adds up
+to exactly ten seconds a turn at any refresh rate.
+
+**`dt` is clamped at a tenth of a second, and that is the deliberate half.** A
+machine too slow to draw the playback would otherwise leap whole tenths
+between frames and skip the blasts and the chunks that only exist for a few
+ticks: that is a video dropping what somebody was looking at rather than
+dropping pixels. Below ten frames a second playback runs SLOW instead, which
+is the old behaviour with a bound on it, and above it a turn takes its ten
+seconds. It scales with `speed` for free, because a player who asked for 4x
+has asked to skip.
+
+The playthrough checks a CEILING rather than a window, and the difference
+matters: the harness runs in a software rasteriser that plays the same turn
+slowly and correctly, so "took ten seconds" would fail on a machine that is
+behaving. Faster than the clock is the defect, so that is what is asserted,
+anchored per turn and measured over at least 700 ms so one noisy sample cannot
+read as a rate.
 
 ## The camera has a goal and a position
 
@@ -1614,11 +1752,43 @@ opens and closes.
 **What PR #32 changed about the ships and this port did NOT take.** The owner
 asked for this branch's ships to win, so the per class lattices (24 to 128
 cells at one voxel size), the symmetric part seating, the drive cavity
-reservation, the volume hit points as a share of hull, the ring rest facing
-by end nearness, and the heavies' window derivation stay as main has them.
-They are ship geometry and ship rules, and every one of them would have moved
-a hull the owner has already approved. The fleet handbook tool was left
+reservation, the volume hit points as a share of hull, and the heavies'
+window derivation stay as main has them. They are ship geometry and ship
+rules, and every one of them would have moved a hull the owner has already
+approved. The ring rest facing by end nearness was taken after all, because
+the owner asked for the bow guns to face forward. The fleet handbook tool was left
 behind with them, because its whole premise is the lattice ladder.
+
+## A window goes with the plate it was cut into
+
+A window face leaves the greedy pass entirely: the plate quad is DROPPED where
+a pane goes, so the hull geometry has nothing at all in that cell. Which means
+the carve cannot reach it. Collapsing a hull's quads takes the plating off and
+leaves the viewport hanging in the hole, lit, over the wound, which is what
+the owner photographed on a torn civil hull.
+
+So panes are carved by CELL, beside the plate: `collapsePanes` in `hull.ts`
+writes a pane's four corners onto one point when its cell is gone, and writes
+it back from the shared buffer when it is not, because a scrub backwards puts
+a cell home and the pane has to come with it. By cell rather than by quad,
+since a window quad is exactly one cell where a greedy plate quad is a
+rectangle of them.
+
+**One function, because two screens ask it.** The map carves a hull as it is
+hit and the schematic draws the same hole in the modal; two answers to "is
+this pane still standing on anything" would be the map's ship and the one the
+player opened to look at it, which is the divergence GUIDELINES 5.1 is about.
+
+**And each ship needs its own copy of them**, for the reason it already needs
+its own hull: designs are shared, so collapsing a pane on one ship would put a
+hole in the same window on every ship of that design. `Carved.panes` is that
+copy, made when a hull first takes damage and handed back on a reset. The
+schematic clones only when there is damage to draw.
+
+The playthrough counts them off the BUFFER rather than off the carve, because
+the defect is exactly a pane the carve knows about and the mesh still draws: a
+quad with four corners at one point is collapsed, anything else is standing,
+and a pane standing on a dead cell fails the run.
 
 ## Load every asset from the SITE ROOT
 
@@ -1720,10 +1890,21 @@ says the ring is on.
 **A ring has a REST FACING**, and the frame knows it where a placement cannot.
 A ring on the port flank is a broadside mount, and a broadside gun resting dead
 ahead is a gun looking down the length of its own ship. `ringFacing` rests a
-flank mount trained outboard and a centreline mount ABEAM, to opposite sides
-fore and aft, because a pair of centreline mounts resting fore and aft look
-straight at each other. The player's `rot` is added to it rather than replacing
-it, so turning a mount still means turning it FROM where its ring puts it.
+flank mount along the keel toward its nearer end, and a centreline mount by
+how near an END it is: in the bow it rests forward, on the transom aft, and
+in the waist ABEAM, because a ring amidships has most of its own ship both
+ways and abeam is the only way it sees out. Which HALF it sits in is the
+wrong question: the Terran destroyer's ventral ring at 0.46 of the length is
+"abaft midships" by one cell and would point down twenty six cells of its own
+hull. A pair on the same face still goes abeam whatever band it is in, since
+the heavy cruiser's two ventral rings resting fore and aft looked straight at
+each other. Where position cannot decide, the frame authors its own `facing`
+and wins: the four corvettes' nose rings sit at 0.42 of a needle and rest
+forward by authorship, and the arc scan proves each sees out that way. The
+owner's words for the old rule, on the Terran cruiser's bow turret resting
+broadside: it would make more sense facing forward. The player's `rot` is
+added to the rest rather than replacing it, so turning a mount still means
+turning it FROM where its ring puts it.
 
 **Mirrored sockets were not mirrored.** `CX` is 16 on a lattice of 32, which is
 a cell BOUNDARY rather than a cell: the plane a ship is symmetric about runs
