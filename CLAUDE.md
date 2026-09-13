@@ -1918,6 +1918,50 @@ Measured across the fleet afterwards: every mount sits at 30 to 53 percent
 blocked, which is its own hull and nothing else, and not one is blocked in the
 direction it rests.
 
+**And ONE mount per hull is the exception to the abeam rest: the BOW GUN.** The
+mount standing on the deck over the centreline with no other gun on the ship
+forward of it rests trained down the keel (`bowRing`, facing 0) rather than
+abeam. A deck battery over the nose is the hull's foremost weapon and what a
+gun bolted there is FOR is firing over the bow; resting it abeam puts a ship's
+foremost mount looking off to starboard, which is a ship nobody drew. It is
+picked across the whole ring set rather than decided per socket, because it is
+a rule about the SHIP rather than about a region of one, and a hull with no
+such mount keeps every gun as `ringFacing` had it.
+
+**"Farthest in front" is measured against the other GUNS, not against a line
+drawn through the middle of the hull.** Amidships reads as the obvious test and
+it threw out every corvette in the fleet: a corvette is a needle, its lattice
+midpoint is 32, and its foremost deck ring sits at 30 with the whole of its
+nose ahead of it carrying nothing at all. What that test was actually
+protecting against is a hull whose only centreline deck mount is at the STERN
+with its real battery out on the flanks forward of it, which is the Rogue and
+Benefactor destroyer, and "nothing is forward of it" refuses those by saying so
+directly. Six hulls turned before the fix and ten after, and the difference was
+caught off a picture rather than by any suite.
+
+`BOW_BEAM` is a quarter of the half beam because every mount that is genuinely
+on the centreline sits within a few hundredths of it and the next one out is a
+Benefactor cruiser's starboard sponson at about half. Set at half, that sponson
+wins "farthest forward" on its own hull while its port twin keeps looking
+outboard, which is a battery pointing two ways.
+
+Ten hulls carry one: all four Terran, all four Karisen, and the Rogue and
+Benefactor corvette, whose single deck mount is the only gun they have. Turning
+a mount seats it on different cells, so hull points, mass and the flight
+envelope all move with it: `measure_fleet.mjs --sync` is the road that change
+takes into `data.rs`, and the Terran frigate's own spot check in
+`sim.test.mjs` moved from 312.406 to 313.188 with it. A pin on a measured
+number is a pin that moves when the measurement does, and the comment above it
+already said so.
+
+**This is also where swarm-demo's bow gun comes from, and that is the point.**
+That project derives which way each gun LOOKS and draws an arrow on it, and
+its first cut of this turned the arrow and left the cells where they were: the
+marker over a frigate's nose moved and the barrel under it did not. A mount's
+pose is authored HERE, so the turn belongs here and the other project re-exports
+the hull. A change that draws a ship differently belongs in the repository that
+authors the ship, not in the one photographing it.
+
 ## A class wears its own surface
 
 Four frigates in the same riveted plate are four frigates a player tells apart

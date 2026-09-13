@@ -2729,7 +2729,8 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
   // this is where a berth on a station no ring sweeps finally rides out to
   // the belt, and where its cabin windows come from.
   const rings = frame.sockets.filter(s => s.kind === 'gun');
-  const out: Socket[] = frame.sockets.map(s => s.kind === 'gun' ? ringSeat(frame, s, rings)
+  const bow = bowRing(frame, rings);
+  const out: Socket[] = frame.sockets.map(s => s.kind === 'gun' ? ringSeat(frame, s, rings, bow)
     : s.lane ? laned(frame.profile, s.id, s.lane, frame.classKey, rings) : s);
   for (const p of parts) {
     if (p.module !== 'WPN-BB1') continue;
@@ -2778,13 +2779,14 @@ export function socketsOf(frame: FrameDef, parts: readonly Placement[]): Socket[
  * The face is taken before the move and the rest facing after it, so a ring
  * that slides out along its own face keeps that face.
  */
-const ringSeat = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
+const ringSeat = (frame: FrameDef, s: Socket, rings: readonly Socket[],
+  bow?: string): Socket => {
   const [ox, oy] = outwardAt(frame.profile, s.at);
   const [skinX, skinY] = skinAt(frame.profile, s.at);
   const at: [number, number, number] = ox
     ? [acrossFrom(CX, ox, skinX - 1), s.at[1] as number, s.at[2] as number]
     : [s.at[0] as number, acrossFrom(CY, oy, skinY - 1), s.at[2] as number];
-  return ringFacing(frame, { ...s, at }, rings);
+  return ringFacing(frame, { ...s, at }, rings, s.id === bow);
 };
 
 /**
@@ -2849,6 +2851,14 @@ export const outwardAt = (
  * looked straight at each other, which is what a superfiring position exists
  * to solve and this lattice has no room for.
  *
+ * And OVER ALL OF IT sits the bow gun, which is the one ring decided by
+ * looking at the whole ship rather than at where this one sits. Two answers
+ * to the owner's complaint were written at once, on two branches, and this is
+ * the one rule they became: the bands catch a gun near either end, `bowRing`
+ * catches the foremost gun on a hull too short for a band to call it near
+ * anything, and neither can reach a belly ring, so the cruiser's ventral pair
+ * still goes abeam. Order is authored facing, then bow gun, then position.
+ *
  * A ring on a FLANK has its axis outboard, since that is the way its base
  * bolts down, so its traverse is the vertical plane along the hull and abeam
  * is where it cannot rest at all: abeam is straight up its own barbette. It
@@ -2862,11 +2872,19 @@ export const outwardAt = (
  *  both ways and abeam is the only clear rest. */
 const BOW_RING = 0.70, STERN_RING = 0.25;
 
-const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socket => {
+const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[],
+  bow = false): Socket => {
   // An authored facing wins. Where a ring sits decides which way it rests on
   // most hulls; where position cannot decide, the frame says, and the arc
   // scan in `sim.test.mjs` proves it sees out that way.
   if (s.facing !== undefined) return s;
+  // Then the BOW GUN, because that one is a fact about the ship rather than
+  // about a region of one and the bands below cannot see it: a corvette is a
+  // needle whose foremost deck ring sits at 0.47 of its length with the whole
+  // of its nose ahead of it carrying nothing, so the band would call it waist
+  // and train it abeam. `bowRing` measures "farthest in front" against the
+  // other GUNS instead, which is the question actually being asked.
+  if (bow) return { ...s, facing: 0 };
   const prof = frame.profile;
   const [ox, oy] = outwardAt(prof, s.at);
   const aft = Math.round((prof[0] as Station)[0]);
@@ -2888,6 +2906,61 @@ const ringFacing = (frame: FrameDef, s: Socket, rings: readonly Socket[]): Socke
       : (r.at[2] as number) < (s.at[2] as number)));
   if (!nearEnd || paired) return { ...s, facing: fwd ? 1 : 3 };
   return { ...s, facing: fwd ? 0 : 2 };
+};
+
+/** How near the centreline a deck mount has to stand to be the bow gun, as a
+ *  share of the half beam at its own station. See `bowRing`. */
+const BOW_BEAM = 0.25;
+
+/**
+ * Which ring, if any, is the BOW GUN: the mount standing on the deck over the
+ * centreline with no other gun on the ship forward of it.
+ *
+ * It is one rule about the SHIP rather than about a region of one, which is
+ * why it is picked across the whole ring set rather than decided per socket.
+ * A deck battery over the nose rests trained abeam under `ringFacing`'s
+ * general rule, and what a gun bolted over the bow is FOR is firing over it:
+ * a hull's foremost mount looking off to starboard is a ship nobody drew.
+ *
+ * **"Farthest in front" is measured against the other GUNS, not against a line
+ * drawn through the middle of the hull**, and the first cut got that wrong.
+ * Amidships reads as the obvious test and it threw out every corvette in the
+ * fleet: a corvette is a needle, its lattice midpoint is 32, and its foremost
+ * deck ring sits at 30 with the whole of its nose ahead of it carrying nothing
+ * at all. What the test was actually protecting against is a hull whose only
+ * centreline deck mount is at the STERN with its real battery out on the
+ * flanks forward of it, which is the Rogue and Benefactor destroyer, and
+ * "nothing is forward of it" refuses those by saying so directly.
+ *
+ * The beam threshold is a quarter of the half beam because every mount that
+ * is genuinely on the centreline sits within a few hundredths of it and the
+ * next one out is a Benefactor cruiser's starboard sponson at about half.
+ * Set at half, that sponson wins "farthest forward" on its own hull and its
+ * port twin keeps looking outboard, which is a battery pointing two ways.
+ * A hull with no such mount has no bow gun, and every other gun on every hull
+ * keeps the rest facing its face gives it.
+ */
+const bowRing = (frame: FrameDef, rings: readonly Socket[]): string | undefined => {
+  const prof = frame.profile;
+  const fore = rings.reduce((z, s) => Math.max(z, s.at[2] as number), -Infinity);
+  let best: Socket | undefined;
+  for (const s of rings) {
+    if ((s.at[2] as number) < fore) continue;
+    const [ox, oy] = outwardAt(prof, s.at);
+    if (ox || oy <= 0) continue;
+    const off = Math.abs(bowOffset(prof, s));
+    if (off >= BOW_BEAM) continue;
+    if (!best || off < Math.abs(bowOffset(prof, best))) best = s;
+  }
+  return best?.id;
+};
+
+/** How far off the centreline a ring stands, as a share of the half beam at
+ *  its own station. `bowRing`'s tie break, for a hull whose foremost station
+ *  carries a pair. */
+const bowOffset = (prof: readonly Station[], s: Socket): number => {
+  const [hw] = hullAt(prof, s.at[2] as number);
+  return ((s.at[0] as number) + 0.5 - CX) / Math.max(0.5, hw as number);
 };
 
 // --------------------------------------------------------------- armour --
