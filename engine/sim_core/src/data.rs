@@ -292,6 +292,9 @@ pub enum ShipClassId {
     CivilTanker,
     CivilMiner,
     CivilLiner,
+    // And the one hull that is not on anybody's ladder: a fleet carrier at the
+    // capital rung, appended last for the reason every other block above was.
+    TerranCarrier,
 }
 
 pub struct ShipClass {
@@ -507,6 +510,11 @@ static FREIGHTER_MOUNTS: [MountDef; 0] = [];
 static TERRAN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.2, 80.0, 0.65);
 static TERRAN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.6, 80.0, 1.9);
 static TERRAN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.4, 80.0, 3.2);
+// The cruiser's own SHARE of its hull rather than the cruiser's number, which
+// is the one relation worth keeping on a hull six times deeper: volumes left
+// at a cruiser's hit points behind a carrier's plating are belts that fail
+// while the ship they are protecting is barely marked.
+static TERRAN_CARRIER_SUBS: [SubDef; 6] = hull_subs(14.8, 80.0, 21.9);
 static KARISEN_CORVETTE_SUBS: [SubDef; 6] = hull_subs(2.4, 75.0, 0.6);
 static KARISEN_DESTROYER_SUBS: [SubDef; 6] = hull_subs(5.8, 75.0, 1.75);
 static KARISEN_CRUISER_SUBS: [SubDef; 6] = hull_subs(7.8, 75.0, 2.9);
@@ -539,6 +547,15 @@ static TERRAN_CRUISER_MOUNTS: [MountDef; 8] = [
     MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 1.17, -2.53) },
     MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -0.82, 3.11) },
     MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -0.82, -1.75) },
+];
+
+static TERRAN_CARRIER_MOUNTS: [MountDef; 6] = [
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 1.53, 9.41) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(-5.03, 0.66, 1.09) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(5.03, 0.66, 1.09) },
+    MountDef { key: WeaponKey::Beam, mount: V3::new(0.00, 2.41, -7.66) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -2.41, 3.72) },
+    MountDef { key: WeaponKey::Cannon, mount: V3::new(0.00, -2.41, -5.03) },
 ];
 
 static KARISEN_CORVETTE_MOUNTS: [MountDef; 2] = [
@@ -1215,6 +1232,37 @@ static C_CIVIL_LINER: ShipClass = ShipClass {
     weapons: &FREIGHTER_MOUNTS,
 };
 
+/// The yard that goes with the fleet: a Terran hull at the capital rung, which
+/// is twice the heavy cruiser's cell and therefore eight times its mass by
+/// `design.rs`'s own cube rule rather than by a number written down here. Six
+/// mounts and not ten, because what defends a carrier is the wing standing off
+/// it; the volume goes on holds, berths and clamps instead.
+static C_TERRAN_CARRIER: ShipClass = ShipClass {
+    id: ShipClassId::TerranCarrier,
+    key: "terran_carrier",
+    name: "Terran Fleet Carrier",
+    hull: 14486.944,
+    radius: 14.8,
+    mass: 40.6,
+    rung_cell: 0.4375,
+    base_reach: 10.0,
+    base_marines: 0,
+    base_capacity: 0,
+    flight: Flight {
+        yaw_rate: 0.3317,
+        pitch_rate: 0.2223,
+        accel_fwd: 0.0753,
+        accel_retro: 0.0174,
+        accel_lat: 0.0116,
+        max_speed: 7.0,
+    },
+    boarding_range: 40.0,
+    marines: 40,
+    boarding_capacity: 8,
+    subsystems: &TERRAN_CARRIER_SUBS,
+    weapons: &TERRAN_CARRIER_MOUNTS,
+};
+
 pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
     match id {
         ShipClassId::TerranFrigate => &C_TERRAN_FRIGATE,
@@ -1240,10 +1288,11 @@ pub fn ship_class(id: ShipClassId) -> &'static ShipClass {
         ShipClassId::CivilTanker => &C_CIVIL_TANKER,
         ShipClassId::CivilMiner => &C_CIVIL_MINER,
         ShipClassId::CivilLiner => &C_CIVIL_LINER,
+        ShipClassId::TerranCarrier => &C_TERRAN_CARRIER,
     }
 }
 
-pub const ALL_CLASSES: [ShipClassId; 23] = [
+pub const ALL_CLASSES: [ShipClassId; 24] = [
     ShipClassId::TerranFrigate,
     ShipClassId::KarisenFrigate,
     ShipClassId::RogueFrigate,
@@ -1267,6 +1316,7 @@ pub const ALL_CLASSES: [ShipClassId; 23] = [
     ShipClassId::CivilTanker,
     ShipClassId::CivilMiner,
     ShipClassId::CivilLiner,
+    ShipClassId::TerranCarrier,
 ];
 
 pub fn class_from_index(i: u32) -> ShipClassId {

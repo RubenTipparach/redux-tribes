@@ -944,12 +944,12 @@ export type FactionKey = 'terran' | 'karisen' | 'rogue' | 'benefactor' | 'civil'
 /** Where a class sits on its navy's ladder. Authored rather than read off the
  *  name: a screen that grouped hulls by splitting their display names would
  *  break the first time a class was called something else. */
-export type TierKey = 'corvette' | 'frigate' | 'destroyer' | 'cruiser'
+export type TierKey = 'corvette' | 'frigate' | 'destroyer' | 'cruiser' | 'carrier'
   | 'freighter' | 'lighter' | 'hauler' | 'boxship' | 'tanker' | 'miner' | 'liner';
 
 export const TIER_NAMES: Record<TierKey, string> = {
   corvette: 'Corvette', frigate: 'Frigate', destroyer: 'Destroyer',
-  cruiser: 'Heavy Cruiser',
+  cruiser: 'Heavy Cruiser', carrier: 'Fleet Carrier',
   // The civil yards do not build a ladder, they build TRADES, and the tier is
   // what a hull is for rather than how big it is. It has to be its own key per
   // hull all the same: the class picker addresses a class by the pair
@@ -965,7 +965,7 @@ export const FACTION_ORDER: readonly FactionKey[] =
   ['terran', 'karisen', 'rogue', 'benefactor', 'civil'];
 
 export const TIER_ORDER: readonly TierKey[] =
-  ['corvette', 'frigate', 'destroyer', 'cruiser',
+  ['corvette', 'frigate', 'destroyer', 'cruiser', 'carrier',
     'lighter', 'freighter', 'hauler', 'boxship', 'tanker', 'miner', 'liner'];
 
 export interface FrameDef {
@@ -1540,6 +1540,11 @@ const decorFor = (frame: FrameDef): Decor[] => {
   const BELT: DecorLook = { role: 'belt' };
   /** A grapple's tip, lit the boarding pink. */
   const GRAPPLE: DecorLook = { lit: 'boarding', mat: Mat.Accent };
+  /** A launch bay's mouth, lit the propulsion orange a fighter leaves on.
+   *  `Mat.Accent` and not `Mat.Glow`: the glow slot of a purpose is its near
+   *  white highlight, which on a blue Terran flank came out as a cream panel
+   *  rather than as light coming out of a hole. */
+  const LAUNCH: DecorLook = { lit: 'propulsion', mat: Mat.Accent };
 
   /** One cell of decor, at a lattice position. */
   const put = (x: number, y: number, z: number, look: DecorLook = DECOR): void => {
@@ -1596,6 +1601,35 @@ const decorFor = (frame: FrameDef): Decor[] => {
           for (let y = Math.round(CY - hh * 0.62); y <= Math.round(CY - hh * 0.18); y++) {
             const root = flankCell(hw, hh, y + 0.5 - CY, side);
             for (let n = 1; n <= 3; n++) put(root + side * n, y, z);
+          }
+        }
+      }
+      // And the one thing a Terran gets for being a CARRIER: two launch bays
+      // a side, cut into the flank at the waist. It is the only cue available
+      // and the ban is what picks it: a big block on top of a Terran is out,
+      // so an island is out, and a groove down the deck is out too because
+      // decor adds cells and never takes them away. A Homeworld carrier
+      // launches from its flanks anyway.
+      //
+      // The recess is made rather than painted. Two lips stand two cells
+      // proud, above and below, and the lit mouth sits one cell back between
+      // them, so what reads is a slot in shadow with light in it rather than
+      // an orange stripe down a blue ship. Both lip courses are filled to the
+      // skin, because a cell two proud with nothing under it is a cell
+      // touching nothing and the weld pass would take it off.
+      if (frame.tier === 'carrier'
+        && ((t > 0.30 && t < 0.46) || (t > 0.52 && t < 0.68))) {
+        const yb = Math.round(CY + hh * 0.05);
+        for (const side of [-1, 1]) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const y = yb + dy;
+            put(flankCell(hw, hh, y + 0.5 - CY, side) + side, y, z, LAUNCH);
+          }
+          for (const dy of [-3, -2, 2, 3]) {
+            const y = yb + dy;
+            const root = flankCell(hw, hh, y + 0.5 - CY, side);
+            const proud = Math.abs(dy) === 2 ? 2 : 1;
+            for (let n = 1; n <= proud; n++) put(root + side * n, y, z, HULL);
           }
         }
       }
@@ -1922,6 +1956,10 @@ const NAVY_SECTION: Record<FactionKey, SectionDef> = {
  */
 const FULLNESS: Record<TierKey, number> = {
   corvette: 1.34, frigate: 1, destroyer: 0.86, cruiser: 0.72,
+  // Blunter than a heavy cruiser, because a carrier is not a gun platform
+  // that got bigger: it is a yard with engines, and what it is mostly made of
+  // is the volume amidships that the hangars and the holds sit in.
+  carrier: 0.62,
   // The civil trades vary by what they carry rather than by rung, and the
   // shape follows the cargo: a tanker is a bulge round a cylinder, a liner is
   // fine because it is mostly people, a hopper ship is square because rock is.
@@ -1933,7 +1971,7 @@ const FULLNESS: Record<TierKey, number> = {
  *  short: every other warship rung is the same profile at a bigger cell,
  *  which is what makes the ladder exact. */
 const REACHES: Record<TierKey, number> = {
-  corvette: 0.50, frigate: 1, destroyer: 1, cruiser: 1,
+  corvette: 0.50, frigate: 1, destroyer: 1, cruiser: 1, carrier: 1,
   freighter: 1, lighter: 0.74, hauler: 1, boxship: 1.06,
   tanker: 1, miner: 0.88, liner: 1.10,
 };
@@ -1979,6 +2017,7 @@ const PROF_LINER = profileFor('civil', 'liner');
 const PROF_TERRAN_CV = profileFor('terran', 'corvette');
 const PROF_TERRAN_DD = profileFor('terran', 'destroyer');
 const PROF_TERRAN_CA = profileFor('terran', 'cruiser');
+const PROF_TERRAN_CVN = profileFor('terran', 'carrier');
 
 const PROF_KARISEN_CV = profileFor('karisen', 'corvette');
 const PROF_KARISEN_DD = profileFor('karisen', 'destroyer');
@@ -2576,6 +2615,40 @@ export const FRAMES: readonly FrameDef[] = [
     note: 'Decks of people, lit from end to end. It is the one hull on the '
       + 'field that is brighter than the sky behind it, and the only thing it '
       + 'is carrying is passengers.',
+  },
+
+  // The one hull on nobody's ladder, and last for the reason every block in
+  // `ALL_CLASSES` is appended rather than interleaved: the position IS the
+  // class index and that index is hashed.
+  {
+    classKey: 'terran_carrier', name: 'Terran Fleet Carrier',
+    faction: 'terran', tier: 'carrier', rung: 'capital',
+    radius: 14.8, massMax: 40.6, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    profile: PROF_TERRAN_CVN,
+    // The cruiser's spine at the capital cell, and no dorsal stringer for the
+    // reason the cruiser has none: a frame member that wide down the length of
+    // a Terran deck is the slab the owner banned, and on a hull this size it
+    // would be the only thing anybody saw.
+    spine: [keel(CY, 3, 59), keel(CY - 6, 10, 50, 8, 2),
+      ...ribs(PROF_TERRAN_CVN, [9, 17, 25, 33, 41, 49, 56])],
+    sockets: [
+      ...suite(PROF_TERRAN_CVN, [[-0.66, -0.3], [-0.22, -0.3], [0.22, -0.3], [0.66, -0.3],
+        [-0.66, 0.36], [-0.22, 0.36], [0.22, 0.36], [0.66, 0.36]], 22, 6),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g0', 'gun ring, nose', 53, 0, 0.4),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g1', 'gun ring, port waist', 34, -0.78, 0.24),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g2', 'gun ring, starboard waist', 34, 0.78, 0.24),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g3', 'gun ring, aft dorsal', 14, 0, 0.6),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g4', 'gun ring, forward ventral', 40, 0, -0.62),
+      seatAt(PROF_TERRAN_CVN, 'gun', 'g5', 'gun ring, aft ventral', 20, 0, -0.62),
+    ],
+    note: 'The yard that goes with the fleet. Twice a heavy cruiser at the capital '
+      + 'cell and eight times its mass, which is the rung ladder doing what it '
+      + 'always does rather than a table saying so. '
+      + 'Six rings and not eight: a carrier is defended by what it builds and by '
+      + 'the wing standing off it, and the guns it does carry are there to keep '
+      + 'something off its own plating rather than to win a line engagement. '
+      + 'What the volume goes on instead is the holds, the barracks the yard '
+      + 'crews sleep in and the clamps a finished hull leaves from.',
   },
 ];
 
@@ -4718,6 +4791,30 @@ export const STOCK: readonly Design[] = [
     P('h0', 'UTL-CTR'), P('h1', 'UTL-CTR'),
   ], { beltFwd: 3, beltMid: 3, beltAft: 3, dorsal: 3, ventral: 3, bow: 2, stern: 2 },
     'civil', 0xF2F5F8, 'plate', 0.20, 0.48),
+
+  // Eight bells, six rings and the rest of it given over to holds, berths and
+  // clamps. The belt is five layers, the cruiser's, because a base that can be
+  // opened by the first thing that reaches it is a base nobody would build.
+  stock('terran_carrier', [
+    P('d0', 'DRV-H'), P('d1', 'DRV-H'), P('d2', 'DRV-H'), P('d3', 'DRV-H'),
+    P('d4', 'DRV-V'), P('d5', 'DRV-V'), P('d6', 'DRV-V'), P('d7', 'DRV-V'),
+    P('g0', 'WPN-BB1'), P('g0/t', 'WPN-BM1'), P('g1', 'WPN-BB1'), P('g1/t', 'WPN-BM1'),
+    P('g2', 'WPN-BB1'), P('g2/t', 'WPN-BM1'), P('g3', 'WPN-BB1'), P('g3/t', 'WPN-BM1'),
+    P('g4', 'WPN-BB1'), P('g4/t', 'WPN-CN1'), P('g5', 'WPN-BB1'), P('g5/t', 'WPN-CN1'),
+    P('r0', 'RET-C'), P('r1', 'RET-C'), P('r2', 'RET-C'), P('r3', 'RET-C'),
+    P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
+    P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
+    P('b0', 'UTL-BRG'),
+    P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'), P('b4', 'UTL-BAR'),
+    P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'), P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'),
+    P('b9', 'UTL-CGO'), P('b10', 'UTL-CGO'), P('b11', 'UTL-CGO'), P('b12', 'UTL-CGO'),
+    P('b13', 'UTL-CGO'), P('b14', 'UTL-CGO'),
+    P('b15', 'UTL-AIR'), P('b16', 'UTL-AIR'), P('b17', 'UTL-AIR'), P('b18', 'UTL-AIR'),
+    P('b19', 'UTL-OBS'), P('b20', 'UTL-OBS'), P('b21', 'UTL-TNK'),
+    P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'),
+    P('c3', 'UTL-CLM'), P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'),
+  ], { beltFwd: 5, beltMid: 5, beltAft: 5, dorsal: 3, ventral: 3, bow: 3, stern: 3 },
+    'terran', 0x124E89, 'plate', 0.30, 0.50),
 ];
 
 export const stockFor = (classKey: string): Design => {

@@ -106,6 +106,7 @@ export const ShipClass = {
   CivilTanker: 20,
   CivilMiner: 21,
   CivilLiner: 22,
+  TerranCarrier: 23,
 } as const;
 export type ShipClass = (typeof ShipClass)[keyof typeof ShipClass];
 
@@ -125,6 +126,7 @@ export const CLASS_KEYS: readonly string[] = [
   'benefactor_corvette', 'benefactor_destroyer', 'benefactor_cruiser',
   'civil_lighter', 'civil_hauler', 'civil_boxship',
   'civil_tanker', 'civil_miner', 'civil_liner',
+  'terran_carrier',
 ];
 export const classIndexOf = (key: string): number => CLASS_KEYS.indexOf(key);
 
@@ -152,6 +154,7 @@ export const CLASS_NAMES: Record<number, string> = {
   20: 'Tanker',
   21: 'Mining Ship',
   22: 'Liner',
+  23: 'Terran Fleet Carrier',
 };
 
 export const FACTION_NAMES: Record<number, string> = {

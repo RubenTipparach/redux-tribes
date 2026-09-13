@@ -6,7 +6,7 @@
   const dmath = isNode ? require("./dmath.js") : global.FT.dmath;
   const data = isNode ? require("./data.js") : global.FT.data;
   const { V } = dmath;
-  const { SHIP_CLASSES } = data;
+  const { SHIP_CLASSES, withinBoarding } = data;
 
   function planShip(state, ship, rng) {
     const cls = SHIP_CLASSES[ship.classKey];
@@ -53,7 +53,8 @@
 
     // boarding-specialist behavior: rogue-class AI boards when close and healthy
     let board;
-    if (cls.boardingRange >= 40 && ship.marines > cls.boardingCapacity && dist <= cls.boardingRange) {
+    if (cls.boardingRange >= 40 && ship.marines > cls.boardingCapacity &&
+        withinBoarding(dist, cls.boardingRange, SHIP_CLASSES[target.classKey].radius)) {
       board = target.id;
     }
 

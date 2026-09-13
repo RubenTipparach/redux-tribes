@@ -87,7 +87,7 @@ pub fn plan_ship(sim: &Sim, si: usize) -> Order {
     // boards when it is near enough and still has marines to spare.
     let board = if cls.boarding_range >= 40.0
         && ship.marines > cls.boarding_capacity
-        && dist <= cls.boarding_range
+        && crate::turn::within_boarding(dist, cls.boarding_range, target.radius)
     {
         Some(target.id)
     } else {

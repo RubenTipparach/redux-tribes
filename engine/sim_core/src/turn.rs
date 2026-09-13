@@ -121,6 +121,28 @@ pub struct TurnResult {
 
 // ------------------------------------------------------------------ damage --
 
+/// Is a hull at `gap` centre to centre inside a boarder's reach?
+///
+/// Measured to the target's SKIN, not to its centre. Marines cross from one
+/// hull to the other and contact separation holds two ships `ra + rb` apart,
+/// so a reach measured centre to centre has to cover the whole of the target's
+/// own radius before it covers any of the gap between them: the bigger the
+/// ship, the harder it is to board, which is backwards.
+///
+/// It was invisible while the largest hull in the game was a heavy cruiser at
+/// 7.8, and it became a ship nobody could board the day a fleet carrier at
+/// 14.8 was authored: a destroyer alongside one stood 20.4 units from its
+/// centre carrying 20 units of gear, so the window was empty at every legal
+/// separation. `tests/volumes.rs` named this as the choice to make before
+/// authoring a hull that big and this is that choice made.
+///
+/// One implementation, because `can_board` gates the order and `ai.rs` decides
+/// whether to close for one, and a reach written twice is a fleet whose AI
+/// declines boardings its own rule would allow.
+pub fn within_boarding(gap: f32, reach: f32, target_radius: f32) -> bool {
+    gap - target_radius <= reach
+}
+
 impl Sim {
     fn stream(&self, key: Stream) -> Rng {
         Rng::stream(self.seed_hash, self.turn, key)
@@ -534,7 +556,7 @@ impl Sim {
             && !to.destroyed
             && to.faction != from.faction
             && from.marines > 0
-            && from.pos.dist(to.pos) <= from.boarding_range
+            && within_boarding(from.pos.dist(to.pos), from.boarding_range, to.radius)
     }
 
     // --------------------------------------------------------------- weapons --

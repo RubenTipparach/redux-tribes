@@ -18,7 +18,7 @@
   const data = isNode ? require("./data.js") : global.FT.data;
 
   const { V, Q, bezier2, arcTest3D } = dmath;
-  const { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency } = data;
+  const { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, withinBoarding } = data;
   const T = CONST.TICKS_PER_TURN;
   const TPS = CONST.TICKS_PER_SECOND;
 
@@ -767,7 +767,8 @@
             const target = state.ships.find(s => s.id === o.board);
             const cls = SHIP_CLASSES[ship.classKey];
             if (target && !target.destroyed && target.faction !== ship.faction &&
-                V.dist(ship.pos, target.pos) <= cls.boardingRange && ship.marines > 0) {
+                withinBoarding(V.dist(ship.pos, target.pos), cls.boardingRange,
+                  SHIP_CLASSES[target.classKey].radius) && ship.marines > 0) {
               const send = Math.min(ship.marines, cls.boardingCapacity);
               ship.marines -= send;
               const existing = target.boardingParties.find(p => p.faction === ship.faction);

@@ -346,12 +346,83 @@ id MEANS stays with the app, the same division that keeps it from knowing the
 screen list. Picking a class in the editor pushes that address, so browsing the
 classes is a trail you can walk back.
 
+## A fleet carrier, at the rung nobody had used
+
+`RUNG` has authored four cell sizes since the ladder landed and `capital` was
+never one any class picked, so it sat in the table as a number with no ship
+behind it. The Terran Fleet Carrier is that ship: the Terran envelope at 28/64
+of a unit, which is twice the heavy cruiser's cell and therefore, by the cube
+rule in `design.rs`, eight times its mass and eight times its hull. Nothing
+about the size is authored. It measures 25.38 units long against the frigate's
+6.34, which is 4.00x, and against the cruiser's 12.69, which is 2.00x, and
+`tools/fleet_shots.mjs --ladder terran` is the picture that says so.
+
+**Six rings and not ten, which is what makes it a carrier rather than a bigger
+cruiser.** The volume goes on holds, berths, airlocks and clamps instead: it is
+a yard with engines, and what defends it is the wing standing off it. `FULLNESS`
+is 0.62, blunter than the cruiser's 0.72, for the same reason: it is mostly the
+volume amidships that the hangars sit in.
+
+**Its one silhouette cue is a pair of LAUNCH BAYS a side, and the ban is what
+picked them.** A carrier wants an island and an island is a big block on top of
+a Terran, which the owner banned; a groove down the deck is out too, because
+`decorFor` adds cells and can never take one away. So the bays are cut into the
+flanks, which is where a Homeworld carrier launches from anyway. The recess is
+MADE rather than painted: two lips stand two cells proud above and below and the
+lit mouth sits one cell back between them, so what reads is a slot in shadow
+with light in it rather than an orange stripe down a blue ship. Both lip courses
+are filled to the skin, because a cell two proud with nothing under it is a cell
+touching nothing and the weld pass would take it straight off again.
+
+The mouth is `Mat.Accent` and not `Mat.Glow`. A purpose's glow slot is its near
+white highlight, and on a blue Terran flank that came out as a cream panel
+rather than as light coming out of a hole.
+
+**And it is a hull swarm-demo exports.** That project's base building mode needs
+a carrier to build and research from, and a ship is authored in one place: the
+frame and the stock fit are here, and `tools/export_hulls.mjs` over there reads
+this rasteriser and this mesher. The same division that put the bow gun's rest
+facing here rather than in the harness photographing it.
+
+## Boarding is measured to the SKIN, and a hull this big is why
+
+`can_board` was `dist <= boarding_range` centre to centre, which makes a ship
+HARDER to board the bigger it is: the reach has to cover the whole of the
+target's own radius before it covers any of the gap between the two hulls. That
+was invisible while the largest hull in the game was a heavy cruiser at 7.8 and
+it became a ship nobody could board the day the carrier arrived at 14.8. Contact
+separation holds two hulls `ra + rb` apart, so a destroyer alongside one stood
+20.4 units from its centre carrying 20 units of gear: the window was empty at
+every legal separation and the button did nothing, on three classes.
+
+`tests/volumes.rs` had named this as the thing to check before authoring a hull
+bigger than the Freighter, and named both remedies, and said the choice was the
+owner's rather than a side effect of adding hulls. The owner took the rule.
+
+`turn::within_boarding(gap, reach, target_radius)` is the one implementation and
+three callers ask it: `can_board` gates the order, `ai.rs` decides whether to
+close for one, and `prototype/sim/` mirrors it on both sides exactly as
+`SUB_FAIL_FRAC` is mirrored. A reach written twice is a fleet whose AI declines
+boardings its own rule would allow.
+
+**It changes every existing match outcome**, which is why it was asked rather
+than assumed. What went with it: the Freighter's exemption, because a civil hull
+now reaches anything it can touch, and the invariant itself, which was about
+every ordered pair and is about one ship now. Touching leaves exactly the
+BOARDER's own radius to cross, so the check is `boarding_range >= radius` and
+nothing about the target enters it. And the console's out of range label, which
+measured to the centre and would have read "out of range" beside a gap the rule
+allows, worst on exactly the hulls a player is most likely to try it on.
+
 ## Four navies with a ladder each, seven civil trades, and one list
 
 The fleet is a LADDER for the navies: corvette, frigate, destroyer, heavy
 cruiser for Terran, Karisen, Rogue and Benefactor. The civil yards do not build
 a ladder, they build TRADES: freighter, lighter, hauler, container ship,
-tanker, mining ship and liner. Twenty three classes.
+tanker, mining ship and liner. Twenty three classes, and one that is on
+nobody's ladder: the Terran Fleet Carrier, at the `capital` rung, appended last
+for the reason every block in `ALL_CLASSES` is appended rather than interleaved.
+Twenty four.
 
 **A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
 every hull; what changes is what one cell is worth in the world, and `RUNG`

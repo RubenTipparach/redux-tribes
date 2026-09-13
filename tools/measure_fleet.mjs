@@ -258,6 +258,7 @@ if (process.argv.includes('--sync') || process.argv.includes('--check')) {
     civil_lighter: 'CivilLighter', civil_hauler: 'CivilHauler',
     civil_boxship: 'CivilBoxship', civil_tanker: 'CivilTanker',
     civil_miner: 'CivilMiner', civil_liner: 'CivilLiner',
+    terran_carrier: 'TerranCarrier',
   };
   for (const r of rows) {
     const d = stockFor(r.key);
