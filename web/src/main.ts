@@ -1616,14 +1616,19 @@ function renderBoard(): void {
   const t = targetShip();
   // The same rule the resolver applies at second zero, asked rather than copied.
   const canBoard = !!t && match.canBoard(s.id, t.id);
-  const dist = t
-    ? Math.hypot(s.pos.x - t.pos.x, s.pos.y - t.pos.y, s.pos.z - t.pos.z)
+  // How far the marines actually have to cross, which is to the target's SKIN
+  // and not to its centre: `turn::within_boarding` is what the button is
+  // disabled by, and a label measuring something else would read "out of
+  // range" beside a gap the rule allows. Worst on the biggest hulls, which is
+  // where a player is most likely to be trying it.
+  const gap = t
+    ? Math.hypot(s.pos.x - t.pos.x, s.pos.y - t.pos.y, s.pos.z - t.pos.z) - t.radius
     : Infinity;
   const order = match.order(s.id);
   b.disabled = !canBoard;
   b.classList.toggle('on', order.board !== undefined);
   b.textContent = !t ? 'No target'
-    : !canBoard ? `Out of range (${dist.toFixed(0)} > ${s.boardingRange.toFixed(0)})`
+    : !canBoard ? `Out of range (${gap.toFixed(0)} > ${s.boardingRange.toFixed(0)})`
     : order.board !== undefined ? 'Boarding ordered'
     : `Board ${shipName(t)}`;
   b.onclick = () => {

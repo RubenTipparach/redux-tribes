@@ -118,7 +118,25 @@ npm --prefix web test                       # 79, the wasm boundary, the address
 npm --prefix server test                    # 13, the lobby and the lockstep API
 
 node tools/measure_fleet.mjs --check        # the class table against the fleet
+
+# And the four CI runs in the `prototype` job that are not tests at all, and
+# are here because running the LIST above and not the JOB is how a green
+# branch lands red. Every one of them is a generated file against the thing
+# that generates it, which is GUIDELINES rule 3, and the last is rule 1.
+python3 tools/make_ember_texture.py --check
+python3 tools/make_surface_textures.py --check
+python3 tools/build_mockups.py --check
+LC_ALL=C.UTF-8 grep -rlP '[\x{2013}\x{2014}]' --exclude-dir=.git --exclude-dir=vendor \
+  --exclude-dir=node_modules --exclude-dir=target --exclude-dir=archive-model .
 ```
+
+**`make_surface_textures.py` writes TWO places**, and that is what caught a
+push out: `web/public/surf` and the mockup's own texture bundle. So adding a
+decal leaves `mockups/surface-finishes/index.html` a version behind its own
+source, and only `build_mockups.py --check` says so. The dash grep needs
+`LC_ALL` on the GREP: without it grep refuses the code points and the check
+passes by printing an error instead of a file, which is what it does on this
+container and not on the runner.
 
 `measure_fleet.mjs --check` is the fifth, and it is not a unit test: it
 rasterises every stock hull, asks the core what each derives, and fails if
@@ -346,12 +364,244 @@ id MEANS stays with the app, the same division that keeps it from knowing the
 screen list. Picking a class in the editor pushes that address, so browsing the
 classes is a trail you can walk back.
 
+## A fleet carrier, at the rung nobody had used
+
+`RUNG` has authored four cell sizes since the ladder landed and `capital` was
+never one any class picked, so it sat in the table as a number with no ship
+behind it. The Terran Fleet Carrier is that ship: the Terran envelope at 28/64
+of a unit, which is twice the heavy cruiser's cell and therefore, by the cube
+rule in `design.rs`, eight times its mass and eight times its hull. Nothing
+about the size is authored. It measures 25.38 units long against the frigate's
+6.34, which is 4.00x, and against the cruiser's 12.69, which is 2.00x, and
+`tools/fleet_shots.mjs --ladder terran` is the picture that says so.
+
+One honest number moved when the berth was cut through the nose: it measures
+24.94 units rather than 25.38, so 3.93x the frigate rather than 4.00x. The
+envelope is still exactly twice the cruiser's and the carve is what took the
+last cell of the bow.
+
+**Six rings and not ten, which is what makes it a carrier rather than a bigger
+cruiser.** The volume goes on holds, berths, airlocks and clamps instead: it is
+a yard with engines, and what defends it is the wing standing off it. `FULLNESS`
+is 0.62, blunter than the cruiser's 0.72, for the same reason: it is mostly the
+volume amidships that the hangars sit in.
+
+## `voidsFor`: the first thing in this fleet that CUTS
+
+Every hull here is a shell grown on a profile with fittings laid inside it and
+armour drawn over the top, and until the carrier nothing ever took a cell back
+off one: `decorFor` is the other half of a silhouette and it can only ever add.
+A carrier needs the opposite, because the two things that say carrier are both
+HOLES. A berth is a place a hull is built in and flies out of and a launch tube
+is a bore a fighter leaves through, and neither can be drawn by adding plate: a
+mouth painted on a flank is a mouth nobody believes, which is exactly what the
+first cut of this hull shipped.
+
+`voidsFor(frame)` is boxes in lattice cells, a function of the FRAME for the
+reason `decorFor` is: a class added tomorrow gets its navy's habits and its
+tier's for free, and no table can drift about what a carrier has cut into it.
+It runs after the plate, the decor and the pylons, so it can take back anything
+any of them laid across a mouth, and before the hand drawn cut, which is the
+player's and therefore last.
+
+**It keeps the hand drawn cut's own semantics exactly** (plate goes, skinned
+plate goes back to bare frame) so a frame member crossing a bay survives as a
+grey spar, which is what a gantry over a dock is. A part is never touched: a
+berth full of the modules it services is a berth, and a cut that ate a drive
+bell would be a hole where an engine was.
+
+**The berth is a SLIPWAY**, cut down through the deck from amidships and out
+through the bow, eight cells wide, with a lit rail down each edge. Cut into the
+deck alone it is an open hold with the yard's own modules sitting in it and a
+hull built in one has nowhere to go; open at an end as well, a ship is
+assembled in the slot and leaves through the opening.
+
+**The bow and not the transom, and that was the one real decision.** The stern
+is where eight drive bells are, and a bell standing in the middle of a bay is a
+bay nothing can fly out of. Moving them outboard to clear it put four of them
+proud of the skin with a spar welded under each, which is the slop the pylon
+pass exists to catch rather than a thing to aim for. The nose carried one gun
+ring and nothing else, so the bow cost a ring's station and no geometry at all:
+the ring moved aft and is still the ship's forward most centreline deck mount,
+so `bowRing` still trains it down the keel.
+
+**And `FULLNESS` went to 0.40 for the tier, which the MOUTH set rather than
+taste.** At the heavy cruiser's 0.72 the nose tapers to nine cells and an eight
+cell mouth ate the whole of it, which reads as a hull with a bite out of it
+rather than as a ship with a door. Blunt, the same cut lands in a face. It
+cannot touch the ladder, because one raised to any power is one.
+
+**The tubes are three a side**, bored clean through the flank amidships, two
+cells square. Small on purpose: what leaves through one is a fighter, and a
+tube a capital ship could fit through is a second berth. They are carved from
+OUTSIDE the hull inward, because a bore written from the skin would need the
+skin's own line at that station and the flank of a chamfered box moves with
+both z and y: starting beyond it and letting the box clip to whatever is solid
+is the same hole with nothing to get wrong.
+
+**What marks a TUBE's mouth is a light standing one course PROUD of the
+plating**, and that is `put`'s own rule rather than a taste: it writes where a
+cell is free, and the skin of a mouth's rim is plating that is very much taken.
+One cell, which is a runway light and not the block on top of a Terran the
+owner banned. `Mat.Accent` and not `Mat.Glow`: a purpose's glow slot is its
+near white highlight, and on a blue Terran flank that came out as a cream panel
+rather than as light out of a hole. The BERTH used to be marked the same way,
+as two strips laid on the deck either side of the slot, and that went the day
+the bay was lined: the lining reserves those two courses and builds the wall in
+them, so the light was laid on a deck that is no longer plated.
+
+**`BERTH` and `TUBES` are written once**, beside `voidsFor`, and `decorFor`
+reads them to place the tube rims. Two passes about one opening, and a second
+copy of those numbers is the copy that would drift the day a bay moved and
+leave a lit outline round a piece of solid plating. `berthAft` is the same rule
+a third time: the carve cuts to it and the frame seats its bridge abaft it, and
+two answers would be an island standing in its own dock.
+
+## A bay is RESERVED, then LINED, then LIT
+
+The first cut of the carrier cut its berth at the END of the rasterise, after
+the parts, and refused to eat one, on the reasoning that a cut through a drive
+bell is a hole where an engine was. That is true, and it is not what a berth
+is: the slot came out FULL. Every cell of it was a cargo hold or a barracks
+that the seating had quite reasonably put amidships, and what a player saw was
+a mouth with the ship's own fittings stacked in the doorway.
+
+**So a bay is reserved BEFORE anything is seated, by the same map a turret's
+sweep is**, because it is the same sentence: a volume that belongs to one thing
+and to nothing else. `lossAt` then charges a part `FOUL_COST` for every cell it
+would stand in and the nudge walks it out, exactly as it already walks one out
+of a gun ring. The carve still runs, because the frame is laid before the
+reservation and is not blocked by it: a rib crossing the bay survives as a grey
+spar, which is what a gantry over a dock is.
+
+**The reservation covers the LINING SHELL and not only the void**, and finding
+that out cost two rounds of whack a mole. The plate pass lays armour within a
+few courses of the skin and leaves everything inboard hollow, which is right
+for a hull nobody can see inside of and wrong the moment something cuts a door
+in one, so a bay needs walls, a floor and an aft bulkhead. Reserving the air
+and leaving those planes contested meant the seating filled them: with the
+floor a course lower the ventral gun ring's drum came up through it, and a
+course higher two observation galleries did. A player looking down a slipway at
+the top of a turret is the same defect either way, and it is a defect about the
+lining rather than about the size of the hole. `dock` is the second map that
+says which cells are the shell, because the reservation that stops everything
+else would otherwise stop the wall too, and it duly did: the bay came out as
+solid deck with no slot in it at all.
+
+**Three things about this hull moved to make room, and every one is authored in
+the FRAME rather than worked around in the rasteriser.** The bridge is an
+island abaft the bay (`suite` takes a `bridgeZ`), because the station every
+other hull puts one at is this hull's dock and the seating, which only knows
+how to walk a part out of the way, had shoved it four cells to port on a
+symmetric ship. The six cargo holds ride aft of the bulkhead and the small
+stuff lines the dock, because a lane is cut for a berth and a hold is ten cells
+across, so it overhangs its lane inboard: harmless where the centreline is ship
+and a hold standing in the slipway where it is not. And the SPINE stops at the
+bulkhead: a keel is four cells across and the mouth is eight, so run through it
+is half the dock filled with a grey bar for the whole length of it. A hull with
+a slipway down its spine has no spine there, and what carries the load instead
+is the bay's own two walls.
+
+**And the dock is lit, which is the whole reason it is worth cutting.** A slot
+with nothing lit in it is a shadow on the deck at the range this ship is drawn
+at. What lights it is a `dock` decal, appended to `DECALS`, and that is the
+decision the whole stage turned on: a lit CELL is a purpose's highlight tone
+written into the vertex colour, which is bright PAINT, and every lamp in this
+scene is outside the hull, so paint on a wall inside a dock is lit by nothing
+and comes out black. That is `INTERIOR_LIGHT` in `view.ts` saying the same
+thing about the inside of a wound, in the same words. A window decal is the one
+thing in this project that carries its own light in BOTH renderers, at an
+emission of 1.6 that is "the only part that survives with no light on it".
+
+`Raster.lamp` is what the rasteriser hands the mesher, keyed by `faceKey`,
+which is a cell AND which of its six faces. The face and not the cell, because
+of the one rule every other window keeps: **no window looks up or down.** A
+light on the floor of a dock does, and that rule is about the OUTSIDE of a
+hull, where a pane in the deck is a greenhouse; inside a hole cut into the ship
+there is no deck and no keel, so the rule has nothing to say. The honest way to
+let a floor lamp through without also putting one on the weather deck above it
+is for the rasteriser, which knows which side of a wall is the bay, to name
+exactly which faces it lit. `sim.test.mjs` holds the exception to the place it
+is allowed in rather than to its name: an up facing window has to be a dock
+light AND has to be standing in a bay this class actually cuts, and at least
+one hull in the fleet has to reach it, or the rule passes by being vacuous.
+
+**The FLOOR rails are the ones that carry, and that took two tunings to find
+out.** The wall panels face each other across an eight cell slot, so at the
+three quarter pitch these games are played at they are seen almost edge on and
+the dock reads as an unlit trench. The floor faces the camera: two lit lines
+down a dark slot is what says at a glance that the thing is a working yard
+rather than a hole. The wall bands stay, every third station, because close in
+they are most of what a player sees of the dock and they are what gives the
+slot a height; two lines on a floor could be painted on a deck.
+
+**And the lamp is BLUE, at 0.62 of what a cabin pane is worth.** Every other
+light on a hull here is warm, because every other light on a hull is a room
+with people in it; a dock is a workspace lit to see by, and a colour nothing
+else in the fleet wears is what makes a slipway readable as one. Getting it to
+STAY blue is the flames' own lesson on a third surface: a window is laid on at
+1.6 and both renderers tone map by scaling every channel toward the peak, so a
+panel authored at full arrived white with a halo and was indistinguishable from
+the strip windows two courses above it. What carries a hue through that is the
+SEPARATION between the channels, so red stays near half of blue whatever else
+happens to the panel. Measured off the game's own picture twice: at 0.62 it
+reads blue in close up and vanishes at the range a capital ship is actually
+looked at, so `DOCK_LEVEL` is 0.85, where the blue channel just tips over one
+after the gain and the other two stay well under it.
+
+**One trap on the way, and it is this project's own about a list going stale.**
+swarm-demo loads its window textures at startup, before any model exists, off a
+hardcoded `WINDOW_KINDS` that is this file's `DECALS` written out. A kind that
+list does not have gets a material with no maps, which is plain WHITE, so the
+dock lights came out as a row of white slabs in exactly the place a light was
+meant to be and the picture was read three times as a texture authored wrong.
+It says so in the log now rather than drawing it.
+
+**And it is a hull swarm-demo exports.** That project's base building mode needs
+a carrier to build and research from, and a ship is authored in one place: the
+frame and the stock fit are here, and `tools/export_hulls.mjs` over there reads
+this rasteriser and this mesher. The same division that put the bow gun's rest
+facing here rather than in the harness photographing it.
+
+## Boarding is measured to the SKIN, and a hull this big is why
+
+`can_board` was `dist <= boarding_range` centre to centre, which makes a ship
+HARDER to board the bigger it is: the reach has to cover the whole of the
+target's own radius before it covers any of the gap between the two hulls. That
+was invisible while the largest hull in the game was a heavy cruiser at 7.8 and
+it became a ship nobody could board the day the carrier arrived at 14.8. Contact
+separation holds two hulls `ra + rb` apart, so a destroyer alongside one stood
+20.4 units from its centre carrying 20 units of gear: the window was empty at
+every legal separation and the button did nothing, on three classes.
+
+`tests/volumes.rs` had named this as the thing to check before authoring a hull
+bigger than the Freighter, and named both remedies, and said the choice was the
+owner's rather than a side effect of adding hulls. The owner took the rule.
+
+`turn::within_boarding(gap, reach, target_radius)` is the one implementation and
+three callers ask it: `can_board` gates the order, `ai.rs` decides whether to
+close for one, and `prototype/sim/` mirrors it on both sides exactly as
+`SUB_FAIL_FRAC` is mirrored. A reach written twice is a fleet whose AI declines
+boardings its own rule would allow.
+
+**It changes every existing match outcome**, which is why it was asked rather
+than assumed. What went with it: the Freighter's exemption, because a civil hull
+now reaches anything it can touch, and the invariant itself, which was about
+every ordered pair and is about one ship now. Touching leaves exactly the
+BOARDER's own radius to cross, so the check is `boarding_range >= radius` and
+nothing about the target enters it. And the console's out of range label, which
+measured to the centre and would have read "out of range" beside a gap the rule
+allows, worst on exactly the hulls a player is most likely to try it on.
+
 ## Four navies with a ladder each, seven civil trades, and one list
 
 The fleet is a LADDER for the navies: corvette, frigate, destroyer, heavy
 cruiser for Terran, Karisen, Rogue and Benefactor. The civil yards do not build
 a ladder, they build TRADES: freighter, lighter, hauler, container ship,
-tanker, mining ship and liner. Twenty three classes.
+tanker, mining ship and liner. Twenty three classes, and one that is on
+nobody's ladder: the Terran Fleet Carrier, at the `capital` rung, appended last
+for the reason every block in `ALL_CLASSES` is appended rather than interleaved.
+Twenty four.
 
 **A rung is a cell size, not a longer profile.** The lattice is 32x32x64 for
 every hull; what changes is what one cell is worth in the world, and `RUNG`

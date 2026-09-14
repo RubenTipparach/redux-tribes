@@ -18,6 +18,20 @@
   // reference that no longer says what the core does.
   const SUB_FAIL_FRAC = 0.20;
 
+  // Is a hull at `gap` centre to centre inside a boarder's reach?
+  //
+  // Measured to the target's SKIN, not to its centre: marines cross from one
+  // hull to the other, and contact separation holds two ships `ra + rb` apart,
+  // so a reach measured centre to centre has to cover the whole of the
+  // target's own radius before it covers any of the gap. The bigger the ship,
+  // the harder it would be to board, which is backwards. Mirrors
+  // `turn::within_boarding` in the Rust core for the reason SUB_FAIL_FRAC
+  // above is mirrored: one rule with two implementations, and a reference that
+  // disagrees with the thing it references is worse than none.
+  function withinBoarding(gap, reach, targetRadius) {
+    return gap - targetRadius <= reach;
+  }
+
   const CONST = {
     TICKS_PER_SECOND: 60,
     TURN_SECONDS: 10,
@@ -415,7 +429,7 @@
   };
 
   const api = { CONST, WEAPONS, SHIP_CLASSES, marineEfficiency, nominalReach,
-    CRITICAL_RADIUS, CRITICAL_DAMAGE, SUB_FAIL_FRAC };
+    CRITICAL_RADIUS, CRITICAL_DAMAGE, SUB_FAIL_FRAC, withinBoarding };
   global.FT = global.FT || {};
   global.FT.data = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

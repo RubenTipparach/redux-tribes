@@ -148,57 +148,33 @@ fn the_slab_test_answers_the_awkward_segments() {
     assert!(Sim::seg_box(V3::new(-5.0, 0.0, 0.0), V3::new(-2.0, 0.0, 0.0), c, h).is_none());
 }
 
-/// A warship's boarding gear has to reach a hull it is TOUCHING.
+/// Every class's boarding gear has to reach a hull it is TOUCHING.
 ///
-/// Boarding is measured centre to centre (`turn.rs`) while contact separation
-/// holds two hulls `ra + rb` apart, so a class whose `boarding_range` is under
-/// the sum of the two radii can never board that hull at any legal separation:
-/// the window is empty and the button does nothing. `docs/SHIP_DESIGNER.md`
-/// raised this as the thing to check before authoring hulls bigger than the
-/// Freighter, and this is that check, run over every ordered pair.
+/// Contact separation holds two hulls `ra + rb` apart and boarding is measured
+/// to the target's SKIN (`turn::within_boarding`), so touching leaves exactly
+/// the boarder's OWN radius to cross: a class whose `boarding_range` is under
+/// its own radius can never board anybody at any legal separation, and the
+/// button does nothing. `docs/SHIP_DESIGNER.md` raised this as the thing to
+/// check before authoring hulls bigger than the Freighter.
 ///
-/// The Freighter is the one exemption and it is deliberate. It is a civilian
-/// hull with a ten unit reach, whose window against a FRIGATE is already only
-/// two units wide, and against anything at the destroyer rung or above it is
-/// empty. Making it reach would mean either giving a cargo hauler a warship's
-/// boarding gear or making `boarding_range` surface relative in the core,
-/// which changes every existing match outcome and is the owner's call rather
-/// than a side effect of adding hulls. What this test pins is that no WARSHIP
-/// is in that position, and that the exemption stays exactly one class wide.
+/// It used to be `ca.radius + cb.radius`, because the reach was centre to
+/// centre, and it carried one exemption: the Freighter could reach nothing at
+/// the destroyer rung or above. Both are gone. A reach measured to the centre
+/// makes a hull harder to board the bigger it is, which is backwards, and the
+/// fleet carrier at 14.8 is where that stopped being invisible: a destroyer
+/// alongside one stood 20.4 units from its centre carrying 20 units of gear.
+/// So the remedy this comment used to describe as the owner's call is the one
+/// that was taken, and what is left is a statement about one ship rather than
+/// about every ordered pair.
 #[test]
 fn every_warship_can_board_a_hull_it_is_touching() {
     use sim_core::data::{ship_class, ALL_CLASSES};
-    let mut unreachable = Vec::new();
-    for a in ALL_CLASSES {
-        let ca = ship_class(a);
-        // An UNARMED hull is exempt, and by its own table rather than by name.
-        // The rule this checks is about a warship: a ship whose gun can reach
-        // a hull it is touching and whose marines cannot is a ship with a
-        // boarding range that is a decoration. A freighter, a tanker or a
-        // liner carries no gun and no boarding gear, so the base reach is the
-        // whole of what it has and it is not supposed to reach anybody.
-        //
-        // It used to name the Freighter outright, which passed for exactly as
-        // long as the Freighter was the only civil hull in the game.
-        if ca.weapons.is_empty() {
-            continue;
-        }
-        for b in ALL_CLASSES {
-            if a == b {
-                continue;
-            }
-            let cb = ship_class(b);
-            if ca.boarding_range < ca.radius + cb.radius {
-                unreachable.push((ca.key, cb.key));
-            }
-        }
-    }
-    let offenders: Vec<&str> = {
-        let mut v: Vec<&str> = unreachable.iter().map(|(a, _)| *a).collect();
-        v.sort_unstable();
-        v.dedup();
-        v
-    };
-    assert!(offenders.is_empty(),
-        "an armed class cannot board a hull it is touching: {unreachable:?}");
+    let short: Vec<(&str, f32, f32)> = ALL_CLASSES
+        .into_iter()
+        .map(ship_class)
+        .filter(|c| c.boarding_range < c.radius)
+        .map(|c| (c.key, c.boarding_range, c.radius))
+        .collect();
+    assert!(short.is_empty(),
+        "a class cannot board a hull it is touching (key, reach, own radius): {short:?}");
 }
