@@ -143,6 +143,7 @@ export const DECALS: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'louvre', name: 'Radiator louvre' },
   { key: 'cargo', name: 'Cargo door' },
   { key: 'hangar', name: 'Hangar mouth' },
+  { key: 'dock', name: 'Dock light' },
 ];
 /** Room to append to `DECALS` without moving a stored entry's cell. */
 export const DECAL_STRIDE = 16;
@@ -1374,7 +1375,8 @@ const plateAt = (classKey: string, prof: readonly Station[], z: number,
 const suite = (prof: readonly Station[],
   drives: ReadonlyArray<readonly [number, number]>,
   bays: number, clamps: number, bayV = 0.05,
-  bayZ: readonly number[] | null = null): Socket[] => {
+  bayZ: readonly number[] | null = null,
+  bridgeZ: number | null = null): Socket[] => {
   const aft = Math.round((prof[0] as Station)[0]);
   const nose = Math.round((prof[prof.length - 1] as Station)[0]);
   const mid = Math.round((aft + nose) / 2);
@@ -1398,7 +1400,15 @@ const suite = (prof: readonly Station[],
   // b0 is the bridge bay on every frame: forward and dorsal, where a bridge
   // goes and where its viewport is worth having. Everything else is berths,
   // airlocks and holds, and the stock fit decides which.
-  out.push(seatAt(prof, 'bay', 'b0', 'bay, bridge', nose - 16, 0, 0.42));
+  //
+  // `bridgeZ` moves it, for the one hull whose centreline forward is not hull
+  // at all: a carrier's is its SLIPWAY, so the generic station put the bridge
+  // in the middle of the bay. Seating only knows how to walk a part out of
+  // the way, so it shoved it bodily to port, and a bridge four cells off its
+  // own centreline on a symmetric ship is not a near miss, it is a different
+  // ship. Abaft the bay it is an island behind the deck, which is what a
+  // carrier's bridge is.
+  out.push(seatAt(prof, 'bay', 'b0', 'bay, bridge', bridgeZ ?? nose - 16, 0, 0.42));
   //
   // `bayZ` names the stations outright, for a hull whose midships volume is
   // spoken for. A Karisen cruiser keeps six missile cells on the keel and is
@@ -1612,15 +1622,19 @@ const decorFor = (frame: FrameDef): Decor[] => {
       // owner banned; and it is what makes an opening read as an opening
       // rather than as a dark patch, at the range this ship is usually drawn.
       if (frame.tier === 'carrier') {
-        // Two strips down the berth's own edges, the length of the slot.
-        if (t > BERTH.z0 && t < BERTH.z1) {
-          for (const side of [-1, 1]) {
-            const x = side < 0 ? CX - BERTH.half - 1 : CX + BERTH.half;
-            put(x, deckCell(hw, hh, x + 0.5 - CX, 1) + 1, z, LAUNCH);
-          }
-        }
-        // And one over and under each tube's mouth, which is the only thing
-        // that says a two cell bore in a flank is a door rather than damage.
+        // The BERTH's own edges are not lit from here. They were, for one
+        // stage, as two strips laid on the deck either side of the slot, and
+        // it stopped working the day the bay was lined: the lining reserves
+        // those two courses and builds the WALL in them, so a light laid on
+        // the deck there was laid on a deck that is no longer plated. What
+        // lights that edge now is the top course of the wall itself, in the
+        // bay's own colour, which is the better answer anyway: the rail round
+        // a dock belongs to the dock.
+        //
+        // One over and under each TUBE's mouth, which is the only thing that
+        // says a two cell bore in a flank is a door rather than damage. Those
+        // are bores rather than bays, so nothing lines them and there is
+        // nothing inside one to light them from.
         for (const tube of TUBES) {
           const k = zOf(tube);
           if (z !== k && z !== k + 1) continue;
@@ -1811,21 +1825,95 @@ export const decorOf = (frame: FrameDef): readonly Decor[] => {
  * never touched: a berth full of the modules it services is a berth, and a
  * cut that ate a drive bell would be a hole where an engine was.
  */
-type Void = readonly [number, number, number, number, number, number];
+export type Void = {
+  /** The cells to take out, inclusive, as `[x0, x1, y0, y1, z0, z1]`. */
+  readonly box: readonly [number, number, number, number, number, number];
+  /**
+   * A BAY is lined and lit; a bore is neither, and that is the whole of what
+   * this flag decides.
+   *
+   * The plate pass lays armour within a few courses of the skin and leaves
+   * everything inboard of that hollow, which is right for a hull nobody can
+   * see inside of and wrong the moment something cuts a door in one: the
+   * first berth opened straight into the ship's own guts, with the modules it
+   * services standing loose in the slot. So a bay gets WALLS, a floor and an
+   * aft bulkhead, and then those walls carry the lights. A tube is two cells
+   * square and a fighter is through it in a moment, so lining one would be
+   * four faces nobody will ever look at.
+   */
+  readonly bay: boolean;
+};
 
 /**
  * Where a carrier's openings are, in fractions of its own length and cells off
  * the centreline.
  *
- * Read by `voidsFor`, which cuts them, and by `decorFor`, which lights their
- * rims: two passes about one opening, and a second copy of these numbers is
- * the copy that would drift the day a bay moved and leave a lit outline
- * round a piece of solid plating.
+ * Read by `voidsFor`, which cuts them and lines them, and by `decorFor`,
+ * which lights their rims: two passes about one opening, and a second copy of
+ * these numbers is the copy that would drift the day a bay moved and leave a
+ * lit outline round a piece of solid plating.
  */
-const BERTH = { z0: 0.50, z1: 1.0, half: 4, floor: 3 } as const;
+// `floor` is how far BELOW the centreline the dock's deck stands, and it is
+// two rather than three because the ventral gun ring under the bay, its
+// cannon and the ventral thruster all reach exactly one course higher than
+// that: at three the floor plane was their cells, so the dock was floored
+// with the tops of the fittings bolted under it and a player looked down the
+// slipway into a turret. A deck is a deck.
+const BERTH = { z0: 0.50, z1: 1.0, half: 4, floor: 2 } as const;
 const TUBES = [0.30, 0.38, 0.46] as const;
 
-const voidsFor = (frame: FrameDef): Void[] => {
+/** The station a berth's aft bulkhead stands at, on a profile. One answer,
+ *  because `voidsFor` cuts to it and the frame seats its bridge abaft it, and
+ *  two would be an island standing in its own dock the day the bay moved. */
+const berthAft = (prof: readonly Station[]): number => {
+  const aft = Math.round((prof[0] as Station)[0]);
+  const nose = Math.round((prof[prof.length - 1] as Station)[0]);
+  return Math.round(aft + BERTH.z0 * Math.max(1, nose - aft));
+};
+
+/**
+ * How often a bay wall carries a lit band, in cells along the hull, and which
+ * decal the lights in there wear.
+ *
+ * Vertical bands rather than a strip along the length, because a Terran's own
+ * language is fluting, which is vertical lines on a horizontal ship, and a bay
+ * wall is the one vertical face big enough to carry it. Every third station,
+ * so the rhythm reads at the range a capital ship is usually drawn at without
+ * the wall becoming one lit sheet.
+ *
+ * A DECAL and not a lit cell, and that is the decision this stage turned on.
+ * A lit cell is a purpose's highlight tone written into the vertex colour: it
+ * is bright PAINT, and every lamp in this scene is outside the hull, so paint
+ * on a wall inside a dock is lit by nothing and comes out black. That is the
+ * lesson `INTERIOR_LIGHT` in `view.ts` already records about the inside of a
+ * wound, in the same words. A window decal is the one thing in this project
+ * that carries its own light in BOTH renderers, at an emission of 1.6 that is
+ * "the only part that survives with no light on it", so a light in a room is
+ * a window whatever else it is.
+ */
+const BAY_BAND = 3;
+const BAY_LAMP = 'dock';
+
+/**
+ * Which of a cell's six faces a direction names, so `Raster.lamp` can be
+ * keyed by FACE rather than by cell.
+ *
+ * A lamp has to name its face and not merely its cell, because the one rule
+ * every other window keeps is the owner's: none of them looks up or down. A
+ * light on the floor of a dock does, and that rule is about the OUTSIDE of a
+ * hull, where a pane in the deck is a greenhouse. Inside a hole cut into the
+ * ship there is no deck and no keel, so the rule has nothing to say, and the
+ * honest way to let a floor lamp through without also putting one on the
+ * weather deck above it is for the rasteriser, which knows which side of a
+ * wall is the bay, to say exactly which faces it lit.
+ */
+export const FACE_CODE = (dx: number, dy: number, dz: number): number =>
+  dx < 0 ? 0 : dx > 0 ? 1 : dy < 0 ? 2 : dy > 0 ? 3 : dz < 0 ? 4 : 5;
+/** A cell's face as one key: six per cell, which fits a lattice this size
+ *  inside a safe integer with room to spare. */
+export const faceKey = (cell: number, face: number): number => cell * 6 + face;
+
+export const voidsFor = (frame: FrameDef): Void[] => {
   if (frame.tier !== 'carrier') return [];
   const prof = frame.profile;
   const aft = Math.round((prof[0] as Station)[0]);
@@ -1856,8 +1944,11 @@ const voidsFor = (frame: FrameDef): Void[] => {
   // the skin with a spar under each, which is the slop the pylon pass exists
   // to catch rather than a thing to aim for. The nose carries one gun ring
   // and nothing else, so it cost a ring's station and no geometry at all.
-  out.push([CX - BERTH.half, CX + BERTH.half - 1, CY - BERTH.floor, NY - 1,
-    zOf(BERTH.z0), zOf(BERTH.z1)] as const);
+  out.push({
+    box: [CX - BERTH.half, CX + BERTH.half - 1, CY - BERTH.floor, NY - 1,
+      berthAft(prof), zOf(BERTH.z1)],
+    bay: true,
+  });
 
   // THE LAUNCH TUBES, three a side, bored clean through the flank forward of
   // the berth. Square and small, because what leaves through one is a fighter
@@ -1870,8 +1961,8 @@ const voidsFor = (frame: FrameDef): Void[] => {
   // wrong.
   for (const t of TUBES) {
     const z = zOf(t);
-    out.push([CX + BERTH.half - 1, NX - 1, CY - 1, CY, z, z + 1] as const);
-    out.push([0, CX - BERTH.half, CY - 1, CY, z, z + 1] as const);
+    out.push({ box: [CX + BERTH.half - 1, NX - 1, CY - 1, CY, z, z + 1], bay: false });
+    out.push({ box: [0, CX - BERTH.half, CY - 1, CY, z, z + 1], bay: false });
   }
   return out;
 };
@@ -2709,17 +2800,30 @@ export const FRAMES: readonly FrameDef[] = [
   {
     classKey: 'terran_carrier', name: 'Terran Fleet Carrier',
     faction: 'terran', tier: 'carrier', rung: 'capital',
-    radius: 14.4, massMax: 38.03, baseReach: 10, baseMarines: 0, baseCapacity: 0,
+    radius: 14.4, massMax: 37.74, baseReach: 10, baseMarines: 0, baseCapacity: 0,
     profile: PROF_TERRAN_CVN,
     // The cruiser's spine at the capital cell, and no dorsal stringer for the
     // reason the cruiser has none: a frame member that wide down the length of
     // a Terran deck is the slab the owner banned, and on a hull this size it
     // would be the only thing anybody saw.
-    spine: [keel(CY, 3, 59), keel(CY - 6, 10, 50, 8, 2),
+    //
+    // And the spine STOPS at the bay's aft bulkhead, which is the one thing on
+    // this hull the section could not decide. A keel is four cells across and
+    // the mouth is eight, so run through, it is half the dock filled with a
+    // grey bar for the whole length of it: a slot with a beam down the middle
+    // reads as a trough with a strake in it rather than as somewhere a ship is
+    // built. A hull with a slipway down its spine has no spine there, and what
+    // carries the load instead is the bay's own two walls, which the lining
+    // lays. The ribs still cross it, because a rib is one cell and a single
+    // spar over a dock is a gantry.
+    spine: [keel(CY, 3, berthAft(PROF_TERRAN_CVN)), keel(CY - 6, 10, 50, 8, 2),
       ...ribs(PROF_TERRAN_CVN, [9, 17, 25, 33, 41, 49, 56])],
     sockets: [
+      // The bridge is an ISLAND, four cells abaft the bay's own aft bulkhead,
+      // because the station every other hull puts one at is this hull's dock.
       ...suite(PROF_TERRAN_CVN, [[-0.66, -0.3], [-0.22, -0.3], [0.22, -0.3], [0.66, -0.3],
-        [-0.66, 0.36], [-0.22, 0.36], [0.22, 0.36], [0.66, 0.36]], 22, 6),
+        [-0.66, 0.36], [-0.22, 0.36], [0.22, 0.36], [0.66, 0.36]], 22, 6, 0.05, null,
+        berthAft(PROF_TERRAN_CVN) - 4),
       // The deck ring sits ABAFT the mouth rather than over the nose, which
       // is where a bow gun goes on every other hull in this navy: the nose is
       // the berth now, and a turret standing over an open bay has nothing
@@ -3405,6 +3509,21 @@ export interface Raster {
    */
   readonly orphans: number;
   /**
+   * Cells the CLASS lit, and which decal each one wears.
+   *
+   * Keyed by `faceKey`, which is the cell AND which of its six faces, because
+   * a lamp is the one decal allowed to look up and only on the face the
+   * rasteriser meant: see `FACE_CODE`.
+   *
+   * The mesher asks this exactly where it asks a player's own painted decals,
+   * and straight after them, so a class authored light and a hand painted one
+   * are one path with one precedence: what the player drew wins. A map rather
+   * than a field on the grid because it is SPARSE (a couple of hundred faces
+   * of sixty thousand) and because what it carries is a decal key rather
+   * than a material.
+   */
+  readonly lamp: ReadonlyMap<number, string>;
+  /**
    * Cells the weld pass ADDED to reattach a loose piece.
    *
    * They are plate like any other once drawn, and the mount rule has to be
@@ -3623,6 +3742,56 @@ export function rasterise(d: Design): Raster {
   const every = d.parts.map((_, n) => n);
   const order = [...every.filter(isGun), ...every.filter(n => !isGun(n))];
   const reserved = new Uint8Array(CELLS);
+  /** The lining planes of a bay: reserved against the seating, and the one
+   *  thing allowed to build in them is the bay's own wall. */
+  const dock = new Uint8Array(CELLS);
+  /** Cells the CLASS lit, and which decal each wears. Read by the mesher the
+   *  way a player's own painted decals are, and asked straight after them. */
+  const lamp = new Map<number, string>();
+
+  // A BAY is reserved BEFORE anything is seated, and it is reserved by the
+  // same map a turret's sweep is, because it is the same sentence: a volume
+  // that belongs to one thing and to nothing else.
+  //
+  // The first cut of the carrier did this the other way round and cut the bay
+  // at the END, after the parts, and refused to eat one, on the reasoning
+  // that a cut through a drive bell is a hole where an engine was. That is
+  // true and it is not what a berth is: the slot came out FULL, every cell of
+  // it a cargo hold or a barracks that the seating had quite reasonably put
+  // amidships, and what a player saw was a mouth with the ship's own fittings
+  // stacked in the doorway. Reserved, `lossAt` charges a part `FOUL_COST` for
+  // every cell it would stand in and the nudge walks it out, exactly as it
+  // already walks one out of a gun ring.
+  //
+  // The carve still runs, because the frame is laid before this and is not
+  // blocked by it: a rib crossing the bay survives as a grey spar, which is
+  // what a gantry over a dock is.
+  for (const { box: [x0, x1, y0, y1, k0, k1], bay } of voidsFor(frame)) {
+    if (!bay) continue;
+    // The box AND its lining shell: one cell out on each flank, one under the
+    // floor and one abaft the aft bulkhead, which are exactly the planes the
+    // walls go in. Not the deck and not the bow, because those two are the
+    // mouth. Reserving the void alone protected the air and left the WALLS
+    // contested, and the seating duly filled them: with the void a course
+    // deeper the ventral gun ring's drum came up through the dock floor, and
+    // with it a course shallower two observation galleries did. A player
+    // looking down a slipway at the top of a turret is the same defect either
+    // way, and it is a defect about the lining rather than about the size of
+    // the hole.
+    for (let k = Math.max(0, k0 - 1); k <= Math.min(NZ - 1, k1); k++)
+      for (let j = Math.max(0, y0 - 1); j <= Math.min(NY - 1, y1); j++)
+        for (let i = Math.max(0, x0 - 1); i <= Math.min(NX - 1, x1 + 1); i++) {
+          const n = idx3(i, j, k);
+          reserved[n] = 1;
+          // The SHELL is the bay's own to build in, and saying which cells
+          // those are is what lets the lining through a map that stops
+          // everything else. Without it the reservation protected the walls
+          // from the lining as thoroughly as from the seating, and the bay
+          // came out as solid deck with no slot in it at all.
+          if (i < x0 || i > x1 || j < y0 || k < k0) dock[n] = 1;
+        }
+  }
+
   // Which cells the weld pass grew, so the mount rule can ask whether a base
   // is on the SHIP rather than on a spar the weld grew to catch it.
   const welded = new Uint8Array(CELLS);
@@ -3934,7 +4103,48 @@ export function rasterise(d: Design): Raster {
   // take back anything any of them laid across a mouth, and before the hand
   // drawn cut, which is the player's and therefore last. Same semantics as
   // that cut and never a part: see `voidsFor`.
-  for (const [x0, x1, y0, y1, k0, k1] of voidsFor(frame)) {
+  //
+  // A BAY is then LINED and LIT, and a bore is neither: see `Void.bay`.
+
+  /** Lay one wall cell of a bay, where there is room for one INSIDE the hull.
+   *  Painted by the shell's own rule, so the inside of a bay comes out the
+   *  colour the outside of the ship would have been there rather than a
+   *  ninth swatch nobody picked. */
+  const bayWall = (i: number, j: number, k: number): void => {
+    if (!inBounds(i, j, k)) return;
+    const n = idx3(i, j, k);
+    if (grid[n] || own[n] || (reserved[n] && !dock[n])) return;
+    if (!insideHull(prof, i, j, k)) return;      // never build a wall out into space
+    grid[n] = Mat.Plate;
+    purp[n] = STRUCT;
+    // The DECK's role, because the floor of a slipway is a deck and its walls
+    // are what that deck is sunk into: one role over the whole dock, so the
+    // slot reads as one space rather than as a wall that changes colour half
+    // way down, which is what painting it by the shell's own rule gave.
+    //
+    // `underside` was the first answer, on the reasoning that it is the
+    // livery's own slot for a surface nobody was meant to see. On this hull's
+    // palette that swatch is very nearly white, so the dock came out as a
+    // bright trough cut into a dark deck and the lamps had nothing to carry
+    // against. Which swatch a role lands on is the livery's business, and the
+    // role has to be picked for what the surface IS.
+    tone[n] = roleCode('deck');
+  };
+
+  /** Light one cell of a bay's lining, and ONLY a cell of its lining: a lamp
+   *  that could overwrite anything else would put a light where a frame member
+   *  or a drive bell crosses the wall. The cell stays PLATING and gains a
+   *  decal, because a lamp is a fitting bolted to a wall rather than a
+   *  different material the wall is made of, and because that is what puts it
+   *  through the one path in this project that emits light. */
+  const bayLamp = (i: number, j: number, k: number, face: number): void => {
+    if (!inBounds(i, j, k)) return;
+    const n = idx3(i, j, k);
+    if (grid[n] !== Mat.Plate || own[n]) return;
+    lamp.set(faceKey(n, face), BAY_LAMP);
+  };
+
+  for (const { box: [x0, x1, y0, y1, k0, k1], bay } of voidsFor(frame)) {
     for (let k = Math.max(0, k0); k <= Math.min(NZ - 1, k1); k++)
       for (let j = Math.max(0, y0); j <= Math.min(NY - 1, y1); j++)
         for (let i = Math.max(0, x0); i <= Math.min(NX - 1, x1); i++) {
@@ -3944,6 +4154,53 @@ export function rasterise(d: Design): Raster {
           if (at === Mat.Plate) { grid[n] = Mat.Empty; purp[n] = 0; tone[n] = 0; }
           else if (at === Mat.Skinned) { grid[n] = Mat.Frame; tone[n] = 0; }
         }
+    if (!bay) continue;
+
+    // The two flanks, the floor and the aft bulkhead. Not the deck, which is
+    // the mouth, and not the bow, which is the other one. Laying the walls
+    // also settles "nothing may float" for the cut: they stand on the floor
+    // and their tops meet the deck plating the slot was cut through, so the
+    // flood fill finds one piece rather than a rim hanging over a hole.
+    for (let k = Math.max(0, k0 - 1); k <= Math.min(NZ - 1, k1); k++) {
+      for (let j = Math.max(0, y0 - 1); j <= Math.min(NY - 1, y1); j++) {
+        bayWall(x0 - 1, j, k);
+        bayWall(x1 + 1, j, k);
+      }
+      for (let i = x0 - 1; i <= x1 + 1; i++) bayWall(i, y0 - 1, k);
+    }
+    for (let j = y0 - 1; j <= y1; j++)
+      for (let i = x0 - 1; i <= x1 + 1; i++) bayWall(i, j, k0 - 1);
+
+    // And the lights, which are the whole reason a bay is worth cutting: a
+    // slot with nothing lit in it is a shadow on the deck at the range this
+    // ship is drawn at, and a lit one is a room with a floor somebody could
+    // stand on.
+    //
+    // Two tones of one hue, and which feature gets which is the palette's own
+    // rule rather than a taste: the wall PANELS are the lights, so they take
+    // the highlight, and the rails down the floor are trim marking the lane a
+    // hull leaves along, so they take the mid tone. Bands stop at whatever
+    // course the lining reached, because a lamp only ever lands on lining and
+    // above the hull line there is none.
+    for (let k = Math.max(0, k0); k <= Math.min(NZ - 1, k1); k++) {
+      // A rail down each edge of the FLOOR, every station, facing UP into the
+      // slot. This is the one that carries, and it took two tunings to find
+      // out why: the wall panels face each other ACROSS an eight cell slot,
+      // so at the three quarter pitch this game is played at they are seen
+      // almost edge on and the dock reads as an unlit trench. The floor faces
+      // the camera, so two lit lines down a dark slot is what says at a glance
+      // that the thing is a working yard rather than a hole.
+      bayLamp(x0, y0 - 1, k, FACE_CODE(0, 1, 0));
+      bayLamp(x1, y0 - 1, k, FACE_CODE(0, 1, 0));
+      if ((k - k0) % BAY_BAND !== 0) continue;
+      // And a band up each wall every third station, facing across. Close in,
+      // this is most of what a player sees of the dock, and it is what gives
+      // the slot a height: two lines on a floor could be painted on a deck.
+      for (let j = Math.max(0, y0 - 1); j <= Math.min(NY - 1, y1); j++) {
+        bayLamp(x0 - 1, j, k, FACE_CODE(1, 0, 0));
+        bayLamp(x1 + 1, j, k, FACE_CODE(-1, 0, 0));
+      }
+    }
   }
 
   // --- hand drawn armour, last, over the top of everything ----------------
@@ -4191,7 +4448,7 @@ export function rasterise(d: Design): Raster {
         }
   }
 
-  const raster: Raster = { grid, purp, own, tone, orphans, welded,
+  const raster: Raster = { grid, purp, own, tone, orphans, welded, lamp,
     plateCells, solidCells: cells.length / 3,
     enclosedOutside, flushProud, turrets, fouled, extent, radiusCells: Math.sqrt(r2) };
   rasterCache = { sig, raster };
@@ -4914,12 +5171,21 @@ export const STOCK: readonly Design[] = [
     P('y0', 'MAN-Y'), P('y1', 'MAN-Y'), P('y2', 'MAN-Y'), P('y3', 'MAN-Y'),
     P('p0', 'MAN-P'), P('p1', 'MAN-P'), P('p2', 'MAN-P'), P('p3', 'MAN-P'),
     P('b0', 'UTL-BRG'),
-    P('b1', 'UTL-BAR'), P('b2', 'UTL-BAR'), P('b3', 'UTL-BAR'), P('b4', 'UTL-BAR'),
-    P('b5', 'UTL-BAR'), P('b6', 'UTL-BAR'), P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'),
-    P('b9', 'UTL-CGO'), P('b10', 'UTL-CGO'), P('b11', 'UTL-CGO'), P('b12', 'UTL-CGO'),
-    P('b13', 'UTL-CGO'), P('b14', 'UTL-CGO'),
+    // The bays march forward in pairs, so WHICH socket a fitting takes is
+    // which station it stands at, and on this hull the forward stations are
+    // the dock. A lane is cut for a berth, five cells by three and a half,
+    // and a fitting wider than that overhangs its own lane INBOARD: harmless
+    // where the centreline is ship, and a cargo hold standing in the slipway
+    // where it is not. A hold is ten cells across, so the six of them ride
+    // aft of the bulkhead; the barracks are a lane's own width and take the
+    // waist; and what lines the dock is the small stuff, four airlocks and
+    // the galleries that look into it.
+    P('b1', 'UTL-CGO'), P('b2', 'UTL-CGO'), P('b3', 'UTL-CGO'), P('b4', 'UTL-CGO'),
+    P('b5', 'UTL-CGO'), P('b6', 'UTL-CGO'),
+    P('b7', 'UTL-BAR'), P('b8', 'UTL-BAR'), P('b9', 'UTL-BAR'), P('b10', 'UTL-BAR'),
+    P('b11', 'UTL-BAR'), P('b12', 'UTL-BAR'), P('b13', 'UTL-BAR'), P('b14', 'UTL-BAR'),
     P('b15', 'UTL-AIR'), P('b16', 'UTL-AIR'), P('b17', 'UTL-AIR'), P('b18', 'UTL-AIR'),
-    P('b19', 'UTL-OBS'), P('b20', 'UTL-OBS'), P('b21', 'UTL-TNK'),
+    P('b19', 'UTL-OBS'), P('b20', 'UTL-OBS'), P('b21', 'UTL-OBS'),
     P('c0', 'UTL-CLM'), P('c1', 'UTL-CLM'), P('c2', 'UTL-CLM'),
     P('c3', 'UTL-CLM'), P('c4', 'UTL-CLM'), P('c5', 'UTL-CLM'),
   ], { beltFwd: 5, beltMid: 5, beltAft: 5, dorsal: 3, ventral: 3, bow: 3, stern: 3 },

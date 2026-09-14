@@ -421,19 +421,123 @@ skin's own line at that station and the flank of a chamfered box moves with
 both z and y: starting beyond it and letting the box clip to whatever is solid
 is the same hole with nothing to get wrong.
 
-**What marks an opening is a light standing one course PROUD of the plating**,
-and that is `put`'s own rule rather than a taste: it writes where a cell is
-free, and the skin of a mouth's rim is plating that is very much taken. One
-cell, which is a runway light and not the block on top of a Terran the owner
-banned, and it is what makes an opening read as an opening rather than as a
-dark patch at the range this ship is usually drawn. `Mat.Accent` and not
-`Mat.Glow`: a purpose's glow slot is its near white highlight, and on a blue
-Terran flank that came out as a cream panel rather than as light out of a hole.
+**What marks a TUBE's mouth is a light standing one course PROUD of the
+plating**, and that is `put`'s own rule rather than a taste: it writes where a
+cell is free, and the skin of a mouth's rim is plating that is very much taken.
+One cell, which is a runway light and not the block on top of a Terran the
+owner banned. `Mat.Accent` and not `Mat.Glow`: a purpose's glow slot is its
+near white highlight, and on a blue Terran flank that came out as a cream panel
+rather than as light out of a hole. The BERTH used to be marked the same way,
+as two strips laid on the deck either side of the slot, and that went the day
+the bay was lined: the lining reserves those two courses and builds the wall in
+them, so the light was laid on a deck that is no longer plated.
 
 **`BERTH` and `TUBES` are written once**, beside `voidsFor`, and `decorFor`
-reads them to place the rims. Two passes about one opening, and a second copy
-of those numbers is the copy that would drift the day a bay moved and leave a
-lit outline round a piece of solid plating.
+reads them to place the tube rims. Two passes about one opening, and a second
+copy of those numbers is the copy that would drift the day a bay moved and
+leave a lit outline round a piece of solid plating. `berthAft` is the same rule
+a third time: the carve cuts to it and the frame seats its bridge abaft it, and
+two answers would be an island standing in its own dock.
+
+## A bay is RESERVED, then LINED, then LIT
+
+The first cut of the carrier cut its berth at the END of the rasterise, after
+the parts, and refused to eat one, on the reasoning that a cut through a drive
+bell is a hole where an engine was. That is true, and it is not what a berth
+is: the slot came out FULL. Every cell of it was a cargo hold or a barracks
+that the seating had quite reasonably put amidships, and what a player saw was
+a mouth with the ship's own fittings stacked in the doorway.
+
+**So a bay is reserved BEFORE anything is seated, by the same map a turret's
+sweep is**, because it is the same sentence: a volume that belongs to one thing
+and to nothing else. `lossAt` then charges a part `FOUL_COST` for every cell it
+would stand in and the nudge walks it out, exactly as it already walks one out
+of a gun ring. The carve still runs, because the frame is laid before the
+reservation and is not blocked by it: a rib crossing the bay survives as a grey
+spar, which is what a gantry over a dock is.
+
+**The reservation covers the LINING SHELL and not only the void**, and finding
+that out cost two rounds of whack a mole. The plate pass lays armour within a
+few courses of the skin and leaves everything inboard hollow, which is right
+for a hull nobody can see inside of and wrong the moment something cuts a door
+in one, so a bay needs walls, a floor and an aft bulkhead. Reserving the air
+and leaving those planes contested meant the seating filled them: with the
+floor a course lower the ventral gun ring's drum came up through it, and a
+course higher two observation galleries did. A player looking down a slipway at
+the top of a turret is the same defect either way, and it is a defect about the
+lining rather than about the size of the hole. `dock` is the second map that
+says which cells are the shell, because the reservation that stops everything
+else would otherwise stop the wall too, and it duly did: the bay came out as
+solid deck with no slot in it at all.
+
+**Three things about this hull moved to make room, and every one is authored in
+the FRAME rather than worked around in the rasteriser.** The bridge is an
+island abaft the bay (`suite` takes a `bridgeZ`), because the station every
+other hull puts one at is this hull's dock and the seating, which only knows
+how to walk a part out of the way, had shoved it four cells to port on a
+symmetric ship. The six cargo holds ride aft of the bulkhead and the small
+stuff lines the dock, because a lane is cut for a berth and a hold is ten cells
+across, so it overhangs its lane inboard: harmless where the centreline is ship
+and a hold standing in the slipway where it is not. And the SPINE stops at the
+bulkhead: a keel is four cells across and the mouth is eight, so run through it
+is half the dock filled with a grey bar for the whole length of it. A hull with
+a slipway down its spine has no spine there, and what carries the load instead
+is the bay's own two walls.
+
+**And the dock is lit, which is the whole reason it is worth cutting.** A slot
+with nothing lit in it is a shadow on the deck at the range this ship is drawn
+at. What lights it is a `dock` decal, appended to `DECALS`, and that is the
+decision the whole stage turned on: a lit CELL is a purpose's highlight tone
+written into the vertex colour, which is bright PAINT, and every lamp in this
+scene is outside the hull, so paint on a wall inside a dock is lit by nothing
+and comes out black. That is `INTERIOR_LIGHT` in `view.ts` saying the same
+thing about the inside of a wound, in the same words. A window decal is the one
+thing in this project that carries its own light in BOTH renderers, at an
+emission of 1.6 that is "the only part that survives with no light on it".
+
+`Raster.lamp` is what the rasteriser hands the mesher, keyed by `faceKey`,
+which is a cell AND which of its six faces. The face and not the cell, because
+of the one rule every other window keeps: **no window looks up or down.** A
+light on the floor of a dock does, and that rule is about the OUTSIDE of a
+hull, where a pane in the deck is a greenhouse; inside a hole cut into the ship
+there is no deck and no keel, so the rule has nothing to say. The honest way to
+let a floor lamp through without also putting one on the weather deck above it
+is for the rasteriser, which knows which side of a wall is the bay, to name
+exactly which faces it lit. `sim.test.mjs` holds the exception to the place it
+is allowed in rather than to its name: an up facing window has to be a dock
+light AND has to be standing in a bay this class actually cuts, and at least
+one hull in the fleet has to reach it, or the rule passes by being vacuous.
+
+**The FLOOR rails are the ones that carry, and that took two tunings to find
+out.** The wall panels face each other across an eight cell slot, so at the
+three quarter pitch these games are played at they are seen almost edge on and
+the dock reads as an unlit trench. The floor faces the camera: two lit lines
+down a dark slot is what says at a glance that the thing is a working yard
+rather than a hole. The wall bands stay, every third station, because close in
+they are most of what a player sees of the dock and they are what gives the
+slot a height; two lines on a floor could be painted on a deck.
+
+**And the lamp is BLUE, at 0.62 of what a cabin pane is worth.** Every other
+light on a hull here is warm, because every other light on a hull is a room
+with people in it; a dock is a workspace lit to see by, and a colour nothing
+else in the fleet wears is what makes a slipway readable as one. Getting it to
+STAY blue is the flames' own lesson on a third surface: a window is laid on at
+1.6 and both renderers tone map by scaling every channel toward the peak, so a
+panel authored at full arrived white with a halo and was indistinguishable from
+the strip windows two courses above it. What carries a hue through that is the
+SEPARATION between the channels, so red stays near half of blue whatever else
+happens to the panel. Measured off the game's own picture twice: at 0.62 it
+reads blue in close up and vanishes at the range a capital ship is actually
+looked at, so `DOCK_LEVEL` is 0.85, where the blue channel just tips over one
+after the gain and the other two stay well under it.
+
+**One trap on the way, and it is this project's own about a list going stale.**
+swarm-demo loads its window textures at startup, before any model exists, off a
+hardcoded `WINDOW_KINDS` that is this file's `DECALS` written out. A kind that
+list does not have gets a material with no maps, which is plain WHITE, so the
+dock lights came out as a row of white slabs in exactly the place a light was
+meant to be and the picture was read three times as a texture authored wrong.
+It says so in the log now rather than drawing it.
 
 **And it is a hull swarm-demo exports.** That project's base building mode needs
 a carrier to build and research from, and a ship is authored in one place: the

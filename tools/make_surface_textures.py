@@ -338,6 +338,27 @@ WARM = (1.00, 0.86, 0.62)     # lived in: galley light, crew spaces
 DEEP = (1.00, 0.62, 0.26)     # the falloff at the edge of a warm pane
 COOL = (0.80, 0.92, 1.00)     # instrument light, which is what a bridge is
 AMBER = (1.00, 0.72, 0.20)    # running lights and bay markers
+DOCK = (0.42, 0.86, 1.00)     # a working light in a dock, which is not a room
+
+# How bright a dock light is authored, and it is a fraction because of what
+# happens on the way out.
+#
+# Every window in this fleet is laid on at an emission of 1.6, which is right
+# for a cabin pane: warm and clipping is exactly what a lit room looks like
+# from outside, and a warm highlight desaturating toward white is not a lie
+# about it. A dock light is the opposite claim, because the only thing it says
+# is its COLOUR, and both renderers tone map by scaling every channel toward
+# the peak: authored at full, the panel's blue channel clipped, the mapper
+# pulled the other two up after it, and a row of them came out as white slabs
+# indistinguishable from the strip windows two courses above. Measured off the
+# game's own picture twice.
+#
+# At 0.85 the blue channel just tips over one after the gain and the other
+# two stay well under it, so the ratio the panel was drawn with is the ratio
+# that arrives and the hue survives. Lower reads as blue in close up and
+# vanishes at the range a capital ship is actually looked at, which is the
+# range the lights exist for: 0.62 was measured that way and rejected.
+DOCK_LEVEL = 0.85
 
 # How dark the GLASS is, as a multiplier on whatever the hull is painted.
 #
@@ -561,6 +582,74 @@ def w_hangar(v=0):
 
 
 
+def w_dock(v=0):
+    """A floodlit panel on the wall of a construction bay.
+
+    Not a window, and the difference is the whole of its design. Every other
+    decal here is a hole with a ROOM behind it, so it is dark glass with a
+    lamp somewhere inside: small, warm, and mostly off. This is the lamp
+    itself, bolted to the inside of a dock so that a hull being built in one
+    can be worked on, and a hull being built in one is the thing a player is
+    meant to be looking at. So it is big, it is nearly all lit, and the tile
+    is a FITTING rather than a pane: a bright panel in a deep bezel, with one
+    mullion across it so a run of them reads as separate lamps instead of as a
+    lit stripe down the wall.
+
+    And it is BLUE. Every other light on a hull here is warm, because every
+    other light on a hull is a room with people in it; a dock is a workspace
+    lit to see by, and a colour nothing else in the fleet wears is what makes
+    a slipway readable as one at the range a capital ship is drawn at.
+    """
+    x0, x1, y0, y1 = 0.10, 0.90, 0.26, 0.74
+    bez = 0.055
+
+    def panel(x, y):
+        return x0 < x < x1 and y0 < y < y1
+
+    def mullion(x, y):
+        return abs(x - 0.5) < 0.035 and panel(x, y)
+
+    def height(x, y):
+        # The bezel stands proud, the glass is sunk behind it, and the plating
+        # round the whole fitting is flat: a lamp is a thing screwed ON.
+        if mullion(x, y):
+            return 0.70
+        if panel(x, y):
+            inset = min(x - x0, x1 - x, y - y0, y1 - y)
+            return 0.95 - smoothstep(0.0, 0.05, inset) * 0.80
+        near = (x0 - bez < x < x1 + bez and y0 - bez < y < y1 + bez)
+        return 0.95 if near else 0.30
+
+    def emission(x, y):
+        if not panel(x, y) or mullion(x, y):
+            return (0.0, 0.0, 0.0)
+        inset = min(x - x0, x1 - x, y - y0, y1 - y)
+        k = smoothstep(0.0, 0.06, inset)
+        # Hotter along the middle of the panel than at its edges, which is what
+        # a diffuser over a tube actually looks like, and never below half:
+        # this is a lamp that is ON, and a lamp that fades to nothing at its
+        # own rim reads as a pane with the light off behind it.
+        #
+        # The hot line stays BLUE, and that is the flames' own lesson on a
+        # third surface. A window is laid on at an emission of 1.6 and the
+        # renderer tone maps by scaling every channel toward the peak, so a
+        # panel whose middle is authored near white arrives white with a halo
+        # round it: measured, the first cut of this lamp came out as a row of
+        # white slabs and was indistinguishable from a cabin pane. What
+        # carries a hue through that is the SEPARATION between the channels,
+        # so red stays near half whatever else happens to the panel.
+        core = 1.0 - smoothstep(0.0, 0.26, abs(y - 0.5))
+        c = lerp3(DOCK, (0.62, 0.93, 1.00), core * 0.6)
+        return tuple(v * DOCK_LEVEL * (0.55 + 0.45 * k) for v in c)
+
+    def glass(x, y):
+        if not panel(x, y) or mullion(x, y):
+            return 0.0
+        inset = min(x - x0, x1 - x, y - y0, y1 - y)
+        return smoothstep(0.0, 0.014, inset)
+    return height, emission, glass
+
+
 def w_cargo(v=0):
     """A container door: two leaves, a centre seam, latch rods and a placard.
 
@@ -688,6 +777,7 @@ WINDOWS = [
     ("cargo",    "Container", "Door leaves, latch rods and a lit manifest placard.",       w_cargo,    4),
     ("promenade", "Liner deck", "Eight panes of a passenger promenade, mostly lit.",       w_promenade, 4),
     ("louvre",   "Radiator",  "Slats over a hot gap. What a tank wears instead of panes.", w_louvre,   1),
+    ("dock",     "Dock light", "A floodlit panel inside a construction bay.",              w_dock,     1),
 ]
 
 WINDOW_STRENGTH = 26.0

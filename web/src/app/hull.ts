@@ -33,7 +33,7 @@ import {
   CELLS, NX, NY, NZ, RUNG, Mat, DEFAULT_METAL, DEFAULT_ROUGH,
   ARMOUR_BANDS, ROLE_BAND, armourColour, bandFinishes, bareGrid, cellColour, faceBasis,
   finishesOf, frameFor, hullAt, liveryFor, moduleById, rasterise, rasterSig, roleAt, seatedFacing,
-  socketsOf, type Design, decalMap, isPainted, paintedSlot, purposeAt,
+  socketsOf, type Design, decalMap, isPainted, paintedSlot, purposeAt, FACE_CODE, faceKey,
 } from './design.js';
 import type { MountFace } from './turret.js';
 
@@ -553,7 +553,6 @@ export function hullMesh(d: Design, bare = false): HullMesh {
   const windowAt = (
     i: number, j: number, k: number, dx: number, dy: number, dz: number,
   ): string | null => {
-    if (dy !== 0) return null;
     // A HAND PAINTED decal wins, and it is asked first.
     //
     // The derivation below is what gives a stock hull its windows for free,
@@ -565,7 +564,23 @@ export function hullMesh(d: Design, bare = false): HullMesh {
     // The up and down rule above still holds, because it is the owner's rule
     // about windows and not about how they got there.
     const painted = decals.get(idx(i, j, k));
-    if (painted !== undefined) return painted;
+    if (painted !== undefined) return dy === 0 ? painted : null;
+    // Then what the CLASS lit, which today is a carrier's dock.
+    //
+    // After the player and before the rooms, which is the same precedence a
+    // navy's own decorative rows already keep: a class authored light is a
+    // fitting the hull came with, so it beats "there is a compartment behind
+    // this plate" and loses to "somebody painted here".
+    //
+    // And it is the ONE thing that may look up or down, because it names its
+    // own face. The owner's rule is about a hull's outside, where a pane in
+    // the deck is a greenhouse; the floor of a dock cut into the ship is not
+    // the outside of anything, and a light on it is the only one the camera
+    // can see at the pitch this game is played at. Every other answer below
+    // still goes through the gate.
+    const lit = raster.lamp.get(faceKey(idx(i, j, k), FACE_CODE(dx, dy, dz)));
+    if (lit !== undefined) return lit;
+    if (dy !== 0) return null;
     const own = roomBehind(i, j, k, dx, dy, dz);
     if (own || dx === 0) return own;
     return roomBehind(NX - 1 - i, j, k, -dx, dy, dz) ?? rowAt(i, j, k);

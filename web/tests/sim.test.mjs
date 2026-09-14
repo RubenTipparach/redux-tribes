@@ -780,18 +780,48 @@ test('every stock hull has windows, and they are cut where a room is', async () 
   });
   const design = await import('data:text/javascript;base64,'
     + Buffer.from(dsn.outputFiles[0].text).toString('base64'));
-  const { FRAMES, stockFor, moduleById, useCore } = design;
+  const { FRAMES, stockFor, moduleById, useCore, voidsFor, NX, NY } = design;
   useCore(() => null);
 
+  let docked = 0;
   for (const f of FRAMES) {
     const d = stockFor(f.classKey);
     const h = hullMesh(d);
     const faces = h.windows.reduce((a, w) => a + w.cellOf.length, 0);
+    // Which cells a bay of this class covers, so the ONE exception below can
+    // be held to the place it is allowed in rather than merely to its name.
+    const bays = voidsFor(f).filter(v => v.bay).map(v => v.box);
+    const inBay = (n) => {
+      const i = n % NX, j = ((n / NX) | 0) % NY, k = (n / (NX * NY)) | 0;
+      return bays.some(([x0, x1, y0, y1, k0, k1]) =>
+        i >= x0 - 1 && i <= x1 + 1 && j >= y0 - 1 && j <= y1 && k >= k0 - 1 && k <= k1);
+    };
     // No window looks up or down: the owner's rule, read off the faces.
+    //
+    // With exactly one exception, and it is checked rather than excused: a
+    // DOCK LIGHT may, because the rule is about a hull's outside, where a
+    // pane in the deck is a greenhouse, and the floor of a bay cut into the
+    // ship is not the outside of anything. So an up facing window has to be
+    // a dock light AND has to be standing in a bay this class actually cuts,
+    // which is what stops the exception from becoming a hole: a dock light
+    // laid on the weather deck would pass on its key alone.
     const nrm = (w, q) => w.geo.getAttribute('normal').array[q * (w.geo.getAttribute('normal').array.length / 3 / w.cellOf.length) * 3 + 1];
     for (const w of h.windows) for (let q = 0; q < w.cellOf.length; q++) {
-      assert.ok(Math.abs(nrm(w, q)) < 0.5, `${f.classKey}: a ${w.key} window looks up or down`);
+      if (Math.abs(nrm(w, q)) < 0.5) continue;
+      assert.equal(w.key, 'dock', `${f.classKey}: a ${w.key} window looks up or down`);
+      assert.ok(inBay(w.cellOf[q]),
+        `${f.classKey}: a dock light looks up and is not in a bay`);
+      docked++;
     }
+    // A dock light only ever stands in a bay, whichever way it faces.
+    for (const w of h.windows) {
+      if (w.key !== 'dock') continue;
+      for (let q = 0; q < w.cellOf.length; q++) {
+        assert.ok(inBay(w.cellOf[q]), `${f.classKey}: a dock light outside the bay`);
+      }
+    }
+    assert.ok(bays.length > 0 || !h.windows.some(w => w.key === 'dock'),
+      `${f.classKey}: draws dock lights and cuts no bay`);
     // Twenty is not a taste: below that a hull reads as unlit at map range,
     // which is what every one of them did.
     assert.ok(faces >= 20,
@@ -804,12 +834,20 @@ test('every stock hull has windows, and they are cut where a room is', async () 
     const worn = new Set([
       ...d.parts.map(p => moduleById(p.module)?.window).filter(Boolean),
       ...(WINDOW_ROWS[f.faction] ?? []).map(r => r.key),
+      // A dock light belongs to the CLASS rather than to a part: it is a
+      // fitting on the wall of a hole the class cuts, and there is no module
+      // to hang it on. The box check above is what holds it in place.
+      ...(voidsFor(f).some(v => v.bay) ? ['dock'] : []),
     ]);
     for (const w of h.windows) {
       assert.ok(worn.has(w.key),
         `${f.classKey}: draws ${w.key} windows and carries no part that wears them`);
     }
   }
+  // The exception has to be REACHED, or the rule above passes by being vacuous
+  // the day a bay stops being lit.
+  assert.ok(docked > 0, 'no hull in the fleet lights a dock floor');
+  console.log(`  windows: ${docked} dock lights face up, and only inside a bay`);
 });
 
 test('a window can be painted where no room put one, and rubbed out where one was', async () => {
