@@ -118,7 +118,25 @@ npm --prefix web test                       # 79, the wasm boundary, the address
 npm --prefix server test                    # 13, the lobby and the lockstep API
 
 node tools/measure_fleet.mjs --check        # the class table against the fleet
+
+# And the four CI runs in the `prototype` job that are not tests at all, and
+# are here because running the LIST above and not the JOB is how a green
+# branch lands red. Every one of them is a generated file against the thing
+# that generates it, which is GUIDELINES rule 3, and the last is rule 1.
+python3 tools/make_ember_texture.py --check
+python3 tools/make_surface_textures.py --check
+python3 tools/build_mockups.py --check
+LC_ALL=C.UTF-8 grep -rlP '[\x{2013}\x{2014}]' --exclude-dir=.git --exclude-dir=vendor \
+  --exclude-dir=node_modules --exclude-dir=target --exclude-dir=archive-model .
 ```
+
+**`make_surface_textures.py` writes TWO places**, and that is what caught a
+push out: `web/public/surf` and the mockup's own texture bundle. So adding a
+decal leaves `mockups/surface-finishes/index.html` a version behind its own
+source, and only `build_mockups.py --check` says so. The dash grep needs
+`LC_ALL` on the GREP: without it grep refuses the code points and the check
+passes by printing an error instead of a file, which is what it does on this
+container and not on the runner.
 
 `measure_fleet.mjs --check` is the fifth, and it is not a unit test: it
 rasterises every stock hull, asks the core what each derives, and fails if
